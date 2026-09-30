@@ -3,7 +3,11 @@ param(
     [Parameter(Mandatory=$true)][string] $Movie,
     [long] $FirstFrame = 0,
     [long] $EndFrame = 3800,
-    [ValidateRange(1,3)][int] $Runs = 1
+    [ValidateRange(1,3)][int] $Runs = 1,
+    [switch] $Light,
+    [switch] $RandomCalls,
+    [long] $CallFirst = 1421,
+    [long] $CallEnd = 1460
 )
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -52,6 +56,8 @@ try {
         $arguments = @('--headless','--loading-probe', ('--scenario-output="{0}"' -f $destination),
             ('--probe-movie="{0}"' -f ([IO.Path]::GetFullPath($Movie))),
             ('--probe-first={0}' -f $FirstFrame), ('--probe-end={0}' -f $EndFrame))
+        if ($Light) { $arguments += '--probe-light' }
+        if ($RandomCalls) { $arguments += @('--probe-random-calls', "--probe-call-first=$CallFirst", "--probe-call-end=$CallEnd") }
         $hostProcess = Start-Process -FilePath (Join-Path $companion 'StudioScenarioHarness.exe') -ArgumentList $arguments `
             -WorkingDirectory $companion -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $destination 'stdout.log') -RedirectStandardError (Join-Path $destination 'stderr.log')

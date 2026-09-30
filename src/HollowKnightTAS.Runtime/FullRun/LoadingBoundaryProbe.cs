@@ -31,6 +31,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         private int transition;
         private bool sealedTrace;
         private bool disposed;
+        private readonly bool light = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_LIGHT") == "1";
+        private readonly LoadingRandomCallTrace? randomTrace;
+        private readonly long randomFirst;
+        private readonly long randomEnd;
         private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
 
         private LoadingBoundaryProbe(string directory, long first, long end,
@@ -42,9 +46,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             this.movieFrame = movieFrame;
             this.nativeFrame = nativeFrame;
             this.rngHash = rngHash;
+            randomFirst = long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_FIRST"), out var rf) ? Math.Max(first, rf) : first;
+            randomEnd = long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_END"), out var re) ? Math.Min(end, re) : end;
             Write(new { kind = "header", schema = "hktas-loading-probe-v1", first, end,
-                coverage = "clock-hero-playerdata-scenedata-sequence-only",
+                coverage = light ? "clock-hero-sequence-only" : "clock-hero-playerdata-scenedata-sequence-only",
+                randomCalls = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS") == "1" ? "Assembly-CSharp-nongeneric" : "off",
+                randomFirst, randomEnd,
                 completeStateCoverage = false });
+            if (Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS") == "1")
+                randomTrace = new LoadingRandomCallTrace(SampleRandom);
             GameManager.SceneTransitionBegan += TransitionBegan;
             USceneManager.sceneLoaded += SceneLoaded;
             USceneManager.sceneUnloaded += SceneUnloaded;
@@ -96,11 +106,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Add("heroBodyX", body == null ? float.NaN : body.position.x);
                     Add("heroBodyY", body == null ? float.NaN : body.position.y);
                     Add("heroState", hero.hero_state);
-                    Add("heroFlags", HashFields(hero.cState));
+                    if (!light) Add("heroFlags", HashFields(hero.cState));
                 }
                 // Field-only recursive hashing: avoids getters and does not publish save data.
-                Add("playerData", manager == null ? "missing" : HashFields(manager.playerData));
-                Add("sceneData", manager == null ? "missing" : HashFields(manager.sceneData));
+                if (!light)
+                {
+                    Add("playerData", manager == null ? "missing" : HashFields(manager.playerData));
+                    Add("sceneData", manager == null ? "missing" : HashFields(manager.sceneData));
+                }
                 Add("bossSequenceIndex", BossSequenceController.BossIndex);
                 Add("bossSequenceActive", BossSequenceController.IsInSequence);
                 Add("bossSequenceTimer", BossSequenceController.Timer);
@@ -115,6 +128,22 @@ namespace HollowKnightTAS.Runtime.FullRun
         public void Completed()
         {
             if (!sealedTrace && movieFrame() == end) Seal(true, "window-complete");
+        }
+
+        private void SampleRandom(string phase, string site, object? self)
+        {
+            if (sealedTrace || movieFrame() < randomFirst || movieFrame() >= randomEnd) return;
+            try
+            {
+                Write(new { kind = phase.StartsWith("rng-", StringComparison.Ordinal) ? "rng-call" : "timer-call", sequence = rows, phase, boundary = site,
+                    movieFrame = movieFrame(), nativeFrame = nativeFrame(),
+                    scene = USceneManager.GetActiveScene().name,
+                    owner = LoadingRandomCallTrace.Describe(self),
+                    state = new { rng = rngHash(), frameCount = Time.frameCount,
+                        time = Scalar(Time.time), fixedTime = Scalar(Time.fixedTime), deltaTime = Scalar(Time.deltaTime) } });
+                rows++;
+            }
+            catch (Exception exception) { Seal(false, exception.GetType().Name + ": " + exception.Message); }
         }
 
         private void TransitionBegan(SceneLoad load)
@@ -236,6 +265,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (disposed) return;
             disposed = true;
+            randomTrace?.Dispose();
             GameManager.SceneTransitionBegan -= TransitionBegan;
             USceneManager.sceneLoaded -= SceneLoaded;
             USceneManager.sceneUnloaded -= SceneUnloaded;

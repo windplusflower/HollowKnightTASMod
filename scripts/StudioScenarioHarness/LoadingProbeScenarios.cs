@@ -19,6 +19,13 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE", "1");
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_FIRST", first.ToString());
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_END", end.ToString());
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_LIGHT", args.Contains("--probe-light") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS", args.Contains("--probe-random-calls") ? "1" : null);
+        if (args.Contains("--probe-random-calls"))
+        {
+            Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_FIRST", Arg("--probe-call-first"));
+            Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_END", Arg("--probe-call-end"));
+        }
         var vm = (MainViewModel)app.MainWindow.DataContext;
         var boot = Field<StartupBootController>(app, "startupBoot");
         var movies = Field<FullRunMovieCoordinator>(app, "fullRunMovies");
