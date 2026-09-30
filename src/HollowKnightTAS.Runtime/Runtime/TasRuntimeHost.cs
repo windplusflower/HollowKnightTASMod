@@ -161,7 +161,7 @@ namespace HollowKnightTAS.Runtime.Runtime
                 if (fullRunSession.Mode == "Recording")
                     fullRunSession.SetRecordingHeader(new MovieV2Header(
                         manifest.GameVersion, manifest.ModdingApiVersion,
-                        HollowKnightTASMod.Version, MovieProtocolV2.NativeProfileId,
+                        HollowKnightTASMod.Version, MovieProtocolV2.SelectedNativeProfileId,
                         MovieProtocolV2.ActionSchemaId, fullRunSession.MouseEnabled,
                         manifestHash, Screen.width, Screen.height));
                 replayJournal = new RuntimeReplayJournal(sessionDirectory,

@@ -87,7 +87,7 @@ namespace HollowKnightTAS.Runtime
                     var token = Environment.GetEnvironmentVariable("HKTAS_BOOT_GATE_TOKEN")
                         ?? throw new InvalidOperationException("Full-run gate token is missing.");
                     var clock = NativeFullRunFrameClock.Attach(token,
-                        HollowKnightTAS.Core.Movie.MovieProtocolV2.NativeProfileId);
+                        HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId);
                     fullRunSession = RuntimeFullRunBootstrap.Attach(token, clock,
                         protectedSaves, message => Log(message));
                     modStartup?.FinishPreloading();

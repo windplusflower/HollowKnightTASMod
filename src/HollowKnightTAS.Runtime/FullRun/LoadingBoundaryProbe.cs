@@ -52,6 +52,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Write(new { kind = "header", schema = "hktas-loading-probe-v1", first, end,
                 experimentalExecution = new {
                     disableLegacyCalibration = Environment.GetEnvironmentVariable("HKTAS_LOADING_DISABLE_LEGACY_CALIBRATION") == "1",
+                    canonicalStartupClock = Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_STARTUP_CLOCK") == "1",
                     synchronousFetch = Environment.GetEnvironmentVariable("HKTAS_LOADING_SYNCHRONOUS_FETCH") == "1" },
                 coverage = light ? "clock-hero-sequence-only" : "clock-hero-playerdata-scenedata-sequence-only",
                 randomCalls = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS") == "1" ? "Assembly-CSharp-nongeneric" : "off",

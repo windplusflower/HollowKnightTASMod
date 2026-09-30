@@ -81,7 +81,7 @@ namespace HollowKnightTAS.Runtime.Timing
                 || !string.Equals(token, Environment.GetEnvironmentVariable("HKTAS_BOOT_GATE_TOKEN"),
                     StringComparison.Ordinal))
                 throw new InvalidOperationException("Native full-run gate token differs from the launch token.");
-            if (expectedProfileId != MovieProtocolV2.NativeProfileId)
+            if (expectedProfileId != MovieProtocolV2.SelectedNativeProfileId)
                 throw new InvalidOperationException("Native full-run frame profile is unsupported.");
             var module = GetModuleHandle("HollowKnightTAS.ClockBridge.dll");
             if (module == IntPtr.Zero)

@@ -11,9 +11,13 @@ param(
     [switch] $EngineLayout,
     [switch] $DisableLegacyCalibration,
     [switch] $ClockRoundTrip,
-    [switch] $SynchronousFetch
+    [switch] $SynchronousFetch,
+    [switch] $CanonicalStartupClock,
+    [switch] $RecordInputs
 )
 $ErrorActionPreference = 'Stop'
+if ($CanonicalStartupClock -and (-not $SynchronousFetch -or -not $DisableLegacyCalibration)) { throw 'The v4 experiment requires synchronous fetch and disabled legacy calibration.' }
+if ($RecordInputs -and (-not $CanonicalStartupClock -or $Runs -ne 1)) { throw 'RecordInputs requires the v4 profile and one run.' }
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $ownedRoot = [IO.Path]::GetFullPath((Join-Path $repo 'artifacts/scene-checkpoints/p0')) + [IO.Path]::DirectorySeparatorChar
@@ -27,19 +31,41 @@ $harnessBuild = Join-Path $repo 'scripts/StudioScenarioHarness/bin/Release/net8.
 $bundleTool = Join-Path $repo 'src/HollowKnightTAS.BundleTool/bin/Release/net8.0/HollowKnightTAS.BundleTool.dll'
 $runtime = Join-Path $repo 'src/HollowKnightTAS.Runtime/bin/Release/HollowKnightTAS.dll'
 $clockPayload = Join-Path $repo 'src/HollowKnightTAS.ClockPayload/bin/Release/HollowKnightTAS.ClockPayload.dll'
+$clockBridge = Join-Path $repo 'artifacts/scene-checkpoints/p0/native-clock-build/HollowKnightTAS.ClockBridge.dll'
+$injectorBuild = Join-Path $repo 'src/HollowKnightTAS.ClockInjector/bin/Release/net8.0-windows/win-x64'
+$injectorFiles = @('HollowKnightTAS.ClockInjector.exe','HollowKnightTAS.ClockInjector.dll','HollowKnightTAS.ClockInjector.deps.json','HollowKnightTAS.ClockInjector.runtimeconfig.json')
+$usesClockCandidate = $DisableLegacyCalibration -or $CanonicalStartupClock
+$profileCandidateFiles = @()
+if ($CanonicalStartupClock) {
+    $profileCandidateFiles = @(
+        @{ name='runtime-core.dll'; source=(Join-Path $harnessBuild 'HollowKnightTAS.Core.dll'); destination=(Join-Path $install 'HollowKnightTAS.Core.dll') },
+        @{ name='studio-core.dll'; source=(Join-Path $harnessBuild 'HollowKnightTAS.Core.dll'); destination=(Join-Path $companion 'HollowKnightTAS.Core.dll') },
+        @{ name='studio.dll'; source=(Join-Path $harnessBuild 'HollowKnightTAS.Companion.dll'); destination=(Join-Path $companion 'HollowKnightTAS.Companion.dll') }
+    )
+}
+$clockCandidateFiles = @('HollowKnightTAS.ClockPayload.dll','clock-build-manifest-v1.json','clock-build-whitelist-v1.json')
+if ($CanonicalStartupClock) { $clockCandidateFiles += @('HollowKnightTAS.ClockBridge.dll') + $injectorFiles }
 $saveRoot = Join-Path $env:USERPROFILE 'AppData/LocalLow/Team Cherry/Hollow Knight'
 $hostFiles = @('StudioScenarioHarness.exe','StudioScenarioHarness.dll','StudioScenarioHarness.deps.json','StudioScenarioHarness.runtimeconfig.json')
 foreach ($name in $hostFiles) { if (Test-Path -LiteralPath (Join-Path $companion $name)) { throw "Existing test host: $name" } }
 foreach ($path in @($runtime,$bundleTool,$Movie) + @($hostFiles | ForEach-Object { Join-Path $harnessBuild $_ })) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required file missing: $path" }
 }
+foreach ($entry in $profileCandidateFiles) {
+    if (-not (Test-Path -LiteralPath $entry.source -PathType Leaf)) { throw "Required profile assembly missing: $($entry.source)" }
+}
+if ($CanonicalStartupClock) {
+    foreach ($name in $injectorFiles) { if (-not (Test-Path -LiteralPath (Join-Path $injectorBuild $name) -PathType Leaf)) { throw "Required injector file missing: $name" } }
+}
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $backup = Join-Path $outputRoot 'installation-backup'
 New-Item -ItemType Directory -Path $backup | Out-Null
 foreach ($name in @('HollowKnightTAS.dll','companion.manifest.json')) { Copy-Item -LiteralPath (Join-Path $install $name) -Destination (Join-Path $backup $name) }
-if ($DisableLegacyCalibration) {
+foreach ($entry in $profileCandidateFiles) { Copy-Item -LiteralPath $entry.destination -Destination (Join-Path $backup $entry.name) }
+if ($usesClockCandidate) {
     if (-not (Test-Path -LiteralPath $clockPayload -PathType Leaf)) { throw 'Built clock payload missing.' }
-    foreach ($name in @('HollowKnightTAS.ClockPayload.dll','clock-build-manifest-v1.json','clock-build-whitelist-v1.json')) {
+    if ($CanonicalStartupClock -and -not (Test-Path -LiteralPath $clockBridge -PathType Leaf)) { throw 'Built clock bridge missing.' }
+    foreach ($name in $clockCandidateFiles) {
         Copy-Item -LiteralPath (Join-Path $clockRoot $name) -Destination (Join-Path $backup $name)
     }
 }
@@ -53,15 +79,33 @@ $before = Read-SaveAudit
 $hostProcess = $null
 try {
     Copy-Item -LiteralPath $runtime -Destination (Join-Path $install 'HollowKnightTAS.dll')
-    if ($DisableLegacyCalibration) {
+    foreach ($entry in $profileCandidateFiles) { Copy-Item -LiteralPath $entry.source -Destination $entry.destination }
+    if ($usesClockCandidate) {
         Copy-Item -LiteralPath $clockPayload -Destination (Join-Path $clockRoot 'HollowKnightTAS.ClockPayload.dll')
+        if ($CanonicalStartupClock) {
+            Copy-Item -LiteralPath $clockBridge -Destination (Join-Path $clockRoot 'HollowKnightTAS.ClockBridge.dll')
+            foreach ($name in $injectorFiles) { Copy-Item -LiteralPath (Join-Path $injectorBuild $name) -Destination (Join-Path $clockRoot $name) }
+        }
         $clockManifestPath = Join-Path $clockRoot 'clock-build-manifest-v1.json'
         $clockManifest = Get-Content -LiteralPath $clockManifestPath -Raw | ConvertFrom-Json
         $payloadIdentity = Get-Item -LiteralPath $clockPayload
         $payloadHash = (Get-FileHash -LiteralPath $clockPayload).Hash.ToLowerInvariant()
         $clockManifest.payloadSha256 = $payloadHash
+        if ($CanonicalStartupClock) { $bridgeIdentity = Get-Item -LiteralPath $clockBridge; $bridgeHash = (Get-FileHash -LiteralPath $clockBridge).Hash.ToLowerInvariant(); $clockManifest.bridgeSha256 = $bridgeHash }
         foreach ($entry in $clockManifest.runtimeFileSet) {
             if ($entry.file -eq 'HollowKnightTAS.ClockPayload.dll') { $entry.length = $payloadIdentity.Length; $entry.sha256 = $payloadHash }
+            if ($CanonicalStartupClock -and $entry.file -eq 'HollowKnightTAS.ClockBridge.dll') { $entry.length = $bridgeIdentity.Length; $entry.sha256 = $bridgeHash }
+            if ($CanonicalStartupClock -and $entry.file -in $injectorFiles) {
+                $file = Join-Path $injectorBuild $entry.file
+                $entry.length = (Get-Item -LiteralPath $file).Length
+                $entry.sha256 = (Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant()
+            }
+        }
+        if ($CanonicalStartupClock) {
+            $clockManifest.injectorSha256 = (Get-FileHash -LiteralPath (Join-Path $injectorBuild $injectorFiles[0])).Hash.ToLowerInvariant()
+            $clockManifest.injectorManagedSha256 = (Get-FileHash -LiteralPath (Join-Path $injectorBuild $injectorFiles[1])).Hash.ToLowerInvariant()
+            $clockManifest.injectorDepsSha256 = (Get-FileHash -LiteralPath (Join-Path $injectorBuild $injectorFiles[2])).Hash.ToLowerInvariant()
+            $clockManifest.injectorRuntimeConfigSha256 = (Get-FileHash -LiteralPath (Join-Path $injectorBuild $injectorFiles[3])).Hash.ToLowerInvariant()
         }
         $fileSetText = $clockManifest.runtimeFileSet | ConvertTo-Json -Compress -Depth 5
         $digest = [Security.Cryptography.SHA256]::Create()
@@ -70,6 +114,7 @@ try {
         $whitelistPath = Join-Path $clockRoot 'clock-build-whitelist-v1.json'
         $whitelist = Get-Content -LiteralPath $whitelistPath -Raw | ConvertFrom-Json
         $whitelist.payloadSha256 = $payloadHash
+        if ($CanonicalStartupClock) { $whitelist.bridgeSha256 = $bridgeHash }
         [IO.File]::WriteAllText($whitelistPath, ($whitelist | ConvertTo-Json -Depth 8))
     }
     foreach ($name in $hostFiles) { Copy-Item -LiteralPath (Join-Path $harnessBuild $name) -Destination (Join-Path $companion $name) }
@@ -78,8 +123,10 @@ try {
     & dotnet $bundleTool verify (Join-Path $repo '.local/signing/companion-public.json') $install (Join-Path $install 'companion.manifest.json')
     if ($LASTEXITCODE -ne 0) { throw 'Candidate signature verification failed.' }
     @('HollowKnightTAS.dll','HollowKnightTAS.Core.dll','companion.manifest.json',
+        'Companion/win-x64/HollowKnightTAS.Core.dll','Companion/win-x64/HollowKnightTAS.Companion.dll',
         'Companion/win-x64/ClockStartup/HollowKnightTAS.ClockPayload.dll',
         'Companion/win-x64/ClockStartup/HollowKnightTAS.ClockBridge.dll',
+        'Companion/win-x64/ClockStartup/HollowKnightTAS.ClockInjector.dll',
         'Companion/win-x64/ClockStartup/clock-build-manifest-v1.json',
         'Companion/win-x64/ClockStartup/clock-build-whitelist-v1.json') | ForEach-Object {
         $path = Join-Path $install $_
@@ -95,6 +142,8 @@ try {
         if ($EngineLayout) { $arguments += '--probe-engine-layout' }
         if ($ClockRoundTrip) { $arguments += '--probe-clock-roundtrip' }
         if ($SynchronousFetch) { $arguments += '--probe-synchronous-fetch' }
+        if ($CanonicalStartupClock) { $arguments += '--probe-canonical-startup-clock' }
+        if ($RecordInputs) { $arguments += '--probe-record-inputs' }
         if ($DisableLegacyCalibration) { $arguments += '--probe-disable-legacy-calibration' }
         if ($RandomCalls) { $arguments += @('--probe-random-calls', "--probe-call-first=$CallFirst", "--probe-call-end=$CallEnd") }
         $hostProcess = Start-Process -FilePath (Join-Path $companion 'StudioScenarioHarness.exe') -ArgumentList $arguments `
@@ -119,8 +168,9 @@ finally {
         foreach ($name in @('HollowKnightTAS.dll','companion.manifest.json')) {
             Copy-Item -LiteralPath (Join-Path $backup $name) -Destination (Join-Path $install $name)
         }
-        if ($DisableLegacyCalibration) {
-            foreach ($name in @('HollowKnightTAS.ClockPayload.dll','clock-build-manifest-v1.json','clock-build-whitelist-v1.json')) {
+        foreach ($entry in $profileCandidateFiles) { Copy-Item -LiteralPath (Join-Path $backup $entry.name) -Destination $entry.destination }
+        if ($usesClockCandidate) {
+            foreach ($name in $clockCandidateFiles) {
                 Copy-Item -LiteralPath (Join-Path $backup $name) -Destination (Join-Path $clockRoot $name)
             }
         }

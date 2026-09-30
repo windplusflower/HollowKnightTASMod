@@ -57,6 +57,11 @@ static void __cdecl boot_player_loop(void)
             return; /* Never advertise frame 0 as ready without the save guard. */
         }
     }
+    if (!prepare_loading_startup_clock_probe()) {
+        hktas_v2_fault(61);
+        g_boot_loop_active = FALSE;
+        return;
+    }
     if (g_v2_gate_enabled)
     {
         if (!hktas_v2_before_frame())

@@ -737,14 +737,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 () => clock.CurrentFrameIndex,
                 () => (bossTraceRngCodec = bossTraceRngCodec ?? UnityRandomStateCodec_1_5_78_11833.Resolve().Codec
                     ?? throw new InvalidOperationException("Loading probe RNG codec unavailable."))!.CaptureCurrent().Sha256);
-            mouse.Configure(input, mode == "Replay");
+            var scriptedRecording = mode == "Recording" ? ReadLoadingProbeRecordingInputs() : null;
+            mouse.Configure(input, mode == "Replay" || scriptedRecording != null);
             if (!mouse.TryInstall(mouseEnabled, out var mouseError))
                 throw new InvalidOperationException("MouseBridgeUnavailable: " + mouseError);
             input.Faulted += OnInputFault;
             if (mode == "Recording")
             {
                 input.Sampled += OnSampled;
-                input.StartRecording();
+                if (scriptedRecording == null) input.StartRecording();
+                else input.StartReplay(scriptedRecording);
             }
             else input.StartReplay(replayMovie
                 ?? throw new InvalidOperationException("Replay movie is missing."));

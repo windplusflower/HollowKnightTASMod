@@ -4,13 +4,17 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using HollowKnightTAS.Companion.Services;
 using HollowKnightTAS.Companion.ViewModels;
+using HollowKnightTAS.Core.Automation;
+using HollowKnightTAS.Core.Movie;
+using HollowKnightTAS.Companion.Automation;
 
 internal static partial class StudioScenarioHarness
 {
-    // Read-only discovery run. A completed trace is not a P0/full-state PASS.
+    // A completed trace or new recording is not a P0/full-state PASS.
     static async Task RunLoadingProbeAsync(string[] args)
     {
         string Arg(string name) => args.Single(a => a.StartsWith(name + "=", StringComparison.Ordinal)).Split('=', 2)[1];
@@ -24,6 +28,7 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_ENGINE_LAYOUT", args.Contains("--probe-engine-layout") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CLOCK_ROUNDTRIP", args.Contains("--probe-clock-roundtrip") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_SYNCHRONOUS_FETCH", args.Contains("--probe-synchronous-fetch") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_CANONICAL_STARTUP_CLOCK", args.Contains("--probe-canonical-startup-clock") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT", output);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_DISABLE_LEGACY_CALIBRATION", args.Contains("--probe-disable-legacy-calibration") ? "1" : null);
         if (args.Contains("--probe-random-calls"))
@@ -40,19 +45,71 @@ internal static partial class StudioScenarioHarness
         Set("initialSaveCacheRoot", Path.Combine(output, "initial-saves"));
         Set("activeSequenceDirectory", output);
         Set("activeAutoSaveSeconds", 0);
+        var source = Path.GetFullPath(Arg("--probe-movie"));
+        var sourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(source)));
+        var record = args.Contains("--probe-record-inputs");
+        if (record)
+        {
+            Require(MovieProtocolV2.SelectedNativeProfileId == MovieProtocolV2.CanonicalStartupNativeProfileId,
+                "new recording uses explicit v4 experimental profile");
+            var original = SequencePackage.Read(source);
+            Require(original.InitialSaves != null, "recording source binds the protected initial saves");
+            var parsed = new MovieV2Codec().Parse(new StringReader(original.Movie), source).Document
+                ?? throw new InvalidDataException("Invalid source inputs.");
+            Require(parsed.Runs.All(run => run.FramesPerSecond == 50 && run.RngSeed == null)
+                && parsed.Runs.Sum(run => run.RepeatCount) >= end, "bounded 50 FPS input script without RNG seeds");
+            movies.SequenceInitialSaves = original.InitialSaves;
+            Set("gameMouseEnabled", parsed.Header.MouseEnabled);
+            Set("defaultFrameRate", "50");
+            var old = parsed.Header;
+            var header = new MovieV2Header(old.GameVersion, old.ApiVersion, old.ModVersion,
+                MovieProtocolV2.SelectedNativeProfileId, old.ActionSchemaId, old.MouseEnabled,
+                old.EnvironmentSha256, old.ViewportWidth, old.ViewportHeight);
+            var runs = parsed.Runs.Select(run => new NativeFrameRun(run.RepeatCount, run.Samples,
+                run.Span, run.FramesPerSecond, authored: true)).Concat(new[]
+                { new NativeFrameRun(1, Array.Empty<GameInputSample>(), new MovieSourceSpan("<probe-tail>", 1, 1, 1), authored: true) });
+            var script = Path.Combine(output, "recording-inputs.hktas");
+            await File.WriteAllTextAsync(script, new MovieV2Codec().WriteCanonical(new MovieV2Document(script, header, runs)));
+            Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_RECORD_INPUTS", script);
+        }
+        else Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_RECORD_INPUTS", null);
         await Field<Func<string, Task>>(vm, "launchGame")(@"D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight.exe");
         try
         {
             Execute(vm.NewFullRunMovieCommand);
             await Command(vm.StepCommand);
             await Until(() => vm.SelectedSession?.Client.IsConnected == true, "loading probe Runtime connected", 120);
-            var source = Path.GetFullPath(Arg("--probe-movie"));
-            var sourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(source)));
-            await vm.OpenMovieFileAsync(source);
             var oldPid = Field<Process>(app, "startupGame").Id;
-            await vm.FrameMenuAsync("rebuild", end);
+            if (record)
+            {
+                var seek = await Field<AutomationBroker>(vm, "automationBroker").ExecuteHumanAsync(
+                    AutomationCommandIds.FullRunSeek, AutomationScope.ControlPlayback,
+                    new System.Collections.Generic.Dictionary<string, string>
+                    {
+                        ["targetFrame"] = end.ToString(),
+                        ["expectedNativeFrame"] = boot.NativeCompletedFrames.ToString()
+                    }, "Paused", null, CancellationToken.None);
+                Require(seek.Success, "normal recording seek accepted: " + seek.Detail);
+                await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
+                await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("recording native fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
+                    "scripted recording exact endpoint", 180);
+                var actual = await VideoRuntimeMovie(vm, movies);
+                var strict = new MovieV2Codec().Parse(new StringReader(actual.Movie), "<new-recording>").Document
+                    ?? throw new InvalidDataException("Invalid native recording.");
+                Require(actual.Frame == end && strict.Runs.Sum(run => run.RepeatCount) == end
+                    && strict.Runs.All(run => !run.Authored)
+                    && strict.Header.NativeProfileId == MovieProtocolV2.CanonicalStartupNativeProfileId,
+                    "fresh strict native recording has exact length and v4 identity");
+                await SequencePackage.WriteAsync(Path.Combine(output, "canonical-startup-v4-recording.hktaspack"),
+                    actual.Movie, movies.SessionInitialSaves);
+            }
+            else
+            {
+                await vm.OpenMovieFileAsync(source);
+                await vm.FrameMenuAsync("rebuild", end);
+                Require(Field<Process>(app, "startupGame").Id != oldPid, "independent cold replacement process");
+            }
             AtFrame(vm, boot, end, "loading probe exact endpoint");
-            Require(Field<Process>(app, "startupGame").Id != oldPid, "independent cold replacement process");
             var state = await VideoRuntimeState(vm);
             Require(state["mismatchCount"] == "0" && state["error"] == "", "probe execution has no input mismatch");
             await File.WriteAllTextAsync(Path.Combine(output, "target-state.json"), JsonSerializer.Serialize(state));
@@ -70,7 +127,7 @@ internal static partial class StudioScenarioHarness
             Require(sourceHash == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(source))),
                 "input package bytes unchanged");
             await File.WriteAllTextAsync(Path.Combine(output, "source-identity.json"), JsonSerializer.Serialize(new
-                { source, sourceHash, first, end, gameProcessId = Field<Process>(app, "startupGame").Id,
+                { source, sourceHash, first, end, record, gameProcessId = Field<Process>(app, "startupGame").Id,
                     shadow = movies.ShadowRoot, phaseP0Passed = false }));
             Log("DISCOVERY TRACE COMPLETE; full-state P0 gate not asserted");
         }

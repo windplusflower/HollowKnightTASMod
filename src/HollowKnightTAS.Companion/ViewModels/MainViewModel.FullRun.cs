@@ -76,7 +76,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                 coordinator.ArmRecording(GameMouseEnabled, ParseFrameRate(DefaultFrameRate));
                 ResetSequenceSaveTarget(null);
                 var header = new MovieV2Header("unknown", "unknown", "unknown",
-                    MovieProtocolV2.NativeProfileId, MovieProtocolV2.ActionSchemaId,
+                    MovieProtocolV2.SelectedNativeProfileId, MovieProtocolV2.ActionSchemaId,
                     GameMouseEnabled, "none", 0, 0);
                 MovieText = new MovieV2Codec().WriteCanonical(new MovieV2Document(
                     "<studio-draft>", header, Array.Empty<NativeFrameRun>()));

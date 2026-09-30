@@ -82,7 +82,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (!validation.Success)
                         throw new InvalidDataException("Staged replay movie failed v2 validation.");
                     var capabilities = new MovieV2RuntimeCapabilities(
-                        MovieProtocolV2.NativeProfileId, MovieProtocolV2.ActionSchemaId,
+                        MovieProtocolV2.SelectedNativeProfileId, MovieProtocolV2.ActionSchemaId,
                         true, true, InputManager.MouseProvider != null,
                         Screen.width, Screen.height, "none",
                         Application.version,

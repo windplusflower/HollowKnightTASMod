@@ -631,7 +631,7 @@ namespace HollowKnightTAS.Companion.Services
                     }
                     if (bootGate?.IsFullRun == true)
                     {
-                        if (!ReadExact(root, "fullRunCapability", MovieProtocolV2.NativeProfileId)
+                        if (!ReadExact(root, "fullRunCapability", MovieProtocolV2.SelectedNativeProfileId)
                             || !ReadExact(root, "fullRunRandomPolicy",
                                 MovieProtocolV2.RandomSynchronizationPolicyId)
                             || !root.TryGetProperty("fullRunGateAbi", out var gateAbi)

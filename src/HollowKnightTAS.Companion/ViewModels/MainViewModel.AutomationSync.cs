@@ -138,7 +138,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                     SetSequenceInitialSaves(fullRunMovies?.SessionInitialSaves);
                     ResetSequenceSaveTarget(null);
                     var header = new MovieV2Header("unknown", "unknown", "unknown",
-                        MovieProtocolV2.NativeProfileId, MovieProtocolV2.ActionSchemaId,
+                        MovieProtocolV2.SelectedNativeProfileId, MovieProtocolV2.ActionSchemaId,
                         command.Arguments["mouseEnabled"] == "true", "none", 0, 0);
                     var fps = command.Arguments.TryGetValue("fps", out var rate) ? MovieFrameRate.Parse(rate) : 50;
                     AcceptExternalStudioMovie(new MovieV2Codec().WriteCanonical(new MovieV2Document("<studio-draft>", header,

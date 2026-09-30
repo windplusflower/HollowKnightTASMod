@@ -548,7 +548,7 @@ namespace HollowKnightTAS.ClockInjector
                     using var stateView = stateMap.CreateViewAccessor();
                     if (stateView.ReadInt32(0) != 0x32544648 || stateView.ReadInt32(4) != 2)
                         throw new InvalidDataException("Full-run frame mapping capability is invalid.");
-                    result["fullRunCapability"] = HollowKnightTAS.Core.Movie.NativeExecutionProfile.ProfileId;
+                    result["fullRunCapability"] = HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId;
                     result["fullRunRandomPolicy"] = "scene-input-boundary-seed-render-isolation-v1";
                     result["fullRunGateAbi"] = 2;
                     result["saveGuardStatus"] = stateView.ReadInt32(92) == 1
