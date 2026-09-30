@@ -21,6 +21,11 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_END", end.ToString());
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_LIGHT", args.Contains("--probe-light") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS", args.Contains("--probe-random-calls") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_ENGINE_LAYOUT", args.Contains("--probe-engine-layout") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CLOCK_ROUNDTRIP", args.Contains("--probe-clock-roundtrip") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_SYNCHRONOUS_FETCH", args.Contains("--probe-synchronous-fetch") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT", output);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_DISABLE_LEGACY_CALIBRATION", args.Contains("--probe-disable-legacy-calibration") ? "1" : null);
         if (args.Contains("--probe-random-calls"))
         {
             Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_FIRST", Arg("--probe-call-first"));
@@ -54,13 +59,19 @@ internal static partial class StudioScenarioHarness
             var traces = Directory.GetFiles(movies.ShadowRoot, "loading-boundary-probe.jsonl", SearchOption.AllDirectories);
             Require(traces.Length == 1, "one trace in current protected shadow");
             File.Copy(traces[0], Path.Combine(output, "loading-boundary-probe.jsonl"), false);
+            foreach (var name in new[] { "engine-clock-layout.json", "engine-clock-roundtrip.json" })
+            {
+                var extra = Path.Combine(Path.GetDirectoryName(traces[0])!, name);
+                if (File.Exists(extra)) File.Copy(extra, Path.Combine(output, name), false);
+            }
             using var footer = JsonDocument.Parse(File.ReadLines(traces[0]).Last());
             Require(footer.RootElement.GetProperty("kind").GetString() == "footer"
                 && footer.RootElement.GetProperty("success").GetBoolean(), "bounded trace completed without sampling failure");
             Require(sourceHash == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(source))),
                 "input package bytes unchanged");
             await File.WriteAllTextAsync(Path.Combine(output, "source-identity.json"), JsonSerializer.Serialize(new
-                { source, sourceHash, first, end, shadow = movies.ShadowRoot, phaseP0Passed = false }));
+                { source, sourceHash, first, end, gameProcessId = Field<Process>(app, "startupGame").Id,
+                    shadow = movies.ShadowRoot, phaseP0Passed = false }));
             Log("DISCOVERY TRACE COMPLETE; full-state P0 gate not asserted");
         }
         finally { movies.VerifyOriginalSavesUnchanged(); }

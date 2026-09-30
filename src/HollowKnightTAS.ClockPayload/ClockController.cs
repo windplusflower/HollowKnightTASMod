@@ -119,6 +119,7 @@ namespace HollowKnightTAS.ClockPayload
         private static EventWaitHandle? fullRunRandomRequest;
         private static EventWaitHandle? fullRunRandomAcknowledged;
         private static bool fullRunRenderIsolationEnabled;
+        private static bool fullRunLegacyCalibrationDisabled;
         private static bool fullRunRenderInitialized;
         private static bool fullRunRenderEntered;
         private static UnityEngine.Random.State fullRunRenderState;
@@ -456,6 +457,8 @@ namespace HollowKnightTAS.ClockPayload
             fullRunRenderIsolationEnabled = string.Equals(
                 Environment.GetEnvironmentVariable("HKTAS_FULL_RUN_V2"),
                 "1", StringComparison.Ordinal);
+            fullRunLegacyCalibrationDisabled = fullRunRenderIsolationEnabled
+                && Environment.GetEnvironmentVariable("HKTAS_LOADING_DISABLE_LEGACY_CALIBRATION") == "1";
             if (fullRunRenderIsolationEnabled)
                 On.UnityStandardAssets.ImageEffects.FastNoise.DrawNoiseQuadGrid +=
                     OnFullRunDrawNoise;
@@ -549,7 +552,7 @@ namespace HollowKnightTAS.ClockPayload
             }
             if (!RecordingClockCalibrationPolicy.IsAllowed(
                     recordingClockCalibrationRequested,
-                    fullRunRenderIsolationEnabled || recordingRootConfigured || randomSynchronizationRequested
+                    fullRunLegacyCalibrationDisabled || recordingRootConfigured || randomSynchronizationRequested
                         || randomSynchronizationApplied || recordingRandomSynchronizationApplied,
                     string.Equals(sceneName, "GG_Workshop", StringComparison.Ordinal)))
             {
