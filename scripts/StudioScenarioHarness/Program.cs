@@ -87,6 +87,7 @@ internal static partial class StudioScenarioHarness
                 else if (args.Contains("--startup-gate")) await RunStartupGateAsync(args);
                 else if (customKeyScenarios) await RunCustomKeysAsync(args);
                 else if (args.Contains("--replay-divergence")) await RunReplayDivergenceAsync(args);
+                else if (args.Contains("--loading-probe")) await RunLoadingProbeAsync(args);
                 else if (args.Contains("--overlay-stacking")) await RunOverlayStackingAsync();
                 else if (args.Contains("--automation-sync")) await RunAutomationSyncAsync();
                 else if (args.Contains("--fractional-fps")) await RunFractionalFpsAsync(args);

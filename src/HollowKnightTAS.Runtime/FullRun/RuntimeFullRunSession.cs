@@ -108,6 +108,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private long bootstrapFrame = -1;
         private long movieFrame;
         private long skippedLoadFrames;
+        private LoadingBoundaryProbe? loadingBoundaryProbe;
         private long expectedNativeStart = -1;
         private bool frameInputEnabled;
         private bool titleReadySeen;
@@ -532,6 +533,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 clock.SetFrameRate(ready ? activeFrameRate : 50);
                 DeterministicCinematics.FrameDuration = 1d / (double)(ready ? activeFrameRate : 50m);
                 infoTiming.BeginFrame(movieFrame, completed, ready, boundary);
+                loadingBoundaryProbe?.Sample(ready ? "before" : "loading", boundary);
                 if (ready) TraceMovieRng("before", replayMovie?.Runs[timingRunIndex].RngSeed);
                 frameInputEnabled = ready;
                 // Resume drawing before the target so temporal presentation can
@@ -653,8 +655,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 ObserveBoss();
                 TraceMovieRng("after", null);
+                loadingBoundaryProbe?.Sample("after", frameBoundary);
                 if (mode == "Recording") journal!.CompleteFrame(movieFrame, activeFrameRate);
                 movieFrame++;
+                loadingBoundaryProbe?.Completed();
                 clock.ReportMovieFrameCompleted();
                 if (movieFrame == pauseAtMovieFrame)
                 {
@@ -729,6 +733,10 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private void StartInputAt(long frame)
         {
+            loadingBoundaryProbe = LoadingBoundaryProbe.Create(sessionDirectory, () => movieFrame,
+                () => clock.CurrentFrameIndex,
+                () => (bossTraceRngCodec = bossTraceRngCodec ?? UnityRandomStateCodec_1_5_78_11833.Resolve().Codec
+                    ?? throw new InvalidOperationException("Loading probe RNG codec unavailable."))!.CaptureCurrent().Sha256);
             mouse.Configure(input, mode == "Replay");
             if (!mouse.TryInstall(mouseEnabled, out var mouseError))
                 throw new InvalidOperationException("MouseBridgeUnavailable: " + mouseError);
@@ -905,6 +913,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (disposed) return;
             disposed = true;
             replayStateTrace?.Dispose();
+            loadingBoundaryProbe?.Dispose();
             restoreDrawing.Dispose();
             videoCapture?.Dispose();
             observationQueue.Dispose();
