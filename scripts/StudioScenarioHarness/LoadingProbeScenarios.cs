@@ -20,7 +20,12 @@ internal static partial class StudioScenarioHarness
         string Arg(string name) => args.Single(a => a.StartsWith(name + "=", StringComparison.Ordinal)).Split('=', 2)[1];
         var first = long.Parse(Arg("--probe-first"));
         var end = long.Parse(Arg("--probe-end"));
-        Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE", "1");
+        var primaryProbe = !args.Contains("--probe-disable-primary");
+        var gameplayOracle = args.Contains("--probe-gameplay-oracle");
+        var nativeScheduler = args.Contains("--probe-native-scheduler");
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE", primaryProbe ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_GAMEPLAY_ORACLE", gameplayOracle ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER", nativeScheduler ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_FIRST", first.ToString());
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_END", end.ToString());
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_LIGHT", args.Contains("--probe-light") ? "1" : null);
@@ -113,21 +118,27 @@ internal static partial class StudioScenarioHarness
             var state = await VideoRuntimeState(vm);
             Require(state["mismatchCount"] == "0" && state["error"] == "", "probe execution has no input mismatch");
             await File.WriteAllTextAsync(Path.Combine(output, "target-state.json"), JsonSerializer.Serialize(state));
-            var traces = Directory.GetFiles(movies.ShadowRoot, "loading-boundary-probe.jsonl", SearchOption.AllDirectories);
-            Require(traces.Length == 1, "one trace in current protected shadow");
-            File.Copy(traces[0], Path.Combine(output, "loading-boundary-probe.jsonl"), false);
-            foreach (var name in new[] { "engine-clock-layout.json", "engine-clock-roundtrip.json" })
+            foreach (var traceName in (primaryProbe ? new[] { "loading-boundary-probe.jsonl" } : Array.Empty<string>())
+                .Concat(gameplayOracle ? new[] { "loading-gameplay-oracle.jsonl" } : Array.Empty<string>()))
             {
-                var extra = Path.Combine(Path.GetDirectoryName(traces[0])!, name);
-                if (File.Exists(extra)) File.Copy(extra, Path.Combine(output, name), false);
+                var traces = Directory.GetFiles(movies.ShadowRoot, traceName, SearchOption.AllDirectories);
+                Require(traces.Length == 1, "one " + traceName + " in current protected shadow");
+                File.Copy(traces[0], Path.Combine(output, traceName), false);
+                foreach (var name in new[] { "engine-clock-layout.json", "engine-clock-roundtrip.json", "loading-state-inventory.json", "loading-oracle-progress.json", "loading-field-digests.json" })
+                {
+                    var extra = Path.Combine(Path.GetDirectoryName(traces[0])!, name);
+                    if (File.Exists(extra) && !File.Exists(Path.Combine(output, name))) File.Copy(extra, Path.Combine(output, name), false);
+                }
+                using var footer = JsonDocument.Parse(File.ReadLines(traces[0]).Last());
+                Require(footer.RootElement.GetProperty("kind").GetString() == "footer"
+                    && footer.RootElement.GetProperty("success").GetBoolean(), "bounded " + traceName + " completed without sampling failure");
             }
-            using var footer = JsonDocument.Parse(File.ReadLines(traces[0]).Last());
-            Require(footer.RootElement.GetProperty("kind").GetString() == "footer"
-                && footer.RootElement.GetProperty("success").GetBoolean(), "bounded trace completed without sampling failure");
+            if (gameplayOracle) Require(File.Exists(Path.Combine(output, "loading-state-inventory.json")), "independent field inventory exported");
             Require(sourceHash == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(source))),
                 "input package bytes unchanged");
             await File.WriteAllTextAsync(Path.Combine(output, "source-identity.json"), JsonSerializer.Serialize(new
-                { source, sourceHash, first, end, record, gameProcessId = Field<Process>(app, "startupGame").Id,
+                { source, sourceHash, first, end, record, primaryProbe, gameplayOracle, nativeScheduler,
+                    gameProcessId = Field<Process>(app, "startupGame").Id,
                     shadow = movies.ShadowRoot, phaseP0Passed = false }));
             Log("DISCOVERY TRACE COMPLETE; full-state P0 gate not asserted");
         }

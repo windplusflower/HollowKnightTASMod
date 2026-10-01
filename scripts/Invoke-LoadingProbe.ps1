@@ -13,11 +13,17 @@ param(
     [switch] $ClockRoundTrip,
     [switch] $SynchronousFetch,
     [switch] $CanonicalStartupClock,
-    [switch] $RecordInputs
+    [switch] $RecordInputs,
+    [switch] $GameplayOracle,
+    [switch] $NativeScheduler,
+    [switch] $DisablePrimaryProbe,
+    [switch] $RelaxedResources
 )
 $ErrorActionPreference = 'Stop'
 if ($CanonicalStartupClock -and (-not $SynchronousFetch -or -not $DisableLegacyCalibration)) { throw 'The v4 experiment requires synchronous fetch and disabled legacy calibration.' }
 if ($RecordInputs -and (-not $CanonicalStartupClock -or $Runs -ne 1)) { throw 'RecordInputs requires the v4 profile and one run.' }
+if ($DisablePrimaryProbe -and (-not $GameplayOracle -or $RecordInputs)) { throw 'DisablePrimaryProbe requires the independent oracle and a replay run.' }
+if ($NativeScheduler -and -not $GameplayOracle) { throw 'NativeScheduler requires the independent gameplay oracle.' }
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $ownedRoot = [IO.Path]::GetFullPath((Join-Path $repo 'artifacts/scene-checkpoints/p0')) + [IO.Path]::DirectorySeparatorChar
@@ -144,6 +150,10 @@ try {
         if ($SynchronousFetch) { $arguments += '--probe-synchronous-fetch' }
         if ($CanonicalStartupClock) { $arguments += '--probe-canonical-startup-clock' }
         if ($RecordInputs) { $arguments += '--probe-record-inputs' }
+        if ($GameplayOracle) { $arguments += '--probe-gameplay-oracle' }
+        if ($NativeScheduler) { $arguments += '--probe-native-scheduler' }
+        if ($DisablePrimaryProbe) { $arguments += '--probe-disable-primary' }
+        if ($RelaxedResources) { $arguments += '--probe-relaxed-resources' }
         if ($DisableLegacyCalibration) { $arguments += '--probe-disable-legacy-calibration' }
         if ($RandomCalls) { $arguments += @('--probe-random-calls', "--probe-call-first=$CallFirst", "--probe-call-end=$CallEnd") }
         $hostProcess = Start-Process -FilePath (Join-Path $companion 'StudioScenarioHarness.exe') -ArgumentList $arguments `

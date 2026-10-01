@@ -24,6 +24,7 @@ internal static partial class StudioScenarioHarness
     static bool worldlineFaultScenarios;
     static bool fsmScenarios;
     static bool customKeyScenarios;
+    static bool relaxedLoadingProbeResources;
     static T Field<T>(object owner, string name) => (T)owner.GetType().GetField(name,
         BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(owner)!;
     static readonly object logLock = new object();
@@ -74,6 +75,7 @@ internal static partial class StudioScenarioHarness
         worldlineFaultScenarios = args.Contains("--worldline-fault");
         fsmScenarios = args.Contains("--boss-fsm");
         customKeyScenarios = args.Contains("--custom-keys");
+        relaxedLoadingProbeResources = args.Contains("--loading-probe") && args.Contains("--probe-relaxed-resources");
         if (!args.Contains("--headless") || Process.GetProcessesByName("hollow_knight").Length != 0
             || Process.GetProcessesByName("HollowKnightTAS.Companion").Length != 0) return 12;
         app = new App(); app.InitializeComponent();

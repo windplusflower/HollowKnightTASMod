@@ -66,6 +66,46 @@ class LoadingProbeComparisonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incomplete"):
             probe.read_trace(p)
 
+    def test_event_state_difference_is_not_hidden_by_matching_lifecycle(self):
+        def event(time):
+            def mutate(rows):
+                rows.insert(2, dict(kind="sample", sequence=2, movieFrame=4, phase="event",
+                                    scene="room", boundary="will-activate", state={"time": time}))
+                for index, row in enumerate(rows):
+                    row["sequence"] = index
+            return mutate
+        result = probe.compare([self.write("a", event("f32:12345678")),
+                                self.write("b", event("f32:12345679"))])
+        self.assertTrue(result["comparisons"][0]["lifecycleMatch"])
+        self.assertEqual(1, result["comparisons"][0]["mismatchedEventSamples"])
+        self.assertFalse(result["comparisonPassed"])
+        self.assertEqual("event", result["differences"][0]["firstDifferences"][0]["phase"])
+
+    def test_loading_state_or_missing_loading_frame_rejects(self):
+        def loading(time):
+            def mutate(rows):
+                rows.insert(2, dict(kind="sample", sequence=2, movieFrame=4, phase="loading", nativeFrame=7,
+                                    scene="room", boundary="SceneTransition", state={"time": time}))
+                for index, row in enumerate(rows):
+                    row["sequence"] = index
+            return mutate
+        a = self.write("a", loading("f32:12345678"))
+        b = self.write("b", loading("f32:12345679"))
+        result = probe.compare([a, b])
+        self.assertTrue(result["comparisons"][0]["loadingOrderMatch"])
+        self.assertEqual(1, result["comparisons"][0]["mismatchedLoadingSamples"])
+        self.assertFalse(result["comparisonPassed"])
+        self.assertFalse(probe.compare([a, self.write("c")])["comparisonPassed"])
+
+    def test_controlled_native_cursor_difference_and_unknown_phase_reject(self):
+        a = self.write("a", lambda rs: rs[0]["state"].update(controlledNativeFrame="10"))
+        b = self.write("b", lambda rs: rs[0]["state"].update(controlledNativeFrame="11"))
+        self.assertFalse(probe.compare([a, b])["comparisonPassed"])
+        self.assertTrue(probe.compare([self.write("d", lambda rs: rs[0].update(nativeFrame=50)),
+                                       self.write("e", lambda rs: rs[0].update(nativeFrame=100))])["comparisonPassed"])
+        with self.assertRaisesRegex(ValueError, "unknown sample phase"):
+            probe.read_trace(self.write("c", lambda rs: rs[0].update(phase="ignored")))
+
 
 if __name__ == "__main__":
     unittest.main()
