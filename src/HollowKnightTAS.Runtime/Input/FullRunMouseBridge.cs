@@ -59,7 +59,7 @@ namespace HollowKnightTAS.Runtime.Input
                 throw new InvalidOperationException("Game mouse bridge is already configured.");
             input = adapter ?? throw new ArgumentNullException(nameof(adapter));
             replaying = isReplay;
-            canonicalMouseCaches = MovieProtocolV2.SelectedNativeProfileId == MovieProtocolV2.CanonicalModClockNativeProfileId;
+            canonicalMouseCaches = NativeExecutionProfile.UsesModWallClock(MovieProtocolV2.SelectedNativeProfileId);
         }
 
         public void UseReplayInputs()

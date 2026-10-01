@@ -19,9 +19,11 @@ param(
     [switch] $DisablePrimaryProbe,
     [switch] $RelaxedResources,
     [switch] $ModWallClock,
-    [switch] $FieldDetails
+    [switch] $FieldDetails,
+    [switch] $SerialScenes
 )
 $ErrorActionPreference = 'Stop'
+if ($SerialScenes -and -not $ModWallClock) { throw 'SerialScenes requires the complete v5 policies and uses the distinct v6 profile.' }
 if ($CanonicalStartupClock -and (-not $SynchronousFetch -or -not $DisableLegacyCalibration)) { throw 'The v4 experiment requires synchronous fetch and disabled legacy calibration.' }
 if ($ModWallClock -and -not $CanonicalStartupClock) { throw 'The v5 Mod wall-clock experiment requires canonical startup clocks.' }
 if ($RecordInputs -and (-not $CanonicalStartupClock -or $Runs -ne 1)) { throw 'RecordInputs requires the v4 profile and one run.' }
@@ -160,6 +162,7 @@ try {
         if ($DisablePrimaryProbe) { $arguments += '--probe-disable-primary' }
         if ($RelaxedResources) { $arguments += '--probe-relaxed-resources' }
         if ($ModWallClock) { $arguments += '--probe-mod-wall-clock' }
+        if ($SerialScenes) { $arguments += '--probe-serial-scenes' }
         if ($DisableLegacyCalibration) { $arguments += '--probe-disable-legacy-calibration' }
         if ($RandomCalls) { $arguments += @('--probe-random-calls', "--probe-call-first=$CallFirst", "--probe-call-end=$CallEnd") }
         $hostProcess = Start-Process -FilePath (Join-Path $companion 'StudioScenarioHarness.exe') -ArgumentList $arguments `

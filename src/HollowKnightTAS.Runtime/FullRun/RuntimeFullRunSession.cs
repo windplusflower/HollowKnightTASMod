@@ -480,6 +480,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (completed != expectedNativeStart)
                     throw new InvalidDataException("Native frame start was not sequential.");
                 var ready = IsMovieFrameReady(out var boundary);
+                LoadingSerialSceneProbe.ObserveNativeBoundary(movieFrame, completed);
                 var sceneHandle = UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;
                 if (ready && sceneHandle != randomSeedSceneHandle)
                 {

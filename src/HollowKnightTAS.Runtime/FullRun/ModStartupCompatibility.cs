@@ -21,6 +21,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly DeterministicSceneFetch? synchronousFetch;
         private readonly DeterministicCinematics cinematics;
         private readonly LoadingSynchronousFetchProbe? experimentalFetch;
+        private readonly LoadingSerialSceneProbe? serialScenes;
         private bool suppressInput = true;
         private long suppressedUpdates;
 
@@ -30,6 +31,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 experimentalFetch = new LoadingSynchronousFetchProbe();
             else synchronousFetch = new DeterministicSceneFetch();
             cinematics = new DeterministicCinematics();
+            if (Environment.GetEnvironmentVariable("HKTAS_LOADING_SERIAL_SCENES") == "1")
+                serialScenes = new LoadingSerialSceneProbe();
             if (InputManager.CurrentTick != 0)
                 throw new InvalidOperationException("Mod startup input guard was installed too late.");
             randomConstructor = new ILHook(typeof(Random).GetConstructor(Type.EmptyTypes), il =>
@@ -53,8 +56,8 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         public void FinishPreloading()
         {
-            if (HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId
-                == HollowKnightTAS.Core.Movie.MovieProtocolV2.CanonicalModClockNativeProfileId)
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesModWallClock(
+                HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId))
             {
                 var payload = AppDomain.CurrentDomain.GetAssemblies()
                     .SingleOrDefault(assembly => assembly.GetName().Name == "HollowKnightTAS.ClockPayload")
@@ -111,6 +114,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             synchronousFetch?.Dispose();
             experimentalFetch?.Dispose();
             cinematics.Dispose();
+            serialScenes?.Dispose();
         }
     }
 }

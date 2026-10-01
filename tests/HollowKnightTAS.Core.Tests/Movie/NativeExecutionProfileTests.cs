@@ -30,15 +30,24 @@ namespace HollowKnightTAS.Core.Tests.Movie
         }
 
         [TestMethod]
+        public void SerialScenesRequireFullClockPolicyAndHaveIndependentIdentity()
+        {
+            Assert.AreEqual(NativeExecutionProfile.SerialSceneProfileId, NativeExecutionProfile.Select(true, true, true, true, true));
+            Assert.ThrowsExactly<InvalidOperationException>(() => NativeExecutionProfile.Select(true, true, true, false, true));
+            Assert.ThrowsExactly<InvalidOperationException>(() => NativeExecutionProfile.Select(false, true, true, true, true));
+            Assert.IsTrue(NativeExecutionProfile.UsesModWallClock(NativeExecutionProfile.SerialSceneProfileId));
+        }
+
+        [TestMethod]
         public void ReplayRejectsBothDirectionsOfProfileMismatch()
         {
             foreach (var recordingProfile in new[] { MovieProtocolV2.NativeProfileId, MovieProtocolV2.CanonicalStartupNativeProfileId,
-                         MovieProtocolV2.CanonicalModClockNativeProfileId })
+                         MovieProtocolV2.CanonicalModClockNativeProfileId, NativeExecutionProfile.SerialSceneProfileId })
             {
                 var header = new MovieV2Header("game", "api", "mod", recordingProfile,
                     MovieProtocolV2.ActionSchemaId, false, new string('a', 64), 800, 450);
                 foreach (var runtimeProfile in new[] { MovieProtocolV2.NativeProfileId, MovieProtocolV2.CanonicalStartupNativeProfileId,
-                             MovieProtocolV2.CanonicalModClockNativeProfileId })
+                             MovieProtocolV2.CanonicalModClockNativeProfileId, NativeExecutionProfile.SerialSceneProfileId })
                 {
                     var runtime = new MovieV2RuntimeCapabilities(runtimeProfile, MovieProtocolV2.ActionSchemaId,
                         true, true, true, 800, 450, new string('a', 64), "game", "api", "mod");

@@ -13,7 +13,7 @@ namespace HollowKnightTAS.ClockPayload
 
         public static void Install()
         {
-            if (NativeExecutionProfile.SelectedProfileId != NativeExecutionProfile.CanonicalModClockProfileId
+            if (!NativeExecutionProfile.UsesModWallClock(NativeExecutionProfile.SelectedProfileId)
                 || Environment.GetEnvironmentVariable("HKTAS_FULL_RUN_V2") != "1")
                 throw new InvalidOperationException("Early Mod wall clocks require the V5 full-run profile.");
             if (Interlocked.Exchange(ref installed, 1) != 0)

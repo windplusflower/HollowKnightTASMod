@@ -459,8 +459,8 @@ namespace HollowKnightTAS.ClockPayload
                 "1", StringComparison.Ordinal);
             fullRunLegacyCalibrationDisabled = fullRunRenderIsolationEnabled
                 && Environment.GetEnvironmentVariable("HKTAS_LOADING_DISABLE_LEGACY_CALIBRATION") == "1";
-            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId
-                == HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalModClockProfileId)
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesModWallClock(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
             {
                 if (!fullRunRenderIsolationEnabled)
                     throw new InvalidOperationException("V5 Mod wall clocks require the full-run execution path.");
