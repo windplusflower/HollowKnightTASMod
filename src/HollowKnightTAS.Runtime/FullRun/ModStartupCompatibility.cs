@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using InControl;
 using Mono.Cecil.Cil;
@@ -52,6 +53,18 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         public void FinishPreloading()
         {
+            if (HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId
+                == HollowKnightTAS.Core.Movie.MovieProtocolV2.CanonicalModClockNativeProfileId)
+            {
+                var payload = AppDomain.CurrentDomain.GetAssemblies()
+                    .SingleOrDefault(assembly => assembly.GetName().Name == "HollowKnightTAS.ClockPayload")
+                    ?? throw new InvalidOperationException("V5 clock payload is unavailable.");
+                var verify = payload.GetType("HollowKnightTAS.ClockPayload.EarlyModWallClockBootstrap", true)!
+                    .GetMethod("Verify", BindingFlags.Static | BindingFlags.Public)
+                    ?? throw new MissingMethodException("V5 Mod wall-clock verifier is unavailable.");
+                verify.Invoke(null, null);
+                Modding.Logger.Log("[HKTAS] V5 registered Mod wall-clock policy verified before input opens.");
+            }
             if (InputManager.CurrentTick != 0)
                 throw new InvalidOperationException("Input advanced outside the preload guard.");
             suppressInput = false;

@@ -9,6 +9,8 @@
 
   <ItemGroup>
     <Compile Include="..\HollowKnightTAS.Core\Ipc\RecordingRootConfiguration.cs" Link="RecordingRootConfiguration.cs" />
+    <Compile Include="..\HollowKnightTAS.Core\Movie\NativeExecutionProfile.cs" Link="NativeExecutionProfile.cs" />
+    <Compile Include="..\HollowKnightTAS.Core\Movie\ModWallClock.cs" Link="ModWallClock.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -28,6 +30,9 @@
       <HintPath>$(HKManagedDir)\MMHOOK_Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="MonoMod.RuntimeDetour"><HintPath>$(HKManagedDir)\MonoMod.RuntimeDetour.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="MonoMod.Utils"><HintPath>$(HKManagedDir)\MonoMod.Utils.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Mono.Cecil"><HintPath>$(HKManagedDir)\Mono.Cecil.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 
   <Target Name="ValidateLocalBuildConfig" BeforeTargets="ResolveReferences">

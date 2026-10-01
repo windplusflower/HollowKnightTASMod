@@ -30,6 +30,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Func<object, string?> reference;
         private readonly Func<Type, bool> nativeBase;
         private readonly Func<object, FieldInfo, object?, string?>? fieldIdentity;
+        private readonly Func<Delegate, bool>? observerCallback;
         private readonly Dictionary<Type, FieldInfo[]> fieldCache = new Dictionary<Type, FieldInfo[]>();
         private readonly Dictionary<object, int> visited = new Dictionary<object, int>(IdentityComparer.Instance);
         private readonly SortedSet<string> unsupported = new SortedSet<string>(StringComparer.Ordinal);
@@ -40,8 +41,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly List<object> fieldDiagnostics = new List<object>();
 
         internal LoadingFieldDigest(Func<object, string?> reference, Func<Type, bool> nativeBase,
-            Func<object, FieldInfo, object?, string?>? fieldIdentity = null)
-        { this.reference = reference; this.nativeBase = nativeBase; this.fieldIdentity = fieldIdentity; }
+            Func<object, FieldInfo, object?, string?>? fieldIdentity = null,
+            Func<Delegate, bool>? observerCallback = null)
+        {
+            this.reference = reference; this.nativeBase = nativeBase;
+            this.fieldIdentity = fieldIdentity; this.observerCallback = observerCallback;
+        }
 
         internal LoadingFieldDigestResult Capture(object? value, string root, bool expandRoot = false,
             bool includeFieldDiagnostics = false)
@@ -119,6 +124,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (++nodes > MaximumNodes || depth > MaximumDepth)
                 throw new InvalidOperationException("P0 field digest graph budget exceeded at " + path);
             if (value == null) { Token("null"); return; }
+            Delegate[]? gameplayCallbacks = null;
+            if (value is Delegate observed && observerCallback != null)
+            {
+                gameplayCallbacks = observed.GetInvocationList().Where(callback => !observerCallback(callback)).ToArray();
+                // A field containing only observation subscriptions has the
+                // same gameplay value as an unsubscribed (null) event.
+                if (gameplayCallbacks.Length == 0) { Token("null"); return; }
+            }
             var type = value.GetType();
             Token(type.FullName ?? type.Name);
             if (value is IntPtr pointer)
@@ -166,7 +179,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (value is Delegate callback)
             {
-                var calls = callback.GetInvocationList();
+                var calls = gameplayCallbacks ?? callback.GetInvocationList();
                 Token(calls.Length.ToString(CultureInfo.InvariantCulture));
                 for (var i = 0; i < calls.Length; i++)
                 {

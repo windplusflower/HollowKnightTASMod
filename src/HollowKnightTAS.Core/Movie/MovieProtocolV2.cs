@@ -21,14 +21,15 @@ namespace HollowKnightTAS.Core.Movie
         public const string ActionSchemaId = "hktas-full-run-actions-v2";
         public const string NativeProfileId = NativeExecutionProfile.ProfileId;
         public const string CanonicalStartupNativeProfileId = NativeExecutionProfile.CanonicalStartupProfileId;
+        public const string CanonicalModClockNativeProfileId = NativeExecutionProfile.CanonicalModClockProfileId;
 
         // Keep the published default profile. The opt-in P0 execution
         // policy must be visible in recordings, capability receipts and replay.
         public static string SelectedNativeProfileId => NativeExecutionProfile.SelectedProfileId;
 
         public static string SelectNativeProfile(bool canonicalStartupClock,
-            bool synchronousFetch, bool disableLegacyCalibration)
-            => NativeExecutionProfile.Select(canonicalStartupClock, synchronousFetch, disableLegacyCalibration);
+            bool synchronousFetch, bool disableLegacyCalibration, bool modWallClock = false)
+            => NativeExecutionProfile.Select(canonicalStartupClock, synchronousFetch, disableLegacyCalibration, modWallClock);
         public const string RandomSynchronizationPolicyId =
             "scene-input-boundary-seed-render-isolation-v1";
         public const int MaximumSourceUtf8Bytes = 16 * 1024 * 1024;

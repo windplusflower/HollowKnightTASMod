@@ -459,6 +459,13 @@ namespace HollowKnightTAS.ClockPayload
                 "1", StringComparison.Ordinal);
             fullRunLegacyCalibrationDisabled = fullRunRenderIsolationEnabled
                 && Environment.GetEnvironmentVariable("HKTAS_LOADING_DISABLE_LEGACY_CALIBRATION") == "1";
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId
+                == HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalModClockProfileId)
+            {
+                if (!fullRunRenderIsolationEnabled)
+                    throw new InvalidOperationException("V5 Mod wall clocks require the full-run execution path.");
+                EarlyModWallClockBootstrap.Verify();
+            }
             if (fullRunRenderIsolationEnabled)
                 On.UnityStandardAssets.ImageEffects.FastNoise.DrawNoiseQuadGrid +=
                     OnFullRunDrawNoise;
@@ -469,6 +476,11 @@ namespace HollowKnightTAS.ClockPayload
             ModHooks.HeroUpdateHook += OnHeroUpdate;
             ModHooks.ApplicationQuitHook += OnApplicationQuit;
             TryRegisterRuntimeVirtualClockBoundary();
+        }
+
+        public static void VerifyModWallClockPolicy()
+        {
+            EarlyModWallClockBootstrap.Verify();
         }
 
         private static void OnGameManagerUpdate(
@@ -658,7 +670,8 @@ namespace HollowKnightTAS.ClockPayload
 
         private static void OnApplicationQuit()
         {
-            Restore();
+            try { Restore(); }
+            finally { EarlyModWallClockBootstrap.Dispose(); }
         }
 
         private static void InitializeRandomSynchronization()

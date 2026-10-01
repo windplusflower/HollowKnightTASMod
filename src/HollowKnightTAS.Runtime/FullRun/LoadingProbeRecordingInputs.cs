@@ -15,8 +15,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             var path = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_RECORD_INPUTS");
             if (string.IsNullOrEmpty(path)) return null;
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE") != "1"
-                || MovieProtocolV2.SelectedNativeProfileId != MovieProtocolV2.CanonicalStartupNativeProfileId)
-                throw new InvalidOperationException("Scripted probe recording requires the explicit P0 v4 profile.");
+                || !NativeExecutionProfile.IsCanonicalStartupProfile(MovieProtocolV2.SelectedNativeProfileId))
+                throw new InvalidOperationException("Scripted probe recording requires an explicit P0 canonical startup profile.");
             var output = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT");
             if (string.IsNullOrWhiteSpace(output)) throw new InvalidDataException("Probe output root is missing.");
             var root = Path.GetFullPath(output).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;

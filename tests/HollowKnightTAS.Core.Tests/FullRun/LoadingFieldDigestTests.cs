@@ -40,6 +40,33 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         }
 
         [TestMethod]
+        public void ObserverSubscriptionsDoNotHideGameplayCallbackOrderOrTargetState()
+        {
+            var observer = new ObservationListener();
+            var game = new GameplayListener(7);
+            var digest = new LoadingFieldDigest(value => null, type => false,
+                observerCallback: callback => callback.Method.DeclaringType == typeof(ObservationListener));
+            var empty = digest.Capture(new EventOwner(null), "root").Sha256;
+            Assert.AreEqual(empty, digest.Capture(new EventOwner(observer.Observe), "root").Sha256);
+            Assert.AreNotEqual(NewDigest().Capture(new EventOwner(null), "root").Sha256,
+                NewDigest().Capture(new EventOwner(observer.Observe), "root").Sha256);
+
+            Action callbacks = game.First;
+            callbacks += game.Second;
+            var expected = digest.Capture(new EventOwner(callbacks), "root").Sha256;
+            Action withObservers = observer.Observe;
+            withObservers += game.First;
+            withObservers += observer.Observe;
+            withObservers += game.Second;
+            Assert.AreEqual(expected, digest.Capture(new EventOwner(withObservers), "root").Sha256);
+            Action reordered = game.Second;
+            reordered += game.First;
+            Assert.AreNotEqual(expected, digest.Capture(new EventOwner(reordered), "root").Sha256);
+            game.Value++;
+            Assert.AreNotEqual(expected, digest.Capture(new EventOwner(withObservers), "root").Sha256);
+        }
+
+        [TestMethod]
         public void CyclesAndSharedReferencesRemainDeterministic()
         {
             Node Graph() { var node = new Node(); node.A = node; node.B = node; return node; }
@@ -100,6 +127,22 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         {
             internal readonly int ProcessBinding, Value;
             internal Binding(int binding, int value) { ProcessBinding = binding; Value = value; }
+        }
+        private sealed class EventOwner
+        {
+            private readonly Action? callback;
+            internal EventOwner(Action? callback) { this.callback = callback; }
+        }
+        private sealed class ObservationListener
+        {
+            internal void Observe() => throw new InvalidOperationException("An observation callback was invoked.");
+        }
+        private sealed class GameplayListener
+        {
+            internal int Value;
+            internal GameplayListener(int value) { Value = value; }
+            internal void First() => throw new InvalidOperationException("A gameplay callback was invoked.");
+            internal void Second() => throw new InvalidOperationException("A gameplay callback was invoked.");
         }
         private sealed class Key
         {

@@ -10,20 +10,28 @@ namespace HollowKnightTAS.Core.Movie
         public const string LegacyProfileId = "hktas-unity-input-playerloop-load-elision-scene-rng-2026-v3";
         public const string CanonicalStartupProfileId =
             "hktas-unity-input-playerloop-canonical-startup-clock-2026-v4-experimental";
+        public const string CanonicalModClockProfileId =
+            "hktas-unity-input-playerloop-canonical-startup-mod-wall-clock-2026-v5-experimental";
 
         public static string SelectedProfileId => Select(
             Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_STARTUP_CLOCK") == "1",
             Environment.GetEnvironmentVariable("HKTAS_LOADING_SYNCHRONOUS_FETCH") == "1",
-            Environment.GetEnvironmentVariable("HKTAS_LOADING_DISABLE_LEGACY_CALIBRATION") == "1");
+            Environment.GetEnvironmentVariable("HKTAS_LOADING_DISABLE_LEGACY_CALIBRATION") == "1",
+            Environment.GetEnvironmentVariable("HKTAS_LOADING_MOD_WALL_CLOCK") == "1");
 
         public static string Select(bool canonicalStartupClock,
-            bool synchronousFetch, bool disableLegacyCalibration)
+            bool synchronousFetch, bool disableLegacyCalibration, bool modWallClock = false)
         {
+            if (modWallClock && !canonicalStartupClock)
+                throw new InvalidOperationException("Mod wall clocks require canonical startup clocks.");
             if (!canonicalStartupClock) return ProfileId;
             if (!synchronousFetch || !disableLegacyCalibration)
                 throw new InvalidOperationException(
                     "Canonical startup clocks require synchronous scene fetch and disabled legacy calibration.");
-            return CanonicalStartupProfileId;
+            return modWallClock ? CanonicalModClockProfileId : CanonicalStartupProfileId;
         }
+
+        public static bool IsCanonicalStartupProfile(string profile)
+            => profile == CanonicalStartupProfileId || profile == CanonicalModClockProfileId;
     }
 }

@@ -41,6 +41,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }, StringComparer.Ordinal);
         private readonly Type? payloadType;
         private readonly LoadingNativeSchedulerDigest? nativeScheduler;
+        private readonly bool fieldDetails;
         private readonly List<Action> detach = new List<Action>();
 
         private LoadingGameplayOracle(string directory, long first, long end,
@@ -49,9 +50,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             this.directory = directory; this.first = first; this.end = end;
             this.movieFrame = movieFrame; this.nativeFrame = nativeFrame; this.gameplayRng = gameplayRng;
             controlledNativeOrigin = nativeFrame();
+            fieldDetails = Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_FIELD_DETAILS") == "1";
             observationIdentity = new LoadingObservationIdentity(directory);
             fields = new LoadingFieldDigest(Reference, type => type == typeof(MonoBehaviour)
-                || type == typeof(UnityEngine.Object), observationIdentity.Field);
+                || type == typeof(UnityEngine.Object), observationIdentity.Field, IsObservationCallback);
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1")
                 nativeScheduler = new LoadingNativeSchedulerDigest();
             payloadType = AppDomain.CurrentDomain.GetAssemblies()
@@ -60,8 +62,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             Write(new { kind = "header", schema = "hktas-loading-oracle-v1", first, end,
                 nativeProfile = HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId,
                 coverage = "active-managed-fields-current-fsm-states-actions-and-all-roots-states-actions-at-window-endpoints-willactivate-loadfinish-v4",
-                referencePolicy = "scene-hierarchy-sibling-component-index; assets-type-name; TAS-controller-references-by-type; protected-root-binding; registered-input-device-guid; input-tick-age; native-scheduler-timestamp-age-v1; dictionary-slots-v1; gradient-active-mode-v1; controlled-native-cursor-from-StartInputAt",
+                referencePolicy = "scene-hierarchy-sibling-component-index; assets-type-name; TAS-controller-references-by-type; readonly-probe-subscriptions-excluded-v1; protected-root-binding; registered-input-device-guid; input-tick-age; native-scheduler-timestamp-age-v1; dictionary-slots-v1; gradient-active-mode-v1; controlled-native-cursor-from-StartInputAt",
                 nativeScheduler = nativeScheduler != null,
+                fieldDiagnostics = fieldDetails,
                 completeStateCoverage = false,
                 knownMissing = new[] { "native-coroutine-running-callstacks-and-unregistered-schedulers", "native-physics-contact-caches",
                     "arbitrary-mod-statics", "ambiguous-asset-identities", "dormant-roots-between-window-endpoints-willactivate-loadfinish",
@@ -76,6 +79,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<long> nativeFrame, Func<string> gameplayRng)
         {
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_GAMEPLAY_ORACLE") != "1") return null;
+            if (Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CLOCK_ROUNDTRIP") == "1")
+                throw new InvalidOperationException("The read-only gameplay oracle cannot run with clock-write diagnostics.");
             if (!long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_FIRST"), out var first)
                 || !long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_END"), out var end)
                 || first < 0 || end <= first || end - first > 10000)
@@ -161,7 +166,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 schedulerDigest = nativeScheduler.Capture(fields,
                     id => objects.TryGetValue(id, out var value) ? value : null,
                     pointer => nativeBehaviours.TryGetValue(pointer, out var value) ? value : null,
-                    includeFieldDiagnostics: fullInventory);
+                    includeFieldDiagnostics: fullInventory && fieldDetails);
             }
             var inventory = new List<object>();
             var fieldDiagnostics = new List<object>();
@@ -202,7 +207,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 else
                 {
                     digest = fields.Capture(component, item.id, expandRoot: true,
-                        includeFieldDiagnostics: fullInventory && detailedTypes.Contains(component.GetType().FullName ?? ""));
+                        includeFieldDiagnostics: fullInventory && fieldDetails
+                            && detailedTypes.Contains(component.GetType().FullName ?? ""));
                     mono.Append(item.id).Append(':').Append(component.enabled).Append(':')
                         .Append(component.gameObject.activeSelf).Append(':').Append(digest.Sha256).Append('\n');
                 }
@@ -215,7 +221,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 foreach (var omitted in digest.Unsupported) omissions.Add(omitted);
                 if (digest.FieldDigests.Length != 0)
                     fieldDiagnostics.Add(new { root = item.id, fields = digest.FieldDigests });
-                var fieldDigests = detailedTypes.Contains(component.GetType().FullName ?? "")
+                var fieldDigests = fullInventory && fieldDetails && detailedTypes.Contains(component.GetType().FullName ?? "")
                     ? fields.Fields(component.GetType()).Select(field => new
                         { field = field.Name, owner = field.DeclaringType!.FullName,
                             digest = fields.CaptureFields(component, item.id, field.Name).Sha256 }).ToArray() : null;
@@ -293,6 +299,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 return "fsm-unbound:" + name;
             }
             return null;
+        }
+
+        private static bool IsObservationCallback(Delegate callback)
+        {
+            // Only these two read-only recorders (including their compiler
+            // closures) are instrumentation. Retain every game/Mod/controller
+            // callback and its order. Clock-write diagnostics are rejected.
+            for (var type = callback.Method.DeclaringType; type != null; type = type.DeclaringType)
+                if (type == typeof(LoadingBoundaryProbe) || type == typeof(LoadingGameplayOracle)) return true;
+            return false;
         }
 
         private static string GradientIdentity(ParticleSystem.MinMaxGradient gradient)

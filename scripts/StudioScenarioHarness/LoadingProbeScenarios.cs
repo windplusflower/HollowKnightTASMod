@@ -26,6 +26,7 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE", primaryProbe ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_GAMEPLAY_ORACLE", gameplayOracle ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER", nativeScheduler ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_ORACLE_FIELD_DETAILS", args.Contains("--probe-field-details") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_FIRST", first.ToString());
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_END", end.ToString());
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_LIGHT", args.Contains("--probe-light") ? "1" : null);
@@ -34,6 +35,7 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CLOCK_ROUNDTRIP", args.Contains("--probe-clock-roundtrip") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_SYNCHRONOUS_FETCH", args.Contains("--probe-synchronous-fetch") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CANONICAL_STARTUP_CLOCK", args.Contains("--probe-canonical-startup-clock") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_MOD_WALL_CLOCK", args.Contains("--probe-mod-wall-clock") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT", output);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_DISABLE_LEGACY_CALIBRATION", args.Contains("--probe-disable-legacy-calibration") ? "1" : null);
         if (args.Contains("--probe-random-calls"))
@@ -55,8 +57,8 @@ internal static partial class StudioScenarioHarness
         var record = args.Contains("--probe-record-inputs");
         if (record)
         {
-            Require(MovieProtocolV2.SelectedNativeProfileId == MovieProtocolV2.CanonicalStartupNativeProfileId,
-                "new recording uses explicit v4 experimental profile");
+            Require(NativeExecutionProfile.IsCanonicalStartupProfile(MovieProtocolV2.SelectedNativeProfileId),
+                "new recording uses explicit canonical startup experimental profile");
             var original = SequencePackage.Read(source);
             Require(original.InitialSaves != null, "recording source binds the protected initial saves");
             var parsed = new MovieV2Codec().Parse(new StringReader(original.Movie), source).Document
@@ -103,9 +105,11 @@ internal static partial class StudioScenarioHarness
                     ?? throw new InvalidDataException("Invalid native recording.");
                 Require(actual.Frame == end && strict.Runs.Sum(run => run.RepeatCount) == end
                     && strict.Runs.All(run => !run.Authored)
-                    && strict.Header.NativeProfileId == MovieProtocolV2.CanonicalStartupNativeProfileId,
-                    "fresh strict native recording has exact length and v4 identity");
-                await SequencePackage.WriteAsync(Path.Combine(output, "canonical-startup-v4-recording.hktaspack"),
+                    && strict.Header.NativeProfileId == MovieProtocolV2.SelectedNativeProfileId,
+                    "fresh strict native recording has exact length and selected profile identity");
+                var recordingName = MovieProtocolV2.SelectedNativeProfileId == MovieProtocolV2.CanonicalModClockNativeProfileId
+                    ? "canonical-startup-v5-recording.hktaspack" : "canonical-startup-v4-recording.hktaspack";
+                await SequencePackage.WriteAsync(Path.Combine(output, recordingName),
                     actual.Movie, movies.SessionInitialSaves);
             }
             else
@@ -138,6 +142,9 @@ internal static partial class StudioScenarioHarness
                 "input package bytes unchanged");
             await File.WriteAllTextAsync(Path.Combine(output, "source-identity.json"), JsonSerializer.Serialize(new
                 { source, sourceHash, first, end, record, primaryProbe, gameplayOracle, nativeScheduler,
+                    nativeProfile = MovieProtocolV2.SelectedNativeProfileId,
+                    modWallClock = args.Contains("--probe-mod-wall-clock"),
+                    fieldDetails = args.Contains("--probe-field-details"),
                     gameProcessId = Field<Process>(app, "startupGame").Id,
                     shadow = movies.ShadowRoot, phaseP0Passed = false }));
             Log("DISCOVERY TRACE COMPLETE; full-state P0 gate not asserted");

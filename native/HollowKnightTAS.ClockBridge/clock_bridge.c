@@ -65,6 +65,7 @@ static BOOL g_v2_gate_enabled;
 static volatile LONG *g_boot_frame_state; /* completed, waiting, thread, hooked */
 static BOOL loading_startup_clock_is_frozen(void);
 static BOOL loading_startup_clock_owns_advances(void);
+static BOOL prepare_early_mod_wall_clock(void);
 
 static void advance_boot_frame_clock(void)
 {
@@ -453,6 +454,50 @@ static BOOL payload_path_utf8(char *output, int output_capacity)
         NULL,
         NULL);
     return converted > 0;
+}
+
+static BOOL prepare_early_mod_wall_clock(void)
+{
+    static LONG attempted;
+    static BOOL installed;
+    wchar_t enabled[4];
+    DWORD length = GetEnvironmentVariableW(L"HKTAS_LOADING_MOD_WALL_CLOCK", enabled, 4);
+    if (length == 0) return TRUE;
+    if (length != 1 || enabled[0] != L'1' || !g_v2_gate_enabled
+        || !g_loading_startup_clock_enabled
+        || GetCurrentThreadId() != g_startup_hook_thread_id) return FALSE;
+    if (InterlockedExchange(&attempted, 1) != 0) return installed;
+
+    /* The regular worker waits for Menu_Title. This small V5-only entry must
+     * precede ModLoader's assembly scan and constructors. The engine thread
+     * is already attached to Mono; do not attach a competing worker thread. */
+    HMODULE mono = GetModuleHandleW(L"mono-2.0-bdwgc.dll");
+    mono_get_root_domain_fn get_root_domain = NULL;
+    mono_domain_assembly_open_fn domain_assembly_open = NULL;
+    mono_assembly_get_image_fn assembly_get_image = NULL;
+    mono_class_from_name_fn class_from_name = NULL;
+    mono_class_get_method_from_name_fn class_get_method = NULL;
+    mono_runtime_invoke_fn runtime_invoke = NULL;
+    if (!load_export(&get_root_domain, sizeof(get_root_domain), mono, "mono_get_root_domain")
+        || !load_export(&domain_assembly_open, sizeof(domain_assembly_open), mono, "mono_domain_assembly_open")
+        || !load_export(&assembly_get_image, sizeof(assembly_get_image), mono, "mono_assembly_get_image")
+        || !load_export(&class_from_name, sizeof(class_from_name), mono, "mono_class_from_name")
+        || !load_export(&class_get_method, sizeof(class_get_method), mono, "mono_class_get_method_from_name")
+        || !load_export(&runtime_invoke, sizeof(runtime_invoke), mono, "mono_runtime_invoke")) return FALSE;
+    void *domain = get_root_domain();
+    char payload_path[MAX_PATH * 4];
+    if (domain == NULL || !payload_path_utf8(payload_path, (int)sizeof(payload_path))) return FALSE;
+    void *assembly = domain_assembly_open(domain, payload_path);
+    void *image = assembly == NULL ? NULL : assembly_get_image(assembly);
+    void *klass = image == NULL ? NULL : class_from_name(image,
+        "HollowKnightTAS.ClockPayload", "EarlyModWallClockBootstrap");
+    void *method = klass == NULL ? NULL : class_get_method(klass, "Install", 0);
+    if (method == NULL) return FALSE;
+    void *exception = NULL;
+    runtime_invoke(method, NULL, NULL, &exception);
+    installed = exception == NULL;
+    if (installed) loading_startup_clock_diagnostic("mod-wall-clock-installed");
+    return installed;
 }
 
 static DWORD WINAPI clock_worker(LPVOID ignored)

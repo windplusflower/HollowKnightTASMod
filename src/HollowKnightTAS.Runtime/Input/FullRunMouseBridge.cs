@@ -41,12 +41,15 @@ namespace HollowKnightTAS.Runtime.Input
         private bool installed;
         private bool suspended = true;
         private bool disposed;
+        private bool canonicalMouseCaches;
+        private FieldInfo? standaloneLastPosition;
+        private FieldInfo? standaloneThisPosition;
 
         private static MouseFrameState Zero => new MouseFrameState(0, 0, 0, 0, 0, 0);
 
         public bool Enabled { get; private set; }
         internal bool Replaying => replaying;
-        internal bool UsesCapturedInput => replaying || suspended;
+        internal bool UsesCapturedInput => replaying || suspended || canonicalMouseCaches;
         internal MouseFrameState HkState => hkState;
         internal uint PreviousHkButtons => previousHkButtons;
 
@@ -56,6 +59,7 @@ namespace HollowKnightTAS.Runtime.Input
                 throw new InvalidOperationException("Game mouse bridge is already configured.");
             input = adapter ?? throw new ArgumentNullException(nameof(adapter));
             replaying = isReplay;
+            canonicalMouseCaches = MovieProtocolV2.SelectedNativeProfileId == MovieProtocolV2.CanonicalModClockNativeProfileId;
         }
 
         public void UseReplayInputs()
@@ -89,6 +93,22 @@ namespace HollowKnightTAS.Runtime.Input
                 On.InControl.InControlInputModule.ShouldActivateModule += OnInControlShouldActivate;
                 On.InControl.InControlInputModule.Process += OnInControlProcess;
                 Enabled = enabled;
+                if (canonicalMouseCaches)
+                {
+                    standaloneLastPosition = typeof(StandaloneInputModule).GetField("m_LastMousePosition", BindingFlags.Instance | BindingFlags.NonPublic)
+                        ?? throw new MissingMemberException("StandaloneInputModule.m_LastMousePosition");
+                    standaloneThisPosition = typeof(StandaloneInputModule).GetField("m_MousePosition", BindingFlags.Instance | BindingFlags.NonPublic)
+                        ?? throw new MissingMemberException("StandaloneInputModule.m_MousePosition");
+                    if (standaloneLastPosition.FieldType != typeof(Vector2) || standaloneThisPosition.FieldType != typeof(Vector2)
+                        || HkLastPosition.FieldType != typeof(Vector3) || HkThisPosition.FieldType != typeof(Vector3))
+                        throw new InvalidOperationException("V5 mouse cache layout is unavailable.");
+                    foreach (var module in Resources.FindObjectsOfTypeAll<HollowKnightInputModule>())
+                        if (module != null && module.gameObject.scene.IsValid() && module.gameObject.scene.isLoaded)
+                        {
+                            EnsureHkModule(module);
+                            SetCanonicalPositions(module, Vector2.zero, Vector2.zero);
+                        }
+                }
                 installed = true;
                 return true;
             }
@@ -113,7 +133,12 @@ namespace HollowKnightTAS.Runtime.Input
                 previousHkButtons = 0;
             }
             foreach (var item in hkModules)
-                if (item.Module != null) item.Module.allowMouseInput = Enabled && enabled && item.Prior;
+                if (item.Module != null)
+                {
+                    item.Module.allowMouseInput = Enabled && enabled && item.Prior;
+                    if (canonicalMouseCaches && (!Enabled || suspended))
+                        SetCanonicalPositions(item.Module, Vector2.zero, Vector2.zero);
+                }
             foreach (var item in inControlModules)
                 if (item.Module != null) item.Module.allowMouseInput = Enabled && enabled && item.Prior;
         }
@@ -180,7 +205,11 @@ namespace HollowKnightTAS.Runtime.Input
                 }
                 originalCalled = true;
                 original(module);
-                if (Enabled && replaying && !suspended)
+                if (canonicalMouseCaches)
+                    SetCanonicalPositions(module,
+                        Enabled && !suspended ? previousHkPosition : Vector2.zero,
+                        Enabled && !suspended ? DecodePosition(hkState) : Vector2.zero);
+                else if (Enabled && replaying && !suspended)
                 {
                     HkLastPosition.SetValue(module, ToVector3(previousHkPosition));
                     HkThisPosition.SetValue(module, ToVector3(DecodePosition(hkState)));
@@ -224,7 +253,12 @@ namespace HollowKnightTAS.Runtime.Input
         {
             EnsureHkModule(module);
             original(module);
-            if (Enabled && replaying && !suspended)
+            if (canonicalMouseCaches)
+            {
+                var position = Enabled && !suspended ? DecodePosition(hkState) : Vector2.zero;
+                SetCanonicalPositions(module, position, position);
+            }
+            else if (Enabled && replaying && !suspended)
             {
                 var position = DecodePosition(hkState);
                 HkLastPosition.SetValue(module, ToVector3(position));
@@ -268,6 +302,16 @@ namespace HollowKnightTAS.Runtime.Input
             }
             hkModules.Add((module, module.allowMouseInput, prior, overrideInput));
             if (!Enabled) module.allowMouseInput = false;
+        }
+
+        private void SetCanonicalPositions(HollowKnightInputModule module, Vector2 previous, Vector2 current)
+        {
+            // Run the original hook chain, then bind both inherited and HK
+            // caches to the Movie mouse channel. Disabled input stays zero.
+            HkLastPosition.SetValue(module, ToVector3(previous));
+            HkThisPosition.SetValue(module, ToVector3(current));
+            standaloneLastPosition!.SetValue(module, previous);
+            standaloneThisPosition!.SetValue(module, current);
         }
 
         private void Disable(HollowKnightInputModule module)
