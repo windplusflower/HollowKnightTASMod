@@ -54,6 +54,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             beginHook = new Hook(begin, (Func<OriginalBegin, SceneLoad, IEnumerator>)Begin);
             unloadHook = new Hook(unload, (Func<OriginalUnload, string, bool>)Unload);
             transitionHook = new Hook(start, (Func<OriginalTransition, GameManager, GameManager.SceneLoadInfo, IEnumerator>)Start);
+            USceneManager.sceneLoaded += TargetLoaded;
             instance = this;
             Write("installed", null);
             Modding.Logger.Log("[HKTAS] V6 serial scene experiment installed.");
@@ -155,7 +156,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // Suppressing only that removal leaves staging active, causing future
                 // objects (and the next transition) to bind to staging instead.
                 var target = USceneManager.GetSceneByName(transition.TargetSceneName);
-                if (!target.IsValid() || !target.isLoaded || !USceneManager.SetActiveScene(target))
+                if (!target.IsValid() || !target.isLoaded
+                    || (USceneManager.GetActiveScene() != target && !USceneManager.SetActiveScene(target)))
                     throw Fail("Cannot select the activated serial target scene.");
                 // Keep one empty carrier scene. CreateScene does not emit sceneLoaded;
                 // unloading it sends an unmatched sceneUnloaded event to Mod listeners.
@@ -229,6 +231,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                     + Array.IndexOf(go.GetComponents(component.GetType()), component) + "]");
         }
 
+        private void TargetLoaded(Scene scene, LoadSceneMode mode)
+        {
+            if (transition == null || !sourceUnloaded || scene.name != transition.TargetSceneName) return;
+            // Select the target and refresh its dimensions before Start builds
+            // scene borders from GameManager tilemap bounds.
+            if (!USceneManager.SetActiveScene(scene)) throw Fail("Cannot select serial target before Start.");
+            // SceneManager.Start builds the four black scene borders from the
+            // GameManager tilemap dimensions. The serialized activation yields
+            // before ActivationComplete, so publish the target dimensions now,
+            // before Start can use the smaller source-scene bounds.
+            var manager = GameManager.UnsafeInstance;
+            if (manager == null) throw Fail("Serial target has no GameManager.");
+            manager.RefreshTilemapInfo(scene.name);
+        }
+
         private void Write(string phase, object? data)
         {
             if (++rows > 256) throw new InvalidOperationException("Serial scene diagnostic budget exceeded.");
@@ -246,6 +263,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public void Dispose()
         {
             instance = null;
+            USceneManager.sceneLoaded -= TargetLoaded;
             transitionHook.Dispose();
             beginHook.Dispose();
             unloadHook.Dispose();
