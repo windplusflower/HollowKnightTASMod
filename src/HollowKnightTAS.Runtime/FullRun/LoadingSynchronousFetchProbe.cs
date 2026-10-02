@@ -29,6 +29,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         [DllImport("kernel32.dll")]
         private static extern UIntPtr VirtualQuery(IntPtr address, out MemoryInfo info, UIntPtr size);
         private readonly ILHook hook;
+        private static LoadingSynchronousFetchProbe? instance;
         private readonly int thread = Thread.CurrentThread.ManagedThreadId;
         private NativePreloadUpdate? update;
         private bool pumping;
@@ -48,6 +49,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 cursor.EmitDelegate<Func<AsyncOperation?, AsyncOperation?>>(Pump);
             });
             Modding.Logger.Log("[HKTAS] P0 synchronous scene fetch experiment attached.");
+            instance = this;
             Milestone("attached");
         }
 
@@ -64,9 +66,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Newtonsoft.Json.JsonConvert.SerializeObject(row) + "\n");
         }
 
-        private AsyncOperation? Pump(AsyncOperation? operation)
+        private AsyncOperation? Pump(AsyncOperation? operation) => PumpOperation(operation, false);
+
+        internal static void CompleteSerialActivation(AsyncOperation operation)
         {
-            if (operation == null || operation.isDone || operation.progress >= 0.9f) return operation;
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId
+                != HollowKnightTAS.Core.Movie.NativeExecutionProfile.SerialSceneProfileId
+                || !operation.allowSceneActivation)
+                throw new InvalidOperationException("Synchronous activation requires an authorized V6 scene operation.");
+            (instance ?? throw new InvalidOperationException("Scene preloader is unavailable."))
+                .PumpOperation(operation, true);
+        }
+
+        private AsyncOperation? PumpOperation(AsyncOperation? operation, bool completeActivation)
+        {
+            if (operation == null || operation.isDone || (!completeActivation && operation.progress >= 0.9f)) return operation;
             if (pumping || Thread.CurrentThread.ManagedThreadId != thread)
                 throw new InvalidOperationException("Scene fetch cannot reenter or run outside the Unity thread.");
             if (update == null)
@@ -114,21 +128,22 @@ namespace HollowKnightTAS.Runtime.FullRun
             pumping = true;
             try
             {
-                operation.allowSceneActivation = false;
-                while (operation.progress < 0.9f && !operation.isDone)
+                operation.allowSceneActivation = completeActivation;
+                bool Pending() => !operation.isDone && (completeActivation || operation.progress < 0.9f);
+                while (Pending())
                 {
                     update();
                     iterations++;
                     if (unchecked(Environment.TickCount - wallStart) > 30000)
                         throw new TimeoutException("Native scene fetch pump exceeded 30 seconds.");
-                    if (operation.progress < 0.9f) Thread.Sleep(1);
+                    if (Pending()) Thread.Sleep(1);
                 }
                 if (Time.frameCount != frame || BitConverter.DoubleToInt64Bits(Time.timeAsDouble) != time
                     || BitConverter.DoubleToInt64Bits(Time.fixedTimeAsDouble) != fixedTime)
                     throw new InvalidOperationException("Preloading advanced the engine clock outside PlayerLoop.");
                 Modding.Logger.Log("[HKTAS] P0 fetch completed without advancing clock: frame=" + frame
                     + " iterations=" + iterations + " wallMs=" + unchecked(Environment.TickCount - wallStart));
-                Milestone("scene-fetch-complete");
+                Milestone(completeActivation ? "serial-scene-activation-complete" : "scene-fetch-complete");
             }
             finally { operation.allowSceneActivation = activation; pumping = false; }
             return operation;
@@ -142,6 +157,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 foreach (var nested in Flatten(child)) yield return nested;
         }
 
-        public void Dispose() => hook.Dispose();
+        public void Dispose()
+        {
+            if (instance == this) instance = null;
+            hook.Dispose();
+        }
     }
 }

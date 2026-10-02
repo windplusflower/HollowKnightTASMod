@@ -105,6 +105,11 @@ internal static partial class StudioScenarioHarness
                     "scripted recording exact endpoint", 180);
                 if (serialScenes)
                 {
+                    var pausedRuntime = await VideoRuntimeState(vm);
+                    Require(Number(pausedRuntime, "movieFrame") == end - 2,
+                        "serial recording Runtime reached the exact pre-step endpoint");
+                    await Until(() => Field<long>(vm, "currentFullRunMovieFrame") == end - 2,
+                        "Studio display catches up to the paused Runtime");
                     AtFrame(vm, boot, end - 2, "serial recording pauses before final two steps");
                     await CheckSerialPauseAsync(vm, boot);
                     for (var frame = end - 1; frame <= end; frame++)
@@ -153,7 +158,7 @@ internal static partial class StudioScenarioHarness
                         var phases = serialRows.Where(row => row.RootElement.GetProperty("ordinal").GetInt32() == ordinal)
                             .Select(row => row.RootElement.GetProperty("phase").GetString()).ToArray();
                         Require(phases.SequenceEqual(new[] { "before-unload", "unload-requested", "native-empty-boundary",
-                            "target-load-start", "duplicate-source-unload-suppressed", "target-finished", "complete" }),
+                            "target-load-start", "target-activation-synchronized", "duplicate-source-unload-suppressed", "staging-roots-cleared", "target-finished", "complete" }),
                             "serial transition has complete ordered unload / native boundary / target load evidence: " + ordinal);
                     }
                 }

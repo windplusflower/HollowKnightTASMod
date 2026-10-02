@@ -171,6 +171,10 @@ try {
         [ordered]@{ run=$run; pid=$hostProcess.Id; status='running' } | ConvertTo-Json -Compress | Write-Output
         if (-not $hostProcess.WaitForExit(270000)) { $hostProcess.Kill(); throw 'Probe host timed out.' }
         $hostProcess.Refresh()
+        foreach ($logName in @('Player.log','ModLog.txt')) {
+            $logSource = Join-Path $saveRoot $logName
+            if (Test-Path -LiteralPath $logSource -PathType Leaf) { Copy-Item -LiteralPath $logSource -Destination (Join-Path $destination $logName) }
+        }
         if ($hostProcess.ExitCode -ne 0) { throw "Probe run $run failed with exit $($hostProcess.ExitCode)." }
         if ((Read-SaveAudit) -ne $before) { throw 'Original save audit mismatch.' }
         [ordered]@{ run=$run; status='trace-collected'; phaseP0Passed=$false } | ConvertTo-Json -Compress | Write-Output

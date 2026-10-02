@@ -35,6 +35,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool observedBoundary;
         private int ordinal;
         private int rows;
+        private string? failure;
 
         internal LoadingSerialSceneProbe()
         {
@@ -66,14 +67,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (info.GetType() != typeof(GameManager.SceneLoadInfo))
             {
                 Write("unsupported-load-info", new { type = info.GetType().FullName });
-                throw new NotSupportedException("V6 serial prototype requires a load-info adapter: " + info.GetType().FullName);
+                throw Fail("V6 serial prototype requires a load-info adapter: " + info.GetType().FullName);
             }
             return original(manager, info);
         }
 
         private IEnumerator Begin(OriginalBegin original, SceneLoad load)
         {
-            if (transition != null) throw new InvalidOperationException("Serial scene transition reentered.");
+            if (transition != null) throw Fail("Serial scene transition reentered.");
             transition = load;
             ordinal++;
             sourceUnloaded = false;
@@ -87,15 +88,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 source = USceneManager.GetActiveScene();
                 sourceName = source.name;
                 if (!source.IsValid() || !source.isLoaded || source.name == StagingName)
-                    throw new InvalidOperationException("Serial scene source is invalid.");
+                    throw Fail("Serial scene source is invalid.");
                 if (!staging.IsValid() || !staging.isLoaded) staging = USceneManager.CreateScene(StagingName);
                 Inventory("before-unload");
-                if (!USceneManager.SetActiveScene(staging)) throw new InvalidOperationException("Cannot activate staging scene.");
+                if (!USceneManager.SetActiveScene(staging)) throw Fail("Cannot activate staging scene.");
                 Write("unload-requested", new { source = sourceName, target = load.TargetSceneName });
                 var operation = USceneManager.UnloadSceneAsync(source);
-                if (operation == null) throw new InvalidOperationException("Source unload operation was not created.");
+                if (operation == null) throw Fail("Source unload operation was not created.");
                 yield return operation;
-                if (source.isLoaded) throw new InvalidOperationException("Source scene remained loaded.");
+                if (source.isLoaded) throw Fail("Source scene remained loaded.");
+                operation = null;
                 sourceUnloaded = true;
                 // Return through PlayerLoop once so destruction callbacks unwind.
                 yield return null;
@@ -103,7 +105,35 @@ namespace HollowKnightTAS.Runtime.FullRun
                 while (!observedBoundary) yield return null;
                 awaitingBoundary = false;
                 Write("target-load-start", new { source = sourceName, target = load.TargetSceneName });
-                yield return original(load);
+                var routine = original(load);
+                var activated = false;
+                try
+                {
+                    while (routine.MoveNext())
+                    {
+                        var wait = routine.Current;
+                        // In the pinned SceneLoad routine the first direct async
+                        // yield is target activation. FinishPendingOperations is
+                        // yielded as a Coroutine; later asset cleanup is kept intact.
+                        if (!activated && wait is AsyncOperation activation)
+                        {
+                            LoadingSynchronousFetchProbe.CompleteSerialActivation(activation);
+                            var target = USceneManager.GetSceneByName(load.TargetSceneName);
+                            if (!activation.isDone || !target.IsValid() || !target.isLoaded)
+                                throw Fail("Synchronous scene activation did not finish the target.");
+                            activated = true;
+                            Write("target-activation-synchronized", new { target = load.TargetSceneName });
+                            // Fixed continuation phase instead of a variable number
+                            // of PlayerLoops waiting for async activation completion.
+                            yield return null;
+                        }
+                        else yield return wait;
+                    }
+                }
+                finally { (routine as IDisposable)?.Dispose(); }
+                if (!activated) throw Fail("Serial loader did not observe target activation.");
+                if (USceneManager.GetActiveScene().name != load.TargetSceneName || staging.rootCount != 0)
+                    throw Fail("Target did not replace the staging scene.");
                 Inventory("target-finished");
                 Write("complete", new { source = sourceName, target = load.TargetSceneName });
             }
@@ -121,6 +151,20 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (transition != null && sourceUnloaded && name == sourceName)
             {
                 Write("duplicate-source-unload-suppressed", new { source = name });
+                // Vanilla's removal of the old active scene also selects the target.
+                // Suppressing only that removal leaves staging active, causing future
+                // objects (and the next transition) to bind to staging instead.
+                var target = USceneManager.GetSceneByName(transition.TargetSceneName);
+                if (!target.IsValid() || !target.isLoaded || !USceneManager.SetActiveScene(target))
+                    throw Fail("Cannot select the activated serial target scene.");
+                // Keep one empty carrier scene. CreateScene does not emit sceneLoaded;
+                // unloading it sends an unmatched sceneUnloaded event to Mod listeners.
+                // Only activation-time temporary objects need the old source lifetime.
+                if (!staging.IsValid() || !staging.isLoaded)
+                    throw Fail("Serial staging scene is unavailable.");
+                var temporaryRoots = staging.GetRootGameObjects();
+                foreach (var root in temporaryRoots) UnityEngine.Object.Destroy(root);
+                Write("staging-roots-cleared", new { target = target.name, count = temporaryRoots.Length });
                 return true;
             }
             return original(name);
@@ -129,6 +173,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static void ObserveNativeBoundary(long movie, long native)
         {
             var self = instance;
+            if (self?.failure != null) throw new InvalidOperationException(self.failure);
             if (self == null || !self.awaitingBoundary || self.observedBoundary) return;
             if (self.source.isLoaded || self.transition == null)
                 throw new InvalidOperationException("Serial native boundary still has a source scene.");
@@ -152,10 +197,19 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Keep this first experiment independent of native layout recovery.
             // Counts establish domain reduction; they do not certify Box2D caches are empty.
             var physicsComponents = new { bodies = components.OfType<Rigidbody2D>().Count(),
-                colliders = components.OfType<Collider2D>().Count(), joints = components.OfType<Joint2D>().Count() };
+                colliders = components.OfType<Collider2D>().Count(), joints = components.OfType<Joint2D>().Count(),
+                activeSimulatedBodies = components.OfType<Rigidbody2D>().Count(c => c.gameObject.activeInHierarchy && c.simulated),
+                activeEnabledColliders = components.OfType<Collider2D>().Count(c => c.gameObject.activeInHierarchy && c.enabled) };
+            // Aggregate equal-named DDOL roots: Unity can report sibling index zero
+            // for several hidden roots, so their display paths are not unique IDs.
+            var rootGroups = objects.GroupBy(go => go.scene.name + "/" + go.transform.root.name)
+                .OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => new { rootName = g.Key,
+                    roots = g.Count(go => go.transform.parent == null), objects = g.Count(),
+                    activeObjects = g.Count(go => go.activeInHierarchy) }).ToArray();
             Write(phase, new { movie, native, activeScene = USceneManager.GetActiveScene().name,
                 source = sourceName, target = transition?.TargetSceneName,
-                objects = objects.Length, components = components.Length, scenes = groups, componentTypes = types,
+                objects = objects.Length, activeObjects = objects.Count(go => go.activeInHierarchy),
+                components = components.Length, scenes = groups, componentTypes = types, rootGroups,
                 roots = objects.Where(go => go.transform.parent == null).Select(Identity).OrderBy(s => s, StringComparer.Ordinal).ToArray(),
                 physicsComponents, nativePhysicsStateCovered = false,
                 completeStateCoverage = false, restorable = false });
@@ -180,6 +234,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (++rows > 256) throw new InvalidOperationException("Serial scene diagnostic budget exceeded.");
             File.AppendAllText(report, JsonConvert.SerializeObject(new { phase, ordinal,
                 engineFrame = Time.frameCount, data }) + "\n");
+        }
+
+        private InvalidOperationException Fail(string message)
+        {
+            failure = message;
+            Write("failed", new { message });
+            return new InvalidOperationException(message);
         }
 
         public void Dispose()
