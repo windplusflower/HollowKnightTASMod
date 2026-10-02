@@ -8,9 +8,9 @@ namespace HollowKnightTAS.Core.Tests.Movie
     public sealed class NativeExecutionProfileTests
     {
         [TestMethod]
-        public void PublishedProfileRemainsV3AndV4RequiresCompletePolicy()
+        public void PublishedProfileRemainsV8AndExperimentalClockRequiresCompletePolicy()
         {
-            Assert.AreEqual("hktas-unity-input-playerloop-load-elision-scene-rng-2026-v3",
+            Assert.AreEqual("hktas-unity-input-playerloop-canonical-cinematics-2026-v8",
                 MovieProtocolV2.SelectNativeProfile(false, false, false));
             Assert.AreEqual(MovieProtocolV2.CanonicalStartupNativeProfileId,
                 MovieProtocolV2.SelectNativeProfile(true, true, true));

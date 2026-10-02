@@ -66,8 +66,14 @@ namespace HollowKnightTAS.Core.Movie
             if (Unknown(header.NativeProfileId) || Unknown(runtime.NativeProfileId))
                 Add(errors, MovieDiagnosticCodes.InvalidIdentifier, "Native profile metadata is unavailable.");
             else if (!string.Equals(header.NativeProfileId, runtime.NativeProfileId, StringComparison.Ordinal))
-                Add(warnings, MovieDiagnosticCodes.InvalidIdentifier,
+            {
+                if (NativeExecutionProfile.IsCanonicalStartupProfile(header.NativeProfileId)
+                    || NativeExecutionProfile.IsCanonicalStartupProfile(runtime.NativeProfileId))
+                    Add(errors, MovieDiagnosticCodes.InvalidIdentifier,
+                        "Experimental execution profiles must match the recording exactly.");
+                else Add(warnings, MovieDiagnosticCodes.InvalidIdentifier,
                     "Execution rules differ from the recording. Playback is allowed; some input frames may need adjustment.");
+            }
             if (!runtime.NativeGateActive)
                 Add(errors, MovieDiagnosticCodes.InvalidCommand, "Native full-run frame gate is inactive.");
             if (!runtime.SaveGuardArmed)
