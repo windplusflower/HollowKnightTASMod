@@ -36,18 +36,34 @@ namespace HollowKnightTAS.Core.Tests.Movie
             Assert.ThrowsExactly<InvalidOperationException>(() => NativeExecutionProfile.Select(true, true, true, false, true));
             Assert.ThrowsExactly<InvalidOperationException>(() => NativeExecutionProfile.Select(false, true, true, true, true));
             Assert.IsTrue(NativeExecutionProfile.UsesModWallClock(NativeExecutionProfile.SerialSceneProfileId));
+            Assert.AreEqual(NativeExecutionProfile.VirtualAudioSerialProfileId,
+                NativeExecutionProfile.Select(true, true, true, true, true, true));
+            Assert.ThrowsExactly<InvalidOperationException>(() => NativeExecutionProfile.Select(true, true, true, true, false, true));
+        }
+
+        [TestMethod]
+        public void IsolatedOnlineRequiresAllPoliciesAndRetainsOrdinaryDefault()
+        {
+            Assert.AreEqual(NativeExecutionProfile.IsolatedOnlineProfileId,
+                NativeExecutionProfile.Select(true, true, true, true, true, true, true));
+            Assert.ThrowsExactly<InvalidOperationException>(() => NativeExecutionProfile.Select(true, true, true, true, true, false, true));
+            Assert.IsTrue(NativeExecutionProfile.UsesVirtualAudio(NativeExecutionProfile.IsolatedOnlineProfileId));
+            Assert.IsTrue(NativeExecutionProfile.UsesSerialScenes(NativeExecutionProfile.IsolatedOnlineProfileId));
+            Assert.AreEqual(NativeExecutionProfile.ProfileId, NativeExecutionProfile.Select(false, false, false));
         }
 
         [TestMethod]
         public void ReplayRejectsBothDirectionsOfProfileMismatch()
         {
             foreach (var recordingProfile in new[] { MovieProtocolV2.NativeProfileId, MovieProtocolV2.CanonicalStartupNativeProfileId,
-                         MovieProtocolV2.CanonicalModClockNativeProfileId, NativeExecutionProfile.SerialSceneProfileId })
+                         MovieProtocolV2.CanonicalModClockNativeProfileId, NativeExecutionProfile.SerialSceneProfileId,
+                         NativeExecutionProfile.VirtualAudioSerialProfileId, NativeExecutionProfile.IsolatedOnlineProfileId })
             {
                 var header = new MovieV2Header("game", "api", "mod", recordingProfile,
                     MovieProtocolV2.ActionSchemaId, false, new string('a', 64), 800, 450);
                 foreach (var runtimeProfile in new[] { MovieProtocolV2.NativeProfileId, MovieProtocolV2.CanonicalStartupNativeProfileId,
-                             MovieProtocolV2.CanonicalModClockNativeProfileId, NativeExecutionProfile.SerialSceneProfileId })
+                             MovieProtocolV2.CanonicalModClockNativeProfileId, NativeExecutionProfile.SerialSceneProfileId,
+                             NativeExecutionProfile.VirtualAudioSerialProfileId, NativeExecutionProfile.IsolatedOnlineProfileId })
                 {
                     var runtime = new MovieV2RuntimeCapabilities(runtimeProfile, MovieProtocolV2.ActionSchemaId,
                         true, true, true, 800, 450, new string('a', 64), "game", "api", "mod");

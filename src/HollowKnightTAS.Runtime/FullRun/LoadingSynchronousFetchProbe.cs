@@ -70,8 +70,8 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal static void CompleteSerialActivation(AsyncOperation operation)
         {
-            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId
-                != HollowKnightTAS.Core.Movie.NativeExecutionProfile.SerialSceneProfileId
+            if (!HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesSerialScenes(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)
                 || !operation.allowSceneActivation)
                 throw new InvalidOperationException("Synchronous activation requires an authorized V6 scene operation.");
             (instance ?? throw new InvalidOperationException("Scene preloader is unavailable."))

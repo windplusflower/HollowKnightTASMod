@@ -22,6 +22,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly DeterministicCinematics cinematics;
         private readonly LoadingSynchronousFetchProbe? experimentalFetch;
         private readonly LoadingSerialSceneProbe? serialScenes;
+        private readonly LoadingAudioLifetimePolicy? audioLifetimes;
         private bool suppressInput = true;
         private long suppressedUpdates;
 
@@ -33,6 +34,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             cinematics = new DeterministicCinematics();
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_SERIAL_SCENES") == "1")
                 serialScenes = new LoadingSerialSceneProbe();
+            if (Environment.GetEnvironmentVariable("HKTAS_LOADING_VIRTUAL_AUDIO") == "1")
+                audioLifetimes = new LoadingAudioLifetimePolicy();
             if (InputManager.CurrentTick != 0)
                 throw new InvalidOperationException("Mod startup input guard was installed too late.");
             randomConstructor = new ILHook(typeof(Random).GetConstructor(Type.EmptyTypes), il =>
@@ -66,6 +69,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     .GetMethod("Verify", BindingFlags.Static | BindingFlags.Public)
                     ?? throw new MissingMethodException("V5 Mod wall-clock verifier is unavailable.");
                 verify.Invoke(null, null);
+                if (Environment.GetEnvironmentVariable("HKTAS_LOADING_VERIFY_ONLINE") == "1")
+                    payload.GetType("HollowKnightTAS.ClockPayload.EarlyModWallClockBootstrap", true)!
+                        .GetMethod("TestSessionOnline", BindingFlags.Static | BindingFlags.Public)!
+                        .Invoke(null, null);
                 Modding.Logger.Log("[HKTAS] V5 registered Mod wall-clock policy verified before input opens.");
             }
             if (InputManager.CurrentTick != 0)
@@ -115,6 +122,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             experimentalFetch?.Dispose();
             cinematics.Dispose();
             serialScenes?.Dispose();
+            audioLifetimes?.Dispose();
         }
     }
 }

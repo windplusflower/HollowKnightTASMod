@@ -480,7 +480,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (completed != expectedNativeStart)
                     throw new InvalidDataException("Native frame start was not sequential.");
                 var ready = IsMovieFrameReady(out var boundary);
-                LoadingSerialSceneProbe.ObserveNativeBoundary(movieFrame, completed);
+                LoadingAudioLifetimePolicy.CheckFailure();
+                LoadingOnlineIsolationObservation.CheckFailure();
+                if (LoadingSerialSceneProbe.ObserveNativeBoundary(movieFrame, completed))
+                    loadingGameplayOracle?.Sample("candidate", "serial-source-unloaded");
                 var sceneHandle = UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;
                 if (ready && sceneHandle != randomSeedSceneHandle)
                 {
@@ -536,6 +539,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 DeterministicCinematics.FrameDuration = 1d / (double)(ready ? activeFrameRate : 50m);
                 infoTiming.BeginFrame(movieFrame, completed, ready, boundary);
                 loadingBoundaryProbe?.Sample(ready ? "before" : "loading", boundary);
+                LoadingSerialSceneProbe.CaptureVisualState(movieFrame);
                 loadingGameplayOracle?.Sample(ready ? "before" : "loading", boundary);
                 if (ready) TraceMovieRng("before", replayMovie?.Runs[timingRunIndex].RngSeed);
                 frameInputEnabled = ready;

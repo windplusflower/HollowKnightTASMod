@@ -24,6 +24,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Hook beginHook;
         private readonly Hook unloadHook;
         private readonly Hook transitionHook;
+        private readonly Hook lightingHook;
         private readonly string report;
         private static LoadingSerialSceneProbe? instance;
         private SceneLoad? transition;
@@ -36,10 +37,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         private int ordinal;
         private int rows;
         private string? failure;
+        private static readonly long visualFrame = long.TryParse(
+            Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_END"), out var visualEnd) ? visualEnd - 1 : -1;
 
         internal LoadingSerialSceneProbe()
         {
-            if (NativeExecutionProfile.SelectedProfileId != NativeExecutionProfile.SerialSceneProfileId)
+            if (!NativeExecutionProfile.UsesSerialScenes(NativeExecutionProfile.SelectedProfileId))
                 throw new InvalidOperationException("Serial scenes require their own V6 execution profile.");
             if (instance != null) throw new InvalidOperationException("Serial scene policy is already installed.");
             report = Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")
@@ -54,6 +57,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             beginHook = new Hook(begin, (Func<OriginalBegin, SceneLoad, IEnumerator>)Begin);
             unloadHook = new Hook(unload, (Func<OriginalUnload, string, bool>)Unload);
             transitionHook = new Hook(start, (Func<OriginalTransition, GameManager, GameManager.SceneLoadInfo, IEnumerator>)Start);
+            var sceneStart = typeof(global::SceneManager).GetMethod("Start", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new MissingMethodException("SceneManager.Start");
+            lightingHook = new Hook(sceneStart, (Action<Action<global::SceneManager>, global::SceneManager>)SceneStart);
             USceneManager.sceneLoaded += TargetLoaded;
             instance = this;
             Write("installed", null);
@@ -96,7 +102,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Write("unload-requested", new { source = sourceName, target = load.TargetSceneName });
                 var operation = USceneManager.UnloadSceneAsync(source);
                 if (operation == null) throw Fail("Source unload operation was not created.");
-                yield return operation;
+                // Do not leave the completed native AsyncOperation retained by
+                // Unity's coroutine scheduler at the checkpoint boundary.
+                // Poll completion through the same PlayerLoop instead.
+                while (!operation.isDone) yield return null;
                 if (source.isLoaded) throw Fail("Source scene remained loaded.");
                 operation = null;
                 sourceUnloaded = true;
@@ -156,15 +165,25 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // Suppressing only that removal leaves staging active, causing future
                 // objects (and the next transition) to bind to staging instead.
                 var target = USceneManager.GetSceneByName(transition.TargetSceneName);
+                RenderState("before-late-select");
                 if (!target.IsValid() || !target.isLoaded
                     || (USceneManager.GetActiveScene() != target && !USceneManager.SetActiveScene(target)))
                     throw Fail("Cannot select the activated serial target scene.");
+                RenderState("after-late-select");
                 // Keep one empty carrier scene. CreateScene does not emit sceneLoaded;
                 // unloading it sends an unmatched sceneUnloaded event to Mod listeners.
                 // Only activation-time temporary objects need the old source lifetime.
                 if (!staging.IsValid() || !staging.isLoaded)
                     throw Fail("Serial staging scene is unavailable.");
                 var temporaryRoots = staging.GetRootGameObjects();
+                File.AppendAllText(report + ".staging.jsonl", JsonConvert.SerializeObject(new {
+                    ordinal, target = target.name, roots = temporaryRoots.Select(root => new {
+                        root.name, objects = root.GetComponentsInChildren<Transform>(true).Select(t => new {
+                            id = Identity(t.gameObject), t.gameObject.activeSelf, t.gameObject.activeInHierarchy,
+                            components = t.GetComponents<Component>().Where(c => c != null).Select(c => c.GetType().FullName).ToArray()
+                        }).ToArray()
+                    }).ToArray()
+                }) + "\n");
                 foreach (var root in temporaryRoots) UnityEngine.Object.Destroy(root);
                 Write("staging-roots-cleared", new { target = target.name, count = temporaryRoots.Length });
                 return true;
@@ -172,11 +191,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             return original(name);
         }
 
-        internal static void ObserveNativeBoundary(long movie, long native)
+        internal static bool ObserveNativeBoundary(long movie, long native)
         {
             var self = instance;
             if (self?.failure != null) throw new InvalidOperationException(self.failure);
-            if (self == null || !self.awaitingBoundary || self.observedBoundary) return;
+            if (self == null || !self.awaitingBoundary || self.observedBoundary) return false;
             if (self.source.isLoaded || self.transition == null)
                 throw new InvalidOperationException("Serial native boundary still has a source scene.");
             var target = USceneManager.GetSceneByName(self.transition.TargetSceneName);
@@ -184,6 +203,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Serial native boundary already has the target scene.");
             self.Inventory("native-empty-boundary", movie, native);
             self.observedBoundary = true;
+            return true;
         }
 
         private void Inventory(string phase, long? movie = null, long? native = null)
@@ -208,6 +228,20 @@ namespace HollowKnightTAS.Runtime.FullRun
                 .OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => new { rootName = g.Key,
                     roots = g.Count(go => go.transform.parent == null), objects = g.Count(),
                     activeObjects = g.Count(go => go.activeInHierarchy) }).ToArray();
+            var audio = components.OfType<AudioSource>()
+                .Where(c => c.gameObject.name.StartsWith("Audio Player", StringComparison.Ordinal))
+                .OrderBy(Identity, StringComparer.Ordinal).Select(c => new {
+                    id = Identity(c), active = c.gameObject.activeInHierarchy, c.enabled,
+                    c.isPlaying, c.timeSamples, c.pitch, c.loop,
+                    clip = c.clip == null ? null : c.clip.name,
+                    behaviours = c.GetComponents<MonoBehaviour>().Where(b => b != null)
+                        .Select(b => b.GetType().FullName).ToArray()
+                }).ToArray();
+            // Audio playback state is diagnostic evidence, not removed from the
+            // state contract just because it can progress independently of TAS.
+            File.AppendAllText(report + ".audio.jsonl", JsonConvert.SerializeObject(new {
+                phase, ordinal, engineFrame = Time.frameCount, dspTime = AudioSettings.dspTime, audio
+            }) + "\n");
             Write(phase, new { movie, native, activeScene = USceneManager.GetActiveScene().name,
                 source = sourceName, target = transition?.TargetSceneName,
                 objects = objects.Length, activeObjects = objects.Count(go => go.activeInHierarchy),
@@ -231,11 +265,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                     + Array.IndexOf(go.GetComponents(component.GetType()), component) + "]");
         }
 
+        private void SceneStart(Action<global::SceneManager> original, global::SceneManager manager)
+        {
+            RenderState("scene-manager-before-start:" + manager.gameObject.scene.name);
+            original(manager);
+            RenderState("scene-manager-start:" + manager.gameObject.scene.name);
+        }
+
         private void TargetLoaded(Scene scene, LoadSceneMode mode)
         {
             if (transition == null || !sourceUnloaded || scene.name != transition.TargetSceneName) return;
             // Select the target and refresh its dimensions before Start builds
             // scene borders from GameManager tilemap bounds.
+            RenderState("before-early-select");
             if (!USceneManager.SetActiveScene(scene)) throw Fail("Cannot select serial target before Start.");
             // SceneManager.Start builds the four black scene borders from the
             // GameManager tilemap dimensions. The serialized activation yields
@@ -244,6 +286,61 @@ namespace HollowKnightTAS.Runtime.FullRun
             var manager = GameManager.UnsafeInstance;
             if (manager == null) throw Fail("Serial target has no GameManager.");
             manager.RefreshTilemapInfo(scene.name);
+            RenderState("after-early-select");
+        }
+
+        private void RenderState(string phase)
+        {
+            var color = RenderSettings.ambientLight;
+            File.AppendAllText(report + ".render.jsonl", JsonConvert.SerializeObject(new {
+                phase, ordinal, engineFrame = Time.frameCount, activeScene = USceneManager.GetActiveScene().name,
+                sceneWidth = GameManager.UnsafeInstance == null ? -1f : GameManager.UnsafeInstance.sceneWidth,
+                sceneHeight = GameManager.UnsafeInstance == null ? -1f : GameManager.UnsafeInstance.sceneHeight,
+                ambient = new[] { color.r, color.g, color.b, color.a }, RenderSettings.ambientIntensity,
+                mode = RenderSettings.ambientMode.ToString()
+            }) + "\n");
+        }
+
+        internal static void CaptureVisualState(long movie)
+        {
+            var output = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT");
+            if (output == null || movie != visualFrame) return;
+            var path = Path.Combine(output, "visual-state-" + System.Diagnostics.Process.GetCurrentProcess().Id + ".json");
+            if (File.Exists(path)) return;
+            var color = RenderSettings.ambientLight;
+            File.WriteAllText(path, JsonConvert.SerializeObject(new {
+                movie, activeScene = USceneManager.GetActiveScene().name,
+                ambient = new[] { color.r, color.g, color.b }, mode = RenderSettings.ambientMode.ToString(),
+                pixelLights = QualitySettings.pixelLightCount,
+                sprites = Resources.FindObjectsOfTypeAll<SpriteRenderer>().Where(c => c.gameObject.scene.IsValid()
+                    && c.gameObject.activeInHierarchy && c.enabled
+                    && (c.bounds.size.y > 20 || c.gameObject.name == "Knight" || Identity(c).Contains("Marmu")))
+                    .Select(c => new { id = Identity(c), c.forceRenderingOff, c.sortingLayerName, c.sortingOrder,
+                        color = new[] { c.color.r, c.color.g, c.color.b, c.color.a },
+                        sprite = c.sprite == null ? null : c.sprite.name,
+                        texture = c.sprite == null || c.sprite.texture == null ? null : c.sprite.texture.name,
+                        position = new[] { c.transform.position.x, c.transform.position.y, c.transform.position.z },
+                        size = new[] { c.bounds.size.x, c.bounds.size.y, c.bounds.size.z }
+                    }).ToArray(),
+                cameras = Resources.FindObjectsOfTypeAll<Camera>().Where(c => c.gameObject.scene.IsValid()).Select(c => new {
+                    id = Identity(c), c.enabled, c.gameObject.activeInHierarchy, c.cullingMask,
+                    renderingPath = c.actualRenderingPath.ToString(), c.depth, c.nearClipPlane, c.farClipPlane,
+                    position = new[] { c.transform.position.x, c.transform.position.y, c.transform.position.z }
+                }).ToArray(),
+                lights = Resources.FindObjectsOfTypeAll<Light>().Where(c => c.gameObject.scene.IsValid()).Select(c => new {
+                    id = Identity(c), c.enabled, c.gameObject.activeInHierarchy, c.intensity, c.range,
+                    c.cullingMask, type = c.type.ToString(), color = new[] { c.color.r, c.color.g, c.color.b },
+                    position = new[] { c.transform.position.x, c.transform.position.y, c.transform.position.z }
+                }).ToArray(),
+                renderers = Resources.FindObjectsOfTypeAll<Renderer>().Where(c => c.gameObject.scene.name == "GG_Workshop"
+                    && c.gameObject.activeInHierarchy && Identity(c).Contains("Statue")).Select(c => new {
+                    id = Identity(c), c.enabled, c.gameObject.layer, c.lightmapIndex,
+                    materials = c.sharedMaterials.Select(m => m == null ? null : new {
+                        m.name, shader = m.shader == null ? null : m.shader.name,
+                        texture = m.mainTexture == null ? null : m.mainTexture.name
+                    }).ToArray()
+                }).ToArray()
+            }));
         }
 
         private void Write(string phase, object? data)
@@ -264,6 +361,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             instance = null;
             USceneManager.sceneLoaded -= TargetLoaded;
+            lightingHook.Dispose();
             transitionHook.Dispose();
             beginHook.Dispose();
             unloadHook.Dispose();

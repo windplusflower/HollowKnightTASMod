@@ -11,9 +11,11 @@
     <Compile Include="..\HollowKnightTAS.Core\Ipc\RecordingRootConfiguration.cs" Link="RecordingRootConfiguration.cs" />
     <Compile Include="..\HollowKnightTAS.Core\Movie\NativeExecutionProfile.cs" Link="NativeExecutionProfile.cs" />
     <Compile Include="..\HollowKnightTAS.Core\Movie\ModWallClock.cs" Link="ModWallClock.cs" />
+    <Compile Include="..\HollowKnightTAS.Core\Movie\SessionAchievements.cs" Link="SessionAchievements.cs" />
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="Assembly-CSharp-firstpass"><HintPath>$(HKManagedDir)\Assembly-CSharp-firstpass.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Assembly-CSharp">
       <HintPath>$(HKManagedDir)\Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
