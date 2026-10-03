@@ -18,6 +18,8 @@
              Link="FullRun\FullRunFrameJournal.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingFieldDigest.cs"
              Link="FullRun\LoadingFieldDigest.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingUnityAssetIdentity.cs"
+             Link="FullRun\LoadingUnityAssetIdentity.cs" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageReference Include="MSTest.TestAdapter" Version="4.3.2">
       <PrivateAssets>all</PrivateAssets>
