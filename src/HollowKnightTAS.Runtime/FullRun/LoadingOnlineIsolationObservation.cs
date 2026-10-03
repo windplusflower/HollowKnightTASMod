@@ -10,7 +10,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static Action? verify;
         internal static void CheckFailure()
         {
-            if (NativeExecutionProfile.SelectedProfileId != NativeExecutionProfile.IsolatedOnlineProfileId) return;
+            if (!NativeExecutionProfile.UsesIsolatedOnline(NativeExecutionProfile.SelectedProfileId)) return;
             if (verify == null)
             {
                 var payload = AppDomain.CurrentDomain.GetAssemblies()

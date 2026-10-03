@@ -53,17 +53,31 @@ namespace HollowKnightTAS.Core.Tests.Movie
         }
 
         [TestMethod]
+        public void ParticleInitializationRequiresV10PoliciesAndHasItsOwnReplayIdentity()
+        {
+            Assert.AreEqual(NativeExecutionProfile.CanonicalParticleProfileId,
+                NativeExecutionProfile.Select(true, true, true, true, true, true, true, true));
+            Assert.ThrowsExactly<InvalidOperationException>(() =>
+                NativeExecutionProfile.Select(true, true, true, true, true, true, false, true));
+            Assert.IsTrue(NativeExecutionProfile.UsesIsolatedOnline(NativeExecutionProfile.CanonicalParticleProfileId));
+            Assert.IsTrue(NativeExecutionProfile.UsesModWallClock(NativeExecutionProfile.CanonicalParticleProfileId));
+            Assert.IsFalse(NativeExecutionProfile.UsesIsolatedOnline(NativeExecutionProfile.ProfileId));
+        }
+
+        [TestMethod]
         public void ReplayRejectsBothDirectionsOfProfileMismatch()
         {
             foreach (var recordingProfile in new[] { MovieProtocolV2.NativeProfileId, MovieProtocolV2.CanonicalStartupNativeProfileId,
                          MovieProtocolV2.CanonicalModClockNativeProfileId, NativeExecutionProfile.SerialSceneProfileId,
-                         NativeExecutionProfile.VirtualAudioSerialProfileId, NativeExecutionProfile.IsolatedOnlineProfileId })
+                         NativeExecutionProfile.VirtualAudioSerialProfileId, NativeExecutionProfile.IsolatedOnlineProfileId,
+                         NativeExecutionProfile.CanonicalParticleProfileId })
             {
                 var header = new MovieV2Header("game", "api", "mod", recordingProfile,
                     MovieProtocolV2.ActionSchemaId, false, new string('a', 64), 800, 450);
                 foreach (var runtimeProfile in new[] { MovieProtocolV2.NativeProfileId, MovieProtocolV2.CanonicalStartupNativeProfileId,
                              MovieProtocolV2.CanonicalModClockNativeProfileId, NativeExecutionProfile.SerialSceneProfileId,
-                             NativeExecutionProfile.VirtualAudioSerialProfileId, NativeExecutionProfile.IsolatedOnlineProfileId })
+                             NativeExecutionProfile.VirtualAudioSerialProfileId, NativeExecutionProfile.IsolatedOnlineProfileId,
+                             NativeExecutionProfile.CanonicalParticleProfileId })
                 {
                     var runtime = new MovieV2RuntimeCapabilities(runtimeProfile, MovieProtocolV2.ActionSchemaId,
                         true, true, true, 800, 450, new string('a', 64), "game", "api", "mod");

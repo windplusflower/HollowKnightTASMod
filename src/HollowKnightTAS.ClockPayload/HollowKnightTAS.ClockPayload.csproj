@@ -15,6 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="UnityEngine.ParticleSystemModule"><HintPath>$(HKManagedDir)\UnityEngine.ParticleSystemModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Assembly-CSharp-firstpass"><HintPath>$(HKManagedDir)\Assembly-CSharp-firstpass.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Assembly-CSharp">
       <HintPath>$(HKManagedDir)\Assembly-CSharp.dll</HintPath>

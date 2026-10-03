@@ -24,7 +24,7 @@ namespace HollowKnightTAS.ClockPayload
 
         internal IsolatedOnlinePolicy()
         {
-            if (NativeExecutionProfile.SelectedProfileId != NativeExecutionProfile.IsolatedOnlineProfileId
+            if (!NativeExecutionProfile.UsesIsolatedOnline(NativeExecutionProfile.SelectedProfileId)
                 || Environment.GetEnvironmentVariable("HKTAS_FULL_RUN_V2") != "1")
                 throw new InvalidOperationException("Online isolation requires a V10 TAS process.");
             // BeforeSceneLoad may already have initialized Steam. No game consumer

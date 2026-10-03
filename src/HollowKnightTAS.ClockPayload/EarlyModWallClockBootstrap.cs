@@ -11,6 +11,7 @@ namespace HollowKnightTAS.ClockPayload
         private static int installed;
         private static CustomKnightModWallClockPolicy? policy;
         private static IsolatedOnlinePolicy? online;
+        private static CanonicalParticleRandomPolicy? particles;
 
         public static void Install()
         {
@@ -19,7 +20,20 @@ namespace HollowKnightTAS.ClockPayload
                 throw new InvalidOperationException("Early Mod wall clocks require the V5 full-run profile.");
             if (Interlocked.Exchange(ref installed, 1) != 0)
                 throw new InvalidOperationException("Early Mod wall clocks were installed more than once.");
-            if (NativeExecutionProfile.SelectedProfileId == NativeExecutionProfile.IsolatedOnlineProfileId)
+            try { InstallPolicies(); }
+            catch (Exception exception)
+            {
+                UnityEngine.Debug.LogError("[HKTAS] Early policy installation failed: "
+                    + exception.GetType().FullName + ": " + exception.Message);
+                throw;
+            }
+        }
+
+        private static void InstallPolicies()
+        {
+            if (NativeExecutionProfile.SelectedProfileId == NativeExecutionProfile.CanonicalParticleProfileId)
+                particles = new CanonicalParticleRandomPolicy();
+            if (NativeExecutionProfile.UsesIsolatedOnline(NativeExecutionProfile.SelectedProfileId))
                 online = new IsolatedOnlinePolicy();
             policy = new CustomKnightModWallClockPolicy();
         }
@@ -35,6 +49,8 @@ namespace HollowKnightTAS.ClockPayload
             => online?.Capture() ?? Array.Empty<string>();
 
         public static void VerifySessionOnline() => online?.Verify();
+
+        public static uint[] CaptureParticleRandomState() => particles?.Capture() ?? Array.Empty<uint>();
 
         public static void TestSessionOnline()
         {
