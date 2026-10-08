@@ -151,7 +151,7 @@ namespace HollowKnightTAS.BundleTool
             var unsigned = new CompanionBundleManifest(
                 1,
                 CompanionManifestCodec.Product,
-                "0.1.7",
+                "0.1.8",
                 "win-x64",
                 1,
                 1,

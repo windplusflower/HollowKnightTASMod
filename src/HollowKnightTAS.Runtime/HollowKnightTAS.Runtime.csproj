@@ -3,7 +3,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>HollowKnightTAS</AssemblyName>
     <RootNamespace>HollowKnightTAS.Runtime</RootNamespace>
-    <Version>0.1.7</Version>
+    <Version>0.1.8</Version>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <InstallDir>$(HKModsDir)\HollowKnightTAS</InstallDir>

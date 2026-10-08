@@ -3,7 +3,7 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <AssemblyName>HollowKnightTAS.Core</AssemblyName>
     <RootNamespace>HollowKnightTAS.Core</RootNamespace>
-    <Version>0.1.7</Version>
+    <Version>0.1.8</Version>
     <Description>Runtime-independent protocols and deterministic evidence primitives for HollowKnightTAS.</Description>
   </PropertyGroup>
   <ItemGroup>
