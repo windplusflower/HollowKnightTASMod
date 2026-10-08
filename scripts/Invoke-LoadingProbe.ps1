@@ -64,6 +64,18 @@ $clockBridge = if ($ClockBridgePath) { [IO.Path]::GetFullPath($ClockBridgePath) 
     else { Join-Path $repo 'artifacts/scene-checkpoints/p0/native-clock-build/HollowKnightTAS.ClockBridge.dll' }
 $injectorBuild = Join-Path $repo 'src/HollowKnightTAS.ClockInjector/bin/Release/net8.0-windows/win-x64'
 $injectorFiles = @('HollowKnightTAS.ClockInjector.exe','HollowKnightTAS.ClockInjector.dll','HollowKnightTAS.ClockInjector.deps.json','HollowKnightTAS.ClockInjector.runtimeconfig.json')
+$injectorConfig = Get-Content -LiteralPath (Join-Path $injectorBuild 'HollowKnightTAS.ClockInjector.runtimeconfig.json') -Raw | ConvertFrom-Json
+$usesSharedInjector = $injectorConfig.runtimeOptions.PSObject.Properties.Name -contains 'includedFrameworks'
+$sharedInjectorFiles = if ($usesSharedInjector) { @($injectorFiles | Where-Object { $_ -ne 'HollowKnightTAS.ClockInjector.exe' }) } else { @() }
+if ($usesSharedInjector) {
+    $studioConfig = Get-Content -LiteralPath (Join-Path $companion 'HollowKnightTAS.Companion.runtimeconfig.json') -Raw | ConvertFrom-Json
+    $injectorVersion = ($injectorConfig.runtimeOptions.includedFrameworks | Where-Object name -eq 'Microsoft.NETCore.App').version
+    $studioVersion = ($studioConfig.runtimeOptions.includedFrameworks | Where-Object name -eq 'Microsoft.NETCore.App').version
+    if (-not $injectorVersion -or $injectorVersion -ne $studioVersion) { throw 'Candidate injector and installed shared runtime versions differ.' }
+    foreach ($name in $sharedInjectorFiles + @('hostpolicy.dll','hostfxr.dll')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $companion $name) -PathType Leaf)) { throw "Installed shared injector dependency missing: $name" }
+    }
+}
 $stageCompleteCandidate = $true
 $usesClockCandidate = $true
 # Runtime and harness reference the selected-profile API even for V3 controls.
@@ -92,6 +104,7 @@ $backup = Join-Path $outputRoot 'installation-backup'
 New-Item -ItemType Directory -Path $backup | Out-Null
 foreach ($name in @('HollowKnightTAS.dll','companion.manifest.json')) { Copy-Item -LiteralPath (Join-Path $install $name) -Destination (Join-Path $backup $name) }
 foreach ($entry in $profileCandidateFiles) { Copy-Item -LiteralPath $entry.destination -Destination (Join-Path $backup $entry.name) }
+foreach ($name in $sharedInjectorFiles) { Copy-Item -LiteralPath (Join-Path $companion $name) -Destination (Join-Path $backup ('shared-' + $name)) }
 if ($usesClockCandidate) {
     if (-not (Test-Path -LiteralPath $clockPayload -PathType Leaf)) { throw 'Built clock payload missing.' }
     if ($stageCompleteCandidate -and -not (Test-Path -LiteralPath $clockBridge -PathType Leaf)) { throw 'Built clock bridge missing.' }
@@ -115,6 +128,32 @@ try {
         if ($stageCompleteCandidate) {
             Copy-Item -LiteralPath $clockBridge -Destination (Join-Path $clockRoot 'HollowKnightTAS.ClockBridge.dll')
             foreach ($name in $injectorFiles) { Copy-Item -LiteralPath (Join-Path $injectorBuild $name) -Destination (Join-Path $clockRoot $name) }
+            if ($usesSharedInjector) {
+                foreach ($name in $sharedInjectorFiles) { Copy-Item -LiteralPath (Join-Path $injectorBuild $name) -Destination (Join-Path $companion $name) }
+                # Match the production bundle's SDK apphost binding to the
+                # managed injector beside Studio's shared runtime. Do not copy
+                # another runtime, fall back to a machine installation or
+                # rewrite the self-contained runtimeconfig as a workaround.
+                $injectorProject = Join-Path $repo 'src/HollowKnightTAS.ClockInjector/HollowKnightTAS.ClockInjector.csproj'
+                $resolved = & dotnet msbuild $injectorProject -t:ResolveFrameworkReferences -p:Configuration=Release `
+                    -p:RuntimeIdentifier=win-x64 -p:SelfContained=true -getProperty:AppHostSourcePath,NetCoreRoot
+                if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve candidate apphost template.' }
+                $properties = ($resolved -join "`n" | ConvertFrom-Json).Properties
+                $sdkVersion = (& dotnet --version).Trim()
+                if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve candidate SDK version.' }
+                [Reflection.Assembly]::LoadFrom((Join-Path $properties.NetCoreRoot "sdk/$sdkVersion/Microsoft.NET.HostModel.dll")) | Out-Null
+                $writer = [Microsoft.NET.HostModel.AppHost.HostWriter].GetMethods() |
+                    Where-Object Name -eq 'CreateAppHost' | Select-Object -First 1
+                $parameters = $writer.GetParameters()
+                $hostArguments = [object[]]::new($parameters.Length)
+                for ($i = 0; $i -lt $hostArguments.Length; $i++) { $hostArguments[$i] = $parameters[$i].DefaultValue }
+                $hostArguments[0] = [string]$properties.AppHostSourcePath
+                $hostArguments[1] = [string](Join-Path $clockRoot 'HollowKnightTAS.ClockInjector.exe')
+                $hostArguments[2] = [IO.Path]::GetRelativePath($clockRoot, (Join-Path $companion 'HollowKnightTAS.ClockInjector.dll'))
+                $hostArguments[3] = $false
+                $hostArguments[4] = [string](Join-Path $companion 'HollowKnightTAS.ClockInjector.dll')
+                $writer.Invoke($null, $hostArguments) | Out-Null
+            }
         }
         $clockManifestPath = Join-Path $clockRoot 'clock-build-manifest-v1.json'
         $clockManifest = Get-Content -LiteralPath $clockManifestPath -Raw | ConvertFrom-Json
@@ -126,16 +165,16 @@ try {
             if ($entry.file -eq 'HollowKnightTAS.ClockPayload.dll') { $entry.length = $payloadIdentity.Length; $entry.sha256 = $payloadHash }
             if ($stageCompleteCandidate -and $entry.file -eq 'HollowKnightTAS.ClockBridge.dll') { $entry.length = $bridgeIdentity.Length; $entry.sha256 = $bridgeHash }
             if ($stageCompleteCandidate -and $entry.file -in $injectorFiles) {
-                $file = Join-Path $injectorBuild $entry.file
+                $file = Join-Path $clockRoot $entry.file
                 $entry.length = (Get-Item -LiteralPath $file).Length
                 $entry.sha256 = (Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant()
             }
         }
         if ($stageCompleteCandidate) {
-            $clockManifest.injectorSha256 = (Get-FileHash -LiteralPath (Join-Path $injectorBuild $injectorFiles[0])).Hash.ToLowerInvariant()
-            $clockManifest.injectorManagedSha256 = (Get-FileHash -LiteralPath (Join-Path $injectorBuild $injectorFiles[1])).Hash.ToLowerInvariant()
-            $clockManifest.injectorDepsSha256 = (Get-FileHash -LiteralPath (Join-Path $injectorBuild $injectorFiles[2])).Hash.ToLowerInvariant()
-            $clockManifest.injectorRuntimeConfigSha256 = (Get-FileHash -LiteralPath (Join-Path $injectorBuild $injectorFiles[3])).Hash.ToLowerInvariant()
+            $clockManifest.injectorSha256 = (Get-FileHash -LiteralPath (Join-Path $clockRoot $injectorFiles[0])).Hash.ToLowerInvariant()
+            $clockManifest.injectorManagedSha256 = (Get-FileHash -LiteralPath (Join-Path $clockRoot $injectorFiles[1])).Hash.ToLowerInvariant()
+            $clockManifest.injectorDepsSha256 = (Get-FileHash -LiteralPath (Join-Path $clockRoot $injectorFiles[2])).Hash.ToLowerInvariant()
+            $clockManifest.injectorRuntimeConfigSha256 = (Get-FileHash -LiteralPath (Join-Path $clockRoot $injectorFiles[3])).Hash.ToLowerInvariant()
         }
         $fileSetText = $clockManifest.runtimeFileSet | ConvertTo-Json -Compress -Depth 5
         $digest = [Security.Cryptography.SHA256]::Create()
@@ -152,13 +191,18 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Candidate signature failed.' }
     & dotnet $bundleTool verify (Join-Path $repo '.local/signing/companion-public.json') $install (Join-Path $install 'companion.manifest.json')
     if ($LASTEXITCODE -ne 0) { throw 'Candidate signature verification failed.' }
-    @('HollowKnightTAS.dll','HollowKnightTAS.Core.dll','companion.manifest.json',
+    $candidateIdentityFiles = @('HollowKnightTAS.dll','HollowKnightTAS.Core.dll','companion.manifest.json',
         'Companion/win-x64/HollowKnightTAS.Core.dll','Companion/win-x64/HollowKnightTAS.Companion.dll',
         'Companion/win-x64/ClockStartup/HollowKnightTAS.ClockPayload.dll',
         'Companion/win-x64/ClockStartup/HollowKnightTAS.ClockBridge.dll',
+        'Companion/win-x64/ClockStartup/HollowKnightTAS.ClockInjector.exe',
         'Companion/win-x64/ClockStartup/HollowKnightTAS.ClockInjector.dll',
+        'Companion/win-x64/ClockStartup/HollowKnightTAS.ClockInjector.deps.json',
+        'Companion/win-x64/ClockStartup/HollowKnightTAS.ClockInjector.runtimeconfig.json',
         'Companion/win-x64/ClockStartup/clock-build-manifest-v1.json',
-        'Companion/win-x64/ClockStartup/clock-build-whitelist-v1.json') | ForEach-Object {
+        'Companion/win-x64/ClockStartup/clock-build-whitelist-v1.json')
+    $candidateIdentityFiles += @($sharedInjectorFiles | ForEach-Object { 'Companion/win-x64/' + $_ })
+    $candidateIdentityFiles | ForEach-Object {
         $path = Join-Path $install $_
         [ordered]@{ name=$_; length=(Get-Item -LiteralPath $path).Length; sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputRoot 'candidate-identity.json') -Encoding utf8
@@ -201,6 +245,30 @@ try {
             $logSource = Join-Path $saveRoot $logName
             if (Test-Path -LiteralPath $logSource -PathType Leaf) { Copy-Item -LiteralPath $logSource -Destination (Join-Path $destination $logName) }
         }
+        $shadowReference = Join-Path $destination 'probe-shadows.json'
+        if (Test-Path -LiteralPath $shadowReference -PathType Leaf) {
+            $shadowParent = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'HollowKnightTAS/save-shadows')) + [IO.Path]::DirectorySeparatorChar
+            $shadows = @((Get-Content -LiteralPath $shadowReference -Raw | ConvertFrom-Json).shadows)
+            if ($shadows.Count -gt 8) { throw 'Probe owned-shadow budget exceeded.' }
+            $shadowOrdinal = 0
+            foreach ($shadow in $shadows) {
+                $resolvedShadow = [IO.Path]::GetFullPath($shadow)
+                if (-not $resolvedShadow.StartsWith($shadowParent, [StringComparison]::OrdinalIgnoreCase) -or
+                    [IO.Path]::GetFileName($resolvedShadow) -notmatch '^full-run-[0-9a-f]{32}$') { throw 'Probe shadow reference escaped its owned boundary.' }
+                $shadowOrdinal++
+                $diagnosticNames = @('loading-boundary-probe.jsonl','loading-gameplay-oracle.jsonl','loading-state-inventory.json',
+                    'loading-field-digests.json','loading-oracle-progress.json','loading-oracle-stage-progress.json',
+                    'engine-clock-layout.json','engine-clock-roundtrip.json')
+                foreach ($file in (Get-ChildItem -LiteralPath $resolvedShadow -Recurse -File | Where-Object {
+                    $_.Name -in $diagnosticNames -or $_.Name -match '^loading-candidate-[0-9]+-inventory\.json$'
+                })) {
+                    $relative = [IO.Path]::GetRelativePath($resolvedShadow, $file.FullName)
+                    $copy = Join-Path $destination (Join-Path ('recovered-shadow-{0:d2}' -f $shadowOrdinal) $relative)
+                    New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($copy)) -Force | Out-Null
+                    Copy-Item -LiteralPath $file.FullName -Destination $copy
+                }
+            }
+        }
         if ($hostProcess.ExitCode -ne 0) { throw "Probe run $run failed with exit $($hostProcess.ExitCode)." }
         if ((Read-SaveAudit) -ne $before) { throw 'Original save audit mismatch.' }
         [ordered]@{ run=$run; status='trace-collected'; phaseP0Passed=$false } | ConvertTo-Json -Compress | Write-Output
@@ -218,6 +286,7 @@ finally {
             Copy-Item -LiteralPath (Join-Path $backup $name) -Destination (Join-Path $install $name)
         }
         foreach ($entry in $profileCandidateFiles) { Copy-Item -LiteralPath (Join-Path $backup $entry.name) -Destination $entry.destination }
+        foreach ($name in $sharedInjectorFiles) { Copy-Item -LiteralPath (Join-Path $backup ('shared-' + $name)) -Destination (Join-Path $companion $name) }
         if ($usesClockCandidate) {
             foreach ($name in $clockCandidateFiles) {
                 Copy-Item -LiteralPath (Join-Path $backup $name) -Destination (Join-Path $clockRoot $name)

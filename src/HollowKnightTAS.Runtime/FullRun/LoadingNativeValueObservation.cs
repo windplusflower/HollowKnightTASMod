@@ -16,15 +16,21 @@ namespace HollowKnightTAS.Runtime.FullRun
         private LoadingMaterialValueObservation? materialValues;
         internal LoadingNativeValueObservation(Func<object, string?> reference)
         {
-            values = new LoadingFieldDigest(reference, type => type == typeof(UnityEngine.Object));
+            values = new LoadingFieldDigest(reference, type => type == typeof(UnityEngine.Object),
+                packedArrayElement: LoadingPackedUnityArrays.Enabled ? LoadingPackedUnityArrays.Registered : (Func<Type, bool>?)null);
         }
 
         internal void BeginSample() { identities.Clear(); steamTables.Clear(); materialValues?.BeginSample(); }
 
         internal string? Field(object owner, FieldInfo field, object? value)
         {
-            var steam = SteamField(owner, field, value);
-            if (steam != null) return steam;
+            // Most fields are scalar managed values. Do not reflect on their
+            // owner type for the three registered Steam pointer field names.
+            if (field.Name == "m_CCallbackBase" || field.Name == "m_pVTable" || field.Name == "m_vfptr")
+            {
+                var steam = SteamField(owner, field, value);
+                if (steam != null) return steam;
+            }
             if (field.Name != "m_Ptr" || !(value is IntPtr pointer)) return null;
             // The pinned native reader enumerates nonempty blocks. It rejects
             // resource kinds whose bindings have not yet been registered.

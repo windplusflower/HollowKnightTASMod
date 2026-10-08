@@ -59,6 +59,25 @@ internal static partial class StudioScenarioHarness
         var vm = (MainViewModel)app.MainWindow.DataContext;
         var boot = Field<StartupBootController>(app, "startupBoot");
         var movies = Field<FullRunMovieCoordinator>(app, "fullRunMovies");
+        // Preserve the exact owned shadows even when the watchdog terminates
+        // the process before normal trace export. Never copy save contents.
+        var ownedShadows = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var shadowTracker = new System.Threading.Timer(_ =>
+        {
+            try
+            {
+                var shadow = movies.ShadowRoot;
+                if (string.IsNullOrEmpty(shadow)) return;
+                lock (logLock)
+                {
+                    if (!ownedShadows.Add(shadow)) return;
+                    if (ownedShadows.Count > 8) throw new InvalidOperationException("Probe owned-shadow budget exceeded.");
+                    File.WriteAllText(Path.Combine(output, "probe-shadows.json"), JsonSerializer.Serialize(
+                        new { diagnosticOnly = true, shadows = ownedShadows.OrderBy(value => value).ToArray() }));
+                }
+            }
+            catch (Exception exception) { Log("SHADOW TRACKING FAILED " + exception.Message); }
+        }, null, 0, 250);
         void Set(string name, object value) => typeof(MainViewModel).GetField(name,
             BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(vm, value);
         Set("worldlines", new StudioTimelineStore());
@@ -211,7 +230,7 @@ internal static partial class StudioScenarioHarness
                 foreach (var candidate in Directory.GetFiles(Path.GetDirectoryName(traces[0])!, "loading-candidate-*-inventory.json"))
                     if (!File.Exists(Path.Combine(output, Path.GetFileName(candidate))))
                         File.Copy(candidate, Path.Combine(output, Path.GetFileName(candidate)), false);
-                foreach (var name in new[] { "engine-clock-layout.json", "engine-clock-roundtrip.json", "loading-state-inventory.json", "loading-oracle-progress.json", "loading-field-digests.json" })
+                foreach (var name in new[] { "engine-clock-layout.json", "engine-clock-roundtrip.json", "loading-state-inventory.json", "loading-oracle-progress.json", "loading-oracle-stage-progress.json", "loading-field-digests.json" })
                 {
                     var extra = Path.Combine(Path.GetDirectoryName(traces[0])!, name);
                     if (File.Exists(extra) && !File.Exists(Path.Combine(output, name))) File.Copy(extra, Path.Combine(output, name), false);
@@ -225,6 +244,8 @@ internal static partial class StudioScenarioHarness
                 "input package bytes unchanged");
             await File.WriteAllTextAsync(Path.Combine(output, "source-identity.json"), JsonSerializer.Serialize(new
                 { source, sourceHash, first, end, record, primaryProbe, gameplayOracle, nativeScheduler, serialScenes,
+                    compiledFieldReaders = Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_REFLECTION_FIELDS") != "1",
+                    packedLeafArrays = Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_LEGACY_ARRAYS") != "1",
                     nativeProfile = MovieProtocolV2.SelectedNativeProfileId,
                     modWallClock = args.Contains("--probe-mod-wall-clock"),
                     fieldDetails = args.Contains("--probe-field-details"),

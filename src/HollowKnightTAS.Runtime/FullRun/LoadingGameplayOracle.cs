@@ -31,6 +31,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Dictionary<Fsm, string> fsmIds = new Dictionary<Fsm, string>(ReferenceComparer<Fsm>.Instance);
         private readonly Dictionary<object, string> fsmMemberIds = new Dictionary<object, string>(ReferenceComparer<object>.Instance);
         private readonly Dictionary<object, string> unityIds = new Dictionary<object, string>(ReferenceComparer<object>.Instance);
+        private readonly Dictionary<string, int> sceneObjectOwners = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly LoadingUnityAssetIdentity assetIdentities = new LoadingUnityAssetIdentity();
         private readonly LoadingAssetProvenanceObservation assetProvenance = new LoadingAssetProvenanceObservation();
         private readonly List<Tuple<UnityEngine.Object, string>> assetRoots = new List<Tuple<UnityEngine.Object, string>>();
@@ -40,6 +41,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly SortedSet<string> detachedFsmReferences = new SortedSet<string>(StringComparer.Ordinal);
         private readonly List<Tuple<object, string>> detachedFsmRoots = new List<Tuple<object, string>>();
         private int rows;
+        private Stopwatch? captureProgress;
+        private readonly List<object> captureStages = new List<object>();
+        private long captureStageStarted;
+        private string capturePhase = "", captureBoundary = "";
+        private object? priorCapture;
         private bool sealedTrace;
         private object[] lastInventory = Array.Empty<object>();
         private object[] rootSurvey = Array.Empty<object>();
@@ -75,7 +81,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             nativeValues = new LoadingNativeValueObservation(Reference);
             fields = new LoadingFieldDigest(Reference, type => type == typeof(MonoBehaviour)
                 || type == typeof(UnityEngine.Object), (owner, field, value) =>
-                    nativeValues.Field(owner, field, value) ?? observationIdentity.Field(owner, field, value), IsObservationCallback);
+                    nativeValues.Field(owner, field, value) ?? observationIdentity.Field(owner, field, value), IsObservationCallback,
+                    packedArrayElement: LoadingPackedUnityArrays.Enabled ? LoadingPackedUnityArrays.Registered : (Func<Type, bool>?)null,
+                    // The registered native pointers, roots, GUIDs and integer
+                    // epochs do not bind any Single/Double instance field.
+                    directFloatingField: _ => true);
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1")
                 nativeScheduler = new LoadingNativeSchedulerDigest();
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
@@ -86,6 +96,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 .FirstOrDefault(assembly => assembly.GetName().Name == "HollowKnightTAS.ClockPayload")
                 ?.GetType("HollowKnightTAS.ClockPayload.ClockController", false);
             Write(new { kind = "header", schema = "hktas-loading-oracle-v1", first, end,
+                observerModuleId = typeof(LoadingGameplayOracle).Module.ModuleVersionId.ToString("D"),
                 nativeProfile = HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId,
                 coverage = nativePhysicsOnly ? "native-physics-only-diagnostic-scope-managed-roots-not-observed-v1"
                     : "active-managed-fields-current-fsm-states-actions-and-all-roots-states-actions-at-window-endpoints-willactivate-loadfinish-v4",
@@ -95,7 +106,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 detachedFsmObservation = "expand-reachable-managed-FSM-state-action-graphs-with-shared-aliases-v1",
                 hierarchyObservation = "loaded-GameObject-transform-recttransform-native-public-configuration-and-animator-particle-copy-v3",
                 registeredStaticObservation = "initialized-ModLoader-ModHooks-InputManager-CustomKnight-SwapManager-EnviousMarmu-v1",
-                copyValueReferencePolicy = "expand-anonymous-value-records-and-all-array-contents-v2",
+                copyValueReferencePolicy = "expand-anonymous-value-records-and-all-array-contents-v3-type-and-field-schema-identity",
+                leafArrayValueEncoding = LoadingPackedUnityArrays.Enabled
+                    ? "registered-padding-free-layout-schema-and-full-little-endian-bits-sha256-v1-logical-node-depth-budgets-retained"
+                    : "legacy-recursive-field-tokens",
                 hashSetReferencePolicy = "rebind-active-hashes-buckets-links-preserve-slots-free-order-capacity-version-comparer-v1",
                 activeInputListEpochPolicy = "registered-list-origin-retain-enumerator-modular-version-delta-v1",
                 assetAliasPolicy = "first-encounter-per-type-name-native-aliases-and-zero-instance-managed-wrapper-aliases-v2-values-not-closed",
@@ -107,11 +121,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                     : nativePhysics == null ? "disabled" : "first-native-before-player-loop-SceneTransition-after-source-unload-with-target-active-v1",
                 fieldDiagnostics = fieldDetails,
                 nativePhysicsEntryDiagnostics = Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_DETAILS") == "1",
+                diagnosticInventoryEncoding = LoadingInventoryRootEncoding.Format,
+                nativePhysicsInventorySampling = "full-boundaries-and-window-endpoints; all-value-and-order-digests-every-sample-v1",
                 samplingScope = serialBoundaryOnly ? "serial-candidate-boundaries-only-diagnostic" : "bounded-window",
                 managedFieldGraph = "ordered-component-fsm-root-shared-references-v1; scheduler-and-SceneLoad-scopes-independent",
                 completeStateCoverage = false,
                 knownMissing = new[] { "native-coroutine-running-callstacks-and-unregistered-schedulers", "native-physics-contact-caches",
-                    "arbitrary-mod-statics", "ambiguous-asset-identities", "dormant-roots-between-window-endpoints-willactivate-loadfinish",
+                    "arbitrary-mod-statics", "ambiguous-asset-identities", "ambiguous-scene-object-identities", "dormant-roots-between-window-endpoints-willactivate-loadfinish",
                     "TAS-controller-internals-require-separate-cursor-input-codecs",
                     "native-Unity-components-and-mutable-assets", "external-Steam-event-queue-and-account-state" } });
             GameManager.SceneTransitionBegan += TransitionBegan;
@@ -140,6 +156,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             try
             {
                 var captureElapsed = Stopwatch.StartNew();
+                captureProgress = captureElapsed;
+                captureStages.Clear();
+                captureStageStarted = 0;
+                capturePhase = phase; captureBoundary = boundary;
+                CaptureProgress("enumerate-roots");
                 var serialCandidate = phase == "candidate" && boundary == "serial-source-unloaded";
                 var candidate = serialCandidate || (nativePhysics != null && !candidateCaptured && currentTransition != null
                     && phase == "loading" && boundary == "SceneTransition" && transitionSourceUnloaded
@@ -165,8 +186,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     state["candidateNativeAsyncOperations"] = (nativeScheduler?.AsyncOperationCount ?? -1).ToString(CultureInfo.InvariantCulture);
                     state["unsupported"] = Hash(string.Join("\n", omissions));
                     candidateCaptured = true;
+                    var encodedRoots = new LoadingInventoryRootEncoding(lastInventory);
                     var inventory = JsonConvert.SerializeObject(new { diagnosticOnly = true,
-                        transitionOrdinal, movieFrame = movieFrame(), roots = lastInventory, rootSurvey, nativeComponentSurvey, nativeComponentDetails,
+                        observerModuleId = typeof(LoadingGameplayOracle).Module.ModuleVersionId.ToString("D"),
+                        nativeProfile = HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId,
+                        transitionOrdinal, movieFrame = movieFrame(),
+                        rootIdentityEncoding = LoadingInventoryRootEncoding.Format,
+                        rootIdentities = encodedRoots.Names, rootTypes = encodedRoots.Types, roots = encodedRoots.Roots,
+                        rootSurvey, nativeComponentSurvey, nativeComponentDetails,
                         assetAliases = assetIdentities.Snapshot(),
                         textCacheDetails = textCacheDetails.ToArray(),
                         fontCacheDetails = assetValues.FontDetails,
@@ -181,9 +208,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Write(new { kind = "sample", sequence = rows++, phase, boundary,
                     movieFrame = movieFrame(), nativeFrame = nativeFrame(),
                     scene = USceneManager.GetActiveScene().name, state,
-                    nativePhysics = nativePhysics?.Inventory,
+                    nativePhysics = fullInventory ? nativePhysics?.Inventory : null,
                     nativePhysicsEntries = nativePhysics?.DiagnosticEntries,
-                    captureMilliseconds = captureElapsed.ElapsedMilliseconds });
+                    captureMilliseconds = captureElapsed.ElapsedMilliseconds,
+                    captureStages = captureStages.ToArray() });
+                priorCapture = new { movieFrame = movieFrame(), phase, boundary,
+                    captureMilliseconds = captureElapsed.ElapsedMilliseconds, stages = captureStages.ToArray() };
+                CaptureProgress("sample-complete");
             }
             catch (Exception exception) { Seal(false, exception.GetType().Name + ": " + exception.Message); }
         }
@@ -198,6 +229,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             detachedFsmReferences.Clear();
             detachedFsmRoots.Clear();
             unityIds.Clear(); fsmIds.Clear(); fsmMemberIds.Clear();
+            sceneObjectOwners.Clear();
             assetIdentities.Clear();
             assetProvenance.Clear();
             assetRoots.Clear(); assetInstances.Clear();
@@ -240,6 +272,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         }
                     }
                 }
+            CaptureProgress("native-scheduler");
             string schedulerDigest = "disabled";
             if (nativeScheduler != null)
             {
@@ -261,6 +294,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     includeFieldDiagnostics: fullInventory && fieldDetails);
             }
             var inventory = new List<object>();
+            CaptureProgress("managed-and-fsm-fields");
             var fieldDiagnostics = new List<object>();
             var mono = new StringBuilder(); var fsms = new StringBuilder(); var staticRoots = new StringBuilder();
             fields.BeginSharedGraph();
@@ -349,6 +383,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             }
             finally { fields.EndSharedGraph(); }
+            CaptureProgress("native-physics");
             var allBodies = Resources.FindObjectsOfTypeAll<Rigidbody2D>().Where(body => body != null && Loaded(body.gameObject)).ToArray();
             var physicsDigest = nativePhysics == null ? "disabled" : nativePhysics.Capture(allBodies,
                 Resources.FindObjectsOfTypeAll<Collider2D>().Where(collider => collider != null && Loaded(collider.gameObject)), UnityId, fields);
@@ -373,6 +408,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (fullInventory) lastFieldDiagnostics = fieldDiagnostics.ToArray();
             if (nativeScheduler != null)
                 foreach (var omitted in nativeScheduler.Unsupported) omissions.Add("native-scheduler:" + omitted);
+            CaptureProgress("global-and-hierarchy-values");
             var result = new SortedDictionary<string, string>(StringComparer.Ordinal)
             {
                 ["time"] = Bits(Time.time), ["timeDouble"] = Bits(Time.timeAsDouble),
@@ -391,15 +427,28 @@ namespace HollowKnightTAS.Runtime.FullRun
                 ["sessionAchievements"] = Hash(JsonConvert.SerializeObject(CaptureSessionAchievements())),
                 ["particleManagerRandom"] = Hash(JsonConvert.SerializeObject(CaptureParticleRandomState())),
                 ["registeredStatics"] = nativePhysicsOnly ? "not-observed" : Hash(staticRoots.ToString()),
-                ["unityHierarchy"] = nativePhysicsOnly ? "not-observed" : CaptureHierarchy(fullInventory, inventory),
-                ["assetValues"] = nativePhysicsOnly || !fullInventory ? "not-observed" : CaptureAssetValues(inventory),
-                ["assetBindings"] = Hash(JsonConvert.SerializeObject(assetIdentities.Snapshot())),
-                ["unsupported"] = Hash(string.Join("\n", omissions))
+                ["unityHierarchy"] = nativePhysicsOnly ? "not-observed" : CaptureHierarchy(fullInventory, inventory)
             };
+            CaptureProgress("asset-values");
+            result["assetValues"] = nativePhysicsOnly || !fullInventory ? "not-observed" : CaptureAssetValues(inventory);
+            CaptureProgress("final-digests");
+            result["assetBindings"] = Hash(JsonConvert.SerializeObject(assetIdentities.Snapshot()));
+            result["unsupported"] = Hash(string.Join("\n", omissions));
             if (nativePhysics != null)
                 foreach (var group in nativePhysics.Groups) result["nativePhysics/" + group.Key] = group.Value;
             lastInventory = inventory.ToArray();
             return result;
+        }
+
+        private void CaptureProgress(string stage)
+        {
+            var elapsed = captureProgress?.ElapsedMilliseconds ?? 0;
+            captureStages.Add(new { stage, priorStageMilliseconds = elapsed - captureStageStarted });
+            captureStageStarted = elapsed;
+            File.WriteAllText(Path.Combine(directory, "loading-oracle-stage-progress.json"),
+                JsonConvert.SerializeObject(new { diagnosticOnly = true, movieFrame = movieFrame(),
+                    rows, phase = capturePhase, boundary = captureBoundary, stage, elapsedMilliseconds = elapsed,
+                    stages = captureStages.ToArray(), priorCapture, completeStateCoverage = false }), new UTF8Encoding(false));
         }
 
         private static bool Loaded(GameObject value) => value.scene.IsValid() && value.scene.isLoaded;
@@ -464,7 +513,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     : new { type = component.GetType().FullName,
                         enabled = component is Behaviour b ? (bool?)b.enabled : null,
                         hideFlags = (int)component.hideFlags,
-                        runtime = CaptureNativeComponent(component),
+                        runtime = CaptureNativeComponent(component, fullInventory),
                         nativePayload = component is MonoBehaviour ? "managed-fields-separate"
                             : component is Transform ? "local-transform-and-layout"
                             : component is Rigidbody2D || component is Collider2D ? "native-physics-separate"
@@ -482,16 +531,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             return Hash(text.ToString());
         }
 
-        private object? CaptureNativeComponent(Component component)
+        private object? CaptureNativeComponent(Component component, bool diagnostics)
         {
             var state = LoadingNativeComponentObservation.Capture(component, message => omissions.Add(message));
-            if (component is Animator animator && animator.isInitialized)
+            if (diagnostics && component is Animator animator && animator.isInitialized)
             {
                 var id = UnityId(component);
                 var digest = fields.Capture(state, id, expandRoot: true, includeFieldDiagnostics: true);
                 nativeComponentDetails.Add(new { id, digest = digest.Sha256, fields = digest.FieldDigests });
             }
-            if (component is ParticleSystem particles && particles.gameObject.activeInHierarchy && state != null)
+            if (diagnostics && component is ParticleSystem particles && particles.gameObject.activeInHierarchy && state != null)
             {
                 var id = UnityId(component);
                 // Diagnose copied values without assigning new ownership in the shared graph.
@@ -659,6 +708,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 for (var current = go.transform; current != null; current = current.parent)
                     path.Push(current.name + "[" + current.GetSiblingIndex() + "]");
                 id = go.scene.name + ":" + string.Join("/", path);
+                var objectOwner = go.GetInstanceID();
+                if (sceneObjectOwners.TryGetValue(id, out var previousOwner))
+                {
+                    if (previousOwner != objectOwner) omissions.Add("ambiguous-scene-object-binding:" + id);
+                }
+                else
+                {
+                    if (sceneObjectOwners.Count >= 100000) throw new InvalidOperationException("P0 scene binding budget exceeded.");
+                    sceneObjectOwners.Add(id, objectOwner);
+                }
                 if (value is Component part)
                 {
                     var sameType = go.GetComponents(part.GetType());
@@ -709,16 +768,23 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 try
                 {
+                    var encodedRoots = new LoadingInventoryRootEncoding(lastInventory);
                     var inventory = JsonConvert.SerializeObject(new { schema = "hktas-p0-state-inventory-v1",
+                        observerModuleId = typeof(LoadingGameplayOracle).Module.ModuleVersionId.ToString("D"),
+                        nativeProfile = HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId,
                         movieFrame = movieFrame(), completeStateCoverage = false,
-                        roots = lastInventory, rootSurvey, nativeComponentSurvey, nativeComponentDetails,
+                        rootIdentityEncoding = LoadingInventoryRootEncoding.Format,
+                        rootIdentities = encodedRoots.Names, rootTypes = encodedRoots.Types, roots = encodedRoots.Roots,
+                        rootSurvey, nativeComponentSurvey, nativeComponentDetails,
                         assetAliases = assetIdentities.Snapshot(), fieldSchema = fields.Schema(), unsupported = omissions,
                         nativeScheduler = nativeScheduler?.Inventory,
                         nativePhysics = nativePhysics?.Inventory,
                         nativePhysicsGroups = nativePhysics?.Groups,
                         renderRng = RenderRngDiagnostic() }, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
-                    if (Encoding.UTF8.GetByteCount(inventory) > 16 * 1024 * 1024)
-                        throw new InvalidOperationException("P0 state inventory exceeds its explicit 16 MiB budget.");
+                    var inventoryBytes = Encoding.UTF8.GetByteCount(inventory);
+                    if (inventoryBytes > 16 * 1024 * 1024)
+                        throw new InvalidOperationException("P0 state inventory exceeds its explicit 16 MiB budget: bytes="
+                            + inventoryBytes + ";roots=" + lastInventory.Length + ".");
                     File.WriteAllText(Path.Combine(directory, "loading-state-inventory.json"), inventory, new UTF8Encoding(false));
                     var diagnostics = JsonConvert.SerializeObject(new { diagnosticOnly = true,
                         movieFrame = movieFrame(), roots = lastFieldDiagnostics,

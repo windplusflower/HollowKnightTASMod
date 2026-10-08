@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -32,10 +33,15 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Func<object, FieldInfo, object?, string?>? fieldIdentity;
         private readonly Func<Delegate, bool>? observerCallback;
         private readonly Dictionary<Type, FieldInfo[]> fieldCache = new Dictionary<Type, FieldInfo[]>();
+        private readonly Dictionary<Type, TypeShape> typeShapes = new Dictionary<Type, TypeShape>();
         private readonly Dictionary<FieldInfo, string> fieldTokens = new Dictionary<FieldInfo, string>();
         private readonly Dictionary<FieldInfo, string> fieldPaths = new Dictionary<FieldInfo, string>();
         private readonly Dictionary<int, string> indexPaths = new Dictionary<int, string>();
         private readonly SHA256 digestHash = SHA256.Create();
+        private readonly LoadingFieldReader fieldReader;
+        private readonly LoadingObservationTypeIdentity typeIdentity = new LoadingObservationTypeIdentity();
+        private readonly LoadingPackedArrayDigest? packedArrays;
+        private readonly Func<FieldInfo, bool>? directFloatingField;
         private readonly Dictionary<object, int> visited = new Dictionary<object, int>(IdentityComparer.Instance);
         private Dictionary<object, int>? sharedGraph;
         private readonly SortedSet<string> unsupported = new SortedSet<string>(StringComparer.Ordinal);
@@ -49,10 +55,15 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal LoadingFieldDigest(Func<object, string?> reference, Func<Type, bool> nativeBase,
             Func<object, FieldInfo, object?, string?>? fieldIdentity = null,
-            Func<Delegate, bool>? observerCallback = null)
+            Func<Delegate, bool>? observerCallback = null, bool? compiledFieldReaders = null,
+            Func<Type, bool>? packedArrayElement = null, Func<FieldInfo, bool>? directFloatingField = null)
         {
             this.reference = reference; this.nativeBase = nativeBase;
             this.fieldIdentity = fieldIdentity; this.observerCallback = observerCallback;
+            this.directFloatingField = directFloatingField;
+            fieldReader = new LoadingFieldReader(compiledFieldReaders
+                ?? Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_REFLECTION_FIELDS") != "1");
+            if (packedArrayElement != null) packedArrays = new LoadingPackedArrayDigest(packedArrayElement, Fields, typeIdentity.Bind);
         }
 
         internal LoadingFieldDigestResult Capture(object? value, string root, bool expandRoot = false,
@@ -96,11 +107,28 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal void EndSharedGraph() { sharedGraph?.Clear(); sharedGraph = null; }
 
         internal object? Read(object owner, string name)
-            => Fields(owner.GetType()).FirstOrDefault(field => field.Name == name)?.GetValue(owner);
+        {
+            var field = Fields(owner.GetType()).FirstOrDefault(value => value.Name == name);
+            return field == null ? null : fieldReader.Read(field, owner);
+        }
 
-        internal object[] Schema() => fieldCache.OrderBy(pair => pair.Key.FullName, StringComparer.Ordinal)
-            .Select(pair => (object)new { type = pair.Key.FullName, fields = pair.Value.Select(field => new
-                { owner = field.DeclaringType!.FullName, field = field.Name, type = field.FieldType.FullName }).ToArray() }).ToArray();
+        internal object Schema()
+        {
+            // Lossless name interning keeps the same 16 MiB output budget.
+            // Preserve every type, field, declaring owner and value type.
+            var names = fieldCache.Keys.Select(typeIdentity.Bind).Concat(fieldCache.Values.SelectMany(value => value)
+                .SelectMany(field => new[] { typeIdentity.Bind(field.DeclaringType!), typeIdentity.Bind(field.FieldType) }))
+                .Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToArray();
+            var indices = names.Select((name, index) => new { name, index }).ToDictionary(value => value.name,
+                value => value.index, StringComparer.Ordinal);
+            return new { encoding = "interned-field-schema-v2", names,
+                types = fieldCache.OrderBy(pair => typeIdentity.Bind(pair.Key), StringComparer.Ordinal).Select(pair => new
+                {
+                    type = indices[typeIdentity.Bind(pair.Key)],
+                    fields = pair.Value.Select(field => new { owner = indices[typeIdentity.Bind(field.DeclaringType!)],
+                        field = field.Name, type = indices[typeIdentity.Bind(field.FieldType)] }).ToArray()
+                }).ToArray() };
+        }
 
         internal FieldInfo[] Fields(Type type)
         {
@@ -113,7 +141,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 .ThenBy(field => field.Name, StringComparer.Ordinal).ToArray();
             foreach (var field in fields)
                 if (!fieldTokens.ContainsKey(field))
-                { fieldTokens.Add(field, field.DeclaringType!.FullName + "." + field.Name); fieldPaths.Add(field, "." + field.Name); }
+                { fieldTokens.Add(field, typeIdentity.Bind(field.DeclaringType!) + "." + field.Name); fieldPaths.Add(field, "." + field.Name); }
             fieldCache.Add(type, fields);
             return fields;
         }
@@ -132,7 +160,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private string Digest(string value) => BitConverter.ToString(digestHash.ComputeHash(
             Encoding.UTF8.GetBytes(value))).Replace("-", "").ToLowerInvariant();
 
-        public void Dispose() { EndSharedGraph(); visited.Clear(); digestHash.Dispose(); }
+        public void Dispose() { EndSharedGraph(); visited.Clear(); typeShapes.Clear(); packedArrays?.Dispose(); digestHash.Dispose(); typeIdentity.Dispose(); }
 
         private void Token(string value)
         {
@@ -163,22 +191,22 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (gameplayCallbacks.Length == 0) { Token("null"); return; }
             }
             var type = value.GetType();
-            Token(type.FullName ?? type.Name);
+            Token(typeIdentity.Bind(type));
             if (value is IntPtr pointer)
             { if (pointer == IntPtr.Zero) Token("0"); else Omit("native-pointer"); return; }
             if (value is UIntPtr unsignedPointer)
             { if (unsignedPointer == UIntPtr.Zero) Token("0"); else Omit("native-pointer"); return; }
-            if (value is float f) { Token(BitConverter.ToInt32(BitConverter.GetBytes(f), 0).ToString("x8")); return; }
+            if (value is float f) { Token(new SingleBits { Value = f }.Bits.ToString("x8")); return; }
             if (value is double d) { Token(BitConverter.DoubleToInt64Bits(d).ToString("x16")); return; }
             if (value is decimal m) { foreach (var part in decimal.GetBits(m)) Token(part.ToString("x8")); return; }
-            if (type.IsEnum)
+            var shape = Shape(type);
+            if (shape.Enum)
             {
-                var underlying = Enum.GetUnderlyingType(type);
-                Token(underlying == typeof(ulong) ? Convert.ToUInt64(value).ToString(CultureInfo.InvariantCulture)
+                Token(shape.UnsignedEnum ? Convert.ToUInt64(value).ToString(CultureInfo.InvariantCulture)
                     : Convert.ToInt64(value).ToString(CultureInfo.InvariantCulture));
                 return;
             }
-            if (type.IsPrimitive || value is string)
+            if (shape.Primitive || value is string)
             { Token(Convert.ToString(value, CultureInfo.InvariantCulture) ?? ""); return; }
             if (!expand)
             {
@@ -195,7 +223,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 { Omit("dynamic-member"); }
                 return;
             }
-            if (!type.IsValueType)
+            if (!shape.ValueType)
             {
                 var graph = sharedGraph ?? visited;
                 if (graph.TryGetValue(value, out var id)) { Token("ref:" + id); return; }
@@ -209,6 +237,21 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (array.Rank != 1) { Omit("multidimensional-array"); return; }
                 Token(array.Length.ToString(CultureInfo.InvariantCulture));
+                var layout = packedArrays?.Describe(type.GetElementType()!);
+                if (layout != null)
+                {
+                    // Preserve the old logical node/depth limits even though
+                    // the padding-free values are encoded without boxing.
+                    var logicalNodes = checked(array.Length * layout.Nodes);
+                    if (logicalNodes > MaximumNodes - nodes || (array.Length != 0 && depth + 1 + layout.Depth > MaximumDepth))
+                        throw new InvalidOperationException("P0 field digest graph budget exceeded at " + CurrentPath);
+                    nodes += logicalNodes;
+                    Token("packed-leaf-array-bits-v1");
+                    Token(layout.Size.ToString(CultureInfo.InvariantCulture));
+                    Token(layout.Schema);
+                    Token(packedArrays!.Capture(array, layout));
+                    return;
+                }
                 for (var i = 0; i < array.Length; i++) AppendAt(array.GetValue(i), IndexPath(i), depth + 1);
                 return;
             }
@@ -223,12 +266,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 return;
             }
-            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
+            if (shape.Dictionary)
             {
                 AppendDictionary(value, depth);
                 return;
             }
-            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(HashSet<>))
+            if (shape.HashSet)
             {
                 AppendHashSet(value, depth);
                 return;
@@ -245,10 +288,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         private void AppendField(object owner, FieldInfo field, int depth)
         {
             var start = text.Length;
-            var value = field.GetValue(owner);
-            var identity = fieldIdentity?.Invoke(owner, field, value);
-            if (identity != null) Token(identity);
-            else Append(value, depth, false);
+            if (!((fieldIdentity == null || directFloatingField?.Invoke(field) == true)
+                && fieldReader.AppendFloating(field, owner, this, depth)))
+            {
+                var value = fieldReader.Read(field, owner);
+                var identity = fieldIdentity?.Invoke(owner, field, value);
+                if (identity != null) Token(identity);
+                else Append(value, depth, false);
+            }
             if (includeFieldDiagnostics)
             {
                 // Export only digests of the exact tokens already observed.
@@ -337,6 +384,45 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (free) AppendAt(link, ".free", depth + 1, index);
                 else AppendAt(value.GetValue(slot), ".value", depth + 1, index);
             }
+        }
+
+        private TypeShape Shape(Type type)
+        {
+            if (typeShapes.TryGetValue(type, out var shape)) return shape;
+            var generic = type.IsGenericType ? type.GetGenericTypeDefinition() : null;
+            shape = new TypeShape { Enum = type.IsEnum, Primitive = type.IsPrimitive, ValueType = type.IsValueType,
+                Dictionary = generic == typeof(Dictionary<,>), HashSet = generic == typeof(HashSet<>),
+                UnsignedEnum = type.IsEnum && Enum.GetUnderlyingType(type) == typeof(ulong) };
+            typeShapes.Add(type, shape);
+            return shape;
+        }
+
+        private sealed class TypeShape
+        {
+            internal bool Enum, UnsignedEnum, Primitive, ValueType, Dictionary, HashSet;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        private struct SingleBits
+        {
+            [FieldOffset(0)] internal float Value;
+            [FieldOffset(0)] internal int Bits;
+        }
+
+        internal void AppendSingleBits(float value, int depth)
+        {
+            if (++nodes > MaximumNodes || depth > MaximumDepth)
+                throw new InvalidOperationException("P0 field digest graph budget exceeded at " + CurrentPath);
+            Token("System.Single");
+            Token(new SingleBits { Value = value }.Bits.ToString("x8"));
+        }
+
+        internal void AppendDoubleBits(double value, int depth)
+        {
+            if (++nodes > MaximumNodes || depth > MaximumDepth)
+                throw new InvalidOperationException("P0 field digest graph budget exceeded at " + CurrentPath);
+            Token("System.Double");
+            Token(BitConverter.DoubleToInt64Bits(value).ToString("x16"));
         }
 
         private string IndexPath(int index)

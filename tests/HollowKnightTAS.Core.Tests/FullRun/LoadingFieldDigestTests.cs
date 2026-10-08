@@ -13,6 +13,118 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         private static LoadingFieldDigest NewDigest() => new LoadingFieldDigest(value => null, type => false);
 
         [TestMethod]
+        public void DirectFieldReadsMatchReflectionForPrivateBasesStructsAndReferenceGraphs()
+        {
+            var cycle = new Node(); cycle.A = cycle; cycle.B = cycle;
+            var negativeZero = BitConverter.Int32BitsToSingle(unchecked((int)0x80000000));
+            var nan = BitConverter.Int32BitsToSingle(unchecked((int)0x7fc00123));
+            var cases = new object[] { new Derived(negativeZero, 7), cycle, new HostileObject(),
+                new Value<float>(nan), new { raw = new[] { negativeZero, nan }, nullable = (int?)7 },
+                new Value<double>(BitConverter.Int64BitsToDouble(unchecked((long)0xfff8000000000123))),
+                new Value<double>(BitConverter.Int64BitsToDouble(unchecked((long)0x8000000000000000))),
+                new Value<UnsignedBits>(UnsignedBits.All), new Value<SignedBits>(SignedBits.Minimum),
+                new Dictionary<string, object> { ["struct"] = new Value<decimal>(1.25m), ["alias"] = cycle },
+                new EventOwner(new GameplayListener(7).First) };
+            using var direct = new LoadingFieldDigest(value => null, type => false, compiledFieldReaders: true);
+            using var reflection = new LoadingFieldDigest(value => null, type => false, compiledFieldReaders: false);
+            foreach (var value in cases)
+            {
+                var expected = reflection.Capture(value, "root", includeFieldDiagnostics: true);
+                var actual = direct.Capture(value, "root", includeFieldDiagnostics: true);
+                Assert.AreEqual(expected.Sha256, actual.Sha256);
+                Assert.AreEqual(expected.Nodes, actual.Nodes);
+                CollectionAssert.AreEqual(expected.Unsupported.ToArray(), actual.Unsupported.ToArray());
+                CollectionAssert.AreEqual(expected.FieldDigests.Select(FieldDigestText).ToArray(),
+                    actual.FieldDigests.Select(FieldDigestText).ToArray());
+            }
+            string FieldDigestText(object record) => string.Join("|", record.GetType().GetProperties()
+                .OrderBy(property => property.Name).Select(property => property.Name + ":" + property.GetValue(record)));
+        }
+
+        [TestMethod]
+        public void CachedDirectReadersObserveNewOwnersAndChangedValues()
+        {
+            var field = typeof(GameplayListener).GetField("Value", System.Reflection.BindingFlags.NonPublic
+                | System.Reflection.BindingFlags.Instance)!;
+            var reader = new LoadingFieldReader(true);
+            var owner = new GameplayListener(7);
+            Assert.AreEqual(7, reader.Read(field, owner));
+            owner.Value = 8;
+            Assert.AreEqual(8, reader.Read(field, owner));
+            Assert.AreEqual(9, reader.Read(field, new GameplayListener(9)));
+        }
+
+        [TestMethod]
+        public void DirectFloatingFieldsNeverBypassAnUnregisteredIdentityRule()
+        {
+            using var digest = new LoadingFieldDigest(_ => null, _ => false,
+                fieldIdentity: (_, field, _) => field.FieldType == typeof(float) ? "registered-float-binding" : null);
+            var first = digest.Capture(new Value<float>(1), "identity");
+            var second = digest.Capture(new Value<float>(2), "identity");
+            Assert.AreEqual(first.Sha256, second.Sha256);
+            Assert.AreEqual(first.Nodes, second.Nodes);
+        }
+
+        [TestMethod]
+        public void AnonymousCopySchemaIsIndependentOfCompilerTypeNumberAndFieldDeclarationOrder()
+        {
+            var first = new { number = 7, value = -0.0f };
+            var reordered = new { value = -0.0f, number = 7 };
+            Assert.AreNotEqual(first.GetType(), reordered.GetType());
+            using var digest = NewDigest();
+            Assert.AreEqual(digest.Capture(first, "root").Sha256, digest.Capture(reordered, "root").Sha256);
+            Assert.AreEqual(digest.Capture(new[] { first }, "array").Sha256,
+                digest.Capture(new[] { reordered }, "array").Sha256);
+            Assert.AreEqual(digest.Capture(new List<object> { first }, "list").Sha256,
+                digest.Capture(new List<object> { reordered }, "list").Sha256);
+            Assert.AreNotEqual(digest.Capture(first, "root").Sha256,
+                digest.Capture(new { number = 7L, value = -0.0f }, "root").Sha256);
+            Assert.AreNotEqual(digest.Capture(first, "root").Sha256,
+                digest.Capture(new { renamed = 7, value = -0.0f }, "root").Sha256);
+        }
+
+        [TestMethod]
+        public void ForeignAnonymousGameplayTypesRetainTheirActualIdentity()
+        {
+            var assembly = System.Reflection.Emit.AssemblyBuilder.DefineDynamicAssembly(
+                new System.Reflection.AssemblyName("P0ForeignAnonymousTest"), System.Reflection.Emit.AssemblyBuilderAccess.Run);
+            var builder = assembly.DefineDynamicModule("test").DefineType("<>f__AnonymousType999");
+            builder.SetCustomAttribute(new System.Reflection.Emit.CustomAttributeBuilder(
+                typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute).GetConstructor(Type.EmptyTypes)!, Array.Empty<object>()));
+            builder.DefineField("value", typeof(int), System.Reflection.FieldAttributes.Private);
+            var type = builder.CreateType()!;
+            using var identities = new LoadingObservationTypeIdentity();
+            Assert.AreEqual(type.FullName, identities.Bind(type));
+        }
+
+        [TestMethod]
+        public void InternedFieldSchemaRetainsPrivateDeclaringOwnersAndValueTypes()
+        {
+            using var digest = NewDigest();
+            digest.Capture(new Derived(1.25f, 7), "root");
+            var schema = digest.Schema();
+            object Property(object value, string name) => value.GetType().GetProperty(name)!.GetValue(value)!;
+            Assert.AreEqual("interned-field-schema-v2", Property(schema, "encoding"));
+            var names = (string[])Property(schema, "names");
+            var records = ((Array)Property(schema, "types")).Cast<object>().ToArray();
+            var derived = records.Single(record => names[(int)Property(record, "type")] == typeof(Derived).FullName);
+            var fields = ((Array)Property(derived, "fields")).Cast<object>().ToArray();
+            Assert.AreEqual(2, fields.Length);
+            var number = fields.Single(field => (string)Property(field, "field") == "number");
+            Assert.AreEqual(typeof(Derived).FullName, names[(int)Property(number, "owner")]);
+            Assert.AreEqual(typeof(float).FullName, names[(int)Property(number, "type")]);
+            var inherited = fields.Single(field => (string)Property(field, "field") == "inherited");
+            Assert.AreEqual(typeof(Base).FullName, names[(int)Property(inherited, "owner")]);
+            Assert.AreEqual(typeof(int).FullName, names[(int)Property(inherited, "type")]);
+        }
+
+        private readonly struct Value<T>
+        {
+            private readonly T scalar;
+            internal Value(T value) { scalar = value; }
+        }
+
+        [TestMethod]
         public void ReusedDigestKeepsThePinnedTokenEncodingAcrossCapturesAndDiagnostics()
         {
             using var digest = NewDigest();
@@ -250,6 +362,8 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             public override string ToString() => throw new InvalidOperationException("ToString invoked");
         }
         private sealed class Node { internal Node? A; internal Node? B; }
+        private enum UnsignedBits : ulong { All = ulong.MaxValue }
+        private enum SignedBits : long { Minimum = long.MinValue }
         private class Base
         {
             private readonly int inherited;

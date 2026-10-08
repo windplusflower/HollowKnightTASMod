@@ -18,6 +18,14 @@
              Link="FullRun\FullRunFrameJournal.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingFieldDigest.cs"
              Link="FullRun\LoadingFieldDigest.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingFieldReader.cs"
+             Link="FullRun\LoadingFieldReader.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingObservationTypeIdentity.cs"
+             Link="FullRun\LoadingObservationTypeIdentity.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingInventoryRootEncoding.cs"
+             Link="FullRun\LoadingInventoryRootEncoding.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingPackedArrayDigest.cs"
+             Link="FullRun\LoadingPackedArrayDigest.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingRuntimeReferencePolicy.cs"
              Link="FullRun\LoadingRuntimeReferencePolicy.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingListEpochIdentity.cs"

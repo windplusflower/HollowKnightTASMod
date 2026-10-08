@@ -14,6 +14,8 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         private readonly string shadowRoot;
         private readonly Dictionary<InputDevice, string> devices = new Dictionary<InputDevice, string>(DeviceComparer.Instance);
+        private enum FieldKind { None, ActiveListEpoch, ProtectedRoot, DeviceGuid, InputTick }
+        private readonly Dictionary<FieldInfo, FieldKind> fieldKinds = new Dictionary<FieldInfo, FieldKind>();
         private ulong inputTick;
         private LoadingListEpochIdentity<InputDevice>? activeDeviceEpoch;
         internal LoadingObservationIdentity(string sessionDirectory)
@@ -43,31 +45,45 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal string? Field(object owner, FieldInfo field, object? value)
         {
-            var epoch = activeDeviceEpoch?.Field(owner, field, value);
-            if (epoch != null) return epoch;
-            var type = field.DeclaringType!.FullName;
-            if (type == "DesktopPlatform" && field.Name == "saveDirPath" && value is string path)
+            if (!fieldKinds.TryGetValue(field, out var kind))
+            {
+                kind = Classify(field);
+                fieldKinds.Add(field, kind);
+            }
+            if (kind == FieldKind.ActiveListEpoch) return activeDeviceEpoch?.Field(owner, field, value);
+            if (kind == FieldKind.ProtectedRoot && value is string path)
             {
                 if (!Path.GetFullPath(path).TrimEnd('\\', '/').Equals(shadowRoot, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("P0 platform save root does not match the protected session.");
                 return "binding:protected-save-root";
             }
-            if (type == "InControl.InputDevice" && field.Name == "<GUID>k__BackingField" && owner is InputDevice device)
+            if (kind == FieldKind.DeviceGuid && owner is InputDevice device)
             {
                 if (!devices.TryGetValue(device, out var id))
                     throw new InvalidOperationException("P0 input device has no registered logical identity.");
                 return "binding:" + id;
             }
-            if (value is ulong tick && (
+            if (kind == FieldKind.InputTick && value is ulong tick)
+                return tick == 0 ? "input-epoch:never" : "input-epoch:age="
+                    + unchecked(inputTick - tick).ToString(CultureInfo.InvariantCulture);
+            return null;
+        }
+
+        private static FieldKind Classify(FieldInfo field)
+        {
+            if ((field.DeclaringType == typeof(List<InputDevice>) || field.DeclaringType == typeof(List<InputDevice>.Enumerator))
+                && (field.Name == "version" || field.Name == "_version")) return FieldKind.ActiveListEpoch;
+            var type = field.DeclaringType!.FullName;
+            if (type == "DesktopPlatform" && field.Name == "saveDirPath") return FieldKind.ProtectedRoot;
+            if (type == "InControl.InputDevice" && field.Name == "<GUID>k__BackingField") return FieldKind.DeviceGuid;
+            if (
                 (type == "InControl.OneAxisInputControl" && (field.Name == "<UpdateTick>k__BackingField" || field.Name == "pendingTick"))
                 || (type == "InControl.TwoAxisInputControl" && field.Name == "<UpdateTick>k__BackingField")
                 || (type == "InControl.InputControl" && field.Name == "zeroTick")
                 || (type == "InControl.PlayerActionSet" && field.Name == "<UpdateTick>k__BackingField")
                 || (type == "InControl.PlayerAction" && field.Name == "LastInputTypeChangedTick")
-                || (type == "InControl.InputDevice" && field.Name == "<LastInputTick>k__BackingField")))
-                return tick == 0 ? "input-epoch:never" : "input-epoch:age="
-                    + unchecked(inputTick - tick).ToString(CultureInfo.InvariantCulture);
-            return null;
+                || (type == "InControl.InputDevice" && field.Name == "<LastInputTick>k__BackingField")) return FieldKind.InputTick;
+            return FieldKind.None;
         }
         private sealed class DeviceComparer : IEqualityComparer<InputDevice>
         {
