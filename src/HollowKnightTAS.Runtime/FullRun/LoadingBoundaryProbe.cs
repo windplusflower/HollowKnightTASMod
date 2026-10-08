@@ -35,6 +35,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly LoadingRandomCallTrace? randomTrace;
         private readonly long randomFirst;
         private readonly long randomEnd;
+        private readonly LoadingRigidbodyObservation rigidbodies;
         private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
 
         private LoadingBoundaryProbe(string directory, long first, long end,
@@ -46,10 +47,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             this.movieFrame = movieFrame;
             this.nativeFrame = nativeFrame;
             this.rngHash = rngHash;
+            rigidbodies = new LoadingRigidbodyObservation();
             LoadingEngineClockProbe.Capture(directory);
             randomFirst = long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_FIRST"), out var rf) ? Math.Max(first, rf) : first;
             randomEnd = long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_END"), out var re) ? Math.Min(end, re) : end;
             Write(new { kind = "header", schema = "hktas-loading-probe-v1", first, end,
+                observerModuleId = typeof(LoadingBoundaryProbe).Module.ModuleVersionId.ToString("D"),
+                rigidbodyObservation = LoadingRigidbodyValueBits.Policy,
                 nativeProfile = HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId,
                 experimentalExecution = new {
                     disableLegacyCalibration = Environment.GetEnvironmentVariable("HKTAS_LOADING_DISABLE_LEGACY_CALIBRATION") == "1",
@@ -106,12 +110,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (hero != null)
                 {
                     var body = hero.GetComponent<Rigidbody2D>();
-                    Add("heroX", hero.transform.position.x);
-                    Add("heroY", hero.transform.position.y);
-                    Add("heroVx", body == null ? float.NaN : body.velocity.x);
-                    Add("heroVy", body == null ? float.NaN : body.velocity.y);
-                    Add("heroBodyX", body == null ? float.NaN : body.position.x);
-                    Add("heroBodyY", body == null ? float.NaN : body.position.y);
+                    var position = hero.transform.position;
+                    var values = body == null ? new LoadingRigidbodyValueBits.Primary(float.NaN, float.NaN, float.NaN, float.NaN)
+                        : rigidbodies.CapturePrimary(body, position);
+                    Add("heroX", position.x);
+                    Add("heroY", position.y);
+                    Add("heroVx", values.Vx);
+                    Add("heroVy", values.Vy);
+                    Add("heroBodyX", values.X);
+                    Add("heroBodyY", values.Y);
                     Add("heroState", hero.hero_state);
                     if (!light) Add("heroFlags", HashFields(hero.cState));
                 }

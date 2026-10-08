@@ -59,6 +59,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Type? payloadType;
         private readonly LoadingNativeSchedulerDigest? nativeScheduler;
         private readonly LoadingNativePhysicsDigest? nativePhysics;
+        private readonly LoadingRigidbodyObservation rigidbodies;
         private readonly bool fieldDetails;
         private readonly bool nativePhysicsOnly;
         private readonly bool serialBoundaryOnly;
@@ -79,6 +80,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             serialBoundaryOnly = Environment.GetEnvironmentVariable("HKTAS_LOADING_SERIAL_BOUNDARY_ONLY") == "1";
             observationIdentity = new LoadingObservationIdentity(directory);
             nativeValues = new LoadingNativeValueObservation(Reference);
+            rigidbodies = new LoadingRigidbodyObservation();
             fields = new LoadingFieldDigest(Reference, type => type == typeof(MonoBehaviour)
                 || type == typeof(UnityEngine.Object), (owner, field, value) =>
                     nativeValues.Field(owner, field, value) ?? observationIdentity.Field(owner, field, value), IsObservationCallback,
@@ -115,6 +117,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 assetAliasPolicy = "first-encounter-per-type-name-native-aliases-and-zero-instance-managed-wrapper-aliases-v2-values-not-closed",
                 assetProvenancePolicy = "pinned-persistent-remapper-read-only-source-binding-v1-live-values-not-closed",
                 nativePhysics = nativePhysics == null ? "disabled" : "pinned-box2d-bound-values-and-explicit-native-order-v2-diagnostic",
+                rigidbodyObservation = LoadingRigidbodyValueBits.Policy,
+                rigidbodyValueRanges = new { owner = LoadingRigidbodyValueBits.OwnerRanges, body = LoadingRigidbodyValueBits.BodyRanges,
+                    pointerBindings = nativePhysics == null ? "unobserved" : "separate-native-physics-oracle" },
                 candidateBoundary = HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesSerialScenes(
                     HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)
                     ? "serial-source-unloaded-target-not-started-native-before-frame-v1"
@@ -394,12 +399,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                          .OrderBy(body => UnityId(body), StringComparer.Ordinal))
             {
                 var id = UnityId(body);
-                var digest = fields.Capture(new { body.position, body.velocity, body.rotation, body.angularVelocity,
-                    body.mass, body.inertia, body.centerOfMass, body.worldCenterOfMass, body.gravityScale,
-                    body.drag, body.angularDrag, body.constraints, body.bodyType, body.simulated, body.useAutoMass,
-                    body.sleepMode, body.interpolation, body.collisionDetectionMode,
-                    sleeping = body.IsSleeping(), transformPosition = body.transform.position,
-                    transformRotation = body.transform.rotation, transformScale = body.transform.localScale }, id, expandRoot: true);
+                // position/rotation getters call PhysicsManager2D.AutoSyncTransforms
+                // on this engine and therefore cannot be used by a state observer.
+                var digest = fields.Capture(rigidbodies.CaptureValues(body), id, expandRoot: true);
                 bodies.Append(id).Append(':').Append(digest.Sha256).Append('\n');
                 inventory.Add(new { id, type = typeof(Rigidbody2D).FullName, digest = digest.Sha256,
                     nodes = digest.Nodes, unsupported = digest.Unsupported });
