@@ -24,11 +24,16 @@ internal static partial class StudioScenarioHarness
         var end = long.Parse(Arg("--probe-end"));
         var primaryProbe = !args.Contains("--probe-disable-primary");
         var gameplayOracle = args.Contains("--probe-gameplay-oracle");
+        var windowsArgument = args.SingleOrDefault(value => value.StartsWith("--probe-oracle-windows=", StringComparison.Ordinal));
+        var oracleWindows = windowsArgument == null ? null : Arg("--probe-oracle-windows");
+        Require(windowsArgument == null || (gameplayOracle && !string.IsNullOrEmpty(oracleWindows)
+            && !args.Contains("--probe-serial-boundary-only")), "declared oracle windows need the gameplay oracle and cannot be empty or candidate-only");
         var nativeScheduler = args.Contains("--probe-native-scheduler");
         var serialScenes = args.Contains("--probe-serial-scenes");
         if (serialScenes) Require(end >= 2, "serial control checks need at least two Movie frames");
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE", primaryProbe ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_GAMEPLAY_ORACLE", gameplayOracle ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_ORACLE_WINDOWS", oracleWindows);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER", nativeScheduler ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS", args.Contains("--probe-native-physics") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_ONLY", args.Contains("--probe-native-physics-only") ? "1" : null);

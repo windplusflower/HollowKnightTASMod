@@ -21,6 +21,9 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         private readonly string directory;
         private readonly long first, end;
+        private readonly LoadingOracleSamplingWindows samplingWindows;
+        private long gameplaySamples;
+        private long lastSampleMovieFrame = -1;
         private readonly Func<long> movieFrame, nativeFrame;
         private readonly long controlledNativeOrigin;
         private readonly Func<string> gameplayRng;
@@ -75,11 +78,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<long> movieFrame, Func<long> nativeFrame, Func<string> gameplayRng)
         {
             this.directory = directory; this.first = first; this.end = end;
+            samplingWindows = LoadingOracleSamplingWindows.Parse(
+                Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_WINDOWS"), first, end);
             this.movieFrame = movieFrame; this.nativeFrame = nativeFrame; this.gameplayRng = gameplayRng;
             controlledNativeOrigin = nativeFrame();
             fieldDetails = Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_FIELD_DETAILS") == "1";
             nativePhysicsOnly = Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_ONLY") == "1";
             serialBoundaryOnly = Environment.GetEnvironmentVariable("HKTAS_LOADING_SERIAL_BOUNDARY_ONLY") == "1";
+            if (serialBoundaryOnly && samplingWindows.ExplicitWindows)
+                throw new InvalidOperationException("Candidate-only diagnostics cannot declare gameplay sampling windows.");
             observationIdentity = new LoadingObservationIdentity(directory);
             nativeValues = new LoadingNativeValueObservation(Reference);
             rigidbodies = new LoadingRigidbodyObservation();
@@ -130,7 +137,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 nativePhysicsEntryDiagnostics = Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_DETAILS") == "1",
                 diagnosticInventoryEncoding = LoadingInventoryRootEncoding.Format,
                 nativePhysicsInventorySampling = "full-boundaries-and-window-endpoints; all-value-and-order-digests-every-sample-v1",
-                samplingScope = serialBoundaryOnly ? "serial-candidate-boundaries-only-diagnostic" : "bounded-window",
+                samplingScope = serialBoundaryOnly ? "serial-candidate-boundaries-only-diagnostic"
+                    : samplingWindows.ExplicitWindows ? "bounded-transition-windows-v1" : "bounded-window",
+                gameplayWindows = samplingWindows.ExplicitWindows ? samplingWindows.Snapshot() : null,
                 managedFieldGraph = "ordered-component-fsm-root-shared-references-v1; scheduler-and-SceneLoad-scopes-independent",
                 completeStateCoverage = false,
                 knownMissing = new[] { "native-coroutine-running-callstacks-and-unregistered-schedulers", "native-physics-contact-caches",
@@ -158,7 +167,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal void Sample(string phase, string boundary)
         {
-            if (sealedTrace || movieFrame() < first || movieFrame() >= end) return;
+            if (sealedTrace || !samplingWindows.Contains(movieFrame())) return;
             if (serialBoundaryOnly && phase != "candidate") return;
             try
             {
@@ -173,9 +182,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     && phase == "loading" && boundary == "SceneTransition" && transitionSourceUnloaded
                     && USceneManager.GetActiveScene().name == transitionTarget);
                 var fullInventory = (phase == "event" && (boundary == "will-activate" || boundary == "load-finish"))
-                    || (phase == "before" && movieFrame() == first)
-                    || (phase == "after" && movieFrame() == end - 1) || candidate;
+                    || samplingWindows.IsEndpoint(movieFrame(), phase) || candidate;
                 var state = CaptureState(fullInventory);
+                lastSampleMovieFrame = movieFrame();
                 if (nativePhysics != null)
                 {
                     state["transitionOrdinal"] = transitionOrdinal.ToString(CultureInfo.InvariantCulture);
@@ -219,6 +228,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     nativePhysicsEntries = nativePhysics?.DiagnosticEntries,
                     captureMilliseconds = captureElapsed.ElapsedMilliseconds,
                     captureStages = captureStages.ToArray() });
+                if (phase == "before" || phase == "after") gameplaySamples++;
                 priorCapture = new { movieFrame = movieFrame(), phase, boundary,
                     captureMilliseconds = captureElapsed.ElapsedMilliseconds, stages = captureStages.ToArray() };
                 CaptureProgress("sample-complete");
@@ -226,7 +236,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             catch (Exception exception) { Seal(false, exception.GetType().Name + ": " + exception.Message); }
         }
 
-        internal void Completed() { if (!sealedTrace && movieFrame() == end) Seal(true, "window-complete"); }
+        internal void Completed()
+        {
+            if (sealedTrace || movieFrame() != end) return;
+            var complete = serialBoundaryOnly || gameplaySamples == 2 * samplingWindows.GameplayFrames;
+            Seal(complete, complete ? "window-complete" : "missing-gameplay-samples");
+        }
 
         private SortedDictionary<string, string> CaptureState(bool fullInventory)
         {
@@ -792,7 +807,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var inventory = JsonConvert.SerializeObject(new { schema = "hktas-p0-state-inventory-v1",
                         observerModuleId = typeof(LoadingGameplayOracle).Module.ModuleVersionId.ToString("D"),
                         nativeProfile = HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId,
-                        movieFrame = movieFrame(), completeStateCoverage = false,
+                        movieFrame = lastSampleMovieFrame, completionMovieFrame = movieFrame(), completeStateCoverage = false,
                         rootIdentityEncoding = LoadingInventoryRootEncoding.Format,
                         rootIdentities = encodedRoots.Names, rootTypes = encodedRoots.Types, roots = encodedRoots.Roots,
                         rootSurvey, nativeComponentSurvey, nativeComponentDetails,
@@ -800,14 +815,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                         nativeScheduler = nativeScheduler?.Inventory,
                         nativePhysics = nativePhysics?.Inventory,
                         nativePhysicsGroups = nativePhysics?.Groups,
-                        renderRng = RenderRngDiagnostic() }, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
+                        renderRng = RenderRngDiagnostic(), renderRngObservationMovieFrame = movieFrame()
+                    }, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
                     var inventoryBytes = Encoding.UTF8.GetByteCount(inventory);
                     if (inventoryBytes > 16 * 1024 * 1024)
                         throw new InvalidOperationException("P0 state inventory exceeds its explicit 16 MiB budget: bytes="
                             + inventoryBytes + ";roots=" + lastInventory.Length + ".");
                     File.WriteAllText(Path.Combine(directory, "loading-state-inventory.json"), inventory, new UTF8Encoding(false));
                     var diagnostics = JsonConvert.SerializeObject(new { diagnosticOnly = true,
-                        movieFrame = movieFrame(), roots = lastFieldDiagnostics,
+                        movieFrame = lastSampleMovieFrame, completionMovieFrame = movieFrame(), roots = lastFieldDiagnostics,
                         nativeCoroutines = nativeScheduler?.FieldDiagnostics });
                     if (Encoding.UTF8.GetByteCount(diagnostics) > 8 * 1024 * 1024)
                         throw new InvalidOperationException("P0 nested field diagnostics exceed the explicit 8 MiB budget.");

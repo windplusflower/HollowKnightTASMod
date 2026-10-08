@@ -15,6 +15,7 @@ param(
     [switch] $CanonicalStartupClock,
     [switch] $RecordInputs,
     [switch] $GameplayOracle,
+    [string] $OracleWindows = '',
     [switch] $NativeScheduler,
     [switch] $NativePhysics,
     [switch] $NativePhysicsOnly,
@@ -47,6 +48,22 @@ if ($NativePhysics -and -not $GameplayOracle) { throw 'NativePhysics requires th
 if ($NativePhysicsOnly -and (-not $NativePhysics -or -not $GameplayOracle)) { throw 'NativePhysicsOnly requires NativePhysics and GameplayOracle; it is a diagnostic scope, not P0 acceptance.' }
 if ($NativePhysicsDetails -and -not $NativePhysics) { throw 'NativePhysicsDetails requires NativePhysics.' }
 if ($FieldDetails -and -not $GameplayOracle) { throw 'FieldDetails requires the independent gameplay oracle.' }
+if ($OracleWindows -and (-not $GameplayOracle -or $SerialBoundaryOnly)) { throw 'OracleWindows requires GameplayOracle and cannot be combined with SerialBoundaryOnly.' }
+if ($OracleWindows) {
+    $priorOracleEnd = $FirstFrame
+    foreach ($interval in $OracleWindows.Split(',')) {
+        $oracleFirst = 0L
+        $oracleEnd = 0L
+        $bounds = $interval.Split(':')
+        if ($bounds.Count -ne 2 -or $interval -notmatch '^[0-9]+:[0-9]+$' -or
+            -not [long]::TryParse($bounds[0], [ref] $oracleFirst) -or
+            -not [long]::TryParse($bounds[1], [ref] $oracleEnd) -or
+            $oracleFirst -lt $priorOracleEnd -or $oracleEnd -gt $EndFrame -or $oracleFirst -ge $oracleEnd) {
+            throw 'OracleWindows must contain ordered non-overlapping first:end intervals within the run.'
+        }
+        $priorOracleEnd = $oracleEnd
+    }
+}
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $ownedRoot = [IO.Path]::GetFullPath((Join-Path $repo 'artifacts/scene-checkpoints/p0')) + [IO.Path]::DirectorySeparatorChar
@@ -219,6 +236,7 @@ try {
         if ($CanonicalStartupClock) { $arguments += '--probe-canonical-startup-clock' }
         if ($RecordInputs) { $arguments += '--probe-record-inputs' }
         if ($GameplayOracle) { $arguments += '--probe-gameplay-oracle' }
+        if ($OracleWindows) { $arguments += ('--probe-oracle-windows={0}' -f $OracleWindows) }
         if ($NativeScheduler) { $arguments += '--probe-native-scheduler' }
         if ($NativePhysics) { $arguments += '--probe-native-physics' }
         if ($NativePhysicsOnly) { $arguments += '--probe-native-physics-only' }

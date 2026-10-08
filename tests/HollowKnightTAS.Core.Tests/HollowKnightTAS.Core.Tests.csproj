@@ -30,6 +30,8 @@
              Link="FullRun\LoadingRigidbodyValueBits.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingSceneRootIdentity.cs"
              Link="FullRun\LoadingSceneRootIdentity.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingOracleSamplingWindows.cs"
+             Link="FullRun\LoadingOracleSamplingWindows.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingRuntimeReferencePolicy.cs"
              Link="FullRun\LoadingRuntimeReferencePolicy.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingListEpochIdentity.cs"

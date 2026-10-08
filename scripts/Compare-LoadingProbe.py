@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from loading_trace_windows import expected_gameplay_samples, validate_sample_scope
 
 
 def read_trace(path):
@@ -27,8 +28,9 @@ def read_trace(path):
         raise ValueError(f"{path}: invalid window")
     if footer.get("first") != first or footer.get("end") != end:
         raise ValueError(f"{path}: footer window mismatch")
+    validate_sample_scope(header, rows)
     gameplay = [r for r in rows if r["phase"] in ("before", "after")]
-    expected = [(frame, phase) for frame in range(first, end) for phase in ("before", "after")]
+    expected = expected_gameplay_samples(header)
     if [(r["movieFrame"], r["phase"]) for r in gameplay] != expected:
         raise ValueError(f"{path}: missing, repeated, or reordered Movie sample")
     return header, rows, gameplay

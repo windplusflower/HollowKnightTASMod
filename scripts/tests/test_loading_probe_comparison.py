@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 spec = importlib.util.spec_from_file_location("loading_probe", Path(__file__).parents[1] / "Compare-LoadingProbe.py")
 probe = importlib.util.module_from_spec(spec)

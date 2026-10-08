@@ -4,6 +4,7 @@ import collections
 import hashlib
 import json
 from pathlib import Path
+from loading_trace_windows import expected_gameplay_samples, validate_sample_scope
 
 
 def read_trace(path):
@@ -28,13 +29,13 @@ def read_trace(path):
     if any(row.get("kind") != "sample" or row.get("phase") not in
            ("before", "after", "loading", "event", "candidate") for row in rows):
         raise ValueError(f"{path}: unknown sample")
+    validate_sample_scope(header, rows)
     if header.get("samplingScope") == "serial-candidate-boundaries-only-diagnostic":
         if not rows or any(row["phase"] != "candidate" for row in rows):
             raise ValueError(f"{path}: invalid candidate-only scope")
     else:
         gameplay = [(row["movieFrame"], row["phase"]) for row in rows if row["phase"] in ("before", "after")]
-        expected = [(frame, phase) for frame in range(header["first"], header["end"])
-                    for phase in ("before", "after")]
+        expected = expected_gameplay_samples(header)
         if gameplay != expected:
             raise ValueError(f"{path}: incomplete gameplay window")
     return header, rows
