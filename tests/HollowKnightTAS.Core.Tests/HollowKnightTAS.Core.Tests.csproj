@@ -28,6 +28,8 @@
              Link="FullRun\LoadingPackedArrayDigest.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingRigidbodyValueBits.cs"
              Link="FullRun\LoadingRigidbodyValueBits.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingSceneRootIdentity.cs"
+             Link="FullRun\LoadingSceneRootIdentity.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingRuntimeReferencePolicy.cs"
              Link="FullRun\LoadingRuntimeReferencePolicy.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingListEpochIdentity.cs"

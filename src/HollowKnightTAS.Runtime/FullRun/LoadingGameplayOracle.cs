@@ -32,6 +32,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Dictionary<object, string> fsmMemberIds = new Dictionary<object, string>(ReferenceComparer<object>.Instance);
         private readonly Dictionary<object, string> unityIds = new Dictionary<object, string>(ReferenceComparer<object>.Instance);
         private readonly Dictionary<string, int> sceneObjectOwners = new Dictionary<string, int>(StringComparer.Ordinal);
+        private readonly LoadingSceneRootIdentity sceneRoots = new LoadingSceneRootIdentity();
+        private readonly Dictionary<int, string> gameObjectPaths = new Dictionary<int, string>();
         private readonly LoadingUnityAssetIdentity assetIdentities = new LoadingUnityAssetIdentity();
         private readonly LoadingAssetProvenanceObservation assetProvenance = new LoadingAssetProvenanceObservation();
         private readonly List<Tuple<UnityEngine.Object, string>> assetRoots = new List<Tuple<UnityEngine.Object, string>>();
@@ -102,7 +104,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 nativeProfile = HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId,
                 coverage = nativePhysicsOnly ? "native-physics-only-diagnostic-scope-managed-roots-not-observed-v1"
                     : "active-managed-fields-current-fsm-states-actions-and-all-roots-states-actions-at-window-endpoints-willactivate-loadfinish-v4",
-                referencePolicy = "scene-hierarchy-sibling-component-index; assets-per-type-name-alias-ordinal; destroyed-wrapper-alias-ordinal; TAS-controller-references-by-type; readonly-probe-subscriptions-excluded-v1; protected-root-binding; registered-input-device-guid; input-tick-age; native-scheduler-timestamp-age-v1; dictionary-slots-v1; gradient-active-mode-v1; controlled-native-cursor-from-StartInputAt",
+                referencePolicy = LoadingSceneRootIdentity.Policy + "; assets-per-type-name-alias-ordinal; destroyed-wrapper-alias-ordinal; TAS-controller-references-by-type; readonly-probe-subscriptions-excluded-v1; protected-root-binding; registered-input-device-guid; input-tick-age; native-scheduler-timestamp-age-v1; dictionary-slots-v1; gradient-active-mode-v1; controlled-native-cursor-from-StartInputAt",
                 nativeScheduler = nativeScheduler != null,
                 nativeValueObservation = "curve-rect-text-guistyle-copy-queries; validated-steam-delegate-tables; pinned-enumerated-shader-property-sheet-v1",
                 detachedFsmObservation = "expand-reachable-managed-FSM-state-action-graphs-with-shared-aliases-v1",
@@ -235,6 +237,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             detachedFsmRoots.Clear();
             unityIds.Clear(); fsmIds.Clear(); fsmMemberIds.Clear();
             sceneObjectOwners.Clear();
+            sceneRoots.Clear(); gameObjectPaths.Clear();
             assetIdentities.Clear();
             assetProvenance.Clear();
             assetRoots.Clear(); assetInstances.Clear();
@@ -706,19 +709,34 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (value is Component component) go = component.gameObject;
             if (go != null && Loaded(go))
             {
-                var path = new Stack<string>();
-                for (var current = go.transform; current != null; current = current.parent)
-                    path.Push(current.name + "[" + current.GetSiblingIndex() + "]");
-                id = go.scene.name + ":" + string.Join("/", path);
                 var objectOwner = go.GetInstanceID();
-                if (sceneObjectOwners.TryGetValue(id, out var previousOwner))
+                if (!gameObjectPaths.TryGetValue(objectOwner, out id))
                 {
-                    if (previousOwner != objectOwner) omissions.Add("ambiguous-scene-object-binding:" + id);
-                }
-                else
-                {
-                    if (sceneObjectOwners.Count >= 100000) throw new InvalidOperationException("P0 scene binding budget exceeded.");
-                    sceneObjectOwners.Add(id, objectOwner);
+                    var scene = go.scene;
+                    if (!sceneRoots.Contains(scene.handle))
+                    {
+                        if (scene.rootCount > 100000) throw new InvalidOperationException("P0 scene-root list exceeds its budget.");
+                        sceneRoots.Register(scene.handle, scene.name,
+                            scene.GetRootGameObjects().Select(root => root == null ? 0 : root.GetInstanceID()).ToArray());
+                    }
+                    var path = new Stack<string>();
+                    for (var current = go.transform; current != null; current = current.parent)
+                    {
+                        var index = current.parent == null
+                            ? sceneRoots.Ordinal(scene.handle, current.gameObject.GetInstanceID()) : current.GetSiblingIndex();
+                        path.Push(current.name + "[" + index + "]");
+                    }
+                    id = scene.name + ":" + string.Join("/", path);
+                    if (sceneObjectOwners.TryGetValue(id, out var previousOwner))
+                    {
+                        if (previousOwner != objectOwner) throw new InvalidOperationException("P0 scene-object identity collision: " + id);
+                    }
+                    else
+                    {
+                        if (sceneObjectOwners.Count >= 100000) throw new InvalidOperationException("P0 scene binding budget exceeded.");
+                        sceneObjectOwners.Add(id, objectOwner);
+                    }
+                    gameObjectPaths.Add(objectOwner, id);
                 }
                 if (value is Component part)
                 {
