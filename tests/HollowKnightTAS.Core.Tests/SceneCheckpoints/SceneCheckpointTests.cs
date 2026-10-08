@@ -19,7 +19,7 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
             var payload = SceneCheckpointPacket.EncodeSections(new Dictionary<string, byte[]>
             {
                 ["playerData"] = Enumerable.Range(0, dataSize).Select(n => (byte)n).ToArray(), ["sceneData"] = new byte[] { 2 },
-                ["transition"] = new byte[] { 3 }, ["unityRng"] = Enumerable.Range(0, 16).Select(n => (byte)n).ToArray()
+                ["transition"] = new byte[] { 3 }, ["unityRng"] = Enumerable.Range(0, 16).Select(n => (byte)n).ToArray(), ["continuation"] = new byte[] { 4 }
             });
             return new SceneCheckpointPacket(new SceneCheckpointHeader(checkpointId ?? Id(), scope, Binding, trigger, 1, 1421, 1500, 1421, 1520,
                 payload.Length, Sha256Utility.ComputeHex(payload)), payload);

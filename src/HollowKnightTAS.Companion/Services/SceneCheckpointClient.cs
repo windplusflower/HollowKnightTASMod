@@ -96,6 +96,44 @@ namespace HollowKnightTAS.Companion.Services
             }
             catch { await Cleanup("import-cancel", "checkpointId", checkpointId); throw; }
         }
+        // Experiments use the same memory transfer and ownership checks as
+        // capture. Preparing an engine scene consumes no Movie history.
+        public async Task StartRestorePrototypeAsync(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding, CancellationToken token)
+        {
+            _ = store.Get(checkpointId, scope, binding);
+            try
+            {
+                var result = await Call(new Dictionary<string, string> { ["phase"] = "restore-start", ["checkpointId"] = checkpointId }, token);
+                Expect(result, "LoadingInitialSave"); ValidateRestoreReply(result, checkpointId);
+                _ = store.Get(checkpointId, scope, binding);
+            }
+            catch { await Cleanup("restore-cancel", "checkpointId", checkpointId); throw; }
+        }
+        public async Task<IReadOnlyDictionary<string, string>> RestoreStatusAsync(string checkpointId, CancellationToken token)
+        {
+            var result = await Call(new Dictionary<string, string> { ["phase"] = "restore-status", ["checkpointId"] = checkpointId }, token);
+            ValidateRestoreReply(result, checkpointId); return result;
+        }
+        public async Task ApplyRestorePrototypeAsync(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding, CancellationToken token)
+        {
+            _ = store.Get(checkpointId, scope, binding);
+            try
+            {
+                var result = await Call(new Dictionary<string, string> { ["phase"] = "restore-apply", ["checkpointId"] = checkpointId }, token);
+                Expect(result, "RebuildingCToK"); ValidateRestoreReply(result, checkpointId);
+                if (!result.TryGetValue("stateApplied", out var applied) || applied != "true") throw new InvalidDataException("Invalid experimental checkpoint application receipt.");
+                _ = store.Get(checkpointId, scope, binding);
+            }
+            catch { await Cleanup("restore-cancel", "checkpointId", checkpointId); throw; }
+        }
+        public Task CancelRestorePrototypeAsync(string checkpointId, CancellationToken token)
+            => Call(new Dictionary<string, string> { ["phase"] = "restore-cancel", ["checkpointId"] = checkpointId }, token);
+        private static void ValidateRestoreReply(IReadOnlyDictionary<string, string> result, string checkpointId)
+        {
+            if (!result.TryGetValue("checkpointId", out var id) || id != checkpointId
+                || !result.TryGetValue("restoreQualified", out var qualified) || qualified != "false")
+                throw new InvalidDataException("Invalid experimental checkpoint restore identity or qualification.");
+        }
         private Task<IReadOnlyDictionary<string, string>> Call(Dictionary<string, string> fields, CancellationToken token)
         { fields["requestId"] = "checkpoint-" + Guid.NewGuid().ToString("N"); return request(fields, token); }
         private async Task Cleanup(string phase, string identityKey, string identity)

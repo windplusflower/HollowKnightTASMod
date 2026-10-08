@@ -25,7 +25,7 @@ namespace HollowKnightTAS.ClockPayload
     /// Rigidbody2D, enemy, or resource state; it only identifies the Hero
     /// action-set update boundary and never writes input state.
     /// </summary>
-    public static class ClockController
+    public static partial class ClockController
     {
         public const string ProfileId =
             "external-unity-startup-continuous-clock-v40-native-scene-lifecycle";

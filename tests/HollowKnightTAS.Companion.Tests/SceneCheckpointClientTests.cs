@@ -79,12 +79,46 @@ namespace HollowKnightTAS.Companion.Tests
             var packet = await client.ReceiveAsync(current, TimeSpan.FromSeconds(2), CancellationToken.None);
             Assert.AreEqual(current.CaptureId, packet.Header.CheckpointId); Assert.AreEqual("Published", current.State);
         }
+        [TestMethod]
+        public async Task ExperimentalRestoreSeparatesStagingApplicationAndStatus()
+        {
+            using var store = new SceneCheckpointStore(); var scope = store.ActivateBranch(Id(), Id()); var binding = Binding();
+            var peer = new MemoryPeer(); var client = new SceneCheckpointClient(store, peer.Request);
+            var lease = await client.ArmAsync(scope, binding, SceneCheckpointTrigger.ManualNextEligibleLoadBoundary, CancellationToken.None);
+            var packet = await client.ReceiveAsync(lease, TimeSpan.FromSeconds(2), CancellationToken.None);
+            await client.StageAsync(packet.Header.CheckpointId, scope, binding, CancellationToken.None);
+            Assert.IsFalse(peer.Applied);
+            await client.StartRestorePrototypeAsync(packet.Header.CheckpointId, scope, binding, CancellationToken.None);
+            Assert.IsFalse(peer.Applied);
+            await client.ApplyRestorePrototypeAsync(packet.Header.CheckpointId, scope, binding, CancellationToken.None);
+            var status = await client.RestoreStatusAsync(packet.Header.CheckpointId, CancellationToken.None);
+            Assert.IsTrue(peer.Applied); Assert.AreEqual("false", status["restoreQualified"]);
+            Assert.AreEqual(packet.Header.CheckpointId, status["checkpointId"]);
+        }
+        [TestMethod]
+        public async Task InvalidRestoreReceiptOrBranchSwitchRetiresTheReplacement()
+        {
+            using var store = new SceneCheckpointStore(); var tree = Id(); var branch = Id(); var scope = store.ActivateBranch(tree, branch); var binding = Binding();
+            var peer = new MemoryPeer(); var client = new SceneCheckpointClient(store, peer.Request);
+            var lease = await client.ArmAsync(scope, binding, SceneCheckpointTrigger.ManualNextEligibleLoadBoundary, CancellationToken.None);
+            var packet = await client.ReceiveAsync(lease, TimeSpan.FromSeconds(2), CancellationToken.None);
+            await client.StageAsync(packet.Header.CheckpointId, scope, binding, CancellationToken.None);
+            peer.InvalidRestoreReceipt = true;
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => client.ApplyRestorePrototypeAsync(packet.Header.CheckpointId, scope, binding, CancellationToken.None));
+            Assert.IsTrue(peer.RestoreCancelled);
+            peer.InvalidRestoreReceipt = false; peer.RestoreCancelled = false;
+            peer.OnRestore = () => store.ActivateBranch(tree, Id());
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => client.StartRestorePrototypeAsync(packet.Header.CheckpointId, scope, binding, CancellationToken.None));
+            Assert.IsTrue(peer.RestoreCancelled);
+        }
         private sealed class MemoryPeer
         {
             internal SceneCheckpointPacket? Captured;
             internal SceneCheckpointPacket? Staged;
             internal bool Corrupt;
             internal Action<int>? OnChunk;
+            internal Action? OnRestore;
+            internal bool Applied, InvalidRestoreReceipt, RestoreCancelled;
             private SceneCheckpointReceiver? import;
             private readonly string session = Id();
             private long sequence;
@@ -98,7 +132,7 @@ namespace HollowKnightTAS.Companion.Tests
                         var scope = new SceneCheckpointScope(fields["studioSessionId"], fields["treeId"], fields["branchId"], long.Parse(fields["generation"], CultureInfo.InvariantCulture));
                         var binding = new SceneCheckpointBinding(fields["environmentSha256"], fields["initialSavesSha256"], fields["nativeProfileId"]);
                         var payload = SceneCheckpointPacket.EncodeSections(new Dictionary<string, byte[]>
-                        { ["playerData"] = Enumerable.Range(0, 100000).Select(n => (byte)n).ToArray(), ["sceneData"] = new byte[] { 2 }, ["transition"] = new byte[] { 3 }, ["unityRng"] = new byte[16] });
+                        { ["playerData"] = Enumerable.Range(0, 100000).Select(n => (byte)n).ToArray(), ["sceneData"] = new byte[] { 2 }, ["transition"] = new byte[] { 3 }, ["unityRng"] = new byte[16], ["continuation"] = new byte[] { 4 } });
                         Captured = new SceneCheckpointPacket(new SceneCheckpointHeader(fields["captureId"], scope, binding,
                             Enum.Parse<SceneCheckpointTrigger>(fields["trigger"]), 1, 4, 8, 4, 12, payload.Length, Sha256Utility.ComputeHex(payload)), payload);
                         reply["status"] = "Pending"; break;
@@ -114,6 +148,16 @@ namespace HollowKnightTAS.Companion.Tests
                     case "import-chunk": import!.Append(int.Parse(fields["index"], CultureInfo.InvariantCulture), Convert.FromBase64String(fields["data"])); reply["status"] = "ImportPending"; break;
                     case "import-end": Staged = import!.Complete(); import = null; reply["status"] = "Staged"; reply["checkpointId"] = Staged.Header.CheckpointId; reply["restoreQualified"] = "false"; break;
                     case "import-cancel": import?.Dispose(); import = null; Staged = null; reply["status"] = "ImportCancelled"; break;
+                    case "restore-start":
+                    case "restore-apply":
+                    case "restore-status":
+                        reply["checkpointId"] = Staged!.Header.CheckpointId;
+                        reply["restoreQualified"] = InvalidRestoreReceipt ? "true" : "false";
+                        reply["status"] = fields["phase"] == "restore-start" ? "LoadingInitialSave" : "RebuildingCToK";
+                        if (fields["phase"] == "restore-apply") Applied = true;
+                        reply["stateApplied"] = Applied ? "true" : "false";
+                        OnRestore?.Invoke(); break;
+                    case "restore-cancel": RestoreCancelled = true; reply["status"] = "Cancelled"; break;
                     default: throw new InvalidOperationException("Unexpected checkpoint phase.");
                 }
                 return Task.FromResult(Wire(reply, IpcMessageTypes.SceneCheckpointData));

@@ -13,9 +13,9 @@ using USceneManager = UnityEngine.SceneManagement.SceneManager;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
-    // Explicit V6 feasibility experiment. No checkpoint payload or restoration.
+    // Explicit serial loading policy; experimental checkpoint code uses its C.
     // The original SceneLoad still owns target activation and all entry callbacks.
-    internal sealed class LoadingSerialSceneProbe : IDisposable
+    internal sealed partial class LoadingSerialSceneProbe : IDisposable
     {
         private const string StagingName = "__HKTAS_SerialBoundary_v6";
         private delegate IEnumerator OriginalBegin(SceneLoad self);
@@ -78,7 +78,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw Fail("V6 serial prototype requires a load-info adapter: " + info.GetType().FullName);
             }
             checkpointLoadInfo = info;
-            return original(manager, info);
+            if (checkpointTransitionRoutine != null) throw Fail("Scene transition continuation reentered.");
+            return TrackCheckpointTransition(original(manager, info));
         }
 
         private IEnumerator Begin(OriginalBegin original, SceneLoad load)
@@ -96,6 +97,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 while (!load.IsFetchAllowed || !load.IsActivationAllowed) yield return null;
                 source = USceneManager.GetActiveScene();
                 sourceName = source.name;
+                if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") == "1")
+                    checkpointBossBindings = CheckpointBossContext.CaptureBindingsBeforeUnload();
                 if (!source.IsValid() || !source.isLoaded || source.name == StagingName)
                     throw Fail("Serial scene source is invalid.");
                 if (!staging.IsValid() || !staging.isLoaded) staging = USceneManager.CreateScene(StagingName);
@@ -154,6 +157,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 awaitingBoundary = false;
                 transition = null;
                 checkpointLoadInfo = null;
+                checkpointTransitionRoutine = null;
+                checkpointTransitionFinished = false;
+                checkpointBossBindings = null;
             }
         }
 

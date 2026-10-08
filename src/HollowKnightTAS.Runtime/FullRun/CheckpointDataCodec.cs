@@ -10,6 +10,7 @@ using System.Runtime.Serialization;
 using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
+using Newtonsoft.Json.Linq;
 using HollowKnightTAS.Core.SceneCheckpoints;
 
 namespace HollowKnightTAS.Runtime.FullRun
@@ -58,7 +59,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             PreserveReferencesHandling = PreserveReferencesHandling.All, ReferenceLoopHandling = ReferenceLoopHandling.Serialize,
             MissingMemberHandling = MissingMemberHandling.Error, ObjectCreationHandling = ObjectCreationHandling.Replace,
             NullValueHandling = NullValueHandling.Include, Culture = CultureInfo.InvariantCulture, MaxDepth = 128,
-            Converters = new List<JsonConverter> { new FloatBitsConverter() }
+            ReferenceResolverProvider = () => new DataReferences(),
+            Converters = new List<JsonConverter> { new PortableArrayConverter(), new FloatBitsConverter() }
         });
         private void ValidateGraph(object root)
         {
@@ -146,6 +148,65 @@ namespace HollowKnightTAS.Runtime.FullRun
                 for (var current = type; current != null && current != typeof(object); current = current.BaseType)
                     fields.AddRange(current.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly));
                 return fields.OrderBy(f => f.Name, StringComparer.Ordinal);
+            }
+        }
+        // Json.NET's default preserve-references array reader cannot allocate
+        // arrays before resolving aliases. Allocate detached arrays first and
+        // register them before reading elements, including cycles through roots.
+        private sealed class PortableArrayConverter : JsonConverter
+        {
+            public override bool CanConvert(Type type) => type.IsArray && type.GetArrayRank() == 1;
+            public override void WriteJson(JsonWriter writer, object? value, JsonSerializer serializer)
+            {
+                if (value == null) { writer.WriteNull(); return; }
+                var array = (Array)value;
+                var references = serializer.ReferenceResolver!;
+                writer.WriteStartObject();
+                if (references.IsReferenced(serializer, array))
+                { writer.WritePropertyName("$ref"); writer.WriteValue(references.GetReference(serializer, array)); writer.WriteEndObject(); return; }
+                writer.WritePropertyName("$id"); writer.WriteValue(references.GetReference(serializer, array));
+                writer.WritePropertyName("$values"); writer.WriteStartArray();
+                foreach (var item in array) serializer.Serialize(writer, item, array.GetType().GetElementType());
+                writer.WriteEndArray(); writer.WriteEndObject();
+            }
+            public override object? ReadJson(JsonReader reader, Type type, object? existingValue, JsonSerializer serializer)
+            {
+                if (reader.TokenType == JsonToken.Null) return null;
+                var token = JToken.Load(reader);
+                if (!(token is JObject data)) throw new InvalidDataException("Checkpoint arrays need their portable reference encoding.");
+                if (data.Count == 1 && data["$ref"]?.Type == JTokenType.String)
+                {
+                    var reference = serializer.ReferenceResolver!.ResolveReference(serializer, (string)data["$ref"]!);
+                    if (reference.GetType() != type) throw new InvalidDataException("Checkpoint array reference type differs.");
+                    return reference;
+                }
+                if (data.Count != 2 || data["$id"]?.Type != JTokenType.String || !(data["$values"] is JArray values) || values.Count > 100000)
+                    throw new InvalidDataException("Invalid checkpoint array shape or bound.");
+                var element = type.GetElementType()!; var result = Array.CreateInstance(element, values.Count);
+                serializer.ReferenceResolver!.AddReference(serializer, (string)data["$id"]!, result);
+                for (var i = 0; i < values.Count; i++) result.SetValue(values[i].ToObject(element, serializer), i);
+                return result;
+            }
+        }
+        private sealed class DataReferences : IReferenceResolver
+        {
+            private readonly Dictionary<string, object> byId = new Dictionary<string, object>(StringComparer.Ordinal);
+            private readonly Dictionary<object, string> byObject = new Dictionary<object, string>(new ReferenceComparer());
+            private int sequence;
+            public bool IsReferenced(object context, object value) => byObject.ContainsKey(value);
+            public string GetReference(object context, object value)
+            {
+                if (byObject.TryGetValue(value, out var id)) return id;
+                id = (++sequence).ToString(CultureInfo.InvariantCulture); AddReference(context, id, value); return id;
+            }
+            public object ResolveReference(object context, string reference) => byId.TryGetValue(reference, out var value)
+                ? value : throw new InvalidDataException("Checkpoint reference is absent.");
+            public void AddReference(object context, string reference, object value)
+            {
+                if (byId.Count >= 100000 || !int.TryParse(reference, NumberStyles.None, CultureInfo.InvariantCulture, out var id)
+                    || id < 1 || id.ToString(CultureInfo.InvariantCulture) != reference || byId.ContainsKey(reference) || byObject.ContainsKey(value))
+                    throw new InvalidDataException("Invalid or duplicate checkpoint reference.");
+                byId.Add(reference, value); byObject.Add(value, reference);
             }
         }
         private sealed class FloatBitsConverter : JsonConverter

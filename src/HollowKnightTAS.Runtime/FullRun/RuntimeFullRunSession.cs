@@ -146,6 +146,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private EventWaitHandle? randomSeedAcknowledged;
         private long randomSeedRequestNativeFrame = -1;
         private int randomSeedSceneHandle = -1;
+        private string randomSeedSceneName = "";
         private bool randomSeedHandshakePending;
         private readonly ReplayRenderSuppression restoreDrawing = new ReplayRenderSuppression();
 
@@ -490,6 +491,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private void OnNativeBeforeFrame(long completed)
         {
             restoreDrawing.Active = false;
+            if (RunCheckpointPreparationFrame(completed)) return;
             if (!inputReady || (mode != "Recording" && mode != "Replay")) return;
             try
             {
@@ -536,9 +538,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     else
                     {
                         randomSeedSceneHandle = sceneHandle;
+                        randomSeedSceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
                         randomSeedHandshakePending = false;
                     }
                 }
+                if (ready && ParkCheckpointAtK(completed)) return;
                 if (ready) CompleteSceneCheckpointBoundary(completed);
                 activeFrameRate = recordingFrameRate;
                 if (replayMovie != null)
@@ -684,6 +688,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 ObserveBoss();
                 TraceMovieRng("after", null);
+                RecordCheckpointInputConsumption(movieFrame);
                 loadingBoundaryProbe?.Sample("after", frameBoundary);
                 loadingGameplayOracle?.Sample("after", frameBoundary);
                 if (mode == "Recording") journal!.CompleteFrame(movieFrame, activeFrameRate);

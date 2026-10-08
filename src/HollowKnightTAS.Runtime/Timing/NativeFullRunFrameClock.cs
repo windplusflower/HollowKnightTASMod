@@ -1,5 +1,8 @@
 using System;
 using System.Runtime.InteropServices;
+using System.IO;
+using System.Text;
+using HollowKnightTAS.Core.Cryptography;
 using HollowKnightTAS.Core.FullRun;
 using HollowKnightTAS.Core.Movie;
 
@@ -21,11 +24,19 @@ namespace HollowKnightTAS.Runtime.Timing
         private delegate int NativeFrameRate(int numerator, int denominator);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int NativeCopyHash([Out] byte[] output, uint capacity);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int NativeImport([In] byte[] input, uint length, ulong expectedCompleted);
+        private NativeCopyHash? exportContinuation;
+        private NativeImport? importContinuation;
+        public const int ContinuationBytes = 1128;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr GetModuleHandle(string name);
         [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true)]
         private static extern IntPtr GetProcAddress(IntPtr module, string name);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern uint GetModuleFileName(IntPtr module, StringBuilder path, int capacity);
+        internal string CheckpointBridgeSha256 { get; private set; } = "";
 
         private readonly NativeFrame getFrame;
         private readonly NativeInt getMode;
@@ -110,6 +121,18 @@ namespace HollowKnightTAS.Runtime.Timing
             clock.requestObservation = Load<NativeInt>("HktasClockBridge_RequestObservation");
             clock.stepTicks = Load<NativeFrame>("HktasClockBridge_GetDeterministicClockStepTicks");
             clock.frequency = Load<NativeFrame>("HktasClockBridge_GetDeterministicClockFrequency");
+            // Experimental exports are optional for ordinary movies/older bridges.
+            if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") == "1")
+            {
+                if (Load<NativeInt>("HktasClockBridge_GetContinuationBytes")() != ContinuationBytes)
+                    throw new InvalidOperationException("Native continuation layout differs.");
+                clock.exportContinuation = Load<NativeCopyHash>("HktasClockBridge_ExportContinuation");
+                clock.importContinuation = Load<NativeImport>("HktasClockBridge_ImportContinuation");
+                var path = new StringBuilder(32768);
+                var pathBytes = GetModuleFileName(module, path, path.Capacity);
+                if (pathBytes == 0 || pathBytes >= path.Capacity) throw new InvalidOperationException("Native continuation module identity is unavailable.");
+                clock.CheckpointBridgeSha256 = Sha256Utility.ComputeHex(File.ReadAllBytes(path.ToString()));
+            }
             if (clock.CurrentFrameIndex < 0)
                 throw new InvalidOperationException("Native full-run frame count is invalid.");
             return clock;
@@ -139,6 +162,20 @@ namespace HollowKnightTAS.Runtime.Timing
 
         public bool IsPaused => getMode() == 0 || getMode() == 4;
         public bool IsFinished => getMode() == 4;
+
+        public byte[] ExportContinuation()
+        {
+            var bytes = new byte[ContinuationBytes];
+            if (exportContinuation == null || exportContinuation(bytes, (uint)bytes.Length) != 1)
+                throw new InvalidOperationException("Native continuation capture rejected its boundary.");
+            return bytes;
+        }
+        public void ImportContinuation(byte[] bytes, long expectedCompleted)
+        {
+            if (bytes == null || bytes.Length != ContinuationBytes || expectedCompleted < 0
+                || importContinuation == null || importContinuation(bytes, (uint)bytes.Length, (ulong)expectedCompleted) != 1)
+                throw new InvalidOperationException("Native continuation import rejected its state or boundary.");
+        }
 
         public byte[] ReadArmedDescriptorHash()
         {

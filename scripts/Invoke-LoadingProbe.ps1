@@ -30,6 +30,7 @@ param(
     [switch] $IsolatedOnline,
     [switch] $CanonicalParticles,
     [switch] $ExportVideo,
+    [switch] $CheckpointPrototype,
     [string] $ClockBridgePath = '',
     [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
 )
@@ -42,6 +43,7 @@ if ($CanonicalParticles -and -not $IsolatedOnline) { throw 'CanonicalParticles r
 if ($CanonicalStartupClock -and (-not $SynchronousFetch -or -not $DisableLegacyCalibration)) { throw 'The v4 experiment requires synchronous fetch and disabled legacy calibration.' }
 if ($ModWallClock -and -not $CanonicalStartupClock) { throw 'The v5 Mod wall-clock experiment requires canonical startup clocks.' }
 if ($RecordInputs -and $Runs -ne 1) { throw 'RecordInputs requires one run.' }
+if ($CheckpointPrototype -and ($Runs -ne 1 -or $RecordInputs -or -not $SerialScenes -or $ExportVideo)) { throw 'CheckpointPrototype requires one serial-scene replay without recording or video.' }
 if ($DisablePrimaryProbe -and (-not $GameplayOracle -or $RecordInputs)) { throw 'DisablePrimaryProbe requires the independent oracle and a replay run.' }
 if ($NativeScheduler -and -not $GameplayOracle) { throw 'NativeScheduler requires the independent gameplay oracle.' }
 if ($NativePhysics -and -not $GameplayOracle) { throw 'NativePhysics requires the independent gameplay oracle.' }
@@ -66,8 +68,9 @@ if ($OracleWindows) {
 }
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
-$ownedRoot = [IO.Path]::GetFullPath((Join-Path $repo 'artifacts/scene-checkpoints/p0')) + [IO.Path]::DirectorySeparatorChar
-if (-not $outputRoot.StartsWith($ownedRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Output must be under artifacts/scene-checkpoints/p0/.' }
+$phaseRoot = if ($CheckpointPrototype) { 'artifacts/scene-checkpoints/p3' } else { 'artifacts/scene-checkpoints/p0' }
+$ownedRoot = [IO.Path]::GetFullPath((Join-Path $repo $phaseRoot)) + [IO.Path]::DirectorySeparatorChar
+if (-not $outputRoot.StartsWith($ownedRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "Output must be under $phaseRoot/." }
 if (Test-Path -LiteralPath $outputRoot) { throw 'Choose a fresh evidence directory.' }
 if (Get-Process hollow_knight,HollowKnightTAS.Companion,StudioScenarioHarness -ErrorAction SilentlyContinue) { throw 'A game or Studio session is already running.' }
 $install = 'D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/Managed/Mods/HollowKnightTAS'
@@ -250,6 +253,7 @@ try {
         if ($IsolatedOnline) { $arguments += '--probe-isolated-online' }
         if ($CanonicalParticles) { $arguments += '--probe-canonical-particles' }
         if ($ExportVideo) { $arguments += '--probe-export-video' }
+        if ($CheckpointPrototype) { $arguments += '--checkpoint-prototype' }
         if ($EndpointHoldSeconds -gt 0) { $arguments += ('--probe-hold-seconds={0}' -f $EndpointHoldSeconds) }
         if ($DisableLegacyCalibration) { $arguments += '--probe-disable-legacy-calibration' }
         if ($RandomCalls) { $arguments += @('--probe-random-calls', "--probe-call-first=$CallFirst", "--probe-call-end=$CallEnd") }
@@ -277,6 +281,7 @@ try {
                 $diagnosticNames = @('loading-boundary-probe.jsonl','loading-gameplay-oracle.jsonl','loading-state-inventory.json',
                     'loading-field-digests.json','loading-oracle-progress.json','loading-oracle-stage-progress.json',
                     'engine-clock-layout.json','engine-clock-roundtrip.json')
+                if ($CheckpointPrototype) { $diagnosticNames += 'full-run-fault.txt' }
                 foreach ($file in (Get-ChildItem -LiteralPath $resolvedShadow -Recurse -File | Where-Object {
                     $_.Name -in $diagnosticNames -or $_.Name -match '^loading-candidate-[0-9]+-inventory\.json$'
                 })) {

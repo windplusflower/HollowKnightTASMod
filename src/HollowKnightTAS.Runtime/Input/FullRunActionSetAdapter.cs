@@ -7,7 +7,7 @@ using InControl;
 
 namespace HollowKnightTAS.Runtime.Input
 {
-    public sealed class FullRunActionSetAdapter : IDisposable
+    public sealed partial class FullRunActionSetAdapter : IDisposable
     {
         private readonly List<ActionSetLease> leases = new List<ActionSetLease>();
         private readonly CustomKnightInputGuard customKnightInputs = new CustomKnightInputGuard();

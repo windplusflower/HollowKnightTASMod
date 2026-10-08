@@ -12,5 +12,16 @@ namespace HollowKnightTAS.Core.Movie
         public bool Held(short key) => current.Contains(key);
         public bool Down(short key) => current.Contains(key) && !previous.Contains(key);
         public bool Up(short key) => !current.Contains(key) && previous.Contains(key);
+        public short[] CapturePrevious() => previous.OrderBy(key => key).ToArray();
+        public short[] CaptureCurrent() => current.OrderBy(key => key).ToArray();
+        public void Restore(IEnumerable<short> previousKeys, IEnumerable<short> currentKeys)
+        {
+            var prior = previousKeys.ToArray(); var next = currentKeys.ToArray();
+            if (!prior.SequenceEqual(prior.Distinct().OrderBy(key => key))
+                || !next.SequenceEqual(next.Distinct().OrderBy(key => key))
+                || prior.Concat(next).Any(key => !CustomKeyInput.Names.ContainsKey(key)))
+                throw new System.IO.InvalidDataException("Invalid checkpoint keyboard state.");
+            previous = new HashSet<short>(prior); current = new HashSet<short>(next);
+        }
     }
 }

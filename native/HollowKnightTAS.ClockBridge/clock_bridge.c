@@ -52,6 +52,8 @@ static LONGLONG g_deterministic_clock_step_ticks;
 #include "fractional_frame_clock.h"
 static hktas_fractional_clock g_fractional_clock;
 static BOOL g_fractional_clock_configured;
+static LONG g_fractional_rate_numerator;
+static LONG g_fractional_rate_denominator;
 static LONG g_deterministic_clock_last_advance_sequence;
 static volatile LONG g_deterministic_clock_frame_advance_count;
 static BOOL g_query_performance_counter_hook_installed;
@@ -90,6 +92,7 @@ static void advance_boot_frame_clock(void)
 #include "full_run_frame_gate.h"
 #include "loading_startup_clock_probe.h"
 #include "startup_frame_hook.h"
+#include "full_run_continuation.h"
 
 static BOOL loading_startup_clock_is_frozen(void)
 {
@@ -1292,6 +1295,8 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_SetFullRunFrameRateRatio(LON
         return 0;
     }
     g_fractional_clock_configured = TRUE;
+    g_fractional_rate_numerator = numerator;
+    g_fractional_rate_denominator = denominator;
     g_deterministic_clock_step_ticks = hktas_fractional_peek(&g_fractional_clock);
     ReleaseSRWLockExclusive(&g_clock_lock);
     return 1;

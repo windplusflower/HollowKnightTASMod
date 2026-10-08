@@ -12,7 +12,7 @@ namespace HollowKnightTAS.Runtime.Input
     /// Records the two game mouse consumers at their own Update boundaries. The
     /// UI process is separate and never receives this provider or BaseInput.
     /// </summary>
-    public sealed class FullRunMouseBridge : IDisposable
+    public sealed partial class FullRunMouseBridge : IDisposable
     {
         private static readonly PropertyInfo MouseProviderProperty = typeof(InputManager).GetProperty(
             "MouseProvider", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)

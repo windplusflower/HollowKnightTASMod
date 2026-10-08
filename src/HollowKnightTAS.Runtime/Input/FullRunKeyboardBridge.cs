@@ -70,6 +70,14 @@ namespace HollowKnightTAS.Runtime.Input
         }
         public void Prepare(IEnumerable<GameInputSample> samples) => state.Prepare(samples);
         public void Complete() => state.Complete();
+        internal short[] CapturePrevious() => state.CapturePrevious();
+        internal short[] CaptureCurrent() => state.CaptureCurrent();
+        internal void Restore(short[] previous, short[] current)
+        {
+            if (previous.Concat(current).Any(key => !keys.Contains(key)))
+                throw new System.IO.InvalidDataException("Checkpoint keyboard keys differ from the Movie.");
+            state.Restore(previous, current);
+        }
         public void Dispose()
         {
             for (var i = hooks.Count - 1; i >= 0; i--) hooks[i].Dispose();

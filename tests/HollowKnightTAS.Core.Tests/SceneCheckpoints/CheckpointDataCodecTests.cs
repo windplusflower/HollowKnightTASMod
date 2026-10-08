@@ -25,6 +25,9 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
             public List<int>? Items;
             public List<int>? Alias;
             public Dictionary<string, int>? Map;
+            public Data[]? Nodes, NodesAlias;
+            public HollowKnightTAS.Core.Movie.GameInputChannel[]? Channels;
+            public byte[]? Bytes, BytesAlias;
             private int hidden = 17;
             public int ReadHidden() => hidden;
             public static int Effects;
@@ -47,6 +50,18 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
             Assert.AreSame(decoded.Items, decoded.Alias); Assert.AreEqual(17, decoded.ReadHidden()); Assert.IsNull(decoded.Text);
             CollectionAssert.AreEqual(bytes, codec.Encode(decoded));
             value.Items!.Add(99); value.Number = 100; Assert.AreEqual(3, decoded.Items!.Count); Assert.AreEqual(-7, decoded.Number);
+        }
+        [TestMethod]
+        public void DetachedArraysPreserveEmptyEnumsBytesAliasesAndCyclesWithoutConstructors()
+        {
+            var data = new Data { Channels = Array.Empty<HollowKnightTAS.Core.Movie.GameInputChannel>(), Bytes = new byte[] { 0, 255, 7 } };
+            data.Nodes = data.NodesAlias = new[] { data }; data.BytesAlias = data.Bytes;
+            Data.Effects = 0; var codec = Codec(); var bytes = codec.Encode(data); var copied = codec.Decode<Data>(bytes);
+            Assert.AreEqual(0, Data.Effects); Assert.AreEqual(0, copied.Channels!.Length);
+            Assert.AreSame(copied.Nodes, copied.NodesAlias); Assert.AreSame(copied, copied.Nodes![0]); Assert.AreSame(copied.Bytes, copied.BytesAlias);
+            CollectionAssert.AreEqual(data.Bytes, copied.Bytes); CollectionAssert.AreEqual(bytes, codec.Encode(copied));
+            var json = JObject.Parse(Encoding.UTF8.GetString(bytes)); ((JObject)json["Nodes"]!)["$ref"] = "999999";
+            Assert.ThrowsExactly<InvalidDataException>(() => codec.Decode<Data>(Encoding.UTF8.GetBytes(json.ToString(Formatting.None))));
         }
         [TestMethod]
         public void MissingExtraDuplicateFieldsWrongFloatEncodingAndCustomComparerAreRejected()

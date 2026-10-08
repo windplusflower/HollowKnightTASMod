@@ -51,6 +51,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var session = new RuntimeFullRunSession(clock,
                     new FullRunActionSetAdapter(), new FullRunMouseBridge(),
                     sessionDirectory);
+                session.BindCheckpointSaveContext(saves);
                 FullRunResult result;
                 session.ConfigureTiming(descriptor.FramesPerSecond, descriptor.PauseAtFrame);
                 if (descriptor.Mode == "Record")

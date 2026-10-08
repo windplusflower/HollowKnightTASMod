@@ -7,6 +7,8 @@ using System.Text;
 using HollowKnightTAS.Core.Cryptography;
 using HollowKnightTAS.Core.Ipc;
 using HollowKnightTAS.Core.Movie;
+using HollowKnightTAS.Core.ReplaySave;
+using System.Linq;
 
 namespace HollowKnightTAS.Core.SceneCheckpoints
 {
@@ -51,6 +53,23 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
         public string EnvironmentSha256 { get; }
         public string InitialSavesSha256 { get; }
         public string NativeProfileId { get; }
+        public static string HashInitialSaves(IReadOnlyDictionary<string, string> hashes)
+        {
+            if (hashes == null || hashes.Count > 128) throw new InvalidDataException("Invalid checkpoint initial-save set.");
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var stream = new MemoryStream())
+            using (var writer = new BinaryWriter(stream, new UTF8Encoding(false, true), true))
+            {
+                writer.Write(1); writer.Write(hashes.Count);
+                foreach (var pair in hashes.OrderBy(p => p.Key.ToLowerInvariant(), StringComparer.Ordinal))
+                {
+                    if (!ProtectedSaveDescriptor.IsSlotFileName(pair.Key) || !MovieProtocolV1.IsLowerSha256(pair.Value) || !names.Add(pair.Key))
+                        throw new InvalidDataException("Invalid checkpoint initial-save file identity.");
+                    writer.Write(pair.Key.ToLowerInvariant()); writer.Write(pair.Value);
+                }
+                writer.Flush(); return Sha256Utility.ComputeHex(stream.ToArray());
+            }
+        }
         public bool Equals(SceneCheckpointBinding? other) => other != null && EnvironmentSha256 == other.EnvironmentSha256
             && InitialSavesSha256 == other.InitialSavesSha256 && NativeProfileId == other.NativeProfileId;
         public override bool Equals(object? obj) => Equals(obj as SceneCheckpointBinding);
@@ -59,8 +78,8 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
 
     public sealed class SceneCheckpointHeader
     {
-        public const string AdapterId = "hk-managed-loading-data-v1";
-        public const int SchemaVersion = 1;
+        public const string AdapterId = "hk-managed-loading-continuation-v2";
+        public const int SchemaVersion = 2;
         public SceneCheckpointHeader(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding,
             SceneCheckpointTrigger trigger, long transitionId, long captureMovieFrame, long captureNativeFrame,
             long resumeMovieFrame, long resumeNativeFrame, int payloadBytes, string payloadSha256)
@@ -94,7 +113,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
         {
             var fields = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-            ["schema"] = "1", ["adapter"] = AdapterId, ["checkpointId"] = CheckpointId,
+            ["schema"] = Number(SchemaVersion), ["adapter"] = AdapterId, ["checkpointId"] = CheckpointId,
             ["studioSessionId"] = Scope.StudioSessionId, ["treeId"] = Scope.TreeId, ["branchId"] = Scope.BranchId,
             ["generation"] = Number(Scope.Generation), ["environmentSha256"] = Binding.EnvironmentSha256,
             ["initialSavesSha256"] = Binding.InitialSavesSha256, ["nativeProfileId"] = Binding.NativeProfileId,
@@ -111,7 +130,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
             string Get(string key) => fields.TryGetValue(key, out var value) ? value : throw new InvalidDataException("Missing checkpoint field: " + key);
             long Read(string key) => long.TryParse(Get(key), NumberStyles.None, CultureInfo.InvariantCulture, out var n)
                 ? n : throw new InvalidDataException("Invalid checkpoint integer: " + key);
-            if (Get("schema") != "1" || Get("adapter") != AdapterId || Get("restoreQualified") != "false")
+            if (Get("schema") != Number(SchemaVersion) || Get("adapter") != AdapterId || Get("restoreQualified") != "false")
                 throw new InvalidDataException("Unsupported checkpoint schema, adapter or qualification.");
             if (!Enum.TryParse<SceneCheckpointTrigger>(Get("trigger"), out var trigger) || trigger.ToString() != Get("trigger"))
                 throw new InvalidDataException("Unknown checkpoint trigger.");
@@ -137,7 +156,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
     {
         public const int MaximumPayloadBytes = 32 * 1024 * 1024;
         public const int ChunkBytes = 48 * 1024;
-        private static readonly string[] Sections = { "playerData", "sceneData", "transition", "unityRng" };
+        private static readonly string[] Sections = { "playerData", "sceneData", "transition", "unityRng", "continuation" };
         private readonly byte[] payload;
         public SceneCheckpointPacket(SceneCheckpointHeader header, byte[] payload)
         {
