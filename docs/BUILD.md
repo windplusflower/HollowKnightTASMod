@@ -125,8 +125,12 @@ dotnet run --project src/HollowKnightTAS.BundleTool -c Release -- print-public .
 
 修改 Runtime、Core、原生时钟、游戏或其他 Mod 可能改变环境身份。分发时使用成套二进制，保留与序列匹配的安装；重新编译后不应直接声称原有序列兼容。
 
-Studio、NativeHost、CLI 和 AgentBridge 共享 `Companion/win-x64` 下的内置 .NET 运行时，辅助 EXE 仍保留原路径。`Stage-SharedDotnetApp.ps1` 使用 SDK apphost writer 将辅助 EXE 绑定到上一级的托管 DLL；所有程序仍以自包含方式发布，不要求玩家安装 .NET。合并时检查运行时版本与重复文件哈希；WindowsDesktop 提供的 `Microsoft.VisualBasic.dll`、`System.Drawing.dll`、`WindowsBase.dll` 保留 Studio 版本。
+Studio、ClockInjector、NativeHost、CLI 和 AgentBridge 共享 `Companion/win-x64` 下的内置 .NET 运行时，辅助 EXE 仍保留原路径。`Stage-SharedDotnetApp.ps1` 使用 SDK apphost writer 将辅助 EXE 绑定到上一级的托管 DLL；所有程序仍以自包含方式发布，不要求玩家安装 .NET。合并时检查运行时版本与重复文件哈希；WindowsDesktop 提供的 `Microsoft.VisualBasic.dll`、`System.Drawing.dll`、`WindowsBase.dll` 保留 Studio 版本。
+
+ClockInjector 的原生组件和六文件启动身份保留在 `ClockStartup`，托管 DLL、deps 和 runtimeconfig 同时保留在共享运行时目录；最终 EXE 重绑定后更新启动清单哈希，再签名整个配套包。`-ClockBundleRoot` 只接受当前启动器源码生成的自包含包；旧包需用当前 `Build-T24ClockPrototype.ps1` 重新构建。
 
 `python scripts/Test-SharedBundle.py <Mod目录> <证据目录>` 在空 PATH、无效 DOTNET_ROOT 和独立工作目录下检查程序启动及实际加载的运行时。运行前关闭游戏和 Studio。有效 CLI/MCP 会话、录制、冷回放及音视频导出由 `StudioScenarioHarness --fractional-fps --package-smoke` 实机检查。
+
+加 `--clock-only` 可单独验证 ClockInjector 从包内加载运行时并读取正确的原生组件；不启动 Studio、不连接或启动游戏，可在游戏运行期间执行。
 
 [玩家安装与使用](USER-MANUAL.md) · [AI 控制指南](AI-CONTROL.md)

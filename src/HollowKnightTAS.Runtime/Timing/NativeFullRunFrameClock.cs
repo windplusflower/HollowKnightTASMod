@@ -130,6 +130,11 @@ namespace HollowKnightTAS.Runtime.Timing
         {
             MovieFrameRate.ToRatio(fps, out var numerator, out var denominator);
             if (setFrameRate(numerator, denominator) != 1) throw new InvalidOperationException("Native frame rate rejected.");
+            // Unity must derive gameplay time from the native QPC clock. A capture
+            // override uses a separately latched step and can lag a rate change by
+            // one frame. Preserve Unity's fixedDeltaTime and timeScale semantics.
+            UnityEngine.Time.captureDeltaTime = 0f;
+            UnityEngine.Application.targetFrameRate = (int)decimal.Ceiling(fps);
         }
 
         public bool IsPaused => getMode() == 0 || getMode() == 4;

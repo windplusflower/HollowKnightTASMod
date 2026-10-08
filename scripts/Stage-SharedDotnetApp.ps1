@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory)][string]$SharedDirectory,
     [Parameter(Mandatory)][string]$EntrypointDirectory,
     [Parameter(Mandatory)][string]$ApplicationName,
-    [string]$Configuration = 'Release'
+    [string]$Configuration = 'Release',
+    [string[]]$ExcludedFiles = @()
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -17,6 +18,9 @@ $entrypoints = [IO.Path]::GetFullPath($EntrypointDirectory)
 [IO.Directory]::CreateDirectory($entrypoints) | Out-Null
 $studioConfig = Get-Content (Join-Path $shared 'HollowKnightTAS.Companion.runtimeconfig.json') -Raw | ConvertFrom-Json
 $appConfig = Get-Content (Join-Path $PublishDirectory "$ApplicationName.runtimeconfig.json") -Raw | ConvertFrom-Json
+if ($appConfig.runtimeOptions.PSObject.Properties.Name -notcontains 'includedFrameworks') {
+    throw "Shared application must be published self-contained: $ApplicationName. Rebuild its publish output."
+}
 $coreVersion = ($appConfig.runtimeOptions.includedFrameworks | Where-Object name -eq 'Microsoft.NETCore.App').version
 $studioCore = ($studioConfig.runtimeOptions.includedFrameworks | Where-Object name -eq 'Microsoft.NETCore.App').version
 $desktopVersion = ($studioConfig.runtimeOptions.includedFrameworks | Where-Object name -eq 'Microsoft.WindowsDesktop.App').version
@@ -28,6 +32,7 @@ if (!$coreVersion -or $coreVersion -ne $studioCore -or $coreVersion -ne $desktop
 $desktopOverrides = @('Microsoft.VisualBasic.dll', 'System.Drawing.dll', 'WindowsBase.dll')
 foreach ($file in Get-ChildItem -LiteralPath $PublishDirectory -File -Recurse) {
     $relative = [IO.Path]::GetRelativePath([IO.Path]::GetFullPath($PublishDirectory), $file.FullName)
+    if ($relative -cin $ExcludedFiles) { continue }
     if ($relative -eq "$ApplicationName.exe") { continue }
     $target = Join-Path $shared $relative
     if (Test-Path -LiteralPath $target) {

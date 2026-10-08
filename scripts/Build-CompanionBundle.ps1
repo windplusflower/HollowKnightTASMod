@@ -59,6 +59,8 @@ $bundleToolProject = Join-Path $repoRoot `
     'src\HollowKnightTAS.BundleTool\HollowKnightTAS.BundleTool.csproj'
 $runtimeProject = Join-Path $repoRoot `
     'src\HollowKnightTAS.Runtime\HollowKnightTAS.Runtime.csproj'
+$clockInjectorProject = Join-Path $repoRoot `
+    'src\HollowKnightTAS.ClockInjector\HollowKnightTAS.ClockInjector.csproj'
 $clockBuildScript = Join-Path $repoRoot `
     'scripts\Build-T24ClockPrototype.ps1'
 
@@ -131,6 +133,14 @@ if ($ClockBundleRoot) {
     if ($clockManifest.configuration -ne $Configuration -or
         $clockManifest.gameExecutableSha256 -ne (Get-FileHash -LiteralPath $GameExecutable).Hash) {
         throw 'Reusable clock configuration or game fingerprint does not match.'
+    }
+    if ($clockManifest.injectorSourceSha256 -ne
+        (Get-FileHash -LiteralPath (Join-Path $repoRoot 'src\HollowKnightTAS.ClockInjector\Program.cs')).Hash) {
+        throw 'Reusable ClockInjector source does not match. Rebuild the clock bundle with the current source.'
+    }
+    $clockConfig = Get-Content -LiteralPath (Join-Path $ClockBundleRoot 'HollowKnightTAS.ClockInjector.runtimeconfig.json') -Raw | ConvertFrom-Json
+    if ($clockConfig.runtimeOptions.PSObject.Properties.Name -notcontains 'includedFrameworks') {
+        throw 'Reusable ClockInjector must be self-contained. Rebuild the clock bundle with the current script.'
     }
     $clockNames = @('HollowKnightTAS.ClockBridge.dll', 'HollowKnightTAS.ClockInjector.deps.json',
         'HollowKnightTAS.ClockInjector.dll', 'HollowKnightTAS.ClockInjector.exe',
@@ -238,6 +248,29 @@ Copy-Item -Path (Join-Path $publishRoot '*') `
     -Destination $companionStage `
     -Recurse `
     -Force
+
+# Keep the six ClockStartup files for startup-profile verification, while the
+# injector's managed assembly/deps/config also live beside the shared runtime.
+# Only the final EXE is rewritten; refresh its inner manifest before signing.
+$clockSource = if ($ClockBundleRoot) { $ClockBundleRoot } else { $clockPublishRoot }
+& (Join-Path $PSScriptRoot 'Stage-SharedDotnetApp.ps1') -Project $clockInjectorProject `
+    -PublishDirectory $clockSource -SharedDirectory $companionStage `
+    -EntrypointDirectory $clockStage -ApplicationName 'HollowKnightTAS.ClockInjector' `
+    -Configuration $Configuration -ExcludedFiles @(
+        'clock-build-manifest-v1.json', 'clock-build-whitelist-v1.json',
+        'HollowKnightTAS.ClockBridge.dll', 'HollowKnightTAS.ClockPayload.dll')
+$clockManifestPath = Join-Path $clockStage 'clock-build-manifest-v1.json'
+$clockManifest = Get-Content -LiteralPath $clockManifestPath -Raw | ConvertFrom-Json
+$clockInjector = Get-Item -LiteralPath (Join-Path $clockStage 'HollowKnightTAS.ClockInjector.exe')
+$clockManifest.injectorSha256 = (Get-FileHash -LiteralPath $clockInjector.FullName).Hash.ToLowerInvariant()
+$clockEntry = $clockManifest.runtimeFileSet | Where-Object file -eq 'HollowKnightTAS.ClockInjector.exe'
+$clockEntry.length = $clockInjector.Length
+$clockEntry.sha256 = $clockManifest.injectorSha256
+$clockFileSetJson = $clockManifest.runtimeFileSet | ConvertTo-Json -Compress -Depth 5
+$clockManifest.runtimeFileSetSha256 = [Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($clockFileSetJson))).ToLowerInvariant()
+$clockManifest | ConvertTo-Json -Depth 10 |
+    Set-Content -LiteralPath $clockManifestPath -Encoding utf8NoBOM
 
 & dotnet publish $nativeProject `
     -c $Configuration `

@@ -41,8 +41,11 @@ namespace HollowKnightTAS.ClockInjector
             try
             {
                 var arguments = ParseArguments(args);
-                var baseDirectory = Path.GetFullPath(
-                    AppContext.BaseDirectory);
+                // The managed assembly shares Studio's runtime one directory
+                // above ClockStartup; native components stay beside this EXE.
+                var baseDirectory = Path.GetDirectoryName(Path.GetFullPath(
+                    Environment.ProcessPath ?? throw new InvalidOperationException(
+                        "Clock Injector image is unavailable.")))!;
                 var bridgePath = FixedSibling(
                     baseDirectory,
                     BridgeFileName);

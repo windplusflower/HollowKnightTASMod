@@ -6,20 +6,23 @@ namespace HollowKnightTAS.Core.Movie
     // managed replay/recording use the same versioned execution contract.
     public static class NativeExecutionProfile
     {
-        public const string ProfileId = "hktas-unity-input-playerloop-canonical-cinematics-2026-v8";
+        // Formal v9 and experimental v12 select each frame's duration before
+        // Unity's separate TimeUpdate. Earlier experimental baselines cannot
+        // claim this execution contract without a fresh recording.
+        public const string ProfileId = "hktas-unity-input-playerloop-canonical-cinematics-2026-v9";
         public const string LegacyProfileId = "hktas-unity-input-playerloop-load-elision-scene-rng-2026-v3";
         public const string CanonicalStartupProfileId =
-            "hktas-unity-input-playerloop-canonical-startup-cinematics-2026-v9-experimental";
+            "hktas-unity-input-playerloop-canonical-startup-cinematics-2026-v12-experimental";
         public const string CanonicalModClockProfileId =
-            "hktas-unity-input-playerloop-canonical-cinematics-mod-wall-clock-2026-v9-experimental";
+            "hktas-unity-input-playerloop-canonical-cinematics-mod-wall-clock-2026-v12-experimental";
         public const string SerialSceneProfileId =
-            "hktas-unity-input-playerloop-serial-scene-cinematics-2026-v9-experimental";
+            "hktas-unity-input-playerloop-serial-scene-cinematics-2026-v12-experimental";
         public const string VirtualAudioSerialProfileId =
-            "hktas-unity-input-playerloop-serial-scene-cinematics-audio-lifetime-2026-v9-experimental";
+            "hktas-unity-input-playerloop-serial-scene-cinematics-audio-lifetime-2026-v12-experimental";
         public const string IsolatedOnlineProfileId =
-            "hktas-unity-input-playerloop-serial-scene-isolated-online-2026-v10-experimental";
+            "hktas-unity-input-playerloop-serial-scene-isolated-online-2026-v12-experimental";
         public const string CanonicalParticleProfileId =
-            "hktas-unity-input-playerloop-serial-scene-canonical-particles-2026-v11-experimental";
+            "hktas-unity-input-playerloop-serial-scene-canonical-particles-2026-v12-experimental";
 
         public static string SelectedProfileId => Select(
             Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_STARTUP_CLOCK") == "1",
@@ -55,6 +58,13 @@ namespace HollowKnightTAS.Core.Movie
 
         public static bool IsCanonicalStartupProfile(string profile)
             => profile == CanonicalStartupProfileId || UsesModWallClock(profile);
+
+        // Execution-policy selection recognizes current revisions only. Replay
+        // admission must also recognize historical experimental headers so a
+        // version bump cannot downgrade their mismatch to a formal warning.
+        public static bool IsExperimentalProfile(string profile)
+            => profile.StartsWith("hktas-unity-input-playerloop-", StringComparison.Ordinal)
+                && profile.EndsWith("-experimental", StringComparison.Ordinal);
 
         public static bool UsesModWallClock(string profile)
             => profile == CanonicalModClockProfileId || UsesSerialScenes(profile);

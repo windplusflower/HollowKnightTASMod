@@ -128,15 +128,15 @@ namespace HollowKnightTAS.Companion.ViewModels
                 if (previousText != MovieText || gridApplying) return;
                 var recorded = movieEditor.ValidateAny(snapshot.Movie).V2Document!;
                 var draft = GridAny().V2Document!;
-                var runs = draft.Runs.AsEnumerable();
+                var runs = draft.Runs.ToArray();
                 if (!gridHasUserEdits)
                 {
                     var total = InputGridEditor.Count(draft);
                     runs = recorded.Runs.Concat(total > snapshot.Frame
                         ? SliceV2(draft, snapshot.Frame, total - snapshot.Frame).Runs
-                        : new[] { new NativeFrameRun(500, Array.Empty<GameInputSample>(), new MovieSourceSpan("<blank>", 1, 1, 1), ParseFrameRate(DefaultFrameRate), true) });
+                        : new[] { new NativeFrameRun(500, Array.Empty<GameInputSample>(), new MovieSourceSpan("<blank>", 1, 1, 1), ParseFrameRate(DefaultFrameRate), true) }).ToArray();
                 }
-                MovieText = gridSource = new MovieV2Codec().WriteCanonical(new MovieV2Document(draft.SourceName, recorded.Header.WithCustomKeys(draft.Header.CustomKeys), runs));
+                MovieText = gridSource = new MovieV2Codec().WriteCanonical(new MovieV2Document(draft.SourceName, CustomKeyInput.WithUsedKeys(recorded.Header, draft.Header.CustomKeys, runs), runs));
                 recordingGridNativeFrame = startupBoot.NativeCompletedFrames;
                 RefreshInputGrid();
                 TrackGridFrame(snapshot.Frame, true);
@@ -190,8 +190,10 @@ namespace HollowKnightTAS.Companion.ViewModels
                     var total = InputGridEditor.Count(draft);
                     if (total <= snapshot.Frame) throw new InvalidOperationException("当前帧之后没有输入，请先补充空帧。");
                     if (earliestGridEdit >= snapshot.Frame)
-                        draft = new MovieV2Document(draft.SourceName, original.Header,
-                            MovieV2Prefix.Take(original, snapshot.Frame).Runs.Concat(SliceV2(draft, snapshot.Frame, total - snapshot.Frame).Runs));
+                    {
+                        var runs = MovieV2Prefix.Take(original, snapshot.Frame).Runs.Concat(SliceV2(draft, snapshot.Frame, total - snapshot.Frame).Runs).ToArray();
+                        draft = new MovieV2Document(draft.SourceName, CustomKeyInput.WithUsedKeys(original.Header, draft.Header.CustomKeys, runs), runs);
+                    }
                     if (!MovieV2Prefix.Matches(original, draft, snapshot.Frame))
                         throw new InvalidOperationException("已修改过去的帧，请先点击回放到当前帧；未来帧修改会自动生效。");
                     var text = new MovieV2Codec().WriteCanonical(draft);

@@ -75,7 +75,9 @@ namespace HollowKnightTAS.Core.Movie
                     case "Left": return 0; case "Right": return 1; case "Up": return 2; case "Down": return 3;
                     case "Submit": return 8; case "Cancel": return 9; case "Jump": return 10;
                     case "Dash": return 12; case "SuperDash": return 13; case "DreamNail": return 14;
-                    case "Attack": return 15; case "Cast": return 16; case "QuickCast": return 19;
+                    case "Attack": return 15; case "Cast": return 16; case "QuickMap": return 18;
+                    case "QuickCast": return 19; case "OpenInventory": return 22; case "PaneRight": return 23;
+                    case "PaneLeft": return 24; case "Pause": return 25;
                 }
             }
             if (channel == GameInputChannel.PreMenu || channel == GameInputChannel.Binder)

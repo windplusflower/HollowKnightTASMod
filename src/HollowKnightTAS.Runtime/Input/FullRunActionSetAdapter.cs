@@ -53,14 +53,14 @@ namespace HollowKnightTAS.Runtime.Input
             var actions = GetActions(hero, GameInputChannel.Hero);
             var names = new[] { "Left", "Right", "Up", "Down", "", "", "", "",
                 "Submit", "Cancel", "Jump", "", "Dash", "SuperDash", "DreamNail",
-                "Attack", "Cast" };
+                "Attack", "Cast", "", "QuickMap", "QuickCast", "", "",
+                "OpenInventory", "PaneRight", "PaneLeft", "Pause" };
             var lease = leases.FirstOrDefault(value => ReferenceEquals(value.Set, hero));
             for (var index = 0; index < names.Length; index++)
             {
                 if (names[index].Length == 0) continue;
                 Add(names[index], index);
             }
-            Add("QuickCast", 19);
             return result;
 
             void Add(string name, int index)

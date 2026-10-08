@@ -149,6 +149,11 @@
               <DataGridCheckBoxColumn Header="{ui:Text t35}" Binding="{Binding QuickCast, Mode=OneWay}" SortMemberPath="QuickCast" Width="80" ElementStyle="{StaticResource TasGridCheckBoxStyle}" />
               <DataGridCheckBoxColumn Header="{ui:Text t36}" Binding="{Binding SuperDash, Mode=OneWay}" SortMemberPath="SuperDash" Width="85" ElementStyle="{StaticResource TasGridCheckBoxStyle}" />
               <DataGridCheckBoxColumn Header="{ui:Text t37}" Binding="{Binding DreamNail, Mode=OneWay}" SortMemberPath="DreamNail" Width="85" ElementStyle="{StaticResource TasGridCheckBoxStyle}" />
+              <DataGridCheckBoxColumn Header="{ui:Text quickMapColumn}" Binding="{Binding [QuickMap], Mode=OneWay}" SortMemberPath="QuickMap" Width="65" ElementStyle="{StaticResource TasGridCheckBoxStyle}" />
+              <DataGridCheckBoxColumn Header="{ui:Text inventoryColumn}" Binding="{Binding [OpenInventory], Mode=OneWay}" SortMemberPath="OpenInventory" Width="65" ElementStyle="{StaticResource TasGridCheckBoxStyle}" />
+              <DataGridCheckBoxColumn Header="{ui:Text paneLeftColumn}" Binding="{Binding [PaneLeft], Mode=OneWay}" SortMemberPath="PaneLeft" Width="65" ElementStyle="{StaticResource TasGridCheckBoxStyle}" />
+              <DataGridCheckBoxColumn Header="{ui:Text paneRightColumn}" Binding="{Binding [PaneRight], Mode=OneWay}" SortMemberPath="PaneRight" Width="65" ElementStyle="{StaticResource TasGridCheckBoxStyle}" />
+              <DataGridCheckBoxColumn Header="{ui:Text pauseColumn}" Binding="{Binding [Pause], Mode=OneWay}" SortMemberPath="Pause" Width="55" ElementStyle="{StaticResource TasGridCheckBoxStyle}" />
               <DataGridTextColumn Header="{ui:Text t38}" Binding="{Binding Axes}" SortMemberPath="Axes" Width="110" />
             </DataGrid.Columns>
           </controls:InputFrameGrid>

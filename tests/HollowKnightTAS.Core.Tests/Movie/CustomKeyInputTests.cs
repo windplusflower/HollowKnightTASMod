@@ -28,6 +28,29 @@ public class CustomKeyInputTests
         CollectionAssert.AreEqual(new short[] {282,306}, deleted.Movie.Header.CustomKeys.ToArray());
     }
     [TestMethod]
+    public void IdleCustomKeysDoNotChangeExecutedPrefix()
+    {
+        var original = new MovieV2Document("test", Movie().Header.WithCustomKeys(Array.Empty<short>()), Movie().Runs);
+        var added = Movie();
+        Assert.IsTrue(MovieV2Prefix.Matches(original, added, 0));
+        Assert.IsTrue(MovieV2Prefix.Matches(original, added, 8));
+        var held = MovieV2RangeEditor.Paint(added, 3, 2, "Key:282", true);
+        Assert.IsTrue(MovieV2Prefix.Matches(original, held, 3));
+        Assert.IsFalse(MovieV2Prefix.Matches(original, held, 4));
+    }
+    [TestMethod]
+    public void MenuHeroActionsPaintTheirNativeIndices()
+    {
+        var expected = new[] { ("QuickMap", 18), ("OpenInventory", 22), ("PaneRight", 23), ("PaneLeft", 24), ("Pause", 25) };
+        foreach (var (action, index) in expected)
+        {
+            var painted = MovieV2RangeEditor.Paint(Movie(), 0, 1, action, true);
+            var values = painted.Runs[0].Samples.Single(s => s.Channel == GameInputChannel.Hero).Values;
+            Assert.AreEqual(short.MaxValue, values[index], action);
+            Assert.AreEqual(1, values.Count(v => v != 0), action);
+        }
+    }
+    [TestMethod]
     public void RejectInvalidDuplicateUnconfiguredKeysAndMasks()
     {
         var codec = new MovieV2Codec();

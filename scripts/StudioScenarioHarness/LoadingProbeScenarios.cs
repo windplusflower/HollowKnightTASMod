@@ -157,17 +157,17 @@ internal static partial class StudioScenarioHarness
                     && strict.Header.NativeProfileId == MovieProtocolV2.SelectedNativeProfileId,
                     "fresh strict native recording has exact length and selected profile identity");
                 var recordingName = MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.CanonicalParticleProfileId
-                    ? "serial-scenes-v11-recording.hktaspack"
+                    ? "serial-scenes-v12-particles-recording.hktaspack"
                     : MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.IsolatedOnlineProfileId
-                    ? "serial-scenes-v10-recording.hktaspack"
+                    ? "serial-scenes-v12-isolated-recording.hktaspack"
                     : MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.VirtualAudioSerialProfileId
-                    ? "serial-scenes-v9-recording.hktaspack"
+                    ? "serial-scenes-v12-audio-recording.hktaspack"
                     : MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.SerialSceneProfileId
-                    ? "serial-scenes-v6-recording.hktaspack"
+                    ? "serial-scenes-v12-recording.hktaspack"
                     : MovieProtocolV2.SelectedNativeProfileId == MovieProtocolV2.CanonicalModClockNativeProfileId
-                        ? "canonical-startup-v5-recording.hktaspack"
+                        ? "canonical-startup-v12-mod-clock-recording.hktaspack"
                         : MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.LegacyProfileId
-                            ? "legacy-v3-recording.hktaspack" : "canonical-startup-v4-recording.hktaspack";
+                            ? "legacy-v3-recording.hktaspack" : "canonical-startup-v12-recording.hktaspack";
                 await SequencePackage.WriteAsync(Path.Combine(output, recordingName),
                     actual.Movie, movies.SessionInitialSaves);
             }

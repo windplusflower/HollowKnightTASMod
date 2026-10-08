@@ -73,7 +73,7 @@ if ($LASTEXITCODE -ne 0) {
     $injectorProject `
     -c $Configuration `
     -r win-x64 `
-    --self-contained false `
+    --self-contained true `
     -o $OutputRoot
 if ($LASTEXITCODE -ne 0) {
     throw "Clock Injector publish failed with exit code $LASTEXITCODE."

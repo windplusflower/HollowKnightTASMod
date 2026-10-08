@@ -30,6 +30,10 @@ namespace HollowKnightTAS.Core.Movie
                 && short.TryParse(action.Substring(4), NumberStyles.None, CultureInfo.InvariantCulture, out key) && Names.ContainsKey(key);
         }
         public static IEnumerable<short> Keys(MovieV2Document movie) => movie.Header.CustomKeys;
+        // Declared keys plus every key that the runs actually sample.
+        public static MovieV2Header WithUsedKeys(MovieV2Header header, IEnumerable<short> declared, IEnumerable<NativeFrameRun> runs)
+            => header.WithCustomKeys(declared.Concat(runs.SelectMany(r => r.Samples)
+                .Where(s => s.Channel == GameInputChannel.CustomKey).Select(s => s.Values[0])).Distinct().OrderBy(k => k).ToArray());
         public static GameInputSample Sample(short key, bool held) => new GameInputSample(GameInputChannel.CustomKey,
             new short[] { key, held ? short.MaxValue : (short)0 }, null);
         public static void Validate(IReadOnlyList<GameInputSample> samples)

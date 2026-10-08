@@ -31,6 +31,18 @@ namespace HollowKnightTAS.Companion.Tests
         }
 
         [TestMethod]
+        public void AddingCustomKeyKeepsExistingTimeline()
+        {
+            var tree = new TimelineTree();
+            var tip = tree.UpdateTip(20, Text(Movie()), Baseline(), null);
+            var added = new MovieV2Document("test", Movie().Header.WithCustomKeys(new short[] { 282 }), Movie().Runs);
+            var updated = tree.UpdateTip(30, Text(MovieV2RangeEditor.Paint(added, 25, 2, "Key:282", true)), Baseline(), tip.Id);
+            Assert.AreEqual(tip.Id, updated.Id);
+            var saved = tree.Add(30, updated.Movie, Baseline());
+            Assert.AreEqual(0, saved.ParentId);
+        }
+
+        [TestMethod]
         public void BranchTipKeepsFurthestReachedFrameAndFutureDraftWithoutAccumulatingNodes()
         {
             var tree = new TimelineTree();

@@ -125,4 +125,10 @@ The script defaults to the Release BundleTool and local public key. Override the
 
 Changing Runtime, Core, native clock code, the game or other Mods can change the environment identity. Distribute matching binaries together and retain the installation that matches a sequence. Recompilation alone does not establish compatibility with existing recordings.
 
+Studio, ClockInjector, NativeHost, CLI and AgentBridge share the bundled .NET runtime in `Companion/win-x64`, retaining their existing EXE paths. `Stage-SharedDotnetApp.ps1` binds each helper EXE to its managed assembly in the shared directory and checks runtime versions and duplicate file hashes. Players do not need a system .NET installation.
+
+ClockInjector retains its native components and six-file startup identity in `ClockStartup`; its managed DLL, deps and runtimeconfig also reside beside the shared runtime. The build refreshes the startup manifest hashes after rebinding the EXE, then signs the complete bundle. `-ClockBundleRoot` accepts only self-contained clock bundles built from the current injector source; rebuild older bundles with the current `Build-T24ClockPrototype.ps1`.
+
+`python scripts/Test-SharedBundle.py <mod-root> <evidence-directory>` checks local runtime loading with an empty PATH, invalid DOTNET_ROOT and a separate working directory. Close the game and Studio before the full check. Add `--clock-only` to check only ClockInjector's local runtime and native component lookup without starting Studio or accessing any game session; this check can run while the game is active.
+
 [Installation and player guide](USER-MANUAL.en.md) · [AI control guide](AI-CONTROL.en.md)

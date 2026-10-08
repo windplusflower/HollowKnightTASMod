@@ -9,7 +9,7 @@ namespace HollowKnightTAS.Companion.Services;
 
 public static class KeyboardFrameInput
 {
-    public static readonly string[] Actions = { "Left", "Right", "Up", "Down", "Submit", "Cancel", "Jump", "Dash", "SuperDash", "DreamNail", "Attack", "Cast", "QuickCast" };
+    public static readonly string[] Actions = { "Left", "Right", "Up", "Down", "Submit", "Cancel", "Jump", "Dash", "SuperDash", "DreamNail", "Attack", "Cast", "QuickCast", "QuickMap", "OpenInventory", "PaneLeft", "PaneRight", "Pause" };
 
     public static IReadOnlyDictionary<string, bool> Capture(IReadOnlyDictionary<string, string> bindings,
         Key stepKey, Func<int, bool>? isDown = null, IEnumerable<short>? customKeys = null)

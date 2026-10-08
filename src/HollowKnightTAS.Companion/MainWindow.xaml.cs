@@ -221,7 +221,7 @@ namespace HollowKnightTAS.Companion
                 return;
             }
             var action = cell.Column.SortMemberPath;
-            if (action != "Submit" && action != "Cancel" && !HollowKnightTAS.Core.Movie.CustomKeyInput.TryAction(action, out _) && !Enum.TryParse<TasAction>(action, out _)) return;
+            if (action != "Submit" && action != "Cancel" && !HollowKnightTAS.Core.Movie.CustomKeyInput.TryAction(action, out _) && !InputGridRow.MenuActions.Contains(action) && !Enum.TryParse<TasAction>(action, out _)) return;
             InputGrid.SelectedItem = row;
             paintStart = paintEnd = row.Tick;
             paintAction = action;
@@ -292,7 +292,7 @@ namespace HollowKnightTAS.Companion
                 if (HollowKnightTAS.Core.Movie.CustomKeyInput.TryAction(action, out _)) continue;
                 var known = vm.InputBindingLabels.TryGetValue(action, out var keys);
                 var label = known ? (string.IsNullOrWhiteSpace(keys) ? "—" : keys!) : "?";
-                var header = new TextBlock { Text = string.Join("/", label.Split(new[] { " / " }, StringSplitOptions.None).Select(CompactKeyLabel)),
+                var header = new TextBlock { Text = string.Join("/", label.Split(new[] { " / " }, StringSplitOptions.None).Select(KeyLabel.Compact)),
                     FontFamily = InputGrid.FontFamily, FontSize = InputGrid.FontSize,
                     ToolTip = UiText.T(action) + " · " + (known ? (label == "—" ? UiText.T("未绑定") : keys) : UiText.T("等待游戏按键设置")) };
                 header.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
@@ -316,27 +316,13 @@ namespace HollowKnightTAS.Companion
                 var action = HollowKnightTAS.Core.Movie.CustomKeyInput.Action(key);
                 InputGrid.Columns.Add(new DataGridCheckBoxColumn
                 {
-                    Header = HollowKnightTAS.Core.Movie.CustomKeyInput.Names[key], SortMemberPath = action,
+                    Header = KeyLabel.Compact(HollowKnightTAS.Core.Movie.CustomKeyInput.Names[key]), SortMemberPath = action,
                     Binding = new System.Windows.Data.Binding("[" + action + "]") { Mode = System.Windows.Data.BindingMode.OneWay },
                     Width = 75, ElementStyle = (Style)FindResource("TasGridCheckBoxStyle")
                 });
             }
         }
 
-        private static string CompactKeyLabel(string key) => key switch
-        {
-            "Left Arrow" or "LeftArrow" => "←",
-            "Right Arrow" or "RightArrow" => "→",
-            "Up Arrow" or "UpArrow" => "↑",
-            "Down Arrow" or "DownArrow" => "↓",
-            "Return" or "Enter" => "↵",
-            "Escape" => "Esc",
-            "Left Shift" or "LeftShift" => "LShift",
-            "Right Shift" or "RightShift" => "RShift",
-            "Left Control" or "LeftControl" => "LCtrl",
-            "Right Control" or "RightControl" => "RCtrl",
-            _ => key
-        };
         private void OnInputGridWheel(object sender, MouseWheelEventArgs e)
         {
             if (DataContext is not MainViewModel vm) return;

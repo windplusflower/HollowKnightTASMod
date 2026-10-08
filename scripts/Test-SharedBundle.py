@@ -9,6 +9,8 @@ import time
 parser = argparse.ArgumentParser()
 parser.add_argument('mod_root', type=Path)
 parser.add_argument('output', type=Path)
+parser.add_argument('--clock-only', action='store_true',
+                    help='Check ClockInjector without starting Studio or accessing a game session.')
 args = parser.parse_args()
 root = args.mod_root.resolve() / 'Companion' / 'win-x64'
 output = args.output.resolve()
@@ -17,6 +19,12 @@ env = dict(os.environ, PATH='', DOTNET_ROOT=str(output / 'absent-dotnet'),
            DOTNET_ROOT_X64=str(output / 'absent-dotnet'), DOTNET_MULTILEVEL_LOOKUP='0',
            COREHOST_TRACE='1')
 results = []
+
+# The copies in ClockStartup retain the exact startup-profile file contract;
+# the EXE must load the identical managed files next to the shared runtime.
+for suffix in ('.dll', '.deps.json', '.runtimeconfig.json'):
+    name = 'HollowKnightTAS.ClockInjector' + suffix
+    assert (root / name).read_bytes() == (root / 'ClockStartup' / name).read_bytes(), name
 
 
 def run(name, executable, arguments=(), stdin=''):
@@ -34,6 +42,18 @@ def run(name, executable, arguments=(), stdin=''):
     results.append(dict(name=name, exit_code=result.returncode, local_runtime=True))
     return result
 
+
+# Invalid PID, no launch argument: validate the fixed native siblings and
+# whitelist, then reject before opening or starting any game process.
+clock = run('clock-injector', 'ClockStartup/HollowKnightTAS.ClockInjector.exe',
+            ['--pid=0', '--start-time-utc-ticks=1'])
+clock_response = json.loads(clock.stderr)
+assert clock.returncode == 1 and clock_response['status'] == 'rejected', clock.stderr
+assert clock_response['error'] == 'A positive integer is required for pid.', clock.stderr
+if args.clock_only:
+    (output / 'results.json').write_text(json.dumps(results, indent=2), encoding='utf-8')
+    print(json.dumps(results, indent=2))
+    raise SystemExit(0)
 
 # The caller must close existing Studio instances first. Its own timed exit is
 # used so normal App cleanup runs; no game or save is touched by this test.

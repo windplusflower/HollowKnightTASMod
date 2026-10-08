@@ -176,11 +176,13 @@ namespace HollowKnightTAS.Companion.ViewModels
             var draft = movieEditor.ValidateAny(MovieText).V2Document;
             if (draft == null) return runtimeText;
             var total = InputGridEditor.Count(draft);
-            var runs = gridHasUserEdits && earliestGridEdit < frame ? draft.Runs
+            var runs = (gridHasUserEdits && earliestGridEdit < frame ? draft.Runs
                 : MovieV2Prefix.Take(runtime, frame).Runs.Concat(total > frame
                     ? SliceV2(draft, frame, total - frame).Runs
-                    : Array.Empty<NativeFrameRun>());
-            return new MovieV2Codec().WriteCanonical(new MovieV2Document(draft.SourceName, runtime.Header, runs));
+                    : Array.Empty<NativeFrameRun>())).ToArray();
+            // Keep keys added in Studio; the runtime header only knows keys from its last update.
+            return new MovieV2Codec().WriteCanonical(new MovieV2Document(draft.SourceName,
+                CustomKeyInput.WithUsedKeys(runtime.Header, draft.Header.CustomKeys, runs), runs));
         }
 
         private void RememberExternalDraft(string key)

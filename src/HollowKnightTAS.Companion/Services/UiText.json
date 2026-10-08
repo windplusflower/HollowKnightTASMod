@@ -3001,6 +3001,11 @@
   "En": "Diagnostic export failed: {0}"
 },
 {"Key": "customKey", "Source": "自定义按键", "Zh": "自定义按键", "En": "Custom key"},
+{"Key": "quickMapColumn", "Source": "QuickMap", "Zh": "地图", "En": "Map"},
+{"Key": "inventoryColumn", "Source": "OpenInventory", "Zh": "背包", "En": "Inventory"},
+{"Key": "paneLeftColumn", "Source": "PaneLeft", "Zh": "左翻页", "En": "Pane left"},
+{"Key": "paneRightColumn", "Source": "PaneRight", "Zh": "右翻页", "En": "Pane right"},
+{"Key": "pauseColumn", "Source": "Pause", "Zh": "暂停", "En": "Pause"},
 {"Key": "addCustomKey", "Source": "添加自定义键", "Zh": "添加自定义键", "En": "Add custom key"},
 {"Key": "removeCustomKey", "Source": "移除自定义键", "Zh": "移除自定义键", "En": "Remove custom key"},
 {"Key": "removeCustomKeyHint", "Source": "从整个序列移除此键；可撤销", "Zh": "从整个序列移除此键；可撤销", "En": "Remove this key from the sequence; undo is available"},

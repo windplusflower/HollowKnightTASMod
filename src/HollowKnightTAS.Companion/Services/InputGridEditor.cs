@@ -40,6 +40,8 @@ namespace HollowKnightTAS.Companion.Services
                     if (values[14] > 0) held |= TasAction.DreamNail;
                     if (values[8] > 0) Submit = true;
                     if (values[9] > 0) Cancel = true;
+                    foreach (var action in MenuActions)
+                        if (values[MovieV2RangeEditor.ActionIndex(GameInputChannel.Hero, action)] > 0) menuActions.Add(action);
                 }
                 else if (sample.Channel == GameInputChannel.PreMenu
                     || sample.Channel == GameInputChannel.Binder)
@@ -60,8 +62,11 @@ namespace HollowKnightTAS.Companion.Services
         public decimal FramesPerSecond { get; } = 50;
         public int? RngSeed { get; }
         private readonly HashSet<short> customKeys = new();
+        // Hero actions outside TasAction; only Movie v2 rows can carry them.
+        public static readonly string[] MenuActions = { "QuickMap", "OpenInventory", "PaneLeft", "PaneRight", "Pause" };
+        private readonly HashSet<string> menuActions = new();
         public bool this[string action] => HasAction(action);
-        public bool HasAction(string action) => previewAction == action ? previewHeld : CustomKeyInput.TryAction(action, out var key) ? customKeys.Contains(key) : action == "Submit" ? Submit : action == "Cancel" ? Cancel : Enum.TryParse<TasAction>(action, out var parsed) && Has(parsed);
+        public bool HasAction(string action) => previewAction == action ? previewHeld : CustomKeyInput.TryAction(action, out var key) ? customKeys.Contains(key) : action == "Submit" ? Submit : action == "Cancel" ? Cancel : MenuActions.Contains(action) ? menuActions.Contains(action) : Enum.TryParse<TasAction>(action, out var parsed) && Has(parsed);
         public long Tick { get; }
         public FrameRunCommand Input { get; }
         public bool IsV2 { get; }

@@ -67,8 +67,8 @@ namespace HollowKnightTAS.Core.Movie
                 Add(errors, MovieDiagnosticCodes.InvalidIdentifier, "Native profile metadata is unavailable.");
             else if (!string.Equals(header.NativeProfileId, runtime.NativeProfileId, StringComparison.Ordinal))
             {
-                if (NativeExecutionProfile.IsCanonicalStartupProfile(header.NativeProfileId)
-                    || NativeExecutionProfile.IsCanonicalStartupProfile(runtime.NativeProfileId))
+                if (NativeExecutionProfile.IsExperimentalProfile(header.NativeProfileId)
+                    || NativeExecutionProfile.IsExperimentalProfile(runtime.NativeProfileId))
                     Add(errors, MovieDiagnosticCodes.InvalidIdentifier,
                         "Experimental execution profiles must match the recording exactly.");
                 else Add(warnings, MovieDiagnosticCodes.InvalidIdentifier,

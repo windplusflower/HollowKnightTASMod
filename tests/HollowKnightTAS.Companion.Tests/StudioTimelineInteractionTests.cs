@@ -45,6 +45,33 @@ namespace HollowKnightTAS.Companion.Tests
         }
 
         [TestMethod]
+        public void EvictedVisibleRowStillLosesCurrentArrow()
+        {
+            var rows = new VirtualInputRows(Movie(5000), 5);
+            var shown = rows[5];
+            Assert.AreEqual("▶", shown.Current);
+            for (int i = 0; i < 3000; i++) _ = rows[1000 + i];
+            rows.UpdateCurrent(6);
+            Assert.AreEqual("", shown.Current);
+            Assert.AreEqual("▶", rows[6].Current);
+            GC.KeepAlive(shown);
+        }
+
+        [TestMethod]
+        public void MenuActionsPaintAndDisplayInGridRows()
+        {
+            var movie = Movie(10);
+            foreach (var action in InputGridRow.MenuActions)
+            {
+                var painted = MovieV2RangeEditor.Paint(movie, 2, 1, action, true);
+                var rows = new VirtualInputRows(painted, 0);
+                Assert.IsTrue(rows[2][action], action);
+                Assert.IsFalse(rows[1][action], action);
+                Assert.IsFalse(InputGridRow.MenuActions.Where(a => a != action).Any(a => rows[2][a]), action);
+            }
+        }
+
+        [TestMethod]
         public void VirtualRowsCoverTenMillionFramesWithBoundedCache()
         {
             var rows = new VirtualInputRows(Movie(), 0);
