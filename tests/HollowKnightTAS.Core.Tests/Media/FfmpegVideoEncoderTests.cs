@@ -66,6 +66,7 @@ namespace HollowKnightTAS.Core.Tests.Media
         [TestMethod]
         [DataRow(50)]
         [DataRow(60)]
+        [DataRow(100)]
         public void EncodesOneSecondWithStereoAudioAndPublishesOnlyOnCompletion(int fps)
         {
             WithEncoderTools((ffmpeg, ffprobe, directory) =>

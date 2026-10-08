@@ -161,6 +161,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Directory.CreateDirectory(this.sessionDirectory);
             observationQueue = new FrameObservationQueue(clock.RequestObservation);
             clock.RegisterObservation(observationQueue.Service);
+            On.GameManager.Update += OnGameManagerTiming;
         }
 
         public Dictionary<string, string> ObserveWorld(IReadOnlyDictionary<string, string> fields)
@@ -376,9 +377,26 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private FullRunStatus? observedWorld;
         private IReadOnlyDictionary<string, string> observedBindings = new Dictionary<string, string>();
+        private IReadOnlyDictionary<string, string> observedFrameTiming = new Dictionary<string, string>();
         private int nextBindingsRefresh;
         private bool observationFaultLogged;
         public IReadOnlyDictionary<string, string> ReadBindingLabels() => Volatile.Read(ref observedBindings);
+        public IReadOnlyDictionary<string, string> ReadFrameTiming() => Volatile.Read(ref observedFrameTiming);
+        private long lastGameUpdateNativeFrame = -1;
+        private double gameUpdateDeltaSeconds, gameUpdateTimeSeconds, executedMovieSeconds;
+
+        private void OnGameManagerTiming(On.GameManager.orig_Update original, GameManager self)
+        {
+            var nativeFrame = clock.CurrentFrameIndex;
+            if (inputReady && frameInputEnabled && nativeFrame != lastGameUpdateNativeFrame)
+            {
+                lastGameUpdateNativeFrame = nativeFrame;
+                gameUpdateDeltaSeconds = UnityEngine.Time.deltaTime;
+                gameUpdateTimeSeconds = UnityEngine.Time.timeAsDouble;
+                executedMovieSeconds += gameUpdateDeltaSeconds;
+            }
+            original(self);
+        }
 
         public FullRunStatus GetStatus()
         {
@@ -711,6 +729,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                 try
                 {
                     Volatile.Write(ref observedWorld, CaptureWorldStatus());
+                    // Sample Unity on its thread; IPC only reads this completed-frame snapshot.
+                    Volatile.Write(ref observedFrameTiming, new Dictionary<string, string>
+                    {
+                        ["unityDeltaSeconds"] = UnityEngine.Time.deltaTime.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                        ["unityUpdateDeltaSeconds"] = gameUpdateDeltaSeconds.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                        ["unityUpdateTimeSeconds"] = gameUpdateTimeSeconds.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                        ["unityExecutedMovieSeconds"] = executedMovieSeconds.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                        ["unityUnscaledDeltaSeconds"] = UnityEngine.Time.unscaledDeltaTime.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                        ["unityCaptureDeltaSeconds"] = UnityEngine.Time.captureDeltaTime.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                        ["unityTimeSeconds"] = UnityEngine.Time.timeAsDouble.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                        ["unityTimeScale"] = UnityEngine.Time.timeScale.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                        ["unityTargetFrameRate"] = UnityEngine.Application.targetFrameRate.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    });
                     var now = Environment.TickCount;
                     if (unchecked(now - nextBindingsRefresh) >= 0)
                     {
@@ -904,6 +935,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             infoTiming.FlushTrace(sessionDirectory);
             if (disposed) return;
             disposed = true;
+            On.GameManager.Update -= OnGameManagerTiming;
             replayStateTrace?.Dispose();
             restoreDrawing.Dispose();
             videoCapture?.Dispose();

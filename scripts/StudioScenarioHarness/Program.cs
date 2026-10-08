@@ -90,6 +90,7 @@ internal static partial class StudioScenarioHarness
                 else if (args.Contains("--overlay-stacking")) await RunOverlayStackingAsync();
                 else if (args.Contains("--automation-sync")) await RunAutomationSyncAsync();
                 else if (args.Contains("--fractional-fps")) await RunFractionalFpsAsync(args);
+                else if (args.Contains("--frame-rate-timing")) await RunFrameRateTimingAsync(args);
                 else if (args.Contains("--keyboard-input")) await RunKeyboardInputAsync();
                 else if (args.Contains("--replay-performance")) await RunReplayPerformanceAsync(args);
                 else if (fsmScenarios) await RunBossFsmAsync(args);
