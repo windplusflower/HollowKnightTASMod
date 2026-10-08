@@ -1304,6 +1304,7 @@ namespace HollowKnightTAS.Runtime.Ipc
                 ["bossSceneEntryMovieFrame"] = status.BossSceneEntryMovieFrame.ToString(CultureInfo.InvariantCulture)
             };
             foreach (var binding in fullRunSession.ReadBindingLabels()) fields[binding.Key] = binding.Value;
+            foreach (var timing in fullRunSession.ReadFrameTiming()) fields[timing.Key] = timing.Value;
             fullRunSession.AppendVideoExportStatus(fields);
             Publish(IpcMessageTypes.FullRunState, fields);
         }

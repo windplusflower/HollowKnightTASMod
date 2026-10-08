@@ -15,6 +15,36 @@ static void reset_clock(void)
     g_fractional_clock_configured = FALSE;
 }
 
+static int boundary_fault;
+static int selected_numerator;
+static int selected_denominator;
+static LONGLONG time_update_anchor;
+static int player_loop_entries;
+static int time_update_entries;
+static void __cdecl select_frame_rate(uint64_t completed)
+{
+    (void)completed;
+    if (HktasClockBridge_SetFullRunFrameRateRatio(selected_numerator, selected_denominator) != 1)
+        boundary_fault = 1;
+    int before = time_update_entries;
+    boot_time_update();
+    boot_player_loop();
+    if (time_update_entries != before || g_boot_frame_prepared)
+        boundary_fault = 1;
+}
+static void __cdecl observe_time_update(void)
+{
+    ++time_update_entries;
+    time_update_anchor = g_deterministic_clock_anchor.QuadPart;
+}
+static void __cdecl observe_player_loop(void)
+{
+    ++player_loop_entries;
+    if (!g_boot_frame_prepared || time_update_anchor != g_deterministic_clock_anchor.QuadPart)
+        boundary_fault = 1;
+    boot_player_loop(); /* A nested window loop must not execute another frame. */
+}
+
 int main(void)
 {
     reset_clock();
@@ -84,5 +114,42 @@ int main(void)
         CHECK(HktasClockBridge_AdvanceDeterministicFrameClock(i) == -5);
     }
     printf("PASS canonical bootstrap holds time and managed observations never double-advance it\n");
+    reset_clock();
+    g_loading_startup_clock_enabled = FALSE;
+    g_guard_armed = g_guard_install_status = 1;
+    hktas_v2_state state = {0};
+    state.magic = HKTAS_V2_MAGIC;
+    state.version = HKTAS_V2_VERSION;
+    memset(state.token, 'a', sizeof(state.token));
+    SetEnvironmentVariableW(L"HKTAS_BOOT_GATE_TOKEN", L"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    state.mode = HKTAS_V2_MODE_RUN;
+    state.bootstrap_armed = 1;
+    state.descriptor_sha256[0] = 1;
+    g_v2_state = &state;
+    g_v2_hash_latched = FALSE;
+    g_v2_before_callback = select_frame_rate;
+    g_boot_ready = CreateEventW(NULL, TRUE, FALSE, NULL);
+    CHECK(g_boot_ready != NULL);
+    g_boot_original_time_update = observe_time_update;
+    g_boot_original_player_loop = observe_player_loop;
+    const int numerators[] = {50, 100, 25, 99999, 50};
+    const int denominators[] = {1, 1, 1, 1000, 1};
+    for (int i = 0; i < 5; ++i) {
+        selected_numerator = numerators[i];
+        selected_denominator = denominators[i];
+        LONGLONG before = g_deterministic_clock_anchor.QuadPart;
+        boot_time_update();
+        CHECK(!boundary_fault && g_boot_frame_prepared && g_boot_loop_active);
+        CHECK(state.completed_frames == i);
+        CHECK(time_update_entries == i + 1);
+        CHECK(time_update_anchor - before == g_deterministic_clock_step_ticks);
+        boot_player_loop();
+        CHECK(!boundary_fault && !g_boot_frame_prepared && !g_boot_loop_active);
+        CHECK(state.completed_frames == i + 1);
+        CHECK(player_loop_entries == i + 1);
+        CHECK(g_deterministic_clock_anchor.QuadPart == time_update_anchor);
+    }
+    CloseHandle(g_boot_ready);
+    printf("PASS rate changes reach TimeUpdate before gameplay; each completed loop advances once\n");
     return 0;
 }

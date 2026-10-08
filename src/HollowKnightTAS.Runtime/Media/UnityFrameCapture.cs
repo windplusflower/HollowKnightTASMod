@@ -21,7 +21,7 @@ namespace HollowKnightTAS.Runtime.Media
         public UnityFrameCapture(VideoExportFormat format, Func<double>? frameDuration = null)
         {
             this.format = format;
-            // v2 advances the native clock without changing Unity captureDeltaTime.
+            // v2 supplies the native duration driving Unity's gameplay clock.
             // Both paths only observe their clock; video export never sets it.
             this.frameDuration = frameDuration ?? (() => Time.captureDeltaTime);
             ValidateConfiguration();

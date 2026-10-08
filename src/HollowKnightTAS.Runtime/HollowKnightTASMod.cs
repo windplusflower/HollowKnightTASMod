@@ -21,7 +21,7 @@ namespace HollowKnightTAS.Runtime
         IGlobalSettings<TasGlobalSettings>,
         ICustomMenuMod
     {
-        public const string Version = "0.1.7";
+        public const string Version = "0.1.8";
 
         private TasGlobalSettings? settings;
         private TasRuntimeHost? runtimeHost;

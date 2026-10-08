@@ -3,7 +3,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <AssemblyName>HollowKnightTAS.Automation.Client</AssemblyName>
     <RootNamespace>HollowKnightTAS.Automation.Client</RootNamespace>
-    <Version>0.1.7</Version>
+    <Version>0.1.8</Version>
   </PropertyGroup>
 
   <ItemGroup>

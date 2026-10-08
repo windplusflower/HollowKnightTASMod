@@ -535,6 +535,14 @@ namespace HollowKnightTAS.ClockPayload
             }
 
             QualitySettings.vSyncCount = 0;
+            if (fullRunRenderIsolationEnabled)
+            {
+                // Full-run QPC timing owns gameplay time and playback pacing.
+                // A fixed capture step bypasses that clock and desynchronizes MP4.
+                Time.captureDeltaTime = 0f;
+                applied = true;
+                return;
+            }
             Application.targetFrameRate = targetFrameRate;
             if (applied)
             {
