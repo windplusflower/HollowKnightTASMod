@@ -24,7 +24,7 @@ internal static partial class StudioScenarioHarness
     static bool worldlineFaultScenarios;
     static bool fsmScenarios;
     static bool customKeyScenarios;
-    static bool relaxedLoadingProbeResources;
+    static bool memoryGateEnabled;
     static T Field<T>(object owner, string name) => (T)owner.GetType().GetField(name,
         BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(owner)!;
     static readonly object logLock = new object();
@@ -75,7 +75,7 @@ internal static partial class StudioScenarioHarness
         worldlineFaultScenarios = args.Contains("--worldline-fault");
         fsmScenarios = args.Contains("--boss-fsm");
         customKeyScenarios = args.Contains("--custom-keys");
-        relaxedLoadingProbeResources = args.Contains("--loading-probe") && args.Contains("--probe-relaxed-resources");
+        memoryGateEnabled = false; // Preserve the user-disabled memory gates.
         if (!args.Contains("--headless") || Process.GetProcessesByName("hollow_knight").Length != 0
             || Process.GetProcessesByName("HollowKnightTAS.Companion").Length != 0) return 12;
         app = new App(); app.InitializeComponent();
@@ -107,7 +107,17 @@ internal static partial class StudioScenarioHarness
                 // Exercise the actual async Closing save handler and App-owned game exit.
                 app.MainWindow.Close();
             }
-            catch (Exception ex) { Log("FAIL " + ex); Interlocked.Exchange(ref finished, 1); app.Shutdown(1); }
+            catch (Exception ex)
+            {
+                try
+                {
+                    string detail;
+                    try { detail = ex.ToString(); }
+                    catch { detail = ex.GetType().FullName + ": " + ex.Message + " (stack formatting unavailable)"; }
+                    Log("FAIL " + detail);
+                }
+                finally { Interlocked.Exchange(ref finished, 1); app.Shutdown(1); }
+            }
         };
         var code = app.Run();
         Interlocked.Exchange(ref finished, 1);
@@ -220,30 +230,44 @@ internal static partial class StudioScenarioHarness
     {
         var deadline = DateTime.UtcNow.AddMinutes(battleVideoScenarios || worldlineFaultScenarios || customKeyScenarios ? 20
             : videoExportScenarios || fsmScenarios || Environment.GetEnvironmentVariable("HKTAS_CINEMATIC_ACCEPTANCE") == "1" ? 8 : 4);
+        const ulong minimumPhysical = 1536UL * 1024 * 1024;
+        const ulong minimumCommit = 2UL * 1024 * 1024 * 1024;
+        Log(memoryGateEnabled
+            ? $"RESOURCE POLICY memoryGateEnabled=true minimumPhysical={minimumPhysical} minimumCommit={minimumCommit} hostLimit=805306368 gameLimit=3221225472 deadline={deadline:O}"
+            : $"RESOURCE POLICY memoryGateEnabled=false minimumPhysical=none minimumCommit=none hostLimit=none gameLimit=none deadline={deadline:O}");
         while (Volatile.Read(ref finished) == 0)
         {
-            if (DateTime.UtcNow > deadline)
-            {
-                Log("FAIL watchdog deadline boundary");
-                try
-                {
-                    var timedOutGame = Field<Process?>(app, "startupGame");
-                    if (timedOutGame != null && !timedOutGame.HasExited) timedOutGame.Kill();
-                }
-                finally { Environment.Exit(15); }
-            }
+            var deadlineReached = DateTime.UtcNow > deadline;
+            var resourceLimitReached = false;
             try
             {
-                using var self = Process.GetCurrentProcess(); self.Refresh();
-                var memory = new Memory { Length = (uint)Marshal.SizeOf<Memory>() };
-                if (!GlobalMemoryStatusEx(ref memory)) throw new Exception("memory monitor unavailable");
-                var game = Field<Process?>(app, "startupGame");
-                long gameBytes = 0;
-                if (game != null && !game.HasExited) { game.Refresh(); gameBytes = game.PrivateMemorySize64; }
-                Log($"RESOURCE host={self.PrivateMemorySize64} game={gameBytes} available={memory.AvailablePhysical} commitAvailable={memory.AvailablePage}");
-                // Resource usage is diagnostic only; the user disabled usage gates.
+                if (memoryGateEnabled)
+                {
+                    using var self = Process.GetCurrentProcess(); self.Refresh();
+                    var memory = new Memory { Length = (uint)Marshal.SizeOf<Memory>() };
+                    if (!GlobalMemoryStatusEx(ref memory)) throw new Exception("memory monitor unavailable");
+                    var game = Field<Process?>(app, "startupGame");
+                    long gameBytes = 0;
+                    if (game != null && !game.HasExited) { game.Refresh(); gameBytes = game.PrivateMemorySize64; }
+                    Log($"RESOURCE host={self.PrivateMemorySize64} game={gameBytes} available={memory.AvailablePhysical} commitAvailable={memory.AvailablePage}");
+                    resourceLimitReached = self.PrivateMemorySize64 > 768L * 1024 * 1024
+                        || gameBytes > 3L * 1024 * 1024 * 1024 || memory.AvailablePhysical < minimumPhysical
+                        || memory.AvailablePage < minimumCommit;
+                }
             }
             catch (Exception ex) { Log("GUARD " + ex.Message); }
+            // A failed or disabled memory observation must never bypass the execution deadline.
+            if (deadlineReached || resourceLimitReached)
+            {
+                Log(deadlineReached ? "FAIL watchdog execution deadline" : "FAIL watchdog resource boundary");
+                try
+                {
+                    var game = Field<Process?>(app, "startupGame");
+                    if (game != null && !game.HasExited) game.Kill();
+                }
+                catch (Exception ex) { Log("GUARD shutdown " + ex.Message); }
+                Environment.Exit(15);
+            }
             Thread.Sleep(1000);
         }
     }

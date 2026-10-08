@@ -38,6 +38,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 audioLifetimes = new LoadingAudioLifetimePolicy();
             if (InputManager.CurrentTick != 0)
                 throw new InvalidOperationException("Mod startup input guard was installed too late.");
+            LoadingInputCounterObservation.Log("mod-constructor");
             randomConstructor = new ILHook(typeof(Random).GetConstructor(Type.EmptyTypes), il =>
             {
                 var cursor = new ILCursor(il);
@@ -77,6 +78,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (InputManager.CurrentTick != 0)
                 throw new InvalidOperationException("Input advanced outside the preload guard.");
+            LoadingInputCounterObservation.Log("preloads-finished");
             suppressInput = false;
             synchronousFetch?.Milestone("runtime-preloading-ready");
             On.InControl.InputManager.UpdateInternal -= OnInputUpdate;

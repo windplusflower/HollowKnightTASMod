@@ -49,11 +49,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Matching PDB getter: index 8 into the existing manager table.
             RequireCode(0x629ef0, "b908000000e9068ef4ff");
             RequireCode(0x572d00, "4863c1488d0d264d4601488b04c1c3");
+            RequireCode(0x771ec0, "8b414883f8020f94c0c3"); // PreloadManagerOperation.IsDone: status == 2.
         }
 
         internal object[] Inventory => inventory.ToArray();
         internal string[] Unsupported => unsupported.ToArray();
         internal object[] FieldDiagnostics => fieldDiagnostics;
+        internal int AsyncOperationCount => coroutines.Values.Count(value => value.HasAsyncOperation);
         internal void Release() { coroutines.Clear(); behaviourId = _ => null; }
 
         internal string Capture(LoadingFieldDigest fields, Func<int, string?> objectId,
@@ -99,11 +101,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 foreach (var omitted in digest.Unsupported) unsupported.Add(omitted);
                 text.Append(coroutine.Id).Append(':').Append(coroutine.Done).Append(':')
                     .Append(coroutine.EnumeratorBased).Append(':').Append(coroutine.HasAsyncOperation).Append(':')
+                    .Append(coroutine.AsyncOperationState).Append(':')
                     .Append(Relation(coroutine.WaitingFor)).Append(':').Append(Relation(coroutine.ContinueWhenFinished))
                     .Append(':').Append(digest.Sha256).Append('\n');
                 inventory.Add(new { kind = "coroutine", id = coroutine.Id,
                     enumeratorType = coroutine.Enumerator?.GetType().FullName, digest = digest.Sha256,
                     nodes = digest.Nodes, coroutine.Done, coroutine.EnumeratorBased, coroutine.HasAsyncOperation,
+                    coroutine.AsyncOperationState,
                     waitingFor = Relation(coroutine.WaitingFor), continueWhenFinished = Relation(coroutine.ContinueWhenFinished) });
             }
             var after = Read(manager, 80);
@@ -169,7 +173,22 @@ namespace HollowKnightTAS.Runtime.FullRun
                 HasAsyncOperation = Pointer(bytes, 120) != IntPtr.Zero
             };
             coroutines.Add(pointer, view);
-            if (view.HasAsyncOperation) unsupported.Add("coroutine-native-async-operation");
+            if (view.HasAsyncOperation)
+            {
+                var operation = Read(Pointer(bytes, 120), 72);
+                var table = Pointer(operation, 0);
+                view.AsyncOperationState = Function(table);
+                if (table == IntPtr.Add(engine, 0x1692310))
+                {
+                    var status = BitConverter.ToInt32(Read(IntPtr.Add(Pointer(bytes, 120), 72), 4), 0);
+                    view.AsyncOperationState += ":UnloadSceneOperation:status=" + status;
+                    // A completed operation may remain referenced by the coroutine;
+                    // keep that lifecycle fact distinct from outstanding I/O.
+                    unsupported.Add(status == 2 ? "completed-unload-operation-binding-needs-rebuild"
+                        : "coroutine-pending-unload-operation");
+                }
+                else unsupported.Add("coroutine-native-async-operation");
+            }
             if (view.Enumerator == null && !view.Done) unsupported.Add("coroutine-enumerator-unavailable");
             if (view.WaitingFor != IntPtr.Zero) Coroutine(view.WaitingFor, depth + 1);
             if (view.ContinueWhenFinished != IntPtr.Zero) Coroutine(view.ContinueWhenFinished, depth + 1);
@@ -230,6 +249,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private sealed class CoroutineView
         {
             internal string Id = "";
+            internal string AsyncOperationState = "none";
             internal object? Enumerator;
             internal bool Done, EnumeratorBased, HasAsyncOperation;
             internal IntPtr WaitingFor, ContinueWhenFinished;

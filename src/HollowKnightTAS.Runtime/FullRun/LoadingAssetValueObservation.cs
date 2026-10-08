@@ -12,7 +12,9 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal sealed class LoadingAssetValueObservation
     {
         private LoadingMaterialValueObservation? materials;
-        internal void BeginSample() => materials?.BeginSample();
+        private readonly LoadingFontValueObservation fonts = new LoadingFontValueObservation();
+        internal object[] FontDetails => fonts.Details;
+        internal void BeginSample() { materials?.BeginSample(); fonts.BeginSample(); }
         internal object? Capture(UnityEngine.Object asset, Action<string> omit)
         {
             if (asset is Mesh mesh)
@@ -93,6 +95,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     native = materials.CaptureMaterial(material, omit) };
             }
             if (asset is TextAsset text) return new { contents = CopyHash(text.bytes, 1) };
+            if (asset is Font font) return fonts.Capture(font, omit);
             return null;
         }
 

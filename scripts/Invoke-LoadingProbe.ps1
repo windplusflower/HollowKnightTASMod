@@ -16,19 +16,36 @@ param(
     [switch] $RecordInputs,
     [switch] $GameplayOracle,
     [switch] $NativeScheduler,
+    [switch] $NativePhysics,
+    [switch] $NativePhysicsOnly,
+    [switch] $NativePhysicsDetails,
     [switch] $DisablePrimaryProbe,
-    [switch] $RelaxedResources,
+    [switch] $RelaxedResources, # Compatibility option; loading probes now disable all memory gates.
     [switch] $ModWallClock,
     [switch] $FieldDetails,
-    [switch] $SerialScenes
+    [switch] $SerialScenes,
+    [switch] $SerialBoundaryOnly,
+    [switch] $VirtualAudio,
+    [switch] $IsolatedOnline,
+    [switch] $CanonicalParticles,
+    [switch] $ExportVideo,
+    [string] $ClockBridgePath = '',
+    [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
 )
 $ErrorActionPreference = 'Stop'
 if ($SerialScenes -and -not $ModWallClock) { throw 'SerialScenes requires the complete v5 policies and uses the distinct v6 profile.' }
+if ($SerialBoundaryOnly -and (-not $SerialScenes -or -not $GameplayOracle)) { throw 'SerialBoundaryOnly requires SerialScenes and GameplayOracle.' }
+if ($VirtualAudio -and -not $SerialScenes) { throw 'VirtualAudio requires SerialScenes.' }
+if ($IsolatedOnline -and -not $VirtualAudio) { throw 'IsolatedOnline requires VirtualAudio.' }
+if ($CanonicalParticles -and -not $IsolatedOnline) { throw 'CanonicalParticles requires IsolatedOnline.' }
 if ($CanonicalStartupClock -and (-not $SynchronousFetch -or -not $DisableLegacyCalibration)) { throw 'The v4 experiment requires synchronous fetch and disabled legacy calibration.' }
 if ($ModWallClock -and -not $CanonicalStartupClock) { throw 'The v5 Mod wall-clock experiment requires canonical startup clocks.' }
-if ($RecordInputs -and (-not $CanonicalStartupClock -or $Runs -ne 1)) { throw 'RecordInputs requires the v4 profile and one run.' }
+if ($RecordInputs -and $Runs -ne 1) { throw 'RecordInputs requires one run.' }
 if ($DisablePrimaryProbe -and (-not $GameplayOracle -or $RecordInputs)) { throw 'DisablePrimaryProbe requires the independent oracle and a replay run.' }
 if ($NativeScheduler -and -not $GameplayOracle) { throw 'NativeScheduler requires the independent gameplay oracle.' }
+if ($NativePhysics -and -not $GameplayOracle) { throw 'NativePhysics requires the independent gameplay oracle.' }
+if ($NativePhysicsOnly -and (-not $NativePhysics -or -not $GameplayOracle)) { throw 'NativePhysicsOnly requires NativePhysics and GameplayOracle; it is a diagnostic scope, not P0 acceptance.' }
+if ($NativePhysicsDetails -and -not $NativePhysics) { throw 'NativePhysicsDetails requires NativePhysics.' }
 if ($FieldDetails -and -not $GameplayOracle) { throw 'FieldDetails requires the independent gameplay oracle.' }
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
@@ -43,20 +60,21 @@ $harnessBuild = Join-Path $repo 'scripts/StudioScenarioHarness/bin/Release/net8.
 $bundleTool = Join-Path $repo 'src/HollowKnightTAS.BundleTool/bin/Release/net8.0/HollowKnightTAS.BundleTool.dll'
 $runtime = Join-Path $repo 'src/HollowKnightTAS.Runtime/bin/Release/HollowKnightTAS.dll'
 $clockPayload = Join-Path $repo 'src/HollowKnightTAS.ClockPayload/bin/Release/HollowKnightTAS.ClockPayload.dll'
-$clockBridge = Join-Path $repo 'artifacts/scene-checkpoints/p0/native-clock-build/HollowKnightTAS.ClockBridge.dll'
+$clockBridge = if ($ClockBridgePath) { [IO.Path]::GetFullPath($ClockBridgePath) }
+    else { Join-Path $repo 'artifacts/scene-checkpoints/p0/native-clock-build/HollowKnightTAS.ClockBridge.dll' }
 $injectorBuild = Join-Path $repo 'src/HollowKnightTAS.ClockInjector/bin/Release/net8.0-windows/win-x64'
 $injectorFiles = @('HollowKnightTAS.ClockInjector.exe','HollowKnightTAS.ClockInjector.dll','HollowKnightTAS.ClockInjector.deps.json','HollowKnightTAS.ClockInjector.runtimeconfig.json')
-$usesClockCandidate = $DisableLegacyCalibration -or $CanonicalStartupClock
-$profileCandidateFiles = @()
-if ($CanonicalStartupClock) {
+$stageCompleteCandidate = $true
+$usesClockCandidate = $true
+# Runtime and harness reference the selected-profile API even for V3 controls.
+# Always stage a coherent managed set, with the same backup/restore audit.
     $profileCandidateFiles = @(
         @{ name='runtime-core.dll'; source=(Join-Path $harnessBuild 'HollowKnightTAS.Core.dll'); destination=(Join-Path $install 'HollowKnightTAS.Core.dll') },
         @{ name='studio-core.dll'; source=(Join-Path $harnessBuild 'HollowKnightTAS.Core.dll'); destination=(Join-Path $companion 'HollowKnightTAS.Core.dll') },
         @{ name='studio.dll'; source=(Join-Path $harnessBuild 'HollowKnightTAS.Companion.dll'); destination=(Join-Path $companion 'HollowKnightTAS.Companion.dll') }
     )
-}
 $clockCandidateFiles = @('HollowKnightTAS.ClockPayload.dll','clock-build-manifest-v1.json','clock-build-whitelist-v1.json')
-if ($CanonicalStartupClock) { $clockCandidateFiles += @('HollowKnightTAS.ClockBridge.dll') + $injectorFiles }
+if ($stageCompleteCandidate) { $clockCandidateFiles += @('HollowKnightTAS.ClockBridge.dll') + $injectorFiles }
 $saveRoot = Join-Path $env:USERPROFILE 'AppData/LocalLow/Team Cherry/Hollow Knight'
 $hostFiles = @('StudioScenarioHarness.exe','StudioScenarioHarness.dll','StudioScenarioHarness.deps.json','StudioScenarioHarness.runtimeconfig.json')
 foreach ($name in $hostFiles) { if (Test-Path -LiteralPath (Join-Path $companion $name)) { throw "Existing test host: $name" } }
@@ -66,7 +84,7 @@ foreach ($path in @($runtime,$bundleTool,$Movie) + @($hostFiles | ForEach-Object
 foreach ($entry in $profileCandidateFiles) {
     if (-not (Test-Path -LiteralPath $entry.source -PathType Leaf)) { throw "Required profile assembly missing: $($entry.source)" }
 }
-if ($CanonicalStartupClock) {
+if ($stageCompleteCandidate) {
     foreach ($name in $injectorFiles) { if (-not (Test-Path -LiteralPath (Join-Path $injectorBuild $name) -PathType Leaf)) { throw "Required injector file missing: $name" } }
 }
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
@@ -76,7 +94,7 @@ foreach ($name in @('HollowKnightTAS.dll','companion.manifest.json')) { Copy-Ite
 foreach ($entry in $profileCandidateFiles) { Copy-Item -LiteralPath $entry.destination -Destination (Join-Path $backup $entry.name) }
 if ($usesClockCandidate) {
     if (-not (Test-Path -LiteralPath $clockPayload -PathType Leaf)) { throw 'Built clock payload missing.' }
-    if ($CanonicalStartupClock -and -not (Test-Path -LiteralPath $clockBridge -PathType Leaf)) { throw 'Built clock bridge missing.' }
+    if ($stageCompleteCandidate -and -not (Test-Path -LiteralPath $clockBridge -PathType Leaf)) { throw 'Built clock bridge missing.' }
     foreach ($name in $clockCandidateFiles) {
         Copy-Item -LiteralPath (Join-Path $clockRoot $name) -Destination (Join-Path $backup $name)
     }
@@ -94,7 +112,7 @@ try {
     foreach ($entry in $profileCandidateFiles) { Copy-Item -LiteralPath $entry.source -Destination $entry.destination }
     if ($usesClockCandidate) {
         Copy-Item -LiteralPath $clockPayload -Destination (Join-Path $clockRoot 'HollowKnightTAS.ClockPayload.dll')
-        if ($CanonicalStartupClock) {
+        if ($stageCompleteCandidate) {
             Copy-Item -LiteralPath $clockBridge -Destination (Join-Path $clockRoot 'HollowKnightTAS.ClockBridge.dll')
             foreach ($name in $injectorFiles) { Copy-Item -LiteralPath (Join-Path $injectorBuild $name) -Destination (Join-Path $clockRoot $name) }
         }
@@ -103,17 +121,17 @@ try {
         $payloadIdentity = Get-Item -LiteralPath $clockPayload
         $payloadHash = (Get-FileHash -LiteralPath $clockPayload).Hash.ToLowerInvariant()
         $clockManifest.payloadSha256 = $payloadHash
-        if ($CanonicalStartupClock) { $bridgeIdentity = Get-Item -LiteralPath $clockBridge; $bridgeHash = (Get-FileHash -LiteralPath $clockBridge).Hash.ToLowerInvariant(); $clockManifest.bridgeSha256 = $bridgeHash }
+        if ($stageCompleteCandidate) { $bridgeIdentity = Get-Item -LiteralPath $clockBridge; $bridgeHash = (Get-FileHash -LiteralPath $clockBridge).Hash.ToLowerInvariant(); $clockManifest.bridgeSha256 = $bridgeHash }
         foreach ($entry in $clockManifest.runtimeFileSet) {
             if ($entry.file -eq 'HollowKnightTAS.ClockPayload.dll') { $entry.length = $payloadIdentity.Length; $entry.sha256 = $payloadHash }
-            if ($CanonicalStartupClock -and $entry.file -eq 'HollowKnightTAS.ClockBridge.dll') { $entry.length = $bridgeIdentity.Length; $entry.sha256 = $bridgeHash }
-            if ($CanonicalStartupClock -and $entry.file -in $injectorFiles) {
+            if ($stageCompleteCandidate -and $entry.file -eq 'HollowKnightTAS.ClockBridge.dll') { $entry.length = $bridgeIdentity.Length; $entry.sha256 = $bridgeHash }
+            if ($stageCompleteCandidate -and $entry.file -in $injectorFiles) {
                 $file = Join-Path $injectorBuild $entry.file
                 $entry.length = (Get-Item -LiteralPath $file).Length
                 $entry.sha256 = (Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant()
             }
         }
-        if ($CanonicalStartupClock) {
+        if ($stageCompleteCandidate) {
             $clockManifest.injectorSha256 = (Get-FileHash -LiteralPath (Join-Path $injectorBuild $injectorFiles[0])).Hash.ToLowerInvariant()
             $clockManifest.injectorManagedSha256 = (Get-FileHash -LiteralPath (Join-Path $injectorBuild $injectorFiles[1])).Hash.ToLowerInvariant()
             $clockManifest.injectorDepsSha256 = (Get-FileHash -LiteralPath (Join-Path $injectorBuild $injectorFiles[2])).Hash.ToLowerInvariant()
@@ -126,7 +144,7 @@ try {
         $whitelistPath = Join-Path $clockRoot 'clock-build-whitelist-v1.json'
         $whitelist = Get-Content -LiteralPath $whitelistPath -Raw | ConvertFrom-Json
         $whitelist.payloadSha256 = $payloadHash
-        if ($CanonicalStartupClock) { $whitelist.bridgeSha256 = $bridgeHash }
+        if ($stageCompleteCandidate) { $whitelist.bridgeSha256 = $bridgeHash }
         [IO.File]::WriteAllText($whitelistPath, ($whitelist | ConvertTo-Json -Depth 8))
     }
     foreach ($name in $hostFiles) { Copy-Item -LiteralPath (Join-Path $harnessBuild $name) -Destination (Join-Path $companion $name) }
@@ -158,11 +176,19 @@ try {
         if ($RecordInputs) { $arguments += '--probe-record-inputs' }
         if ($GameplayOracle) { $arguments += '--probe-gameplay-oracle' }
         if ($NativeScheduler) { $arguments += '--probe-native-scheduler' }
+        if ($NativePhysics) { $arguments += '--probe-native-physics' }
+        if ($NativePhysicsOnly) { $arguments += '--probe-native-physics-only' }
+        if ($NativePhysicsDetails) { $arguments += '--probe-native-physics-details' }
         if ($FieldDetails) { $arguments += '--probe-field-details' }
         if ($DisablePrimaryProbe) { $arguments += '--probe-disable-primary' }
-        if ($RelaxedResources) { $arguments += '--probe-relaxed-resources' }
         if ($ModWallClock) { $arguments += '--probe-mod-wall-clock' }
         if ($SerialScenes) { $arguments += '--probe-serial-scenes' }
+        if ($SerialBoundaryOnly) { $arguments += '--probe-serial-boundary-only' }
+        if ($VirtualAudio) { $arguments += '--probe-virtual-audio' }
+        if ($IsolatedOnline) { $arguments += '--probe-isolated-online' }
+        if ($CanonicalParticles) { $arguments += '--probe-canonical-particles' }
+        if ($ExportVideo) { $arguments += '--probe-export-video' }
+        if ($EndpointHoldSeconds -gt 0) { $arguments += ('--probe-hold-seconds={0}' -f $EndpointHoldSeconds) }
         if ($DisableLegacyCalibration) { $arguments += '--probe-disable-legacy-calibration' }
         if ($RandomCalls) { $arguments += @('--probe-random-calls', "--probe-call-first=$CallFirst", "--probe-call-end=$CallEnd") }
         $hostProcess = Start-Process -FilePath (Join-Path $companion 'StudioScenarioHarness.exe') -ArgumentList $arguments `

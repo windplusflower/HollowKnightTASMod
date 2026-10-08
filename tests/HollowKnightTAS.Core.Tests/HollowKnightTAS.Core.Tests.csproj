@@ -18,6 +18,10 @@
              Link="FullRun\FullRunFrameJournal.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingFieldDigest.cs"
              Link="FullRun\LoadingFieldDigest.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingRuntimeReferencePolicy.cs"
+             Link="FullRun\LoadingRuntimeReferencePolicy.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingListEpochIdentity.cs"
+             Link="FullRun\LoadingListEpochIdentity.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingUnityAssetIdentity.cs"
              Link="FullRun\LoadingUnityAssetIdentity.cs" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />

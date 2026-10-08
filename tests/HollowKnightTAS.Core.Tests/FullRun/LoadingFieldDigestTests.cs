@@ -13,6 +13,18 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         private static LoadingFieldDigest NewDigest() => new LoadingFieldDigest(value => null, type => false);
 
         [TestMethod]
+        public void ReusedDigestKeepsThePinnedTokenEncodingAcrossCapturesAndDiagnostics()
+        {
+            using var digest = NewDigest();
+            var owner = new Derived(1.25f, 7);
+            const string expected = "833ab8aa506014bc5e544e4be8b829d7a29f210d8cb32043bde52ad06758a4ba";
+            Assert.AreEqual(expected, digest.Capture(owner, "root").Sha256);
+            digest.Capture(new[] { 1, 2, 3 }, "another-root");
+            Assert.AreEqual(expected, digest.Capture(owner, "root", includeFieldDiagnostics: true).Sha256);
+            Assert.AreEqual(expected, digest.Capture(owner, "root").Sha256);
+        }
+
+        [TestMethod]
         public void NestedFieldDiagnosticsPreserveTheObservedDigestAndOnlyExportHashes()
         {
             var owner = new Derived(1.25f, 7);
@@ -76,6 +88,51 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         }
 
         [TestMethod]
+        public void SharedRootGraphCapturesAliasesValuesAndDoesNotLeakBetweenSamples()
+        {
+            string[] Capture(bool alias, int value)
+            {
+                using var digest = NewDigest();
+                var first = new Derived(1.25f, value);
+                var second = alias ? first : new Derived(1.25f, value);
+                digest.BeginSharedGraph();
+                try { return new[] { digest.Capture(first, "a").Sha256, digest.Capture(second, "b").Sha256 }; }
+                finally { digest.EndSharedGraph(); }
+            }
+            CollectionAssert.AreEqual(Capture(true, 7), Capture(true, 7));
+            CollectionAssert.AreNotEqual(Capture(true, 7), Capture(false, 7));
+            CollectionAssert.AreNotEqual(Capture(true, 7), Capture(true, 8));
+
+            using var reused = NewDigest();
+            var owner = new Derived(1.25f, 7);
+            var independent = reused.Capture(owner, "root");
+            reused.BeginSharedGraph();
+            Assert.AreEqual(independent.Sha256, reused.Capture(owner, "root").Sha256);
+            Assert.IsTrue(reused.Capture(owner, "root").Nodes < independent.Nodes);
+            reused.EndSharedGraph();
+            Assert.AreEqual(independent.Sha256, reused.Capture(owner, "root").Sha256);
+        }
+
+        [TestMethod]
+        public void ExtraFieldDiagnosticsCannotChangeTheSharedRootGraph()
+        {
+            string Next(bool diagnostic)
+            {
+                using var digest = NewDigest();
+                var owner = new Node { A = new Node(), B = new Node() };
+                digest.BeginSharedGraph();
+                try
+                {
+                    digest.Capture(owner, "a");
+                    if (diagnostic) digest.CaptureFields(new Node { A = new Node() }, "extra", "A");
+                    return digest.Capture(new Node { A = owner, B = new Node() }, "b").Sha256;
+                }
+                finally { digest.EndSharedGraph(); }
+            }
+            Assert.AreEqual(Next(false), Next(true));
+        }
+
+        [TestMethod]
         public void RawFloatBitsAndInheritedPrivateFieldsAffectDigest()
         {
             var digest = NewDigest();
@@ -93,6 +150,19 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             Assert.AreEqual("coroutine:native-pointer", first.Unsupported.Single());
             Assert.AreEqual(first.Sha256, digest.Capture(new IntPtr(42), "coroutine").Sha256);
             Assert.ThrowsExactly<InvalidOperationException>(() => digest.Capture(new int[50001], "too-large"));
+        }
+
+        [TestMethod]
+        public void DeferredPathsKeepNestedOmissionsAndRecoverAfterARejectedCapture()
+        {
+            using var digest = NewDigest();
+            var owner = new Dictionary<string, object> { ["ports"] = new[] { new IntPtr(12), new IntPtr(42) } };
+            CollectionAssert.AreEqual(new[] { "root.value[0][0]:native-pointer", "root.value[0][1]:native-pointer" },
+                digest.Capture(owner, "root").Unsupported.ToArray());
+            var error = Assert.ThrowsExactly<InvalidOperationException>(() => digest.Capture(new int[50001], "too-large"));
+            StringAssert.Contains(error.Message, "too-large[49999]");
+            CollectionAssert.AreEqual(new[] { "next.value[0][0]:native-pointer", "next.value[0][1]:native-pointer" },
+                digest.Capture(owner, "next", includeFieldDiagnostics: true).Unsupported.ToArray());
         }
 
         [TestMethod]
@@ -121,6 +191,26 @@ namespace HollowKnightTAS.Core.Tests.FullRun
                 digest.Capture(new Binding(2, 7), "root").Sha256);
             Assert.AreNotEqual(digest.Capture(new Binding(1, 7), "root").Sha256,
                 digest.Capture(new Binding(2, 8), "root").Sha256);
+        }
+
+        [TestMethod]
+        public void HashSetRebindingPreservesSlotsValuesCapacityAndFreeReuse()
+        {
+            LoadingFieldDigest Digest() => new LoadingFieldDigest(value => value is Key key ? "key:" + key.Id : null, type => false);
+            var first = new HashSet<Key> { new Key(1, 5), new Key(2, 5) };
+            var second = new HashSet<Key> { new Key(1, 25), new Key(2, 80) };
+            using var digest = Digest();
+            var expected = digest.Capture(first, "root").Sha256;
+            Assert.AreEqual(expected, digest.Capture(second, "root").Sha256);
+            Assert.AreNotEqual(expected, digest.Capture(new HashSet<Key> { new Key(2, 5), new Key(1, 5) }, "root").Sha256);
+            Assert.AreNotEqual(expected, digest.Capture(new HashSet<Key> { new Key(1, 5), new Key(3, 5) }, "root").Sha256);
+            second.EnsureCapacity(100);
+            Assert.AreNotEqual(expected, digest.Capture(second, "root").Sha256);
+            first.Remove(first.First());
+            var removed = digest.Capture(first, "root").Sha256;
+            Assert.AreNotEqual(expected, removed);
+            first.Add(new Key(1, 5));
+            Assert.AreNotEqual(expected, digest.Capture(first, "root").Sha256);
         }
 
         private sealed class Binding

@@ -47,6 +47,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidDataException("Full-run bootstrap identity differs from the save session.");
                 var sessionDirectory = saves.GetTasDataPath("sessions",
                     "full-run-" + descriptor.RunId);
+                LoadingInputCounterObservation.Log("full-run-attach");
                 var session = new RuntimeFullRunSession(clock,
                     new FullRunActionSetAdapter(), new FullRunMouseBridge(),
                     sessionDirectory);

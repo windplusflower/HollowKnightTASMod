@@ -15,6 +15,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly string shadowRoot;
         private readonly Dictionary<InputDevice, string> devices = new Dictionary<InputDevice, string>(DeviceComparer.Instance);
         private ulong inputTick;
+        private LoadingListEpochIdentity<InputDevice>? activeDeviceEpoch;
         internal LoadingObservationIdentity(string sessionDirectory)
         {
             var sessions = Path.GetDirectoryName(sessionDirectory)!;
@@ -28,6 +29,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             // InputManager and InputDevice have already initialized and run
             // the native input handshake before this observer can be created.
             inputTick = InputManager.CurrentTick;
+            var active = typeof(InputManager).GetField("activeDevices", BindingFlags.Static | BindingFlags.NonPublic)!
+                .GetValue(null) as List<InputDevice>
+                ?? throw new InvalidOperationException("P0 active input list is unavailable.");
+            activeDeviceEpoch = new LoadingListEpochIdentity<InputDevice>(active);
             devices.Clear(); devices.Add(InputDevice.Null, "device:null");
             var field = typeof(InputManager).GetField("devices", BindingFlags.Static | BindingFlags.NonPublic)
                 ?? throw new InvalidOperationException("P0 input device registry is unavailable.");
@@ -38,6 +43,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal string? Field(object owner, FieldInfo field, object? value)
         {
+            var epoch = activeDeviceEpoch?.Field(owner, field, value);
+            if (epoch != null) return epoch;
             var type = field.DeclaringType!.FullName;
             if (type == "DesktopPlatform" && field.Name == "saveDirPath" && value is string path)
             {

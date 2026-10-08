@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -6,6 +7,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Media.Imaging;
 using HollowKnightTAS.Companion.Services;
 using HollowKnightTAS.Companion.ViewModels;
 using HollowKnightTAS.Core.Automation;
@@ -28,6 +30,14 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE", primaryProbe ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_GAMEPLAY_ORACLE", gameplayOracle ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER", nativeScheduler ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS", args.Contains("--probe-native-physics") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_ONLY", args.Contains("--probe-native-physics-only") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_DETAILS", args.Contains("--probe-native-physics-details") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_SERIAL_BOUNDARY_ONLY", args.Contains("--probe-serial-boundary-only") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_VIRTUAL_AUDIO", args.Contains("--probe-virtual-audio") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_ISOLATED_ONLINE", args.Contains("--probe-isolated-online") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_CANONICAL_PARTICLES", args.Contains("--probe-canonical-particles") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_VERIFY_ONLINE", args.Contains("--probe-isolated-online") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_ORACLE_FIELD_DETAILS", args.Contains("--probe-field-details") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_FIRST", first.ToString());
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_END", end.ToString());
@@ -58,11 +68,22 @@ internal static partial class StudioScenarioHarness
         var source = Path.GetFullPath(Arg("--probe-movie"));
         var sourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(source)));
         var record = args.Contains("--probe-record-inputs");
+        var protectedSource = SequencePackage.Read(source);
+        Require(protectedSource.InitialSaves != null, "loading probe binds protected initial saves from its source package");
+        if (!record)
+        {
+            var replay = new MovieV2Codec().Parse(new StringReader(protectedSource.Movie), source).Document
+                ?? throw new InvalidDataException("Invalid recorded source inputs.");
+            Require(replay.Runs.All(run => !run.Authored)
+                && replay.Header.NativeProfileId == MovieProtocolV2.SelectedNativeProfileId,
+                "cold baseline uses a strict recording with the selected execution profile");
+        }
         if (record)
         {
-            Require(NativeExecutionProfile.IsCanonicalStartupProfile(MovieProtocolV2.SelectedNativeProfileId),
-                "new recording uses explicit canonical startup experimental profile");
-            var original = SequencePackage.Read(source);
+            Require(NativeExecutionProfile.IsCanonicalStartupProfile(MovieProtocolV2.SelectedNativeProfileId)
+                || MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.LegacyProfileId,
+                "new recording uses a registered execution profile");
+            var original = protectedSource;
             Require(original.InitialSaves != null, "recording source binds the protected initial saves");
             var parsed = new MovieV2Codec().Parse(new StringReader(original.Movie), source).Document
                 ?? throw new InvalidDataException("Invalid source inputs.");
@@ -92,6 +113,14 @@ internal static partial class StudioScenarioHarness
             var oldPid = Field<Process>(app, "startupGame").Id;
             if (record)
             {
+                await Until(() =>
+                    {
+                        boot.Refresh();
+                        if (boot.FullRunFaultCode != 0)
+                            throw new InvalidOperationException("Recording bootstrap native fault " + boot.FullRunFaultCode);
+                        return boot.IsWaiting;
+                    },
+                    "recording bootstrap reaches a paused native boundary", 120);
                 var seek = await Field<AutomationBroker>(vm, "automationBroker").ExecuteHumanAsync(
                     AutomationCommandIds.FullRunSeek, AutomationScope.ControlPlayback,
                     new System.Collections.Generic.Dictionary<string, string>
@@ -127,10 +156,18 @@ internal static partial class StudioScenarioHarness
                     && strict.Runs.All(run => !run.Authored)
                     && strict.Header.NativeProfileId == MovieProtocolV2.SelectedNativeProfileId,
                     "fresh strict native recording has exact length and selected profile identity");
-                var recordingName = MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.SerialSceneProfileId
+                var recordingName = MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.CanonicalParticleProfileId
+                    ? "serial-scenes-v11-recording.hktaspack"
+                    : MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.IsolatedOnlineProfileId
+                    ? "serial-scenes-v10-recording.hktaspack"
+                    : MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.VirtualAudioSerialProfileId
+                    ? "serial-scenes-v9-recording.hktaspack"
+                    : MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.SerialSceneProfileId
                     ? "serial-scenes-v6-recording.hktaspack"
                     : MovieProtocolV2.SelectedNativeProfileId == MovieProtocolV2.CanonicalModClockNativeProfileId
-                        ? "canonical-startup-v5-recording.hktaspack" : "canonical-startup-v4-recording.hktaspack";
+                        ? "canonical-startup-v5-recording.hktaspack"
+                        : MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.LegacyProfileId
+                            ? "legacy-v3-recording.hktaspack" : "canonical-startup-v4-recording.hktaspack";
                 await SequencePackage.WriteAsync(Path.Combine(output, recordingName),
                     actual.Movie, movies.SessionInitialSaves);
             }
@@ -171,6 +208,9 @@ internal static partial class StudioScenarioHarness
                 var traces = Directory.GetFiles(movies.ShadowRoot, traceName, SearchOption.AllDirectories);
                 Require(traces.Length == 1, "one " + traceName + " in current protected shadow");
                 File.Copy(traces[0], Path.Combine(output, traceName), false);
+                foreach (var candidate in Directory.GetFiles(Path.GetDirectoryName(traces[0])!, "loading-candidate-*-inventory.json"))
+                    if (!File.Exists(Path.Combine(output, Path.GetFileName(candidate))))
+                        File.Copy(candidate, Path.Combine(output, Path.GetFileName(candidate)), false);
                 foreach (var name in new[] { "engine-clock-layout.json", "engine-clock-roundtrip.json", "loading-state-inventory.json", "loading-oracle-progress.json", "loading-field-digests.json" })
                 {
                     var extra = Path.Combine(Path.GetDirectoryName(traces[0])!, name);
@@ -191,6 +231,48 @@ internal static partial class StudioScenarioHarness
                     gameProcessId = Field<Process>(app, "startupGame").Id,
                     shadow = movies.ShadowRoot, phaseP0Passed = false }));
             Log("DISCOVERY TRACE COMPLETE; full-state P0 gate not asserted");
+            var holdArgument = args.SingleOrDefault(a => a.StartsWith("--probe-hold-seconds=", StringComparison.Ordinal));
+            if (holdArgument != null)
+            {
+                var seconds = int.Parse(holdArgument.Split('=', 2)[1]);
+                Require(seconds >= 0 && seconds <= 120, "bounded endpoint screenshot hold");
+                var captureType = typeof(MainViewModel).Assembly.GetType("HollowKnightTAS.Companion.Services.GameWindowCapture", true)!;
+                var gameProcess = Field<Process>(app, "startupGame");
+                gameProcess.Refresh();
+                var image = await (Task<BitmapSource>)captureType.GetMethod("CaptureAsync", BindingFlags.Static | BindingFlags.Public)!
+                    .Invoke(null, new object[] { gameProcess.MainWindowHandle })!;
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(image));
+                using (var file = File.Create(Path.Combine(output, "endpoint.png"))) encoder.Save(file);
+                Log("SCREENSHOT HOLD seconds=" + seconds);
+                await Task.Delay(TimeSpan.FromSeconds(seconds));
+                await CheckSerialPauseAsync(vm, boot);
+            }
+            if (args.Contains("--probe-export-video"))
+            {
+                Require(!record, "MP4 validation uses an existing strict package");
+                var picker = typeof(MainViewModel).GetField("videoExportFilePicker", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var previousPicker = picker.GetValue(vm);
+                var destination = Path.Combine(output, "serial-profile.mp4");
+                var encoderPath = Path.Combine(AppContext.BaseDirectory, "Tools", "ffmpeg", "ffmpeg.exe");
+                Require(File.Exists(encoderPath) && !File.Exists(destination), "bundled encoder and fresh MP4 path");
+                var draft = vm.MovieText;
+                try
+                {
+                    picker.SetValue(vm, (Func<(string Ffmpeg, string Output)?>)(() => (encoderPath, destination)));
+                    await Command(vm.StartVideoExportCommand).WaitAsync(TimeSpan.FromMinutes(2));
+                    var video = await VideoRuntimeState(vm);
+                    await File.WriteAllTextAsync(Path.Combine(output, "video-state.json"), JsonSerializer.Serialize(video));
+                    Require(video.GetValueOrDefault("videoExport.state") == "Completed" && File.Exists(destination), "serial profile publishes MP4");
+                    Require(Number(video, "videoExport.startMovieFrame") == 0
+                        && Number(video, "videoExport.endMovieFrame") == MovieFrames(draft)
+                        && video.GetValueOrDefault("videoExport.timing") == "per-frame-game-clock",
+                        "serial MP4 covers the complete editor movie with game-clock timing");
+                    Require(video["mismatchCount"] == "0" && video["error"] == "" && vm.MovieText == draft,
+                        "serial MP4 preserves strict input execution and editor draft");
+                }
+                finally { picker.SetValue(vm, previousPicker); }
+            }
         }
         finally { movies.VerifyOriginalSavesUnchanged(); }
     }
