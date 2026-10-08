@@ -14,6 +14,10 @@
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\FullRunVideoExportRange.cs" Link="FullRun\FullRunVideoExportRange.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\WorldObservationCache.cs" Link="FullRun\WorldObservationCache.cs" />
     <Reference Include="Newtonsoft.Json"><HintPath>$(HKManagedDir)\Newtonsoft.Json.dll</HintPath></Reference>
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CheckpointDataCodec.cs" Link="FullRun\CheckpointDataCodec.cs" />
+    <Reference Include="Assembly-CSharp"><HintPath>$(HKManagedDir)\Assembly-CSharp.dll</HintPath></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(HKManagedDir)\UnityEngine.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(HKManagedDir)\UnityEngine.CoreModule.dll</HintPath></Reference>
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\FullRunFrameJournal.cs"
              Link="FullRun\FullRunFrameJournal.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingFieldDigest.cs"

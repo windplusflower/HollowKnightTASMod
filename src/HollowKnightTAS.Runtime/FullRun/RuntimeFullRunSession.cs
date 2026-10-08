@@ -501,7 +501,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 LoadingAudioLifetimePolicy.CheckFailure();
                 LoadingOnlineIsolationObservation.CheckFailure();
                 if (LoadingSerialSceneProbe.ObserveNativeBoundary(movieFrame, completed))
+                {
                     loadingGameplayOracle?.Sample("candidate", "serial-source-unloaded");
+                    CaptureSceneCheckpointAtBoundary(completed);
+                }
                 var sceneHandle = UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;
                 if (ready && sceneHandle != randomSeedSceneHandle)
                 {
@@ -536,6 +539,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         randomSeedHandshakePending = false;
                     }
                 }
+                if (ready) CompleteSceneCheckpointBoundary(completed);
                 activeFrameRate = recordingFrameRate;
                 if (replayMovie != null)
                 {
@@ -958,6 +962,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             infoTiming.FlushTrace(sessionDirectory);
             if (disposed) return;
             disposed = true;
+            DisposeSceneCheckpoints();
             On.GameManager.Update -= OnGameManagerTiming;
             replayStateTrace?.Dispose();
             loadingBoundaryProbe?.Dispose();

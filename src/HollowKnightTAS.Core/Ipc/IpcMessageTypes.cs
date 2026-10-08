@@ -43,6 +43,8 @@ namespace HollowKnightTAS.Core.Ipc
         public const string GetObjectDetails = "getObjectDetails";
         public const string FullRunStop = "fullRunStop";
         public const string FullRunMovie = "fullRunMovie";
+        public const string SceneCheckpoint = "sceneCheckpoint";
+        public const string SceneCheckpointData = "sceneCheckpointData";
         public const string FullRunState = "fullRunState";
         public const string FullRunMovieDocument = "fullRunMovieDocument";
         public const string WorldSnapshot = "worldSnapshot";
@@ -146,6 +148,7 @@ namespace HollowKnightTAS.Core.Ipc
                     GetObjectDetails,
                     FullRunStop,
                     FullRunMovie,
+                    SceneCheckpoint,
                     SetHeroPose,
                     SetPlayerResources,
                     CommitStateMutation,
@@ -196,6 +199,7 @@ namespace HollowKnightTAS.Core.Ipc
                     MovieDocument,
                     FullRunState,
                     FullRunMovieDocument,
+                    SceneCheckpointData,
                     WorldSnapshot,
                     ObjectDetails,
                     StateMutationResult,

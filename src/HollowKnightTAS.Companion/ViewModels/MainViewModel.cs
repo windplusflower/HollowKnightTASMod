@@ -2052,6 +2052,9 @@ namespace HollowKnightTAS.Companion.ViewModels
             object? sender,
             SessionEnvelopeEventArgs eventArgs)
         {
+            // Checkpoint clients consume these directly. Never put restorable bytes
+            // (including a truncated base64 preview) in Studio's timeline/diagnostic history.
+            if (eventArgs.Envelope.MessageType == IpcMessageTypes.SceneCheckpointData) return;
             var payload =
                 IpcPayloadCodec.TryDeserialize(
                     eventArgs.Envelope.PayloadUtf8);

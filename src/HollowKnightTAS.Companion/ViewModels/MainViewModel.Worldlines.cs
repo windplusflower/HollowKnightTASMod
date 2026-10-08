@@ -12,6 +12,9 @@ namespace HollowKnightTAS.Companion.ViewModels
 {
     public sealed partial class MainViewModel
     {
+        // Lifetime follows Studio, not RuntimeSessionClient or a game-process registration.
+        public HollowKnightTAS.Core.SceneCheckpoints.SceneCheckpointStore SceneCheckpoints { get; } = new();
+        public SceneCheckpointClient CreateSceneCheckpointClient(RuntimeSessionClient runtime) => new(SceneCheckpoints, runtime);
         private StudioTimelineStore? worldlines;
         private TimelineTree? freshTimeline = new TimelineTree { Name = "当前空序列（未存档）" };
         private TimelineTree? selectedTimelineTree;

@@ -28,6 +28,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly string report;
         private static LoadingSerialSceneProbe? instance;
         private SceneLoad? transition;
+        private GameManager.SceneLoadInfo? checkpointLoadInfo;
         private Scene source;
         private string sourceName = "";
         private Scene staging;
@@ -76,6 +77,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Write("unsupported-load-info", new { type = info.GetType().FullName });
                 throw Fail("V6 serial prototype requires a load-info adapter: " + info.GetType().FullName);
             }
+            checkpointLoadInfo = info;
             return original(manager, info);
         }
 
@@ -151,6 +153,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 awaitingBoundary = false;
                 transition = null;
+                checkpointLoadInfo = null;
             }
         }
 
@@ -204,6 +207,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             self.Inventory("native-empty-boundary", movie, native);
             self.observedBoundary = true;
             return true;
+        }
+
+        internal static Tuple<int, GameManager.SceneLoadInfo, string> GetCheckpointBoundary()
+        {
+            var self = instance;
+            if (self == null || !self.observedBoundary || self.source.isLoaded || self.transition == null || self.checkpointLoadInfo == null)
+                throw new InvalidOperationException("No serial source-unloaded checkpoint boundary is active.");
+            var target = USceneManager.GetSceneByName(self.transition.TargetSceneName);
+            if ((target.IsValid() && target.isLoaded) || self.checkpointLoadInfo.SceneName != self.transition.TargetSceneName)
+                throw new InvalidOperationException("Checkpoint target load has already started or its entry parameters differ.");
+            return Tuple.Create(self.ordinal, self.checkpointLoadInfo, self.sourceName);
         }
 
         private void Inventory(string phase, long? movie = null, long? native = null)

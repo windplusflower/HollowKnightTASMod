@@ -1171,6 +1171,7 @@ namespace HollowKnightTAS.Runtime.Ipc
             while (!disposed)
             {
                 commands.WaitForActivity(TimeSpan.FromMilliseconds(50));
+                if (server.ConsumeDisconnectPending()) fullRunSession?.DiscardCheckpointTransfersOnDisconnect();
                 while (!disposed && commands.TryDequeue(out var command))
                 {
                     Dispatch(command);
@@ -1195,6 +1196,9 @@ namespace HollowKnightTAS.Runtime.Ipc
             var session = fullRunSession ?? throw new InvalidOperationException("Full-run session is unavailable.");
             switch (command.MessageType)
             {
+                case IpcMessageTypes.SceneCheckpoint:
+                    Publish(IpcMessageTypes.SceneCheckpointData, session.CheckpointCommand(command.Fields, manifestSha256));
+                    return "Checkpoint data command completed; restoration is not qualified.";
                 case IpcMessageTypes.StartVideoExport:
                     var videoFields = new List<string> { "ffmpegPath", "outputPath", "maximumFrames", "requestId", "replayLoadedMovie" };
                     if (command.Fields.ContainsKey("endMovieFrame")) videoFields.Add("endMovieFrame");

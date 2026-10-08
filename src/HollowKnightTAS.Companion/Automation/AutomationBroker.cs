@@ -4097,6 +4097,8 @@ namespace HollowKnightTAS.Companion.Automation
             object? sender,
             SessionEnvelopeEventArgs eventArgs)
         {
+            // Restorable chunks are private to the checkpoint client, not general automation events.
+            if (eventArgs.Envelope.MessageType == IpcMessageTypes.SceneCheckpointData) return;
             RuntimeSessionClient? current;
             lock (sync)
             {
