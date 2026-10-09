@@ -31,6 +31,8 @@ param(
     [switch] $CanonicalParticles,
     [switch] $ExportVideo,
     [switch] $CheckpointPrototype,
+    [long] $CheckpointAfterFrame = 0,
+    [string] $CheckpointWindows = '',
     [string] $ClockBridgePath = '',
     [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
 )
@@ -44,6 +46,28 @@ if ($CanonicalStartupClock -and (-not $SynchronousFetch -or -not $DisableLegacyC
 if ($ModWallClock -and -not $CanonicalStartupClock) { throw 'The v5 Mod wall-clock experiment requires canonical startup clocks.' }
 if ($RecordInputs -and $Runs -ne 1) { throw 'RecordInputs requires one run.' }
 if ($CheckpointPrototype -and ($Runs -ne 1 -or $RecordInputs -or -not $SerialScenes -or $ExportVideo)) { throw 'CheckpointPrototype requires one serial-scene replay without recording or video.' }
+if ($CheckpointWindows -and -not $CheckpointPrototype) { throw 'CheckpointWindows requires CheckpointPrototype.' }
+if ($CheckpointAfterFrame -lt 0 -or $CheckpointAfterFrame -ge $EndFrame -or
+    ($CheckpointAfterFrame -gt 0 -and -not $CheckpointPrototype)) { throw 'CheckpointAfterFrame must select a boundary before the prototype endpoint.' }
+if ($CheckpointWindows) {
+    $windowEnd = $FirstFrame
+    $windowFrames = 0L
+    $intervals = $CheckpointWindows.Split(',')
+    foreach ($interval in $intervals) {
+        $bounds = $interval.Split(':')
+        $start = 0L; $stop = 0L
+        if ($interval -notmatch '^[0-9]+:[0-9]+$' -or $bounds.Count -ne 2 -or
+            -not [long]::TryParse($bounds[0], [ref] $start) -or -not [long]::TryParse($bounds[1], [ref] $stop) -or
+            $start -lt $windowEnd -or $stop -gt $EndFrame -or $stop -le $start -or $stop - $start -gt 16) {
+            throw 'CheckpointWindows must contain ordered short first:end intervals inside the run.'
+        }
+        $windowFrames += $stop - $start
+        $windowEnd = $stop
+    }
+    if ($intervals.Count -gt 16 -or $windowFrames -gt 128 -or [long]$intervals[0].Split(':')[0] -ne $FirstFrame) {
+        throw 'CheckpointWindows exceeds its short-window budget or differs from FirstFrame.'
+    }
+}
 if ($DisablePrimaryProbe -and (-not $GameplayOracle -or $RecordInputs)) { throw 'DisablePrimaryProbe requires the independent oracle and a replay run.' }
 if ($NativeScheduler -and -not $GameplayOracle) { throw 'NativeScheduler requires the independent gameplay oracle.' }
 if ($NativePhysics -and -not $GameplayOracle) { throw 'NativePhysics requires the independent gameplay oracle.' }
@@ -254,6 +278,8 @@ try {
         if ($CanonicalParticles) { $arguments += '--probe-canonical-particles' }
         if ($ExportVideo) { $arguments += '--probe-export-video' }
         if ($CheckpointPrototype) { $arguments += '--checkpoint-prototype' }
+        if ($CheckpointWindows) { $arguments += ('--checkpoint-windows={0}' -f $CheckpointWindows) }
+        if ($CheckpointPrototype) { $arguments += ('--checkpoint-after={0}' -f $CheckpointAfterFrame) }
         if ($EndpointHoldSeconds -gt 0) { $arguments += ('--probe-hold-seconds={0}' -f $EndpointHoldSeconds) }
         if ($DisableLegacyCalibration) { $arguments += '--probe-disable-legacy-calibration' }
         if ($RandomCalls) { $arguments += @('--probe-random-calls', "--probe-call-first=$CallFirst", "--probe-call-end=$CallEnd") }

@@ -22,6 +22,7 @@ internal static partial class StudioScenarioHarness
     {
         string Arg(string name) => args.Single(a => a.StartsWith(name + "=", StringComparison.Ordinal)).Split('=', 2)[1];
         var end = long.Parse(Arg("--probe-end"));
+        var after = long.Parse(args.SingleOrDefault(a => a.StartsWith("--checkpoint-after=", StringComparison.Ordinal))?.Split('=', 2)[1] ?? "0");
         var source = Path.GetFullPath(Arg("--probe-movie"));
         var policies = new Dictionary<string, string>
         {
@@ -38,7 +39,9 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT", "1");
         // Three frames before the trigger, the trigger, and three at K. This
         // existing passive probe hashes data without enumerating the object graph.
-        var sampleEnd = long.Parse(Arg("--probe-first")) + 7;
+        var windowText = args.SingleOrDefault(value => value.StartsWith("--checkpoint-windows=", StringComparison.Ordinal))?.Split('=', 2)[1];
+        var sampleEnd = string.IsNullOrEmpty(windowText) ? long.Parse(Arg("--probe-first")) + 7
+            : long.Parse(windowText.Split(',').Last().Split(':')[1]);
         Require(sampleEnd <= end, "short state window lies inside the source run");
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE", "1");
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_LIGHT", null);
@@ -46,7 +49,11 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_ORACLE_WINDOWS", null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_FIRST", Arg("--probe-first"));
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_END", sampleEnd.ToString());
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_WINDOWS", windowText);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_RECORD_INPUTS", null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS", args.Contains("--probe-random-calls") ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_FIRST", args.Contains("--probe-random-calls") ? Arg("--probe-call-first") : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_END", args.Contains("--probe-random-calls") ? Arg("--probe-call-end") : null);
         var vm = (MainViewModel)app.MainWindow.DataContext;
         var boot = Field<StartupBootController>(app, "startupBoot");
         var movies = Field<FullRunMovieCoordinator>(app, "fullRunMovies");
@@ -58,7 +65,8 @@ internal static partial class StudioScenarioHarness
         var package = SequencePackage.Read(source);
         var movie = new MovieV2Codec().Parse(new StringReader(package.Movie), source).Document ?? throw new InvalidDataException("Invalid prototype Movie.");
         Require(package.InitialSaves != null && movie.Runs.All(run => !run.Authored)
-            && movie.Header.NativeProfileId == MovieProtocolV2.SelectedNativeProfileId && end < movie.Runs.Sum(run => run.RepeatCount),
+            && movie.Header.NativeProfileId == MovieProtocolV2.SelectedNativeProfileId && end <= movie.Runs.Sum(run => run.RepeatCount)
+            && after >= 0 && after < end,
             "prototype uses the unchanged strict Movie and its protected initial saves");
         movies.SequenceInitialSaves = package.InitialSaves;
         vm.MovieText = new MovieV2Codec().WriteCanonical(movie);
@@ -77,7 +85,8 @@ internal static partial class StudioScenarioHarness
         }
         async Task WaitPaused(string detail)
         {
-            await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException(detail + ": native fault=" + boot.FullRunFaultCode); return boot.IsWaiting; }, detail, 120);
+            await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException(detail + ": native fault=" + boot.FullRunFaultCode);
+                return boot.IsWaiting || movies.Gate?.IsFullRunFinished == true; }, detail, 120);
         }
         async Task Bootstrap()
         {
@@ -103,6 +112,12 @@ internal static partial class StudioScenarioHarness
         ProbeDirectory("source");
         await Field<Func<string, Task>>(vm, "launchGame")(@"D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight.exe");
         await Bootstrap();
+        if (after > 0)
+        {
+            await Seek(after); await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
+            await WaitPaused("source reaches requested checkpoint capture interval");
+            Require((await VideoRuntimeState(vm))["movieFrame"] == after.ToString(), "source exact capture selection frame");
+        }
         var sourceGame = Field<Process>(app, "startupGame");
         var scope = vm.SceneCheckpoints.ActivateBranch(Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"));
         var binding = new SceneCheckpointBinding(vm.SelectedSession!.Client.EnvironmentManifestSha256,
@@ -113,6 +128,8 @@ internal static partial class StudioScenarioHarness
         await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
         var packet = await capture.ReceiveAsync(lease, TimeSpan.FromMinutes(2), CancellationToken.None);
         Receipt("capture-header", packet.Header.ToFields());
+        Require(packet.Header.CaptureMovieFrame >= after && packet.Header.ResumeMovieFrame + 3 <= end,
+            "captured boundary belongs to the requested interval and has a three-frame suffix");
         await WaitPaused("source capture endpoint");
         Require((await VideoRuntimeState(vm))["movieFrame"] == end.ToString(), "source exact endpoint");
         var sourcePid = sourceGame.Id;

@@ -10,9 +10,13 @@ namespace HollowKnightTAS.Runtime.FullRun
     [Serializable]
     internal sealed class CheckpointManagedWorldData
     {
-        public int Version = 1;
+        public int Version = 4;
         public Dictionary<string, string> GameManager = null!, Hero = null!, HeroStates = null!;
         public Vector2[]? HeroPositionHistory;
+        public Vector3 HeroLocalPosition, HeroLocalScale;
+        public Quaternion HeroLocalRotation;
+        public CheckpointNailSlashState[] NailSlashes = null!;
+        public CheckpointHeroSpellVariables SpellVariables = null!;
         public CheckpointBossContext Boss = null!;
         // Explicit data coverage. Reference/native domains are not implied by
         // capturing their owner's scalar fields.
@@ -30,23 +34,34 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var manager = global::GameManager.instance ?? throw new InvalidOperationException("Checkpoint GameManager is absent.");
             var hero = HeroController.SilentInstance ?? throw new InvalidOperationException("Checkpoint Hero is absent.");
+            if (hero.transform.parent != null)
+                throw new InvalidOperationException("Checkpoint Hero must have left its scene parent at C.");
             return new CheckpointManagedWorldData
             {
                 GameManager = CheckpointScalarFields.Capture(manager, ManagerFields),
                 Hero = CheckpointScalarFields.Capture(hero, HeroFields),
                 HeroStates = CheckpointScalarFields.Capture(hero.cState, StateFields),
+                HeroLocalPosition = hero.transform.localPosition,
+                HeroLocalRotation = hero.transform.localRotation,
+                HeroLocalScale = hero.transform.localScale,
+                NailSlashes = CheckpointNailSlashState.Capture(hero),
+                SpellVariables = CheckpointHeroSpellVariables.Capture(hero),
                 Boss = CheckpointBossContext.Capture(LoadingSerialSceneProbe.CheckpointBossBindings),
                 HeroPositionHistory = PositionHistory.GetValue(hero) is Vector2[] history ? (Vector2[])history.Clone() : null
             };
         }
         internal Action PrepareApply(PlayerData playerData, SceneData sceneData)
         {
-            if (Version != 1 || RemainingDomains == null || !RemainingDomains.SequenceEqual(new[] { "persistent-object-bindings",
+            if (Version != 4 || RemainingDomains == null || !RemainingDomains.SequenceEqual(new[] { "persistent-object-bindings",
                 "fsm-actions-and-variables", "coroutine-scheduler", "physics-world", "mod-state", "animation-and-audio" })
                 || HeroPositionHistory?.Length > 1024)
                 throw new InvalidDataException("Unsupported managed world checkpoint coverage.");
             var manager = global::GameManager.instance ?? throw new InvalidOperationException("Restore GameManager is absent.");
             var hero = HeroController.SilentInstance ?? throw new InvalidOperationException("Restore Hero is absent.");
+            if (hero.transform.parent != null || new[] { HeroLocalPosition.x, HeroLocalPosition.y, HeroLocalPosition.z,
+                HeroLocalRotation.x, HeroLocalRotation.y, HeroLocalRotation.z, HeroLocalRotation.w,
+                HeroLocalScale.x, HeroLocalScale.y, HeroLocalScale.z }.Any(v => float.IsNaN(v) || float.IsInfinity(v)))
+                throw new InvalidDataException("Checkpoint Hero transform or its binding is invalid.");
             var currentPlayer = PlayerData.instance;
             if (currentPlayer == null || manager.sceneData == null || hero.cState == null
                 || !ReferenceEquals(manager.playerData, currentPlayer) || !ReferenceEquals(hero.playerData, currentPlayer))
@@ -54,6 +69,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             var applyManager = CheckpointScalarFields.PrepareApply(manager, ManagerFields, GameManager);
             var applyHero = CheckpointScalarFields.PrepareApply(hero, HeroFields, Hero);
             var applyStates = CheckpointScalarFields.PrepareApply(hero.cState, StateFields, HeroStates);
+            var applySlashes = CheckpointNailSlashState.PrepareApply(hero, NailSlashes);
+            var applySpellVariables = (SpellVariables ?? throw new InvalidDataException("Checkpoint Spell Control values are absent.")).PrepareApply(hero);
             var history = HeroPositionHistory == null ? null : (Vector2[])HeroPositionHistory.Clone();
             var playerWrites = CheckpointScalarFields.Declared(typeof(PlayerData)).Select(f => Tuple.Create(f, f.GetValue(playerData))).ToArray();
             var sceneWrites = CheckpointScalarFields.Declared(typeof(SceneData)).Select(f => Tuple.Create(f, f.GetValue(sceneData))).ToArray();
@@ -64,7 +81,72 @@ namespace HollowKnightTAS.Runtime.FullRun
                 foreach (var write in playerWrites) write.Item1.SetValue(currentPlayer, write.Item2);
                 foreach (var write in sceneWrites) write.Item1.SetValue(manager.sceneData, write.Item2);
                 applyManager(); applyHero(); applyStates(); PositionHistory.SetValue(hero, history);
+                // Facing flags and the persistent native Transform are separate
+                // state. FlipSprite multiplies the current scale, so restoring
+                // only cState leaves later attack colliders facing differently.
+                hero.transform.localPosition = HeroLocalPosition;
+                hero.transform.localRotation = HeroLocalRotation;
+                hero.transform.localScale = HeroLocalScale;
+                applySlashes();
+                applySpellVariables();
             };
+        }
+    }
+
+    [Serializable]
+    internal sealed class CheckpointNailSlashState
+    {
+        public string Binding = "", ObjectName = "";
+        public Dictionary<string, string> Fields = null!;
+        public Vector3 LocalPosition, LocalScale;
+        public Quaternion LocalRotation;
+        private static readonly FieldInfo[] ScalarFields = CheckpointScalarFields.Declared(typeof(NailSlash)).Where(f =>
+            f.FieldType.IsPrimitive || f.FieldType.IsEnum || f.FieldType == typeof(string) || f.FieldType == typeof(Vector3)).ToArray();
+        private static readonly FieldInfo Slashing = typeof(NailSlash).GetField("slashing", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        private static readonly string[] Bindings = { "normalSlash", "alternateSlash", "upSlash", "downSlash", "wallSlash" };
+        private static NailSlash Resolve(HeroController hero, string binding) =>
+            (NailSlash)typeof(HeroController).GetField(binding)!.GetValue(hero);
+        internal static CheckpointNailSlashState[] Capture(HeroController hero) => Bindings.Select(binding =>
+        {
+            var slash = Resolve(hero, binding);
+            if (slash == null || slash.transform.root != hero.transform || (bool)Slashing.GetValue(slash))
+                throw new InvalidOperationException("Checkpoint requires an initialized, quiescent Hero nail slash: " + binding);
+            return new CheckpointNailSlashState { Binding = binding, ObjectName = slash.name,
+                Fields = CheckpointScalarFields.Capture(slash, ScalarFields), LocalPosition = slash.transform.localPosition,
+                LocalRotation = slash.transform.localRotation, LocalScale = slash.transform.localScale };
+        }).ToArray();
+        internal static Action PrepareApply(HeroController hero, CheckpointNailSlashState[] states)
+        {
+            if (states == null || !states.Select(s => s.Binding).SequenceEqual(Bindings))
+                throw new InvalidDataException("Checkpoint Hero nail slash bindings differ.");
+            var writes = states.Select(state =>
+            {
+                var slash = Resolve(hero, state.Binding);
+                if (slash == null || slash.transform.root != hero.transform || slash.name != state.ObjectName
+                    || (bool)Slashing.GetValue(slash) || state.Fields[typeof(NailSlash).FullName + "/slashing"] != "System.Boolean:False"
+                    || new[] { state.LocalPosition.x, state.LocalPosition.y, state.LocalPosition.z,
+                        state.LocalRotation.x, state.LocalRotation.y, state.LocalRotation.z, state.LocalRotation.w,
+                        state.LocalScale.x, state.LocalScale.y, state.LocalScale.z }.Any(v => float.IsNaN(v) || float.IsInfinity(v)))
+                    throw new InvalidDataException("Checkpoint Hero nail slash is active or its native binding differs.");
+                var apply = CheckpointScalarFields.PrepareApply(slash, ScalarFields, state.Fields);
+                var current = CheckpointScalarFields.Capture(slash, ScalarFields);
+                var differences = state.Fields.Where(pair => current[pair.Key] != pair.Value)
+                    .Select(pair => pair.Key + "=" + pair.Value).ToArray();
+                Modding.Logger.Log("[HKTAS] Checkpoint nail slash differing fields " + state.Binding + ": " + string.Join(",", differences));
+                return (Action)(() => { apply(); slash.transform.localPosition = state.LocalPosition;
+                    slash.transform.localRotation = state.LocalRotation; slash.transform.localScale = state.LocalScale; });
+            }).ToArray();
+            return () => { foreach (var write in writes) write(); };
+        }
+        internal static string ScalarDigest(HeroController hero)
+        {
+            var values = Bindings.Select(binding =>
+            {
+                var slash = Resolve(hero, binding);
+                return slash == null ? binding + ":missing" : binding + ":" + string.Join(";",
+                    CheckpointScalarFields.Capture(slash, ScalarFields).Select(pair => pair.Key + "=" + pair.Value));
+            });
+            return HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(System.Text.Encoding.UTF8.GetBytes(string.Join("|", values)));
         }
     }
 }

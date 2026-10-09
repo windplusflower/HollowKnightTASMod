@@ -48,7 +48,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             new[] { typeof(PlayerData), typeof(SceneData), typeof(CheckpointTransitionData), typeof(GameManager.SceneLoadInfo),
                 typeof(CheckpointContinuationData), typeof(CheckpointInputState), typeof(CheckpointActionSetState),
                 typeof(CheckpointMouseState), typeof(CheckpointMouseModule), typeof(CheckpointMouseValue),
-                typeof(CheckpointManagedWorldData), typeof(CheckpointSceneLoadState), typeof(CheckpointBossContext) }, new[] { typeof(UnityEngine.Vector3), typeof(UnityEngine.Vector2) });
+                typeof(CheckpointManagedWorldData), typeof(CheckpointSceneLoadState), typeof(CheckpointBossContext) },
+            new[] { typeof(UnityEngine.Vector3), typeof(UnityEngine.Vector2), typeof(UnityEngine.Quaternion) });
         private static MethodInfo CheckpointClockMethod(string name) => AppDomain.CurrentDomain.GetAssemblies()
             .Single(assembly => assembly.GetName().Name == "HollowKnightTAS.ClockPayload")
             .GetType("HollowKnightTAS.ClockPayload.ClockController", true)!.GetMethod(name, BindingFlags.Static | BindingFlags.Public)

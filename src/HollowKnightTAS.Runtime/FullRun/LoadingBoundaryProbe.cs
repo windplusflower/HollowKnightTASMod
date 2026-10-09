@@ -22,6 +22,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly string path;
         private readonly long first;
         private readonly long end;
+        private readonly Tuple<long, long>[] windows;
         private readonly Func<long> movieFrame;
         private readonly Func<long> nativeFrame;
         private readonly Func<string> rngHash;
@@ -44,6 +45,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             path = Path.Combine(directory, "loading-boundary-probe.jsonl");
             this.first = first;
             this.end = end;
+            windows = ReadWindows(first, end);
             this.movieFrame = movieFrame;
             this.nativeFrame = nativeFrame;
             this.rngHash = rngHash;
@@ -52,6 +54,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             randomFirst = long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_FIRST"), out var rf) ? Math.Max(first, rf) : first;
             randomEnd = long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_END"), out var re) ? Math.Min(end, re) : end;
             Write(new { kind = "header", schema = "hktas-loading-probe-v1", first, end,
+                windows = windows.Select(window => new { first = window.Item1, end = window.Item2 }).ToArray(),
                 observerModuleId = typeof(LoadingBoundaryProbe).Module.ModuleVersionId.ToString("D"),
                 rigidbodyObservation = LoadingRigidbodyValueBits.Policy,
                 nativeProfile = HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId,
@@ -60,7 +63,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     canonicalStartupClock = Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_STARTUP_CLOCK") == "1",
                     synchronousFetch = Environment.GetEnvironmentVariable("HKTAS_LOADING_SYNCHRONOUS_FETCH") == "1",
                     modWallClock = Environment.GetEnvironmentVariable("HKTAS_LOADING_MOD_WALL_CLOCK") == "1" },
-                coverage = light ? "clock-hero-sequence-only" : "clock-hero-playerdata-scenedata-sequence-only",
+                coverage = light ? "clock-hero-boss-sequence-only" : "clock-hero-boss-playerdata-scenedata-sequence-only",
                 randomCalls = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS") == "1" ? "Assembly-CSharp-nongeneric" : "off",
                 randomFirst, randomEnd,
                 completeStateCoverage = false });
@@ -85,7 +88,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         public void Sample(string phase, string boundary)
         {
-            if (sealedTrace || movieFrame() < first || movieFrame() >= end) return;
+            if (sealedTrace || !InWindow(movieFrame())) return;
             try
             {
                 var state = new SortedDictionary<string, string>(StringComparer.Ordinal);
@@ -115,11 +118,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                         : rigidbodies.CapturePrimary(body, position);
                     Add("heroX", position.x);
                     Add("heroY", position.y);
+                    var scale = hero.transform.localScale;
+                    Add("heroScaleX", scale.x);
+                    Add("heroScaleY", scale.y);
+                    Add("heroScaleZ", scale.z);
                     Add("heroVx", values.Vx);
                     Add("heroVy", values.Vy);
                     Add("heroBodyX", values.X);
                     Add("heroBodyY", values.Y);
                     Add("heroState", hero.hero_state);
+                    Add("nailSlashes", CheckpointNailSlashState.ScalarDigest(hero));
                     if (!light) Add("heroFlags", HashFields(hero.cState));
                 }
                 // Field-only recursive hashing: avoids getters and does not publish save data.
@@ -127,10 +135,32 @@ namespace HollowKnightTAS.Runtime.FullRun
                 {
                     Add("playerData", manager == null ? "missing" : HashFields(manager.playerData));
                     Add("sceneData", manager == null ? "missing" : HashFields(manager.sceneData));
+                    if (manager != null && Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_FIELDS") == "playerData")
+                        foreach (var field in CheckpointScalarFields.Declared(typeof(PlayerData)))
+                        {
+                            var value = field.GetValue(manager.playerData);
+                            Add("pd." + field.Name, field.FieldType.IsPrimitive || field.FieldType.IsEnum
+                                ? value : HashFields(value));
+                        }
                 }
                 Add("bossSequenceIndex", BossSequenceController.BossIndex);
                 Add("bossSequenceActive", BossSequenceController.IsInSequence);
                 Add("bossSequenceTimer", BossSequenceController.Timer);
+                var bossController = BossSceneController.Instance;
+                var boss = bossController != null && bossController.bosses != null && bossController.bosses.Length > 0
+                    ? bossController.bosses[0] : null;
+                Add("bossPresent", boss != null);
+                if (boss != null)
+                {
+                    Add("bossHealth", boss.hp); Add("bossDead", boss.isDead);
+                    var body = boss.GetComponent<Rigidbody2D>();
+                    var position = boss.transform.position;
+                    Add("bossX", position.x); Add("bossY", position.y);
+                    var values = body == null ? new LoadingRigidbodyValueBits.Primary(float.NaN, float.NaN, float.NaN, float.NaN)
+                        : rigidbodies.CapturePrimary(body, position);
+                    Add("bossVx", values.Vx); Add("bossVy", values.Vy);
+                }
+                if (!light) Add("heroHealth", manager == null ? -1 : manager.playerData.health);
                 Write(new { kind = "sample", sequence = rows, phase, boundary,
                     movieFrame = movieFrame(), nativeFrame = nativeFrame(), transition,
                     scene = USceneManager.GetActiveScene().name, state });
@@ -144,9 +174,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!sealedTrace && movieFrame() == end) Seal(true, "window-complete");
         }
 
+        public void Failed(string detail)
+        {
+            // The native fault gate stops engine callbacks. Preserve the bounded
+            // evidence already collected before entering that terminal state.
+            if (!sealedTrace) Seal(false, "runtime-fault: " + detail);
+        }
+
         private void SampleRandom(string phase, string site, object? self)
         {
-            if (sealedTrace || movieFrame() < randomFirst || movieFrame() >= randomEnd) return;
+            if (sealedTrace || !InWindow(movieFrame()) || movieFrame() < randomFirst || movieFrame() >= randomEnd) return;
             try
             {
                 Write(new { kind = phase.StartsWith("rng-", StringComparison.Ordinal) ? "rng-call" : "timer-call", sequence = rows, phase, boundary = site,
@@ -192,6 +229,25 @@ namespace HollowKnightTAS.Runtime.FullRun
         private void SceneLoaded(Scene scene, LoadSceneMode mode) => Sample("event", "scene-loaded:" + scene.name + ":" + mode);
         private void SceneUnloaded(Scene scene) => Sample("event", "scene-unloaded:" + scene.name);
         private void ActiveSceneChanged(Scene previous, Scene current) => Sample("event", "active-scene:" + previous.name + "->" + current.name);
+
+        private bool InWindow(long frame) => windows.Any(window => frame >= window.Item1 && frame < window.Item2);
+        private static Tuple<long, long>[] ReadWindows(long first, long end)
+        {
+            var text = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_WINDOWS");
+            if (string.IsNullOrEmpty(text)) return new[] { Tuple.Create(first, end) };
+            var result = new List<Tuple<long, long>>(); var previousEnd = first; long sampledFrames = 0;
+            foreach (var interval in text!.Split(','))
+            {
+                var bounds = interval.Split(':');
+                if (bounds.Length != 2 || !long.TryParse(bounds[0], out var start) || !long.TryParse(bounds[1], out var stop)
+                    || start < previousEnd || stop > end || stop <= start || stop - start > 16)
+                    throw new InvalidOperationException("Loading probe windows must be ordered short intervals inside [first,end).");
+                result.Add(Tuple.Create(start, stop)); previousEnd = stop; sampledFrames += stop - start;
+            }
+            if (result.Count > 16 || sampledFrames > 128 || result[0].Item1 != first || previousEnd != end)
+                throw new InvalidOperationException("Loading probe short-window budget or endpoints differ.");
+            return result.ToArray();
+        }
 
         private void Write(object row)
         {

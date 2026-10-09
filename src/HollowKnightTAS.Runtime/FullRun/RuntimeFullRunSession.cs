@@ -932,6 +932,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Active exports only exist in Replay: their failures enter here from
             // Unity's input/native callbacks, never the worker's Recording freeze.
             FailVideoExport(detail);
+            loadingBoundaryProbe?.Failed(detail);
             if (bossTraceEnabled && bossTraceRows > 0)
             {
                 try
