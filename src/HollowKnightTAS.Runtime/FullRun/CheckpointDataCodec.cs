@@ -211,14 +211,19 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private sealed class FloatBitsConverter : JsonConverter
         {
-            public override bool CanConvert(Type type) => type == typeof(float) || type == typeof(double);
+            public override bool CanConvert(Type type)
+            { type = Nullable.GetUnderlyingType(type) ?? type; return type == typeof(float) || type == typeof(double); }
             public override void WriteJson(JsonWriter writer, object? value, JsonSerializer serializer)
             {
+                if (value == null) { writer.WriteNull(); return; }
                 writer.WriteValue(value is float f ? "f32:" + BitConverter.ToUInt32(BitConverter.GetBytes(f), 0).ToString("x8", CultureInfo.InvariantCulture)
                     : "f64:" + BitConverter.ToUInt64(BitConverter.GetBytes((double)value!), 0).ToString("x16", CultureInfo.InvariantCulture));
             }
             public override object ReadJson(JsonReader reader, Type type, object? existingValue, JsonSerializer serializer)
             {
+                var scalar = Nullable.GetUnderlyingType(type);
+                if (scalar != null && reader.TokenType == JsonToken.Null) return null!;
+                type = scalar ?? type;
                 if (reader.TokenType != JsonToken.String || !(reader.Value is string value)) throw new InvalidDataException("Floating point checkpoint data must use raw bits.");
                 if (type == typeof(float) && value.Length == 12 && value.StartsWith("f32:", StringComparison.Ordinal)
                     && uint.TryParse(value.Substring(4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var f))

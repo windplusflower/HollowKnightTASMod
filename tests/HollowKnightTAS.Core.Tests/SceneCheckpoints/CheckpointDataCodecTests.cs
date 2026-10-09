@@ -37,6 +37,33 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
             [OnDeserialized] internal void OnDeserialized(StreamingContext context) { Effects++; }
         }
         private static CheckpointDataCodec Codec() => new CheckpointDataCodec(new[] { typeof(Data) });
+        [Serializable]
+        public sealed class OptionalWait
+        {
+            public float? Seconds;
+            public double? Wake;
+            public Dictionary<string, string>[] Fields = Array.Empty<Dictionary<string, string>>();
+        }
+        [TestMethod]
+        public void OptionalWaitPreservesNullAndRawFloatBitsWithDictionaryArrays()
+        {
+            var codec = new CheckpointDataCodec(new[] { typeof(OptionalWait) });
+            foreach (var bits in new uint?[] { null, 0, 0x80000000U, 0x7fc01234U, 0x3e2aaaabU })
+            {
+                var data = new OptionalWait { Seconds = bits.HasValue ? BitConverter.ToSingle(BitConverter.GetBytes(bits.Value), 0) : (float?)null,
+                    Wake = bits.HasValue ? BitConverter.ToDouble(BitConverter.GetBytes(0x7ff8000000000123UL), 0) : (double?)null,
+                    Fields = new[] { new Dictionary<string, string> { ["state"] = "System.Int32:2" }, new Dictionary<string, string>() } };
+                var encoded = codec.Encode(data); var copied = codec.Decode<OptionalWait>(encoded);
+                Assert.AreEqual(bits.HasValue, copied.Seconds.HasValue);
+                if (bits.HasValue) Assert.AreEqual(bits.Value, BitConverter.ToUInt32(BitConverter.GetBytes(copied.Seconds!.Value), 0));
+                Assert.AreEqual(bits.HasValue, copied.Wake.HasValue);
+                if (bits.HasValue) Assert.AreEqual(0x7ff8000000000123UL, BitConverter.ToUInt64(BitConverter.GetBytes(copied.Wake!.Value), 0));
+                Assert.AreEqual("System.Int32:2", copied.Fields[0]["state"]); Assert.AreEqual(0, copied.Fields[1].Count);
+                CollectionAssert.AreEqual(encoded, codec.Encode(copied));
+            }
+            var invalid = JObject.Parse(Encoding.UTF8.GetString(codec.Encode(new OptionalWait()))); invalid["Seconds"] = 0;
+            Assert.ThrowsExactly<InvalidDataException>(() => codec.Decode<OptionalWait>(Encoding.UTF8.GetBytes(invalid.ToString(Formatting.None))));
+        }
         [TestMethod]
         public void RawFloatBitsPrivateFieldsNullAliasesAndDataRoundTripWithoutLifecycleEffects()
         {
