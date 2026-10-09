@@ -33,6 +33,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public Dictionary<string, string> Fields = null!;
             public string[] VariableFields = null!;
             public Dictionary<string, string>[] VariableValues = null!;
+            public string? ShakeTargetAlias;
         }
         private static FieldInfo Field(Type type, string name) => type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             ?? throw new InvalidDataException("Persistent FSM field binding is absent: " + type.FullName + "/" + name);
@@ -46,6 +47,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return result.ToArray();
         }
         private static readonly FieldInfo RawFsm = Field(typeof(PlayMakerFSM), "fsm");
+        private static readonly FieldInfo ShakeTarget = Field(typeof(HutongGames.PlayMaker.Actions.ShakePositionV2), "target");
         private static readonly FieldInfo StateArray = Field(typeof(Fsm), "states");
         private static readonly FieldInfo ActionArray = Field(typeof(FsmState), "actions");
         private static readonly FieldInfo[] FsmFields = Scalars(typeof(Fsm)), StateFields = Scalars(typeof(FsmState));
@@ -65,6 +67,32 @@ namespace HollowKnightTAS.Runtime.FullRun
             return fields.ToArray();
         }
         private static string Identity(FieldInfo field) => field.DeclaringType!.FullName + "/" + field.Name;
+        private static string? CaptureShakeTarget(FsmStateAction action, PlayMakerFSM component)
+        {
+            if (!(action is HutongGames.PlayMaker.Actions.ShakePositionV2)) return null;
+            if (!ReferenceEquals(component, GameCameras.instance.cameraShakeFSM))
+                throw new InvalidDataException("Shake action needs an explicitly bound persistent camera FSM.");
+            var target = (Transform?)ShakeTarget.GetValue(action);
+            if (ReferenceEquals(target, null)) return "none";
+            if (!ReferenceEquals(target, component.transform))
+                throw new InvalidDataException("Camera shake target is not its existing owner transform.");
+            return "owner-transform";
+        }
+        private static Action PrepareShakeTarget(FsmStateAction action, PlayMakerFSM component, string? alias)
+        {
+            if (!(action is HutongGames.PlayMaker.Actions.ShakePositionV2))
+            {
+                if (alias != null) throw new InvalidDataException("A non-shake action contains a shake target alias.");
+                return () => { };
+            }
+            if (!ReferenceEquals(component, GameCameras.instance.cameraShakeFSM)
+                || (alias != "none" && alias != "owner-transform"))
+                throw new InvalidDataException("Camera shake target binding differs.");
+            var target = alias == "owner-transform" ? component.transform : null;
+            // Bind without OnEnter, which would reset the timer/starting pose
+            // and consume three extra random numbers.
+            return () => ShakeTarget.SetValue(action, target);
+        }
         private static Dictionary<string, string> VariableValue(object? variable)
         {
             if (variable == null) return new Dictionary<string, string> { ["null"] = "true" };
@@ -106,7 +134,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                         Actions = actions?.Select(action => new ActionData { Type = action.GetType().FullName,
                             Fields = CheckpointScalarFields.Capture(action, Scalars(action.GetType())),
                             VariableFields = NamedValues(action.GetType()).Select(Identity).ToArray(),
-                            VariableValues = NamedValues(action.GetType()).Select(field => VariableValue(field.GetValue(action))).ToArray() }).ToArray() };
+                            VariableValues = NamedValues(action.GetType()).Select(field => VariableValue(field.GetValue(action))).ToArray(),
+                            ShakeTargetAlias = CaptureShakeTarget(action, component) }).ToArray() };
                 }).ToArray() };
             Modding.Logger.Log("[HKTAS] Captured " + result.FsmName + " C state=" + result.Active + " entered=" + result.Fields[typeof(Fsm).FullName + "/activeStateEntered"]
                 + " activeActions=" + string.Join(",", result.States.Where(s => s.Name == result.Active).SelectMany(s => s.Actions?.Select(a => a.Type) ?? Array.Empty<string>())));
@@ -141,6 +170,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 for (var actionIndex = 0; actionIndex < actions.Length; actionIndex++)
                 {
                     var action = actions[actionIndex]; var saved = data.Actions[actionIndex];
+                    writes.Add(PrepareShakeTarget(action, component, saved.ShakeTargetAlias));
                     var variables = NamedValues(action.GetType());
                     if (!variables.Select(Identity).SequenceEqual(saved.VariableFields) || variables.Length != saved.VariableValues.Length)
                         throw new InvalidDataException("Persistent FSM action value layout differs.");

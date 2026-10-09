@@ -10,7 +10,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     [Serializable]
     internal sealed class CheckpointManagedWorldData
     {
-        public int Version = 11;
+        public int Version = 12;
         public Dictionary<string, string> GameManager = null!, Hero = null!, HeroStates = null!;
         public Vector2[]? HeroPositionHistory;
         public Vector3 HeroLocalPosition, HeroLocalScale;
@@ -65,7 +65,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal Action PrepareApply(PlayerData playerData, SceneData sceneData)
         {
-            if (Version != 11 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
+            if (Version != 12 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
                 || RemainingDomains == null || !RemainingDomains.SequenceEqual(new[] { "persistent-object-bindings",
                 "fsm-actions-and-variables", "coroutine-scheduler", "physics-world", "mod-state", "animation-and-audio" })
                 || HeroPositionHistory?.Length > 1024)
