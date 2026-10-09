@@ -339,6 +339,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 movie, activeScene = USceneManager.GetActiveScene().name,
                 ambient = new[] { color.r, color.g, color.b }, mode = RenderSettings.ambientMode.ToString(),
                 pixelLights = QualitySettings.pixelLightCount,
+                gates = TransitionPoint.TransitionPoints.Where(c => c != null && c.gameObject.scene.IsValid())
+                    .Select(c => new { id = Identity(c), scene = c.gameObject.scene.name,
+                        c.gameObject.activeInHierarchy, c.isADoor, c.targetScene, c.entryPoint,
+                        c.alwaysEnterLeft, c.alwaysEnterRight, c.hardLandOnExit,
+                        visualization = c.sceneLoadVisualization.ToString(),
+                        position = new[] { c.transform.position.x, c.transform.position.y },
+                        entryOffset = new[] { c.entryOffset.x, c.entryOffset.y }
+                    }).ToArray(),
                 sprites = Resources.FindObjectsOfTypeAll<SpriteRenderer>().Where(c => c.gameObject.scene.IsValid()
                     && c.gameObject.activeInHierarchy && c.enabled
                     && (c.bounds.size.y > 20 || c.gameObject.name == "Knight" || Identity(c).Contains("Marmu")))
