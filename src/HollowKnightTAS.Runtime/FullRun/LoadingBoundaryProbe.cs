@@ -38,6 +38,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly LoadingRandomCallTrace? randomTrace;
         private readonly long randomFirst;
         private readonly long randomEnd;
+        private readonly bool continuousRandomCalls = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_CONTINUOUS") == "1";
         private readonly LoadingRigidbodyObservation rigidbodies;
         private readonly HashSet<long> tweenCallerFrames = new HashSet<long>();
         private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
@@ -56,6 +57,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             LoadingEngineClockProbe.Capture(directory);
             randomFirst = long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_FIRST"), out var rf) ? Math.Max(first, rf) : first;
             randomEnd = long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_END"), out var re) ? Math.Min(end, re) : end;
+            if (continuousRandomCalls && (randomEnd <= randomFirst || randomEnd - randomFirst > 256))
+                throw new InvalidOperationException("Continuous random-call diagnostics require an explicit interval of at most 256 Movie frames.");
             WriteHeader();
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS") == "1")
                 randomTrace = new LoadingRandomCallTrace(SampleRandom);
@@ -79,7 +82,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     modWallClock = Environment.GetEnvironmentVariable("HKTAS_LOADING_MOD_WALL_CLOCK") == "1" },
                 coverage = light ? "clock-hero-boss-sequence-only" : "clock-hero-boss-playerdata-scenedata-sequence-only",
                 randomCalls = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS") == "1" ? "Assembly-CSharp-nongeneric" : "off",
-                randomFirst, randomEnd,
+                randomFirst, randomEnd, continuousRandomCalls,
                 checkpointWindow,
                 completeStateCoverage = false });
             headerBytes = checked((int)buffer.Length);
@@ -194,6 +197,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                             Add("heroFlag." + field.Name, field.GetValue(hero.cState));
                         var fsms = hero.GetComponents<PlayMakerFSM>().OrderBy(fsm => fsm.FsmName, StringComparer.Ordinal).ToArray();
                         for (var i = 0; i < fsms.Length; i++) Add("heroFsm." + i + "." + fsms[i].FsmName, fsms[i].ActiveStateName);
+                        foreach (var value in CheckpointHeroLightState.Observe(hero)) Add(value.Key, value.Value);
                         var buzzer = GameObject.Find("Angry Buzzer");
                         if (buzzer != null)
                         {
@@ -287,7 +291,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private void SampleRandom(string phase, string site, object? self)
         {
-            if (sealedTrace || !InWindow(movieFrame()) || movieFrame() < randomFirst || movieFrame() >= randomEnd) return;
+            if (sealedTrace || !continuousRandomCalls && !InWindow(movieFrame()) || movieFrame() < randomFirst || movieFrame() >= randomEnd) return;
             try
             {
                 if (phase == "rng-before" && site.StartsWith("System.String iTween::GenerateID()", StringComparison.Ordinal)
