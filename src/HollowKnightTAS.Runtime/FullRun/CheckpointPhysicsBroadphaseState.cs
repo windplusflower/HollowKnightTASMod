@@ -76,7 +76,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal byte[] Header = null!;
             internal Dictionary<string, IntPtr> Proxies = new Dictionary<string, IntPtr>();
         }
-        private static Live Bind()
+        private static Live Bind(GameObject[]? restoredSpatters = null, GameObject[]? restoredGeos = null, GameObject[]? restoredProjectiles = null)
         {
             LoadingEngineClockProbe.RequirePinnedEngine();
             var hero = HeroController.SilentInstance ?? throw new InvalidOperationException("Broadphase Hero is absent.");
@@ -91,8 +91,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (BitConverter.ToUInt32(cached, 20) != 0 || BitConverter.ToUInt64(cached, 56) != 0)
                 throw new InvalidOperationException("Broadphase callback cache is not empty at C.");
             var result = new Live { Scene = scene, World = world, State = state, Tree = IntPtr.Add(state, 8), Cache = cache, Header = header };
-            var spatters = CheckpointSpatterState.LiveActors(); var geos = CheckpointGeoState.LiveActors();
-            var projectiles = CheckpointProjectileState.LiveActors();
+            // Capture assigns ordinals from the source pool. Restore rebinds
+            // those ordinals to its explicit prepared actor array; a fresh
+            // Dictionary can enumerate different free slots after recycling.
+            var spatters = restoredSpatters ?? CheckpointSpatterState.LiveActors();
+            var geos = restoredGeos ?? CheckpointGeoState.LiveActors();
+            var projectiles = restoredProjectiles ?? CheckpointProjectileState.LiveActors();
             foreach (var collider in Resources.FindObjectsOfTypeAll<Collider2D>())
             {
                 if (collider == null || !collider.gameObject.scene.IsValid() || !collider.gameObject.scene.isLoaded) continue;
@@ -132,9 +136,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (count == 0) return Array.Empty<int>();
             var b = Read(Pointer(header, offset), count * stride); return Enumerable.Range(0, b.Length / 4).Select(i => Int(b, i * 4)).ToArray();
         }
-        internal static CheckpointPhysicsBroadphaseState Capture()
+        internal static CheckpointPhysicsBroadphaseState Capture(GameObject[]? restoredSpatters = null, GameObject[]? restoredGeos = null, GameObject[]? restoredProjectiles = null)
         {
-            var live = Bind(); var b = live.Header; var capacity = Bound(Int(b, 28), MaximumNodes, "node capacity");
+            var live = Bind(restoredSpatters, restoredGeos, restoredProjectiles); var b = live.Header; var capacity = Bound(Int(b, 28), MaximumNodes, "node capacity");
             var count = Bound(Int(b, 24), capacity, "node count"); var bytes = Read(Pointer(b, 16), capacity * 40);
             var aliases = live.Proxies.ToDictionary(p => p.Value, p => p.Key);
             var nodes = new Node[capacity];
@@ -196,14 +200,18 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (active.Count != Count || proxies.Count != ProxyCount || active.Overlaps(free) || active.Count + free.Count != Nodes.Length
                 || Pairs.Concat(Moves).Any(i => i < -1 || i >= Nodes.Length)) throw new InvalidDataException("Broadphase node coverage differs.");
         }
-        internal Action PrepareApply()
+        internal Action PrepareApply(GameObject[] spatters, GameObject[] geos, GameObject[] projectiles)
         {
             Validate();
+            if (spatters == null || geos == null || projectiles == null || spatters.Concat(geos).Concat(projectiles).Any(go => go == null)
+                || spatters.Concat(geos).Concat(projectiles).Distinct().Count() != spatters.Length + geos.Length + projectiles.Length)
+                throw new InvalidDataException("Broadphase prepared actor aliases differ.");
             return () =>
             {
-                var live = Bind(); var aliases = Nodes.Where(n => n.Proxy != null).Select(n => n.Proxy!).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+                var live = Bind(spatters, geos, projectiles); var aliases = Nodes.Where(n => n.Proxy != null).Select(n => n.Proxy!).OrderBy(x => x, StringComparer.Ordinal).ToArray();
                 if (!aliases.SequenceEqual(live.Proxies.Keys.OrderBy(x => x, StringComparer.Ordinal)))
-                    throw new InvalidOperationException("Broadphase target fixture proxy identities differ.");
+                    throw new InvalidOperationException("Broadphase target fixture proxy identities differ: missing=" + string.Join(",", aliases.Except(live.Proxies.Keys))
+                        + " extra=" + string.Join(",", live.Proxies.Keys.Except(aliases)));
                 if (Pairs.Length / 2 > BitConverter.ToInt64(live.Header, 80) || Moves.Length > BitConverter.ToInt64(live.Header, 112))
                     throw new InvalidOperationException("Broadphase target buffer capacity differs.");
                 var engine = LoadingEngineClockProbe.RequirePinnedEngine(); var allocateAddress = IntPtr.Add(engine.BaseAddress, 0xb9d5a0);
@@ -250,7 +258,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Write(IntPtr.Add(live.Tree, 40), BitConverter.GetBytes(ProxyCount)); Write(IntPtr.Add(live.Tree, 112), BitConverter.GetBytes(QueryProxy));
                 Write(live.State, BitConverter.GetBytes(WorldFlags)); Write(IntPtr.Add(live.State, 344), Step);
                 Write(IntPtr.Add(live.Cache, 80), BitConverter.GetBytes(SimulationId));
-                var actual = Capture();
+                var actual = Capture(spatters, geos, projectiles);
                 if (Newtonsoft.Json.JsonConvert.SerializeObject(actual) != Newtonsoft.Json.JsonConvert.SerializeObject(this))
                     throw new InvalidOperationException("Restored broadphase values did not match the captured C.");
                 Modding.Logger.Log("[HKTAS] Restored broadphase values match captured C; fixture addresses rebound locally.");

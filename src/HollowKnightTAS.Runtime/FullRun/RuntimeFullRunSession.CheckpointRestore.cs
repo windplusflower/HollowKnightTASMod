@@ -178,6 +178,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (boundary.Item3 != pending.Transition.SourceScene
                         || !CheckpointCodec.Encode(boundary.Item2).SequenceEqual(CheckpointCodec.Encode(pending.Transition.LoadInfo)))
                         throw new InvalidDataException("Reconstructed transition differs from the checkpoint.");
+                    using var validation = new LoadingEngineClockProbe.CheckpointValidation();
                     var applyWorld = pending.Data.ManagedWorld.PrepareApply(pending.Player, pending.Scene);
                     var applyBoss = pending.Data.ManagedWorld.Boss.PrepareApply(pending.BossTargets
                         ?? throw new InvalidOperationException("Boss setup objects were not bound before source unloading."), pending.Player);
@@ -185,7 +186,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var applySpatters = pending.Data.ManagedWorld.Spatters.PrepareApply(pending.SpatterActors!);
                     var applyGeo = pending.Data.ManagedWorld.Geo.PrepareApply(pending.GeoActors!);
                     var applyProjectiles = pending.Data.ManagedWorld.Projectiles.PrepareApply(pending.ProjectileActors!);
-                    var applyBroadphase = pending.Data.ManagedWorld.Broadphase.PrepareApply();
+                    var applyBroadphase = pending.Data.ManagedWorld.Broadphase.PrepareApply(
+                        pending.SpatterActors!.Actors.Select(a => a.gameObject).ToArray(), pending.GeoActors!.Actors.Select(a => a.gameObject).ToArray(),
+                        pending.ProjectileActors!.Actors.ToArray());
                     var resumeInvulnerability = pending.Data.ManagedWorld.Invulnerability.PrepareResume(HeroController.SilentInstance);
                     var resumeProjectiles = pending.Data.ManagedWorld.Projectiles.PrepareResume(pending.ProjectileActors!);
                     var heroScale = HeroController.SilentInstance.transform.localScale;
@@ -276,6 +279,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (!job.GeoActors.Ready) return true;
                     if (job.ProjectileActors == null) job.ProjectileActors = job.Data.ManagedWorld.Projectiles.PrepareActors(job.ProjectileAnimatorStarts);
                     if (!job.ProjectileActors.Ready) return true;
+                    if (!job.HeroLightPrepared) { job.Data.ManagedWorld.HeroLight.PrepareObject(hero); job.HeroLightPrepared = true; }
                     job.BossTargets = job.Data.ManagedWorld.Boss.BindBeforeUnload(); job.Phase = "AwaitingTargetC";
                     manager.BeginSceneTransition(job.Transition.LoadInfo);
                 }
@@ -328,6 +332,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal CheckpointProjectileState.Preparation? ProjectileActors;
             internal readonly HashSet<tk2dSpriteAnimator> ProjectileAnimatorStarts = new HashSet<tk2dSpriteAnimator>();
             internal bool InitialFadeFinished;
+            internal bool HeroLightPrepared;
             internal long FirstConsumed = -1, Consumed;
             internal CheckpointBossContext.Targets? BossTargets;
         }

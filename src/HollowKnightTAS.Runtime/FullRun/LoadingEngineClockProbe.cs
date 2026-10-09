@@ -23,9 +23,35 @@ namespace HollowKnightTAS.Runtime.FullRun
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate IntPtr GetTimeManager();
         private const string EngineSha256 = "d97e92a7640b10580b4e60139eacf01828f74baaef53f75e08b9fdd6193fbe5e";
+        [ThreadStatic] private static CheckpointValidation? checkpointValidation;
+
+        // A single synchronous C transaction never crosses PlayerLoop or a
+        // thread boundary. Share its validated loaded module, and forget it in
+        // Dispose; every later transaction validates the file afresh.
+        internal sealed class CheckpointValidation : IDisposable
+        {
+            internal readonly ProcessModule Engine;
+            internal CheckpointValidation()
+            {
+                if (checkpointValidation != null) throw new InvalidOperationException("Checkpoint engine validation scopes cannot nest.");
+                Engine = RequirePinnedEngine(); checkpointValidation = this;
+            }
+            public void Dispose()
+            {
+                if (!ReferenceEquals(checkpointValidation, this)) throw new InvalidOperationException("Checkpoint engine validation scope ownership differs.");
+                checkpointValidation = null;
+            }
+        }
 
         internal static ProcessModule RequirePinnedEngine()
         {
+            if (checkpointValidation != null)
+            {
+                var checkedEngine = checkpointValidation.Engine;
+                if (GetModuleHandle("UnityPlayer.dll") != checkedEngine.BaseAddress)
+                    throw new InvalidOperationException("Validated checkpoint engine module changed during C.");
+                return checkedEngine;
+            }
             var engine = Process.GetCurrentProcess().Modules.Cast<ProcessModule>().Single(m => m.ModuleName == "UnityPlayer.dll");
             using (var file = File.OpenRead(engine.FileName))
             using (var sha = SHA256.Create())

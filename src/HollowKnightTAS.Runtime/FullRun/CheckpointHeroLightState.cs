@@ -10,12 +10,13 @@ using UnityEngine;
 namespace HollowKnightTAS.Runtime.FullRun
 {
     // The persistent damage-light FSM continues its original Wait after C.
-    // Active native tweens need a separate continuation and are rejected here.
+    // A running scale-to tween uses its explicit native lifecycle adapter.
     [Serializable]
     internal sealed class CheckpointHeroLightState
     {
         public CheckpointPersistentFsmState Fsm = null!;
         public CheckpointPersistentFsmState ColorFader = null!;
+        public CheckpointHeroLightTweenState? Tween;
         public Vector3 LocalPosition, LocalScale;
         public Quaternion LocalRotation;
         public float[] Color = null!;
@@ -31,7 +32,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (light == null || light.gameObject.name != "HeroLight" || light.transform.parent != hero.transform)
                 throw new InvalidDataException("Checkpoint HeroLight owner binding differs.");
             var fsm = light.GetComponents<PlayMakerFSM>().Single(f => f.FsmName == "HeroLight Control");
-            if (!light.GetComponents<Component>().Select(c => c.GetType()).OrderBy(t => t.FullName, StringComparer.Ordinal)
+            if (!light.GetComponents<Component>().Where(c => !(c is iTween) && !(c is iTweenFSMEvents)).Select(c => c.GetType()).OrderBy(t => t.FullName, StringComparer.Ordinal)
                 .SequenceEqual(new[] { typeof(Transform), typeof(SpriteRenderer), typeof(PlayMakerFSM), typeof(PlayMakerFSM) }.OrderBy(t => t.FullName, StringComparer.Ordinal))
                 || !light.GetComponents<PlayMakerFSM>().Select(f => f.FsmName).OrderBy(n => n, StringComparer.Ordinal)
                     .SequenceEqual(new[] { "HeroLight Control", "color_fader" }))
@@ -55,7 +56,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (!(action is iTweenScaleTo scale) || scale.gameObject.OwnerOption != OwnerDefaultOption.UseOwner
                     || !scale.transformScale.IsNone || scale.transformScale.Value != null
-                    || (iTweenFSMEvents?)TweenEvents.GetValue(action) != null)
+                    || (iTweenFSMEvents?)TweenEvents.GetValue(action) is iTweenFSMEvents evt && evt != null
+                        && (!ReferenceEquals(evt.gameObject, component.gameObject) || !ReferenceEquals(evt.itweenFSMAction, action)))
                     throw new InvalidDataException("Checkpoint HeroLight tween action needs an explicit reference/continuation adapter.");
             }
             return result;
@@ -63,12 +65,24 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static CheckpointHeroLightState Capture(HeroController hero)
         {
             var fsm = Bind(hero); BoundTweenActions(fsm); var fader = BindColorFader(hero);
+            var tween = CheckpointHeroLightTweenState.Capture(fsm);
             var light = hero.heroLight; var color = light.color;
             return new CheckpointHeroLightState { Fsm = CheckpointPersistentFsmState.Capture(fsm),
                 ColorFader = CheckpointPersistentFsmState.Capture(fader),
+                Tween = tween,
                 LocalPosition = light.transform.localPosition, LocalRotation = light.transform.localRotation, LocalScale = light.transform.localScale,
                 Color = new[] { color.r, color.g, color.b, color.a }, RendererEnabled = light.enabled,
                 FsmEnabled = fsm.enabled, ActiveSelf = light.gameObject.activeSelf, TweenEventIdCount = iTweenFSMEvents.itweenIDCount };
+        }
+        internal void PrepareObject(HeroController hero)
+        {
+            var fsm = Bind(hero);
+            if (Tween == null)
+            {
+                if (fsm.GetComponents<iTween>().Length != 0 || fsm.GetComponents<iTweenFSMEvents>().Length != 0)
+                    throw new InvalidDataException("Prepared HeroLight has an unexpected native tween.");
+            }
+            else Tween.PrepareObject(fsm);
         }
         internal Action PrepareApply(HeroController hero)
         {
@@ -83,10 +97,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             // PrepareApply can load source-visited actions through the normal
             // action factory. Rebind their completed, destroyed event objects.
             tweenActions = BoundTweenActions(fsm);
-            return () => { apply(); applyFader(); foreach (var action in tweenActions) TweenEvents.SetValue(action, null);
+            var applyTween = Tween?.PrepareApply(fsm);
+            if (Tween == null && (fsm.GetComponents<iTween>().Length != 0 || fsm.GetComponents<iTweenFSMEvents>().Length != 0))
+                throw new InvalidDataException("Restored HeroLight contains an unexpected native tween.");
+            return () => { apply(); applyFader(); foreach (var action in tweenActions)
+                    if ((iTweenFSMEvents?)TweenEvents.GetValue(action) == null) TweenEvents.SetValue(action, null);
                 light.transform.localPosition = LocalPosition; light.transform.localRotation = LocalRotation; light.transform.localScale = LocalScale;
                 light.color = new Color(Color[0], Color[1], Color[2], Color[3]); light.enabled = RendererEnabled;
-                iTweenFSMEvents.itweenIDCount = TweenEventIdCount; };
+                iTweenFSMEvents.itweenIDCount = TweenEventIdCount; applyTween?.Invoke(); };
         }
         internal static IEnumerable<KeyValuePair<string, object?>> Observe(HeroController hero)
         {

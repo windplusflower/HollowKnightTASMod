@@ -10,7 +10,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     [Serializable]
     internal sealed class CheckpointManagedWorldData
     {
-        public int Version = 20;
+        public int Version = 21;
         public Dictionary<string, string> GameManager = null!, Hero = null!, HeroStates = null!;
         public Vector2[]? HeroPositionHistory;
         public Vector3 HeroLocalPosition, HeroLocalScale;
@@ -45,6 +45,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static readonly FieldInfo PositionHistory = typeof(HeroController).GetField("positionHistory", BindingFlags.Instance | BindingFlags.NonPublic)!;
         internal static CheckpointManagedWorldData Capture()
         {
+            using var validation = new LoadingEngineClockProbe.CheckpointValidation();
             var manager = global::GameManager.instance ?? throw new InvalidOperationException("Checkpoint GameManager is absent.");
             var hero = HeroController.SilentInstance ?? throw new InvalidOperationException("Checkpoint Hero is absent.");
             if (hero.transform.parent != null)
@@ -81,7 +82,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal Action PrepareApply(PlayerData playerData, SceneData sceneData)
         {
-            if (Version != 20 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
+            if (Version != 21 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
                 || RemainingDomains == null || !RemainingDomains.SequenceEqual(new[] { "persistent-object-bindings",
                 "fsm-actions-and-variables", "coroutine-scheduler", "physics-world", "mod-state", "animation-and-audio" })
                 || HeroPositionHistory?.Length > 1024)
