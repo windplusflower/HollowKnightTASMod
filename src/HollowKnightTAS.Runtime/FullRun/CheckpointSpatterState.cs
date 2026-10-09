@@ -38,6 +38,23 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static ObjectPool Pool() => (ObjectPool?)PoolInstance.GetValue(null)
             ?? throw new InvalidOperationException("Checkpoint's existing object pool is absent.");
         private static Dictionary<GameObject, GameObject> Live(ObjectPool pool) => (Dictionary<GameObject, GameObject>)Spawned.GetValue(pool);
+        internal static GameObject[] LiveActors() => Live(Pool()).Keys.Where(go => go != null && go.activeInHierarchy && go.GetComponent<SpatterOrange>() != null).ToArray();
+        internal static Dictionary<string, string> Observe(LoadingRigidbodyObservation physics)
+        {
+            var result = new Dictionary<string, string>(); var actors = LiveActors();
+            result["spatter.active-count"] = actors.Length.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            for (var i = 0; i < actors.Length; i++)
+            {
+                var actor = actors[i].GetComponent<SpatterOrange>(); var values = physics.CapturePrimary(actor.rb2d, actor.transform.position);
+                Func<float, string> bits = value => BitConverter.ToUInt32(BitConverter.GetBytes(value), 0).ToString("x8");
+                var state = new { x = bits(values.X), y = bits(values.Y), vx = bits(values.Vx), vy = bits(values.Vy),
+                    fields = CheckpointScalarFields.Capture(actor, Scalars),
+                    sprite = Array.FindIndex(actor.sprites, s => ReferenceEquals(s, actor.spriteRenderer.sprite)) };
+                result["spatter.actor-" + i] = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(
+                    System.Text.Encoding.UTF8.GetBytes(Newtonsoft.Json.JsonConvert.SerializeObject(state)));
+            }
+            return result;
+        }
         private static string Sprites(SpatterOrange actor) => string.Join("\n", actor.sprites.Select(s => s == null ? "null" : s.name));
         private static string? Guard(SpatterOrange actor)
         {
@@ -166,7 +183,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     actor.circleCollider.enabled = saved.ColliderEnabled;
                     actor.spriteRenderer.sprite = actor.sprites[saved.SpriteIndex];
                     actor.spriteRenderer.color = new Color(saved.Color[0], saved.Color[1], saved.Color[2], saved.Color[3]);
-                    actor.spriteRenderer.enabled = saved.RendererEnabled; fields(); actor.enabled = true;
+                    actor.spriteRenderer.enabled = saved.RendererEnabled; fields(); CheckpointBehaviourEnable.Resume(actor);
                 });
             }
             return () => { foreach (var write in writes) write(); };

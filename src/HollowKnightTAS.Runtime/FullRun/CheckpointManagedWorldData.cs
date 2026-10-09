@@ -10,7 +10,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     [Serializable]
     internal sealed class CheckpointManagedWorldData
     {
-        public int Version = 13;
+        public int Version = 15;
         public Dictionary<string, string> GameManager = null!, Hero = null!, HeroStates = null!;
         public Vector2[]? HeroPositionHistory;
         public Vector3 HeroLocalPosition, HeroLocalScale;
@@ -24,6 +24,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public CheckpointPersistentFsmState DreamReturn = null!;
         public CheckpointHeroInvulnerability Invulnerability = null!;
         public CheckpointSpatterState Spatters = null!;
+        public CheckpointGeoState Geo = null!;
         public CheckpointBossContext Boss = null!;
         // Explicit data coverage. Reference/native domains are not implied by
         // capturing their owner's scalar fields.
@@ -61,13 +62,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 DreamReturn = CheckpointPersistentFsmState.Capture(hero),
                 Invulnerability = CheckpointHeroInvulnerability.Capture(hero),
                 Spatters = CheckpointSpatterState.Capture(),
+                Geo = CheckpointGeoState.Capture(),
                 Boss = CheckpointBossContext.Capture(LoadingSerialSceneProbe.CheckpointBossBindings),
                 HeroPositionHistory = PositionHistory.GetValue(hero) is Vector2[] history ? (Vector2[])history.Clone() : null
             };
         }
         internal Action PrepareApply(PlayerData playerData, SceneData sceneData)
         {
-            if (Version != 13 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
+            if (Version != 15 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
                 || RemainingDomains == null || !RemainingDomains.SequenceEqual(new[] { "persistent-object-bindings",
                 "fsm-actions-and-variables", "coroutine-scheduler", "physics-world", "mod-state", "animation-and-audio" })
                 || HeroPositionHistory?.Length > 1024)

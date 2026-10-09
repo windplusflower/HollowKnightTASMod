@@ -228,6 +228,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 Add(prefix + fsm.FsmName, HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(
                                     Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(CheckpointHeroSpellVariables.Capture(fsm)))));
                         }
+                        foreach (var geo in CheckpointGeoState.Observe(rigidbodies)) Add(geo.Key, geo.Value);
+                        foreach (var spatter in CheckpointSpatterState.Observe(rigidbodies)) Add(spatter.Key, spatter.Value);
                     }
                 }
                 // Field-only recursive hashing: avoids getters and does not publish save data.
