@@ -35,6 +35,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             return new Vector2(values.Vx, values.Vy);
         }
 
+        internal float CaptureCheckpointAngularVelocity(Rigidbody2D body)
+        {
+            ReadBody(body, out _, out var nativeBody);
+            if (nativeBody == null) throw new InvalidOperationException("Checkpoint native body is absent.");
+            return BitConverter.ToSingle(nativeBody, 0x48) * Mathf.Rad2Deg;
+        }
+
         internal object CaptureValues(Rigidbody2D body)
         {
             ReadBody(body, out var owner, out var nativeBody);

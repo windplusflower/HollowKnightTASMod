@@ -22,6 +22,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (checkpointPreparationHooked) return;
             On.GameManager.FadeSceneInWithDelay += OnCheckpointBootstrapFade;
             On.HeroController.Respawn += OnCheckpointBootstrapRespawn;
+            On.SpatterOrange.Start += OnCheckpointSpatterStart;
             checkpointPreparationHooked = true;
         }
         private void UnhookCheckpointPreparation()
@@ -29,7 +30,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!checkpointPreparationHooked) return;
             On.GameManager.FadeSceneInWithDelay -= OnCheckpointBootstrapFade;
             On.HeroController.Respawn -= OnCheckpointBootstrapRespawn;
+            On.SpatterOrange.Start -= OnCheckpointSpatterStart;
             checkpointPreparationHooked = false;
+        }
+        private void OnCheckpointSpatterStart(On.SpatterOrange.orig_Start original, SpatterOrange self)
+        {
+            original(self);
+            if (mode == "CheckpointPreparing") checkpointRestore?.SpatterActors?.ObserveStarted(self);
         }
         private IEnumerator OnCheckpointBootstrapFade(On.GameManager.orig_FadeSceneInWithDelay original, GameManager self, float delay)
         {
@@ -156,6 +163,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var applyBoss = pending.Data.ManagedWorld.Boss.PrepareApply(pending.BossTargets
                         ?? throw new InvalidOperationException("Boss setup objects were not bound before source unloading."), pending.Player);
                     var applyLoad = LoadingSerialSceneProbe.PrepareCheckpointLoadState(pending.Data.SceneLoad);
+                    var applySpatters = pending.Data.ManagedWorld.Spatters.PrepareApply(pending.SpatterActors!);
                     var resumeInvulnerability = pending.Data.ManagedWorld.Invulnerability.PrepareResume(HeroController.SilentInstance);
                     var heroScale = HeroController.SilentInstance.transform.localScale;
                     loadingBoundaryProbe?.IncludeCheckpointK(pending.Data.MovieFrame);
@@ -163,7 +171,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         + " captured=" + pending.Data.ManagedWorld.HeroLocalScale);
                     // Failure after the first live write is terminal. No cold
                     // replay fallback or continuation of a partial transaction.
-                    applyWorld(); applyBoss(); applyLoad(); ApplyCheckpointContinuation(pending.Data, frame);
+                    applyWorld(); applyBoss(); applyLoad(); applySpatters(); ApplyCheckpointContinuation(pending.Data, frame);
                     resumeInvulnerability();
                     pending.Applied = true; pending.Phase = "RebuildingCToK";
                     Modding.Logger.Log("[HKTAS] Experimental checkpoint state applied: id=" + id
@@ -231,7 +239,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (job.Phase == "LoadingSourceScene" && USceneManager.GetActiveScene().name == job.Transition.SourceScene
                     && job.PendingBootstrapCoroutines == 0) job.Phase = "SourceReady";
                 if (job.Phase == "SourceReady")
-                { job.BossTargets = job.Data.ManagedWorld.Boss.BindBeforeUnload(); job.Phase = "AwaitingTargetC"; manager.BeginSceneTransition(job.Transition.LoadInfo); }
+                {
+                    if (job.SpatterActors == null) job.SpatterActors = job.Data.ManagedWorld.Spatters.PrepareActors();
+                    if (!job.SpatterActors.Ready) return true;
+                    job.BossTargets = job.Data.ManagedWorld.Boss.BindBeforeUnload(); job.Phase = "AwaitingTargetC";
+                    manager.BeginSceneTransition(job.Transition.LoadInfo);
+                }
             }
             catch (Exception exception) { RejectCheckpointRestore(job, exception); }
             return true;
@@ -276,6 +289,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal volatile string Phase = "LoadingInitialSave", Error = "";
             internal volatile bool Applied;
             internal int PendingBootstrapCoroutines;
+            internal CheckpointSpatterState.Preparation? SpatterActors;
             internal bool InitialFadeFinished;
             internal long FirstConsumed = -1, Consumed;
             internal CheckpointBossContext.Targets? BossTargets;
