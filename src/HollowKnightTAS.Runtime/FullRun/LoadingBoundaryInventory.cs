@@ -81,8 +81,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 .Select(pair => (GameObject)pair.Key).Where(go => go != null).Select(go =>
                                 { poolMembers[go.GetInstanceID()] = prefab.name; return Id(go); }).ToArray() });
                     }
-                    return new { id = Id(pool), tables = rows, startupDefinition = fields.Capture(
-                        fields.Read(pool, "startupPools"), Id(pool) + ".startupPools").Sha256 };
+                    var definitions = fields.Read(pool, "startupPools") as Array
+                        ?? throw new InvalidOperationException("ObjectPool startup definitions are unavailable.");
+                    return new { id = Id(pool), tables = rows,
+                        startupPools = definitions.Cast<object>().Select(definition => new {
+                            prefab = fields.Read(definition, "prefab") is GameObject prefab ? Id(prefab) : null,
+                            size = fields.Read(definition, "size")
+                        }).ToArray(), startupDefinition = fields.Capture(
+                            definitions, Id(pool) + ".startupPools").Sha256 };
                 }).ToArray();
                 var scheduler = new LoadingNativeSchedulerDigest();
                 string schedulerHash;
@@ -113,7 +119,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var fsm = fields.Read(component, "fsm");
                     var active = fsm == null ? null : fields.Read(fsm, "activeState");
                     var actions = active == null ? null : fields.Read(active, "actions") as Array;
-                    return new { id = Id(component), name = component.FsmName, component.enabled,
+                    return new { id = Id(component), name = fsm == null ? null : fields.Read(fsm, "name"), component.enabled,
                         component.gameObject.activeInHierarchy, state = active == null ? null : fields.Read(active, "name"),
                         actions = actions?.Cast<object>().Where(action => action != null).Select(action => new {
                             type = action.GetType().FullName, fields = fields.Fields(action.GetType()).Select(f => f.Name).ToArray()

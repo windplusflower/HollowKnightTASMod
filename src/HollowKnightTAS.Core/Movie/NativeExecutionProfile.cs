@@ -23,6 +23,8 @@ namespace HollowKnightTAS.Core.Movie
             "hktas-unity-input-playerloop-serial-scene-isolated-online-2026-v12-experimental";
         public const string CanonicalParticleProfileId =
             "hktas-unity-input-playerloop-serial-scene-canonical-particles-2026-v12-experimental";
+        public const string CanonicalBoundaryProfileId =
+            "hktas-unity-input-playerloop-serial-scene-canonical-boundary-2026-v12-experimental";
 
         public static string SelectedProfileId => Select(
             Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_STARTUP_CLOCK") == "1",
@@ -32,12 +34,16 @@ namespace HollowKnightTAS.Core.Movie
             Environment.GetEnvironmentVariable("HKTAS_LOADING_SERIAL_SCENES") == "1",
             Environment.GetEnvironmentVariable("HKTAS_LOADING_VIRTUAL_AUDIO") == "1",
             Environment.GetEnvironmentVariable("HKTAS_LOADING_ISOLATED_ONLINE") == "1",
-            Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_PARTICLES") == "1");
+            Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_PARTICLES") == "1",
+            Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_BOUNDARY") == "1");
 
         public static string Select(bool canonicalStartupClock,
             bool synchronousFetch, bool disableLegacyCalibration, bool modWallClock = false, bool serialScenes = false,
-            bool virtualAudio = false, bool isolatedOnline = false, bool canonicalParticles = false)
+            bool virtualAudio = false, bool isolatedOnline = false, bool canonicalParticles = false,
+            bool canonicalBoundary = false)
         {
+            if (canonicalBoundary && !canonicalParticles)
+                throw new InvalidOperationException("Canonical boundaries require the complete canonical particle profile.");
             if (canonicalParticles && !isolatedOnline)
                 throw new InvalidOperationException("Canonical particles require the complete isolated online profile.");
             if (isolatedOnline && !virtualAudio)
@@ -52,7 +58,7 @@ namespace HollowKnightTAS.Core.Movie
             if (!synchronousFetch || !disableLegacyCalibration)
                 throw new InvalidOperationException(
                     "Canonical startup clocks require synchronous scene fetch and disabled legacy calibration.");
-            return canonicalParticles ? CanonicalParticleProfileId : isolatedOnline ? IsolatedOnlineProfileId : virtualAudio ? VirtualAudioSerialProfileId : serialScenes ? SerialSceneProfileId
+            return canonicalBoundary ? CanonicalBoundaryProfileId : canonicalParticles ? CanonicalParticleProfileId : isolatedOnline ? IsolatedOnlineProfileId : virtualAudio ? VirtualAudioSerialProfileId : serialScenes ? SerialSceneProfileId
                 : modWallClock ? CanonicalModClockProfileId : CanonicalStartupProfileId;
         }
 
@@ -76,6 +82,17 @@ namespace HollowKnightTAS.Core.Movie
             => profile == VirtualAudioSerialProfileId || UsesIsolatedOnline(profile);
 
         public static bool UsesIsolatedOnline(string profile)
-            => profile == IsolatedOnlineProfileId || profile == CanonicalParticleProfileId;
+            => profile == IsolatedOnlineProfileId || UsesCanonicalParticles(profile);
+
+        public static bool UsesCanonicalParticles(string profile)
+            => profile == CanonicalParticleProfileId || UsesCanonicalBoundary(profile);
+
+        public static bool UsesCanonicalBoundary(string profile)
+            => profile == CanonicalBoundaryProfileId;
+
+        // Execution-policy admission only; restoration qualification still
+        // requires the separate D0-D3 and P4/P5 acceptance gates.
+        public static bool SupportsSceneCheckpoints(string profile)
+            => UsesCanonicalBoundary(profile);
     }
 }

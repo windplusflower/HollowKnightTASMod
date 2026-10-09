@@ -26,7 +26,7 @@ namespace HollowKnightTAS.ClockPayload
 
         internal CanonicalParticleRandomPolicy()
         {
-            if (NativeExecutionProfile.SelectedProfileId != NativeExecutionProfile.CanonicalParticleProfileId
+            if (!NativeExecutionProfile.UsesCanonicalParticles(NativeExecutionProfile.SelectedProfileId)
                 || Environment.GetEnvironmentVariable("HKTAS_FULL_RUN_V2") != "1")
                 throw new InvalidOperationException("Particle root initialization requires V11 full-run.");
             var engine = Process.GetCurrentProcess().Modules.Cast<ProcessModule>().Single(m => m.ModuleName == "UnityPlayer.dll");

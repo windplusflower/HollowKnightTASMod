@@ -86,6 +86,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") != "1")
                 throw new InvalidOperationException("Scene checkpoint development is disabled.");
+            if (!NativeExecutionProfile.SupportsSceneCheckpoints(NativeExecutionProfile.SelectedProfileId))
+                throw new InvalidOperationException("This recorded execution profile supports full replay only; scene checkpoints require the canonical boundary profile.");
             if (fields.TryGetValue("phase", out var restorePhase) && restorePhase.StartsWith("restore-", StringComparison.Ordinal))
                 return CheckpointRestoreCommand(fields);
             string Get(string key) => fields.TryGetValue(key, out var value) ? value : throw new InvalidDataException("Missing checkpoint command field: " + key);

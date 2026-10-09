@@ -45,6 +45,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (!NativeExecutionProfile.UsesSerialScenes(NativeExecutionProfile.SelectedProfileId))
                 throw new InvalidOperationException("Serial scenes require their own V6 execution profile.");
+            // Do not label a legacy trajectory as Canon while Phase 1 is being
+            // implemented. Remove this gate only with the shared startup/Canon
+            // path and its closed registry, before making a new recording.
+            if (NativeExecutionProfile.UsesCanonicalBoundary(NativeExecutionProfile.SelectedProfileId))
+                throw new InvalidOperationException("Canonical boundary profile is not ready: Phase 0 pending domains, startup warmup and Canon must be implemented before recording.");
             if (instance != null) throw new InvalidOperationException("Serial scene policy is already installed.");
             report = Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")
                 ?? throw new InvalidOperationException("Serial scene diagnostics need an output directory."),

@@ -29,6 +29,7 @@ param(
     [switch] $VirtualAudio,
     [switch] $IsolatedOnline,
     [switch] $CanonicalParticles,
+    [switch] $CanonicalBoundary,
     [switch] $BoundaryInventory,
     [switch] $ExportVideo,
     [switch] $CheckpointPrototype,
@@ -44,6 +45,7 @@ if ($SerialBoundaryOnly -and (-not $SerialScenes -or -not $GameplayOracle)) { th
 if ($VirtualAudio -and -not $SerialScenes) { throw 'VirtualAudio requires SerialScenes.' }
 if ($IsolatedOnline -and -not $VirtualAudio) { throw 'IsolatedOnline requires VirtualAudio.' }
 if ($CanonicalParticles -and -not $IsolatedOnline) { throw 'CanonicalParticles requires IsolatedOnline.' }
+if ($CanonicalBoundary -and -not $CanonicalParticles) { throw 'CanonicalBoundary requires CanonicalParticles.' }
 if ($BoundaryInventory -and -not $SerialScenes) { throw 'BoundaryInventory requires SerialScenes.' }
 if ($CanonicalStartupClock -and (-not $SynchronousFetch -or -not $DisableLegacyCalibration)) { throw 'The v4 experiment requires synchronous fetch and disabled legacy calibration.' }
 if ($ModWallClock -and -not $CanonicalStartupClock) { throw 'The v5 Mod wall-clock experiment requires canonical startup clocks.' }
@@ -280,6 +282,7 @@ try {
         if ($VirtualAudio) { $arguments += '--probe-virtual-audio' }
         if ($IsolatedOnline) { $arguments += '--probe-isolated-online' }
         if ($CanonicalParticles) { $arguments += '--probe-canonical-particles' }
+        if ($CanonicalBoundary) { $arguments += '--probe-canonical-boundary' }
         if ($BoundaryInventory) { $arguments += '--probe-boundary-inventory' }
         if ($ExportVideo) { $arguments += '--probe-export-video' }
         if ($CheckpointPrototype) { $arguments += '--checkpoint-prototype' }

@@ -31,7 +31,7 @@ namespace HollowKnightTAS.ClockPayload
 
         private static void InstallPolicies()
         {
-            if (NativeExecutionProfile.SelectedProfileId == NativeExecutionProfile.CanonicalParticleProfileId)
+            if (NativeExecutionProfile.UsesCanonicalParticles(NativeExecutionProfile.SelectedProfileId))
                 particles = new CanonicalParticleRandomPolicy();
             if (NativeExecutionProfile.UsesIsolatedOnline(NativeExecutionProfile.SelectedProfileId))
                 online = new IsolatedOnlinePolicy();

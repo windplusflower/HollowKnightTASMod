@@ -588,8 +588,8 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private static uint[] CaptureParticleRandomState()
         {
-            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId !=
-                HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalParticleProfileId) return Array.Empty<uint>();
+            if (!HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalParticles(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)) return Array.Empty<uint>();
             var payload = AppDomain.CurrentDomain.GetAssemblies()
                 .Single(assembly => assembly.GetName().Name == "HollowKnightTAS.ClockPayload");
             return (uint[])payload.GetType("HollowKnightTAS.ClockPayload.EarlyModWallClockBootstrap", true)!

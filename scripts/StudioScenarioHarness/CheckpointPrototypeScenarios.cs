@@ -33,6 +33,7 @@ internal static partial class StudioScenarioHarness
             ["HKTAS_LOADING_VIRTUAL_AUDIO"] = "--probe-virtual-audio",
             ["HKTAS_LOADING_ISOLATED_ONLINE"] = "--probe-isolated-online",
             ["HKTAS_LOADING_CANONICAL_PARTICLES"] = "--probe-canonical-particles",
+            ["HKTAS_LOADING_CANONICAL_BOUNDARY"] = "--probe-canonical-boundary",
             ["HKTAS_LOADING_DISABLE_LEGACY_CALIBRATION"] = "--probe-disable-legacy-calibration"
         };
         foreach (var policy in policies) Environment.SetEnvironmentVariable(policy.Key, args.Contains(policy.Value) ? "1" : null);
