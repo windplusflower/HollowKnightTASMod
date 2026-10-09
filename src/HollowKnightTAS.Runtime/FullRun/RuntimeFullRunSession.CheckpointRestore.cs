@@ -156,6 +156,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var applyBoss = pending.Data.ManagedWorld.Boss.PrepareApply(pending.BossTargets
                         ?? throw new InvalidOperationException("Boss setup objects were not bound before source unloading."), pending.Player);
                     var applyLoad = LoadingSerialSceneProbe.PrepareCheckpointLoadState(pending.Data.SceneLoad);
+                    var resumeInvulnerability = pending.Data.ManagedWorld.Invulnerability.PrepareResume(HeroController.SilentInstance);
                     var heroScale = HeroController.SilentInstance.transform.localScale;
                     loadingBoundaryProbe?.IncludeCheckpointK(pending.Data.MovieFrame);
                     Modding.Logger.Log("[HKTAS] Checkpoint Hero scale before apply=" + heroScale
@@ -163,6 +164,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     // Failure after the first live write is terminal. No cold
                     // replay fallback or continuation of a partial transaction.
                     applyWorld(); applyBoss(); applyLoad(); ApplyCheckpointContinuation(pending.Data, frame);
+                    resumeInvulnerability();
                     pending.Applied = true; pending.Phase = "RebuildingCToK";
                     Modding.Logger.Log("[HKTAS] Experimental checkpoint state applied: id=" + id
                         + " C=" + movieFrame + "/" + expectedNativeStart + " qualified=false");

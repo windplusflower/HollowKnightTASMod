@@ -10,7 +10,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     [Serializable]
     internal sealed class CheckpointManagedWorldData
     {
-        public int Version = 10;
+        public int Version = 11;
         public Dictionary<string, string> GameManager = null!, Hero = null!, HeroStates = null!;
         public Vector2[]? HeroPositionHistory;
         public Vector3 HeroLocalPosition, HeroLocalScale;
@@ -22,6 +22,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public CheckpointNailSlashState[] NailSlashes = null!;
         public CheckpointHeroSpellVariables SpellVariables = null!;
         public CheckpointPersistentFsmState DreamReturn = null!;
+        public CheckpointHeroInvulnerability Invulnerability = null!;
         public CheckpointBossContext Boss = null!;
         // Explicit data coverage. Reference/native domains are not implied by
         // capturing their owner's scalar fields.
@@ -57,13 +58,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 NailSlashes = CheckpointNailSlashState.Capture(hero),
                 SpellVariables = CheckpointHeroSpellVariables.Capture(hero),
                 DreamReturn = CheckpointPersistentFsmState.Capture(hero),
+                Invulnerability = CheckpointHeroInvulnerability.Capture(hero),
                 Boss = CheckpointBossContext.Capture(LoadingSerialSceneProbe.CheckpointBossBindings),
                 HeroPositionHistory = PositionHistory.GetValue(hero) is Vector2[] history ? (Vector2[])history.Clone() : null
             };
         }
         internal Action PrepareApply(PlayerData playerData, SceneData sceneData)
         {
-            if (Version != 10 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
+            if (Version != 11 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
                 || RemainingDomains == null || !RemainingDomains.SequenceEqual(new[] { "persistent-object-bindings",
                 "fsm-actions-and-variables", "coroutine-scheduler", "physics-world", "mod-state", "animation-and-audio" })
                 || HeroPositionHistory?.Length > 1024)
@@ -88,6 +90,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var applySpellVariables = (SpellVariables ?? throw new InvalidDataException("Checkpoint Spell Control values are absent.")).PrepareApply(hero);
             var applyDreamReturn = (DreamReturn ?? throw new InvalidDataException("Checkpoint Dream Return state is absent.")).PrepareApply(hero);
             var applyCamera = (Camera ?? throw new InvalidDataException("Checkpoint camera state is absent.")).PrepareApply();
+            var applyPulse = (Invulnerability ?? throw new InvalidDataException("Checkpoint invulnerability state is absent.")).PreparePulseApply(hero);
             var history = HeroPositionHistory == null ? null : (Vector2[])HeroPositionHistory.Clone();
             var playerWrites = CheckpointScalarFields.Declared(typeof(PlayerData)).Select(f => Tuple.Create(f, f.GetValue(playerData))).ToArray();
             var sceneWrites = CheckpointScalarFields.Declared(typeof(SceneData)).Select(f => Tuple.Create(f, f.GetValue(sceneData))).ToArray();
@@ -117,6 +120,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 applySlashes();
                 applySpellVariables();
                 applyDreamReturn();
+                applyPulse();
             };
         }
     }

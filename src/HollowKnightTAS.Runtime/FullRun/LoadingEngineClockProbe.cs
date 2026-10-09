@@ -34,6 +34,35 @@ namespace HollowKnightTAS.Runtime.FullRun
             return engine;
         }
 
+        internal static void WithCoroutineScheduleTime(double time, long frame, int mode, Action schedule)
+        {
+            if (double.IsNaN(time) || double.IsInfinity(time) || (mode & 8) != 0 && (frame < 0 || frame > int.MaxValue))
+                throw new InvalidOperationException("Coroutine schedule time/frame is invalid.");
+            var engine = RequirePinnedEngine();
+            var getter = (GetTimeManager)Marshal.GetDelegateForFunctionPointer(
+                IntPtr.Add(engine.BaseAddress, 0x52b330), typeof(GetTimeManager));
+            var manager = getter();
+            if (manager == IntPtr.Zero) throw new InvalidOperationException("Coroutine TimeManager binding is absent.");
+            // Pinned CallDelayed at 0x628490 selects 0x30 for mode bit 1,
+            // 0x60 for bit 2 (the ordinary seconds wait), their minimum for
+            // both, and 0x90 otherwise. Bit 8 records the frame counter + 1.
+            var offsets = (mode & 3) == 0 ? new[] { 0x90 }
+                : new[] { (mode & 1) != 0 ? 0x30 : -1, (mode & 2) != 0 ? 0x60 : -1 }.Where(o => o >= 0).ToArray();
+            var fields = offsets.Select(o => IntPtr.Add(manager, o)).ToArray();
+            var before = fields.Select(field => Marshal.ReadInt64(field)).ToArray();
+            var frameTimeBefore = BitConverter.DoubleToInt64Bits(Time.timeAsDouble);
+            var frameField = IntPtr.Add(manager, 0xc8); var frameBefore = Marshal.ReadInt64(frameField);
+            if (frameTimeBefore != Marshal.ReadInt64(IntPtr.Add(manager, 0x90)) || Time.frameCount != frameBefore)
+                throw new InvalidOperationException("Coroutine reconstruction is not at the scaled frame clock boundary.");
+            try { foreach (var field in fields) Marshal.WriteInt64(field, BitConverter.DoubleToInt64Bits(time));
+                if ((mode & 8) != 0) Marshal.WriteInt64(frameField, frame); schedule(); }
+            finally { for (var i = 0; i < fields.Length; i++) Marshal.WriteInt64(fields[i], before[i]);
+                Marshal.WriteInt64(frameField, frameBefore); }
+            if (fields.Select(field => Marshal.ReadInt64(field)).Where((v, i) => v != before[i]).Any()
+                || BitConverter.DoubleToInt64Bits(Time.timeAsDouble) != frameTimeBefore || Time.frameCount != frameBefore)
+                throw new InvalidOperationException("Coroutine reconstruction changed the frame clock.");
+        }
+
         public static void Capture(string directory)
         {
             var inspect = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_ENGINE_LAYOUT") == "1";

@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -57,6 +58,56 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal object[] FieldDiagnostics => fieldDiagnostics;
         internal int AsyncOperationCount => coroutines.Values.Count(value => value.HasAsyncOperation);
         internal void Release() { coroutines.Clear(); behaviourId = _ => null; }
+
+        internal sealed class InvulnerabilityWait
+        {
+            internal IEnumerator Enumerator = null!;
+            internal double WakeTime;
+            internal long Frame;
+            internal int Rate, Mode;
+            internal byte Repeat;
+            internal bool Flag128;
+            internal string Call = "";
+        }
+
+        // Read only the actual queued wait and its existing iterator. The
+        // packet receives scalar values, never a coroutine or native address.
+        internal InvulnerabilityWait[] CaptureInvulnerabilityWaits(HeroController hero)
+        {
+            coroutines.Clear(); unsupported.Clear(); behaviourId = _ => "existing-behaviour";
+            var manager = Pointer(Read(IntPtr.Add(engine, 0x19d7a70), 8), 0);
+            var before = Read(manager, 80);
+            var head = Pointer(before, 48); var count = BitConverter.ToUInt64(before, 56);
+            if (count > 4096) throw new InvalidOperationException("Checkpoint scheduler exceeds its callback bound.");
+            var callbacks = new List<CallbackView>();
+            Walk(Pointer(Read(head, 32), 8), head, callbacks, new HashSet<IntPtr>(),
+                _ => "existing-object", BitConverter.ToUInt32(before, 72));
+            if ((ulong)callbacks.Count != count) throw new InvalidOperationException("Checkpoint callback tree count differs.");
+            var result = new List<InvulnerabilityWait>();
+            foreach (var callback in callbacks.Where(c => c.Coroutine != IntPtr.Zero))
+            {
+                var coroutine = Coroutine(callback.Coroutine, 0);
+                if (!(coroutine.Enumerator is IEnumerator iterator)
+                    || !CheckpointHeroInvulnerability.IsBoundIterator(iterator, hero)) continue;
+                if (coroutine.Done || coroutine.HasAsyncOperation
+                    || coroutine.WaitingFor != IntPtr.Zero || coroutine.ContinueWhenFinished != IntPtr.Zero
+                    || callback.Repeat != 0 || double.IsNaN(callback.WakeTime) || double.IsInfinity(callback.WakeTime))
+                    throw new InvalidOperationException("Invulnerability native wait binding: done=" + coroutine.Done
+                        + " enumerator=" + coroutine.EnumeratorBased + " async=" + coroutine.HasAsyncOperation
+                        + " waiting=" + (coroutine.WaitingFor != IntPtr.Zero)
+                        + " continuation=" + (coroutine.ContinueWhenFinished != IntPtr.Zero)
+                        + " repeat=" + callback.Repeat + " frame=" + callback.Frame + " mode=" + callback.Mode);
+                result.Add(new InvulnerabilityWait { Enumerator = iterator, WakeTime = callback.WakeTime,
+                    Frame = callback.Frame, Rate = callback.Rate, Mode = callback.Mode,
+                    Repeat = callback.Repeat, Call = callback.Call, Flag128 = coroutine.EnumeratorBased });
+            }
+            var after = Read(manager, 80);
+            if (Pointer(after, 48) != head || BitConverter.ToUInt64(after, 56) != count
+                || BitConverter.ToUInt32(after, 72) != BitConverter.ToUInt32(before, 72))
+                throw new InvalidOperationException("Checkpoint callback queue changed during its read.");
+            if (result.Count > 8) throw new InvalidOperationException("Hero invulnerability exceeds its coroutine bound.");
+            return result.ToArray();
+        }
 
         internal string Capture(LoadingFieldDigest fields, Func<int, string?> objectId,
             Func<IntPtr, string?> nativeBehaviourId, bool includeFieldDiagnostics = false)
@@ -218,7 +269,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 + ":repeat=" + bytes[52] + ":mode=" + BitConverter.ToInt32(bytes, 84)
                 + ":stamp-age=" + unchecked(timestamp - BitConverter.ToUInt32(bytes, 88))
                 + ":call=" + Function(call) + ":cleanup=" + Function(cleanup);
-            callbacks.Add(new CallbackView { Description = description, Coroutine = coroutine, UserDataPresent = userData != IntPtr.Zero });
+            callbacks.Add(new CallbackView { Description = description, Coroutine = coroutine, UserDataPresent = userData != IntPtr.Zero,
+                WakeTime = BitConverter.ToDouble(bytes, 32), Frame = BitConverter.ToInt64(bytes, 40),
+                Rate = BitConverter.ToInt32(bytes, 48), Repeat = bytes[52], Mode = BitConverter.ToInt32(bytes, 84), Call = Function(call) });
             Walk(Pointer(bytes, 16), head, callbacks, visited, objectId, timestamp);
         }
 
@@ -259,6 +312,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal string Description = "";
             internal IntPtr Coroutine;
             internal bool UserDataPresent;
+            internal double WakeTime;
+            internal long Frame;
+            internal int Rate, Mode;
+            internal byte Repeat;
+            internal string Call = "";
         }
     }
 }
