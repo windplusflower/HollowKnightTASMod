@@ -16,6 +16,9 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal sealed class LoadingRandomCallTrace : IDisposable
     {
         private readonly List<ILHook> hooks = new List<ILHook>();
+        private Hook? updateHook;
+        private readonly List<Hook> lifecycleHooks = new List<Hook>();
+        private delegate void OriginalUpdate(PlayMakerFSM self);
         private readonly Action<string, string, object?> sample;
         private static readonly FieldInfo WaitTimer = typeof(HutongGames.PlayMaker.Actions.Wait).GetField("timer", BindingFlags.Instance | BindingFlags.NonPublic)!;
         public int CallSites { get; private set; }
@@ -57,6 +60,23 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Modding.Logger.Log("[HKTAS] Loading RNG diagnostic attached: " + hooks.Count + " methods, " + CallSites + " calls.");
                 On.HutongGames.PlayMaker.Actions.Wait.OnEnter += WaitEnter;
                 On.HutongGames.PlayMaker.Actions.Wait.OnUpdate += WaitUpdate;
+                var update = typeof(PlayMakerFSM).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                updateHook = new Hook(update, (Action<OriginalUpdate, PlayMakerFSM>)ObserveUpdate);
+                foreach (var name in new[] { "OnEnable", "Start" })
+                {
+                    var lifecycle = typeof(PlayMakerFSM).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
+                    lifecycleHooks.Add(new Hook(lifecycle, (Action<OriginalUpdate, PlayMakerFSM>)((original, self) =>
+                    {
+                        var selected = self.FsmName == "Bouncer Control"
+                            && (self.gameObject.name == "Bursting Bouncer (4)" || self.gameObject.name == "Bursting Bouncer (5)");
+                        if (selected) sample("fsm-lifecycle-before", name + "/component=" + self.GetInstanceID()
+                            + "/gameObject=" + self.gameObject.GetInstanceID() + "/state=" + self.ActiveStateName, self);
+                        if (selected && name == "OnEnable") sample("fsm-enable-caller",
+                            new System.Diagnostics.StackTrace(false).ToString(), self);
+                        original(self);
+                        if (selected) sample("fsm-lifecycle-after", name + "/state=" + self.ActiveStateName, self);
+                    })));
+                }
             }
             catch { Dispose(); throw; }
         }
@@ -65,6 +85,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (self.Fsm?.Name == "Initial Activation" && self.Fsm.GameObject?.name == "Charms")
                 sample(phase, "Charms.InitialActivation.Wait", self);
+        }
+        private void ObserveUpdate(OriginalUpdate original, PlayMakerFSM self)
+        {
+            var selected = self.FsmName == "Bouncer Control"
+                && (self.gameObject.name == "Bursting Bouncer (4)" || self.gameObject.name == "Bursting Bouncer (5)");
+            if (selected) sample("fsm-update-before", self.FsmName + "/" + self.ActiveStateName, self);
+            original(self);
+            if (selected) sample("fsm-update-after", self.FsmName + "/" + self.ActiveStateName, self);
         }
 
         private void WaitEnter(On.HutongGames.PlayMaker.Actions.Wait.orig_OnEnter original, HutongGames.PlayMaker.Actions.Wait self)
@@ -97,6 +125,8 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         public void Dispose()
         {
+            updateHook?.Dispose(); updateHook = null;
+            foreach (var hook in lifecycleHooks) hook.Dispose(); lifecycleHooks.Clear();
             On.HutongGames.PlayMaker.Actions.Wait.OnEnter -= WaitEnter;
             On.HutongGames.PlayMaker.Actions.Wait.OnUpdate -= WaitUpdate;
             for (var i = hooks.Count - 1; i >= 0; i--) hooks[i].Dispose();

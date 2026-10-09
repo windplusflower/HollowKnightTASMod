@@ -210,6 +210,24 @@ namespace HollowKnightTAS.Runtime.FullRun
                                         Add("buzzer." + field.Name, field.GetValue(buzz));
                             }
                         }
+                        foreach (var name in new[] { "Bursting Bouncer (3)", "Bursting Bouncer (4)", "Bursting Bouncer (5)" })
+                        {
+                            var enemy = GameObject.Find(name);
+                            var prefix = "bouncer." + name + ".";
+                            Add(prefix + "present", enemy != null);
+                            if (enemy == null) continue;
+                            var enemyPosition = enemy.transform.position;
+                            Add(prefix + "x", enemyPosition.x); Add(prefix + "y", enemyPosition.y);
+                            var enemyBody = enemy.GetComponent<Rigidbody2D>();
+                            if (enemyBody != null)
+                            {
+                                var enemyValues = rigidbodies.CapturePrimary(enemyBody, enemyPosition);
+                                Add(prefix + "vx", enemyValues.Vx); Add(prefix + "vy", enemyValues.Vy);
+                            }
+                            foreach (var fsm in enemy.GetComponents<PlayMakerFSM>().Where(f => f.FsmName == "Bouncer Control" || f.FsmName == "Drip"))
+                                Add(prefix + fsm.FsmName, HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(
+                                    Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(CheckpointHeroSpellVariables.Capture(fsm)))));
+                        }
                     }
                 }
                 // Field-only recursive hashing: avoids getters and does not publish save data.
