@@ -36,6 +36,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             var fsm = hero.spellControl;
             if (fsm == null || fsm.gameObject != hero.gameObject)
                 throw new InvalidOperationException("Checkpoint Hero Spell Control binding is absent.");
+            return Capture(fsm);
+        }
+        internal static CheckpointHeroSpellVariables Capture(PlayMakerFSM fsm)
+        {
             var variables = Variables(fsm).ToArray();
             if (variables.Length > 1024 || variables.Any(v => v.CastVariable != null))
                 throw new InvalidDataException("Spell FSM variables exceed their bound or use an unsupported cast binding.");
@@ -46,7 +50,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal Action PrepareApply(HeroController hero)
         {
             var fsm = hero.spellControl;
-            if (fsm == null || fsm.gameObject != hero.gameObject || fsm.FsmName != FsmName || fsm.ActiveStateName != StateName)
+            if (fsm == null || fsm.gameObject != hero.gameObject)
+                throw new InvalidDataException("Checkpoint Spell Control owner differs.");
+            return PrepareApply(fsm, requireSameState: true);
+        }
+        internal Action PrepareApply(PlayMakerFSM fsm, bool requireSameState)
+        {
+            if (fsm == null || fsm.FsmName != FsmName || requireSameState && fsm.ActiveStateName != StateName)
                 throw new InvalidDataException("Checkpoint Spell Control binding or active state differs: " + fsm?.ActiveStateName + " / " + StateName);
             var variables = Variables(fsm).ToArray();
             if (Identities == null || Values == null || Values.Length != Identities.Length || variables.Length > 1024

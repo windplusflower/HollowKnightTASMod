@@ -129,6 +129,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Add("heroState", hero.hero_state);
                     Add("nailSlashes", CheckpointNailSlashState.ScalarDigest(hero));
                     if (!light) Add("heroFlags", HashFields(hero.cState));
+                    if (Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_FIELDS") == "hero")
+                    {
+                        foreach (var field in CheckpointScalarFields.Declared(typeof(HeroControllerStates)))
+                            Add("heroFlag." + field.Name, field.GetValue(hero.cState));
+                        var fsms = hero.GetComponents<PlayMakerFSM>().OrderBy(fsm => fsm.FsmName, StringComparer.Ordinal).ToArray();
+                        for (var i = 0; i < fsms.Length; i++) Add("heroFsm." + i + "." + fsms[i].FsmName, fsms[i].ActiveStateName);
+                    }
                 }
                 // Field-only recursive hashing: avoids getters and does not publish save data.
                 if (!light)

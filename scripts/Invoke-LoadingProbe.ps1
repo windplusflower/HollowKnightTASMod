@@ -34,6 +34,7 @@ param(
     [long] $CheckpointAfterFrame = 0,
     [string] $CheckpointWindows = '',
     [string] $ClockBridgePath = '',
+    [ValidateSet('', 'p0', 'p3', 'p3a', 'p3b', 'p3c')][string] $EvidencePhase = '',
     [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
 )
 $ErrorActionPreference = 'Stop'
@@ -92,7 +93,8 @@ if ($OracleWindows) {
 }
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
-$phaseRoot = if ($CheckpointPrototype) { 'artifacts/scene-checkpoints/p3' } else { 'artifacts/scene-checkpoints/p0' }
+$phaseName = if ($EvidencePhase) { $EvidencePhase } elseif ($CheckpointPrototype) { 'p3' } else { 'p0' }
+$phaseRoot = 'artifacts/scene-checkpoints/' + $phaseName
 $ownedRoot = [IO.Path]::GetFullPath((Join-Path $repo $phaseRoot)) + [IO.Path]::DirectorySeparatorChar
 if (-not $outputRoot.StartsWith($ownedRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "Output must be under $phaseRoot/." }
 if (Test-Path -LiteralPath $outputRoot) { throw 'Choose a fresh evidence directory.' }

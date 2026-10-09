@@ -131,7 +131,9 @@ internal static partial class StudioScenarioHarness
         Require(packet.Header.CaptureMovieFrame >= after && packet.Header.ResumeMovieFrame + 3 <= end,
             "captured boundary belongs to the requested interval and has a three-frame suffix");
         await WaitPaused("source capture endpoint");
-        Require((await VideoRuntimeState(vm))["movieFrame"] == end.ToString(), "source exact endpoint");
+        var sourceEnd = await VideoRuntimeState(vm); Receipt("source-full-runtime", sourceEnd);
+        Require(sourceEnd["movieFrame"] == end.ToString() && sourceEnd["faultCode"] == "0" && sourceEnd["mismatchCount"] == "0",
+            "source exact endpoint without fault or input mismatch");
         var sourcePid = sourceGame.Id;
         ProbeDirectory("replacement");
         await Field<Func<Task>>(vm, "restartProtectedGame")();
