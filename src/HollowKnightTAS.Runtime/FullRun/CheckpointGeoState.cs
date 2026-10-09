@@ -105,9 +105,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || (bool)Field(typeof(SpriteFlash), "cancelFlash").GetValue(flash))
                 throw new InvalidOperationException("Active Geo flashing needs its material continuation.");
         }
-        internal static CheckpointGeoState Capture()
+        internal static CheckpointGeoState Capture(LoadingRigidbodyObservation physics)
         {
-            var pool = Pool(); var physics = new LoadingRigidbodyObservation(); var actors = LiveActors();
+            var pool = Pool(); var actors = LiveActors();
             if (actors.Length > 64) throw new InvalidOperationException("Geo actor bound exceeded.");
             return new CheckpointGeoState { Actors = actors.Select(go =>
             {
@@ -154,7 +154,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal Preparation PrepareActors()
         {
             if (Version != 1 || Actors == null || Actors.Length > 64) throw new InvalidDataException("Geo schema differs.");
-            if (LiveActors().Length != 0 || PlayerData.instance.equippedCharm_1)
+            if (LiveActors().Length != 0 || Actors.Length != 0 && PlayerData.instance.equippedCharm_1)
                 throw new InvalidOperationException("Geo preparation has existing actors or an active Getter charm.");
             var prefabs = Actors.Select(Prefab).ToArray(); var result = new Preparation();
             foreach (var prefab in prefabs)

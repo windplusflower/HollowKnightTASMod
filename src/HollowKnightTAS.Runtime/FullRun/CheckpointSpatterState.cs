@@ -38,6 +38,18 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static ObjectPool Pool() => (ObjectPool?)PoolInstance.GetValue(null)
             ?? throw new InvalidOperationException("Checkpoint's existing object pool is absent.");
         private static Dictionary<GameObject, GameObject> Live(ObjectPool pool) => (Dictionary<GameObject, GameObject>)Spawned.GetValue(pool);
+        internal static void LogFreeMembers(string phase)
+        {
+            var pool = Pool();
+            var free = (Dictionary<GameObject, List<GameObject>>)typeof(ObjectPool).GetField("pooledObjects", Instance)!.GetValue(pool);
+            foreach (var pair in free.Where(p => p.Key != null && p.Key.GetComponent<SpatterOrange>() != null))
+            {
+                if (pair.Value.Count > 256) throw new InvalidOperationException("Spatter free pool exceeds diagnostic bound.");
+                Modding.Logger.Log("[HKTAS] Spatter free FIFO " + phase + ": count=" + pair.Value.Count + " modifiers="
+                    + string.Join(",", pair.Value.Select(go => go == null ? "missing" : BitConverter.ToUInt32(BitConverter.GetBytes(
+                        (float)ScaleModifier.GetValue(go.GetComponent<SpatterOrange>())), 0).ToString("x8"))));
+            }
+        }
         internal static GameObject[] LiveActors() => Live(Pool()).Keys.Where(go => go != null && go.activeInHierarchy && go.GetComponent<SpatterOrange>() != null).ToArray();
         internal static Dictionary<string, string> Observe(LoadingRigidbodyObservation physics)
         {
@@ -79,9 +91,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     + (actor == null ? "missing" : actor.gameObject.scene.name + "/" + actor.name + "; components="
                         + string.Join(",", actor.GetComponents<Component>().Select(c => c.GetType().FullName))));
         }
-        internal static CheckpointSpatterState Capture()
+        internal static CheckpointSpatterState Capture(LoadingRigidbodyObservation physics)
         {
-            var pool = Pool(); var physics = new LoadingRigidbodyObservation();
+            LogFreeMembers("source-C");
+            var pool = Pool();
             var actors = Live(pool).Where(pair => pair.Key != null && pair.Key.activeInHierarchy
                 && pair.Key.GetComponent<SpatterOrange>() != null).ToArray();
             if (actors.Length > 64) throw new InvalidOperationException("Orange spatter exceeds its checkpoint bound.");
@@ -163,6 +176,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal Action PrepareApply(Preparation prepared)
         {
+            LogFreeMembers("prepared-C");
             if (prepared == null || !prepared.Ready || Actors == null || prepared.Actors.Count != Actors.Length)
                 throw new InvalidOperationException("Orange spatter preparation is incomplete.");
             var pool = Pool(); var writes = new List<Action>();

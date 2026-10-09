@@ -73,6 +73,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         // Read only the actual queued wait and its existing iterator. The
         // packet receives scalar values, never a coroutine or native address.
         internal InvulnerabilityWait[] CaptureInvulnerabilityWaits(HeroController hero)
+            => CaptureWaits(iterator => CheckpointHeroInvulnerability.IsBoundIterator(iterator, hero), 8, "Hero invulnerability");
+
+        internal InvulnerabilityWait[] CaptureWaits(Func<IEnumerator, bool> accepts, int maximum, string family)
         {
             coroutines.Clear(); unsupported.Clear(); behaviourId = _ => "existing-behaviour";
             var manager = Pointer(Read(IntPtr.Add(engine, 0x19d7a70), 8), 0);
@@ -88,11 +91,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 var coroutine = Coroutine(callback.Coroutine, 0);
                 if (!(coroutine.Enumerator is IEnumerator iterator)
-                    || !CheckpointHeroInvulnerability.IsBoundIterator(iterator, hero)) continue;
+                    || !accepts(iterator)) continue;
                 if (coroutine.Done || coroutine.HasAsyncOperation
                     || coroutine.WaitingFor != IntPtr.Zero || coroutine.ContinueWhenFinished != IntPtr.Zero
                     || callback.Repeat != 0 || double.IsNaN(callback.WakeTime) || double.IsInfinity(callback.WakeTime))
-                    throw new InvalidOperationException("Invulnerability native wait binding: done=" + coroutine.Done
+                    throw new InvalidOperationException(family + " native wait binding: done=" + coroutine.Done
                         + " enumerator=" + coroutine.EnumeratorBased + " async=" + coroutine.HasAsyncOperation
                         + " waiting=" + (coroutine.WaitingFor != IntPtr.Zero)
                         + " continuation=" + (coroutine.ContinueWhenFinished != IntPtr.Zero)
@@ -105,7 +108,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (Pointer(after, 48) != head || BitConverter.ToUInt64(after, 56) != count
                 || BitConverter.ToUInt32(after, 72) != BitConverter.ToUInt32(before, 72))
                 throw new InvalidOperationException("Checkpoint callback queue changed during its read.");
-            if (result.Count > 8) throw new InvalidOperationException("Hero invulnerability exceeds its coroutine bound.");
+            if (result.Count > maximum) throw new InvalidOperationException(family + " exceeds its coroutine bound.");
             return result.ToArray();
         }
 

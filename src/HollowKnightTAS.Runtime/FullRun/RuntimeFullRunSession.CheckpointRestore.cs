@@ -24,6 +24,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             On.HeroController.Respawn += OnCheckpointBootstrapRespawn;
             On.SpatterOrange.Start += OnCheckpointSpatterStart;
             On.GeoControl.Start += OnCheckpointGeoStart;
+            On.tk2dSpriteAnimator.Start += OnCheckpointProjectileAnimationStart;
             checkpointPreparationHooked = true;
         }
         private void UnhookCheckpointPreparation()
@@ -33,6 +34,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             On.HeroController.Respawn -= OnCheckpointBootstrapRespawn;
             On.SpatterOrange.Start -= OnCheckpointSpatterStart;
             On.GeoControl.Start -= OnCheckpointGeoStart;
+            On.tk2dSpriteAnimator.Start -= OnCheckpointProjectileAnimationStart;
             checkpointPreparationHooked = false;
         }
         private void OnCheckpointSpatterStart(On.SpatterOrange.orig_Start original, SpatterOrange self)
@@ -44,6 +46,15 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             original(self);
             if (mode == "CheckpointPreparing") checkpointRestore?.GeoActors?.ObserveStarted(self);
+        }
+        private void OnCheckpointProjectileAnimationStart(On.tk2dSpriteAnimator.orig_Start original, tk2dSpriteAnimator self)
+        {
+            original(self);
+            if (mode == "CheckpointPreparing" && self.GetComponent<EnemyBullet>() != null && checkpointRestore != null)
+            {
+                checkpointRestore.ProjectileAnimatorStarts.Add(self);
+                checkpointRestore.ProjectileActors?.ObserveStarted(self);
+            }
         }
         private IEnumerator OnCheckpointBootstrapFade(On.GameManager.orig_FadeSceneInWithDelay original, GameManager self, float delay)
         {
@@ -163,6 +174,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 try
                 {
                     var boundary = LoadingSerialSceneProbe.GetCheckpointBoundary();
+                    var applyElapsed = System.Diagnostics.Stopwatch.StartNew();
                     if (boundary.Item3 != pending.Transition.SourceScene
                         || !CheckpointCodec.Encode(boundary.Item2).SequenceEqual(CheckpointCodec.Encode(pending.Transition.LoadInfo)))
                         throw new InvalidDataException("Reconstructed transition differs from the checkpoint.");
@@ -172,16 +184,20 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var applyLoad = LoadingSerialSceneProbe.PrepareCheckpointLoadState(pending.Data.SceneLoad);
                     var applySpatters = pending.Data.ManagedWorld.Spatters.PrepareApply(pending.SpatterActors!);
                     var applyGeo = pending.Data.ManagedWorld.Geo.PrepareApply(pending.GeoActors!);
+                    var applyProjectiles = pending.Data.ManagedWorld.Projectiles.PrepareApply(pending.ProjectileActors!);
+                    var applyBroadphase = pending.Data.ManagedWorld.Broadphase.PrepareApply();
                     var resumeInvulnerability = pending.Data.ManagedWorld.Invulnerability.PrepareResume(HeroController.SilentInstance);
+                    var resumeProjectiles = pending.Data.ManagedWorld.Projectiles.PrepareResume(pending.ProjectileActors!);
                     var heroScale = HeroController.SilentInstance.transform.localScale;
                     loadingBoundaryProbe?.IncludeCheckpointK(pending.Data.MovieFrame);
                     Modding.Logger.Log("[HKTAS] Checkpoint Hero scale before apply=" + heroScale
                         + " captured=" + pending.Data.ManagedWorld.HeroLocalScale);
                     // Failure after the first live write is terminal. No cold
                     // replay fallback or continuation of a partial transaction.
-                    applyWorld(); applyBoss(); applyLoad(); applySpatters(); applyGeo(); ApplyCheckpointContinuation(pending.Data, frame);
-                    resumeInvulnerability();
+                    applyWorld(); applyBoss(); applyLoad(); applySpatters(); applyGeo(); applyProjectiles(); applyBroadphase(); ApplyCheckpointContinuation(pending.Data, frame);
+                    resumeInvulnerability(); resumeProjectiles();
                     pending.Applied = true; pending.Phase = "RebuildingCToK";
+                    Modding.Logger.Log("[HKTAS] Checkpoint C apply complete: wallMs=" + applyElapsed.ElapsedMilliseconds);
                     Modding.Logger.Log("[HKTAS] Experimental checkpoint state applied: id=" + id
                         + " C=" + movieFrame + "/" + expectedNativeStart + " qualified=false");
                     return new Dictionary<string, string> { ["requestId"] = fields["requestId"], ["checkpointId"] = id,
@@ -235,6 +251,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     // otherwise they can mutate the reconstructed C after apply.
                     if (!job.InitialFadeFinished || job.PendingBootstrapCoroutines != 0
                         || GameCameras.instance.cameraFadeFSM.ActiveStateName != "Normal") return true;
+                    // Preparation has no Movie history or source-scene entry
+                    // trajectory. Keep its Hero out of incidental gate/region
+                    // triggers; C restores the captured simulation flag.
+                    hero.GetComponent<UnityEngine.Rigidbody2D>().simulated = false;
                     if (USceneManager.GetActiveScene().name == job.Transition.SourceScene) job.Phase = "SourceReady";
                     else
                     {
@@ -248,10 +268,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     && job.PendingBootstrapCoroutines == 0) job.Phase = "SourceReady";
                 if (job.Phase == "SourceReady")
                 {
+                    if (USceneManager.GetActiveScene().name != job.Transition.SourceScene)
+                        throw new InvalidOperationException("Prepared source scene changed before target reconstruction.");
                     if (job.SpatterActors == null) job.SpatterActors = job.Data.ManagedWorld.Spatters.PrepareActors();
                     if (!job.SpatterActors.Ready) return true;
                     if (job.GeoActors == null) job.GeoActors = job.Data.ManagedWorld.Geo.PrepareActors();
                     if (!job.GeoActors.Ready) return true;
+                    if (job.ProjectileActors == null) job.ProjectileActors = job.Data.ManagedWorld.Projectiles.PrepareActors(job.ProjectileAnimatorStarts);
+                    if (!job.ProjectileActors.Ready) return true;
                     job.BossTargets = job.Data.ManagedWorld.Boss.BindBeforeUnload(); job.Phase = "AwaitingTargetC";
                     manager.BeginSceneTransition(job.Transition.LoadInfo);
                 }
@@ -301,6 +325,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal int PendingBootstrapCoroutines;
             internal CheckpointSpatterState.Preparation? SpatterActors;
             internal CheckpointGeoState.Preparation? GeoActors;
+            internal CheckpointProjectileState.Preparation? ProjectileActors;
+            internal readonly HashSet<tk2dSpriteAnimator> ProjectileAnimatorStarts = new HashSet<tk2dSpriteAnimator>();
             internal bool InitialFadeFinished;
             internal long FirstConsumed = -1, Consumed;
             internal CheckpointBossContext.Targets? BossTargets;

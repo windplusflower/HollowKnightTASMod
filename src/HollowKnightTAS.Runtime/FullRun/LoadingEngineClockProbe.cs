@@ -35,10 +35,17 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         internal static void WithCoroutineScheduleTime(double time, long frame, int mode, Action schedule)
+            => new CoroutineScheduler().WithTime(time, frame, mode, schedule);
+        internal sealed class CoroutineScheduler
+        {
+            private readonly ProcessModule engine = RequirePinnedEngine();
+            internal void WithTime(double time, long frame, int mode, Action schedule)
+                => WithCoroutineScheduleTime(engine, time, frame, mode, schedule);
+        }
+        private static void WithCoroutineScheduleTime(ProcessModule engine, double time, long frame, int mode, Action schedule)
         {
             if (double.IsNaN(time) || double.IsInfinity(time) || (mode & 8) != 0 && (frame < 0 || frame > int.MaxValue))
                 throw new InvalidOperationException("Coroutine schedule time/frame is invalid.");
-            var engine = RequirePinnedEngine();
             var getter = (GetTimeManager)Marshal.GetDelegateForFunctionPointer(
                 IntPtr.Add(engine.BaseAddress, 0x52b330), typeof(GetTimeManager));
             var manager = getter();

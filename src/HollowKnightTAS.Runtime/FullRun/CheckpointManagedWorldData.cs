@@ -10,7 +10,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     [Serializable]
     internal sealed class CheckpointManagedWorldData
     {
-        public int Version = 15;
+        public int Version = 18;
         public Dictionary<string, string> GameManager = null!, Hero = null!, HeroStates = null!;
         public Vector2[]? HeroPositionHistory;
         public Vector3 HeroLocalPosition, HeroLocalScale;
@@ -18,6 +18,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public RigidbodyType2D HeroBodyType;
         public Vector2 HeroBodyVelocity;
         public float HeroBodyGravityScale;
+        public bool HeroBodySimulated;
         public CheckpointCameraState Camera = null!;
         public CheckpointNailSlashState[] NailSlashes = null!;
         public CheckpointHeroSpellVariables SpellVariables = null!;
@@ -25,6 +26,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         public CheckpointHeroInvulnerability Invulnerability = null!;
         public CheckpointSpatterState Spatters = null!;
         public CheckpointGeoState Geo = null!;
+        public CheckpointProjectileState Projectiles = null!;
+        public CheckpointPhysicsBroadphaseState Broadphase = null!;
         public CheckpointBossContext Boss = null!;
         // Explicit data coverage. Reference/native domains are not implied by
         // capturing their owner's scalar fields.
@@ -45,6 +48,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (hero.transform.parent != null)
                 throw new InvalidOperationException("Checkpoint Hero must have left its scene parent at C.");
             var body = hero.GetComponent<Rigidbody2D>() ?? throw new InvalidOperationException("Checkpoint Hero body is absent.");
+            var physics = new LoadingRigidbodyObservation();
+            var scheduler = new LoadingNativeSchedulerDigest();
             return new CheckpointManagedWorldData
             {
                 GameManager = CheckpointScalarFields.Capture(manager, ManagerFields),
@@ -54,22 +59,25 @@ namespace HollowKnightTAS.Runtime.FullRun
                 HeroLocalRotation = hero.transform.localRotation,
                 HeroLocalScale = hero.transform.localScale,
                 HeroBodyType = body.bodyType,
-                HeroBodyVelocity = new LoadingRigidbodyObservation().CaptureCheckpointVelocity(body),
+                HeroBodyVelocity = physics.CaptureCheckpointVelocity(body),
                 HeroBodyGravityScale = body.gravityScale,
+                HeroBodySimulated = body.simulated,
                 Camera = CheckpointCameraState.Capture(),
                 NailSlashes = CheckpointNailSlashState.Capture(hero),
                 SpellVariables = CheckpointHeroSpellVariables.Capture(hero),
                 DreamReturn = CheckpointPersistentFsmState.Capture(hero),
-                Invulnerability = CheckpointHeroInvulnerability.Capture(hero),
-                Spatters = CheckpointSpatterState.Capture(),
-                Geo = CheckpointGeoState.Capture(),
+                Invulnerability = CheckpointHeroInvulnerability.Capture(hero, scheduler),
+                Spatters = CheckpointSpatterState.Capture(physics),
+                Geo = CheckpointGeoState.Capture(physics),
+                Projectiles = CheckpointProjectileState.Capture(physics, scheduler),
+                Broadphase = CheckpointPhysicsBroadphaseState.Capture(),
                 Boss = CheckpointBossContext.Capture(LoadingSerialSceneProbe.CheckpointBossBindings),
                 HeroPositionHistory = PositionHistory.GetValue(hero) is Vector2[] history ? (Vector2[])history.Clone() : null
             };
         }
         internal Action PrepareApply(PlayerData playerData, SceneData sceneData)
         {
-            if (Version != 15 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
+            if (Version != 18 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
                 || RemainingDomains == null || !RemainingDomains.SequenceEqual(new[] { "persistent-object-bindings",
                 "fsm-actions-and-variables", "coroutine-scheduler", "physics-world", "mod-state", "animation-and-audio" })
                 || HeroPositionHistory?.Length > 1024)
@@ -119,6 +127,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // previous value. A fresh preparation body can still have zero.
                 // Restore the captured property before the original entry runs.
                 body.gravityScale = HeroBodyGravityScale;
+                body.simulated = HeroBodySimulated;
                 body.velocity = HeroBodyVelocity;
                 applyCamera();
                 applySlashes();

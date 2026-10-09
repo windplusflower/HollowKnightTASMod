@@ -60,6 +60,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Modding.Logger.Log("[HKTAS] Loading RNG diagnostic attached: " + hooks.Count + " methods, " + CallSites + " calls.");
                 On.HutongGames.PlayMaker.Actions.Wait.OnEnter += WaitEnter;
                 On.HutongGames.PlayMaker.Actions.Wait.OnUpdate += WaitUpdate;
+                On.HutongGames.PlayMaker.Actions.iTweenScaleTo.OnEnter += TweenScaleEnter;
                 var update = typeof(PlayMakerFSM).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 updateHook = new Hook(update, (Action<OriginalUpdate, PlayMakerFSM>)ObserveUpdate);
                 foreach (var name in new[] { "OnEnable", "Start" })
@@ -68,7 +69,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     lifecycleHooks.Add(new Hook(lifecycle, (Action<OriginalUpdate, PlayMakerFSM>)((original, self) =>
                     {
                         var selected = self.FsmName == "Bouncer Control"
-                            && (self.gameObject.name == "Bursting Bouncer (4)" || self.gameObject.name == "Bursting Bouncer (5)");
+                            && (self.gameObject.name == "Bursting Bouncer (4)" || self.gameObject.name == "Bursting Bouncer (5)")
+                            || self.FsmName == "Control" && self.gameObject.name.StartsWith("Angry Buzzer", StringComparison.Ordinal);
                         if (selected) sample("fsm-lifecycle-before", name + "/component=" + self.GetInstanceID()
                             + "/gameObject=" + self.gameObject.GetInstanceID() + "/state=" + self.ActiveStateName, self);
                         if (selected && name == "OnEnable") sample("fsm-enable-caller",
@@ -100,6 +102,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             original(self);
             SampleWait("wait-enter", self);
         }
+        private void TweenScaleEnter(On.HutongGames.PlayMaker.Actions.iTweenScaleTo.orig_OnEnter original, HutongGames.PlayMaker.Actions.iTweenScaleTo self)
+        {
+            sample("tween-scale-enter", "iTweenScaleTo.OnEnter", self);
+            original(self);
+        }
 
         private void WaitUpdate(On.HutongGames.PlayMaker.Actions.Wait.orig_OnUpdate original, HutongGames.PlayMaker.Actions.Wait self)
         {
@@ -129,6 +136,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var hook in lifecycleHooks) hook.Dispose(); lifecycleHooks.Clear();
             On.HutongGames.PlayMaker.Actions.Wait.OnEnter -= WaitEnter;
             On.HutongGames.PlayMaker.Actions.Wait.OnUpdate -= WaitUpdate;
+            On.HutongGames.PlayMaker.Actions.iTweenScaleTo.OnEnter -= TweenScaleEnter;
             for (var i = hooks.Count - 1; i >= 0; i--) hooks[i].Dispose();
             hooks.Clear();
         }

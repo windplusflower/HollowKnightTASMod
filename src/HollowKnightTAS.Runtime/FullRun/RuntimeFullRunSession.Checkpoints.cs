@@ -212,6 +212,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var rng = UnityRandomStateCodec_1_5_78_11833.Resolve();
                     if (!rng.Ready || rng.Codec == null) throw new InvalidDataException("Unity RNG checkpoint codec is unavailable.");
                     // All live reads end here, on C's game-thread boundary. The worker receives only owned byte arrays.
+                    var captureElapsed = System.Diagnostics.Stopwatch.StartNew();
                     var sections = new Dictionary<string, byte[]>(StringComparer.Ordinal)
                     {
                         ["playerData"] = CheckpointCodec.Encode(PlayerData.instance ?? throw new InvalidDataException("PlayerData is missing.")),
@@ -223,6 +224,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     frozenCheckpoint = new FrozenCheckpoint(checkpointArm, boundary.Item1, movieFrame, nativeFrame, sections);
                     // Both policies submit a single eligible-boundary request. P4 owns automatic re-arming.
                     checkpointArm = null;
+                    Modding.Logger.Log("[HKTAS] Checkpoint C data frozen: wallMs=" + captureElapsed.ElapsedMilliseconds
+                        + " continuationBytes=" + sections["continuation"].Length);
                     Modding.Logger.LogDebug("[HKTAS] Checkpoint data frozen at C: Movie=" + movieFrame + " native=" + nativeFrame + " transition=" + boundary.Item1);
                 }
                 catch (Exception exception)

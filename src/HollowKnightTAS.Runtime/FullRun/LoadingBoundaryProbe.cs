@@ -39,6 +39,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly long randomFirst;
         private readonly long randomEnd;
         private readonly LoadingRigidbodyObservation rigidbodies;
+        private readonly HashSet<long> tweenCallerFrames = new HashSet<long>();
         private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
 
         private LoadingBoundaryProbe(string directory, long first, long end,
@@ -230,6 +231,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         }
                         foreach (var geo in CheckpointGeoState.Observe(rigidbodies)) Add(geo.Key, geo.Value);
                         foreach (var spatter in CheckpointSpatterState.Observe(rigidbodies)) Add(spatter.Key, spatter.Value);
+                        foreach (var projectile in CheckpointProjectileState.Observe(rigidbodies)) Add(projectile.Key, projectile.Value);
                     }
                 }
                 // Field-only recursive hashing: avoids getters and does not publish save data.
@@ -288,6 +290,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (sealedTrace || !InWindow(movieFrame()) || movieFrame() < randomFirst || movieFrame() >= randomEnd) return;
             try
             {
+                if (phase == "rng-before" && site.StartsWith("System.String iTween::GenerateID()", StringComparison.Ordinal)
+                    && tweenCallerFrames.Add(nativeFrame()))
+                {
+                    var caller = new System.Diagnostics.StackTrace(false).ToString();
+                    Write(new { kind = "timer-call", sequence = rows, phase = "tween-create-caller",
+                        boundary = caller.Substring(0, Math.Min(8192, caller.Length)), movieFrame = movieFrame(), nativeFrame = nativeFrame(),
+                        scene = USceneManager.GetActiveScene().name, owner = "iTween.GenerateID", state = new { rng = rngHash() } });
+                    rows++;
+                }
                 Write(new { kind = phase.StartsWith("rng-", StringComparison.Ordinal) ? "rng-call" : "timer-call", sequence = rows, phase, boundary = site,
                     movieFrame = movieFrame(), nativeFrame = nativeFrame(),
                     scene = USceneManager.GetActiveScene().name,
