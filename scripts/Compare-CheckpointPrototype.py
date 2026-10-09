@@ -32,9 +32,21 @@ def read_trace(path):
         raise ValueError(f"{path}: window endpoints differ")
     if footer.get("first") != first or footer.get("end") != end:
         raise ValueError(f"{path}: footer scope differs")
+    continuous = header.get("continuousRandomCalls", False)
+    call_first, call_end = header.get("randomFirst"), header.get("randomEnd")
+    if type(continuous) is not bool or continuous and (type(call_first) is not int or type(call_end) is not int
+            or not first <= call_first < call_end <= end or call_end - call_first > 256):
+        raise ValueError(f"{path}: invalid continuous random-call scope")
+    def in_scope(row):
+        frame = row.get("movieFrame")
+        if type(frame) is not int:
+            return False
+        if continuous and row.get("kind") in ("rng-call", "timer-call"):
+            return call_first <= frame < call_end
+        return any(w["first"] <= frame < w["end"] for w in windows)
     if any(row.get("kind") not in ("sample", "rng-call", "timer-call")
            or row.get("kind") == "sample" and row.get("phase") not in ("before", "after", "event", "loading")
-           or not any(w["first"] <= row["movieFrame"] < w["end"] for w in windows) for row in rows):
+           or not in_scope(row) for row in rows):
         raise ValueError(f"{path}: sample outside the declared scope")
     return header, footer, rows, windows
 
