@@ -13,6 +13,18 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         private static LoadingFieldDigest NewDigest() => new LoadingFieldDigest(value => null, type => false);
 
         [TestMethod]
+        public void DynamicHookMethodsAreReportedAsUnsupportedWithoutExecutingThem()
+        {
+            var method = new System.Reflection.Emit.DynamicMethod("hook", typeof(void), Type.EmptyTypes);
+            var il = method.GetILGenerator();
+            il.Emit(System.Reflection.Emit.OpCodes.Newobj, typeof(InvalidOperationException).GetConstructor(Type.EmptyTypes)!);
+            il.Emit(System.Reflection.Emit.OpCodes.Throw);
+            using var digest = NewDigest();
+            var result = digest.Capture(new object[] { method, method.CreateDelegate(typeof(Action)) }, "scheduler");
+            Assert.IsTrue(result.Unsupported.Any(path => path.Contains("dynamic-member", StringComparison.Ordinal)));
+        }
+
+        [TestMethod]
         public void DirectFieldReadsMatchReflectionForPrivateBasesStructsAndReferenceGraphs()
         {
             var cycle = new Node(); cycle.A = cycle; cycle.B = cycle;

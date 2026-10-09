@@ -29,6 +29,7 @@ param(
     [switch] $VirtualAudio,
     [switch] $IsolatedOnline,
     [switch] $CanonicalParticles,
+    [switch] $BoundaryInventory,
     [switch] $ExportVideo,
     [switch] $CheckpointPrototype,
     [long] $CheckpointAfterFrame = 0,
@@ -43,6 +44,7 @@ if ($SerialBoundaryOnly -and (-not $SerialScenes -or -not $GameplayOracle)) { th
 if ($VirtualAudio -and -not $SerialScenes) { throw 'VirtualAudio requires SerialScenes.' }
 if ($IsolatedOnline -and -not $VirtualAudio) { throw 'IsolatedOnline requires VirtualAudio.' }
 if ($CanonicalParticles -and -not $IsolatedOnline) { throw 'CanonicalParticles requires IsolatedOnline.' }
+if ($BoundaryInventory -and -not $SerialScenes) { throw 'BoundaryInventory requires SerialScenes.' }
 if ($CanonicalStartupClock -and (-not $SynchronousFetch -or -not $DisableLegacyCalibration)) { throw 'The v4 experiment requires synchronous fetch and disabled legacy calibration.' }
 if ($ModWallClock -and -not $CanonicalStartupClock) { throw 'The v5 Mod wall-clock experiment requires canonical startup clocks.' }
 if ($RecordInputs -and $Runs -ne 1) { throw 'RecordInputs requires one run.' }
@@ -278,6 +280,7 @@ try {
         if ($VirtualAudio) { $arguments += '--probe-virtual-audio' }
         if ($IsolatedOnline) { $arguments += '--probe-isolated-online' }
         if ($CanonicalParticles) { $arguments += '--probe-canonical-particles' }
+        if ($BoundaryInventory) { $arguments += '--probe-boundary-inventory' }
         if ($ExportVideo) { $arguments += '--probe-export-video' }
         if ($CheckpointPrototype) { $arguments += '--checkpoint-prototype' }
         if ($CheckpointWindows) { $arguments += ('--checkpoint-windows={0}' -f $CheckpointWindows) }
@@ -308,8 +311,7 @@ try {
                 $shadowOrdinal++
                 $diagnosticNames = @('loading-boundary-probe.jsonl','loading-gameplay-oracle.jsonl','loading-state-inventory.json',
                     'loading-field-digests.json','loading-oracle-progress.json','loading-oracle-stage-progress.json',
-                    'engine-clock-layout.json','engine-clock-roundtrip.json')
-                if ($CheckpointPrototype) { $diagnosticNames += 'full-run-fault.txt' }
+                    'engine-clock-layout.json','engine-clock-roundtrip.json','full-run-fault.txt','boundary-inventory.json')
                 foreach ($file in (Get-ChildItem -LiteralPath $resolvedShadow -Recurse -File | Where-Object {
                     $_.Name -in $diagnosticNames -or $_.Name -match '^loading-candidate-[0-9]+-inventory\.json$'
                 })) {

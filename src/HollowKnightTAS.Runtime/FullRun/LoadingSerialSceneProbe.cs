@@ -218,6 +218,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (target.IsValid() && target.isLoaded)
                 throw new InvalidOperationException("Serial native boundary already has the target scene.");
             self.Inventory("native-empty-boundary", movie, native);
+            LoadingBoundaryInventory.Capture(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native);
             self.observedBoundary = true;
             return true;
         }

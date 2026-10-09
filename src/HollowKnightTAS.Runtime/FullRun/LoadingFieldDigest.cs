@@ -217,9 +217,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             { Token(reflectedType.Assembly.GetName().Name + ":" + reflectedType.FullName); return; }
             if (value is MemberInfo member)
             {
+                if (member is System.Reflection.Emit.DynamicMethod) { Omit("dynamic-member"); return; }
                 Token(member.DeclaringType?.FullName ?? "");
                 try { Token(member.MetadataToken.ToString(CultureInfo.InvariantCulture)); }
-                catch (Exception error) when (error is InvalidOperationException || error is NotSupportedException)
+                catch (Exception error) when (error is InvalidOperationException || error is NotSupportedException
+                    || error is NotImplementedException)
                 { Omit("dynamic-member"); }
                 return;
             }
