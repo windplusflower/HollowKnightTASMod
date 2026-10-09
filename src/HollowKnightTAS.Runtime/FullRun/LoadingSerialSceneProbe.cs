@@ -78,6 +78,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw Fail("V6 serial prototype requires a load-info adapter: " + info.GetType().FullName);
             }
             checkpointLoadInfo = info;
+            // Bounded route metadata identifies the actual entry family; scene
+            // names alone do not establish the gate or leaving direction.
+            File.AppendAllText(report + ".transitions.jsonl", JsonConvert.SerializeObject(new {
+                ordinal = ordinal + 1, engineFrame = Time.frameCount,
+                source = USceneManager.GetActiveScene().name, target = info.SceneName,
+                entryGate = info.EntryGateName, leaveDirection = info.HeroLeaveDirection?.ToString(),
+                visualization = info.Visualization.ToString(), firstLevel = info.IsFirstLevelForPlayer }) + "\n");
             if (checkpointTransitionRoutine != null) throw Fail("Scene transition continuation reentered.");
             return TrackCheckpointTransition(original(manager, info));
         }
