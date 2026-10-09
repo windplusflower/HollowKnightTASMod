@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -14,6 +15,60 @@ namespace HollowKnightTAS.Runtime.FullRun
     public sealed partial class RuntimeFullRunSession
     {
         private CheckpointRestoreJob? checkpointRestore;
+        private bool checkpointPreparationHooked;
+
+        private void HookCheckpointPreparation()
+        {
+            if (checkpointPreparationHooked) return;
+            On.GameManager.FadeSceneInWithDelay += OnCheckpointBootstrapFade;
+            On.HeroController.Respawn += OnCheckpointBootstrapRespawn;
+            checkpointPreparationHooked = true;
+        }
+        private void UnhookCheckpointPreparation()
+        {
+            if (!checkpointPreparationHooked) return;
+            On.GameManager.FadeSceneInWithDelay -= OnCheckpointBootstrapFade;
+            On.HeroController.Respawn -= OnCheckpointBootstrapRespawn;
+            checkpointPreparationHooked = false;
+        }
+        private IEnumerator OnCheckpointBootstrapFade(On.GameManager.orig_FadeSceneInWithDelay original, GameManager self, float delay)
+        {
+            var routine = original(self, delay);
+            var job = checkpointRestore;
+            return job != null && mode == "CheckpointPreparing" && job.Phase == "LoadingInitialSave"
+                ? TrackCheckpointBootstrap(job, routine, true) : routine;
+        }
+        private IEnumerator OnCheckpointBootstrapRespawn(On.HeroController.orig_Respawn original, HeroController self)
+        {
+            var routine = original(self);
+            var job = checkpointRestore;
+            return job != null && mode == "CheckpointPreparing" && !job.Applied
+                ? TrackCheckpointBootstrap(job, routine, false) : routine;
+        }
+        private IEnumerator TrackCheckpointBootstrap(CheckpointRestoreJob job, IEnumerator routine, bool initialFade)
+        {
+            job.PendingBootstrapCoroutines++;
+            var finished = false;
+            try
+            {
+                while (true)
+                {
+                    bool moved;
+                    try { moved = routine.MoveNext(); }
+                    catch (Exception exception) { RejectCheckpointRestore(job, exception); throw; }
+                    if (!moved) { finished = true; break; }
+                    yield return routine.Current;
+                }
+            }
+            finally
+            {
+                (routine as IDisposable)?.Dispose();
+                job.PendingBootstrapCoroutines--;
+                if (initialFade && finished) job.InitialFadeFinished = true;
+                Modding.Logger.Log("[HKTAS] Checkpoint bootstrap coroutine finished: fade=" + initialFade
+                    + " pending=" + job.PendingBootstrapCoroutines + " Movie=" + movieFrame);
+            }
+        }
         private Dictionary<string, string> CheckpointRestoreCommand(IReadOnlyDictionary<string, string> fields)
         {
             if (fields.Count != 3 || !fields.TryGetValue("checkpointId", out var id)) throw new InvalidDataException("Invalid checkpoint restore command fields.");
@@ -81,6 +136,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var job = new CheckpointRestoreJob(packet, data, transition, player, scene);
                     checkpointRestore = job; mode = "CheckpointPreparing"; frameInputEnabled = false;
                     input.SetFrameInputEnabled(false); mouse.SetFrameInputEnabled(false); input.SetNativeFrameActive(false);
+                    HookCheckpointPreparation();
                     try { manager.LoadGameFromUI(slot); }
                     catch (Exception exception) { RejectCheckpointRestore(job, exception); throw; }
                     return new Dictionary<string, string> { ["requestId"] = fields["requestId"], ["checkpointId"] = id,
@@ -101,6 +157,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         ?? throw new InvalidOperationException("Boss setup objects were not bound before source unloading."), pending.Player);
                     var applyLoad = LoadingSerialSceneProbe.PrepareCheckpointLoadState(pending.Data.SceneLoad);
                     var heroScale = HeroController.SilentInstance.transform.localScale;
+                    loadingBoundaryProbe?.IncludeCheckpointK(pending.Data.MovieFrame);
                     Modding.Logger.Log("[HKTAS] Checkpoint Hero scale before apply=" + heroScale
                         + " captured=" + pending.Data.ManagedWorld.HeroLocalScale);
                     // Failure after the first live write is terminal. No cold
@@ -155,6 +212,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (hero == null || !hero.gameObject.activeInHierarchy || manager.gameState != GlobalEnums.GameState.PLAYING) return true;
                 if (job.Phase == "LoadingInitialSave")
                 {
+                    // PLAYING is set before the initial delayed fade and Hero
+                    // respawn finish. Let their original continuations end;
+                    // otherwise they can mutate the reconstructed C after apply.
+                    if (!job.InitialFadeFinished || job.PendingBootstrapCoroutines != 0
+                        || GameCameras.instance.cameraFadeFSM.ActiveStateName != "Normal") return true;
                     if (USceneManager.GetActiveScene().name == job.Transition.SourceScene) job.Phase = "SourceReady";
                     else
                     {
@@ -164,7 +226,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                         return true;
                     }
                 }
-                if (job.Phase == "LoadingSourceScene" && USceneManager.GetActiveScene().name == job.Transition.SourceScene) job.Phase = "SourceReady";
+                if (job.Phase == "LoadingSourceScene" && USceneManager.GetActiveScene().name == job.Transition.SourceScene
+                    && job.PendingBootstrapCoroutines == 0) job.Phase = "SourceReady";
                 if (job.Phase == "SourceReady")
                 { job.BossTargets = job.Data.ManagedWorld.Boss.BindBeforeUnload(); job.Phase = "AwaitingTargetC"; manager.BeginSceneTransition(job.Transition.LoadInfo); }
             }
@@ -210,6 +273,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal readonly Stopwatch Elapsed = Stopwatch.StartNew();
             internal volatile string Phase = "LoadingInitialSave", Error = "";
             internal volatile bool Applied;
+            internal int PendingBootstrapCoroutines;
+            internal bool InitialFadeFinished;
             internal long FirstConsumed = -1, Consumed;
             internal CheckpointBossContext.Targets? BossTargets;
         }

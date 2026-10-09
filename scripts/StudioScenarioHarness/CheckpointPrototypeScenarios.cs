@@ -50,6 +50,7 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_FIRST", Arg("--probe-first"));
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_END", sampleEnd.ToString());
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_WINDOWS", windowText);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CHECKPOINT_K", "1");
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_RECORD_INPUTS", null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS", args.Contains("--probe-random-calls") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_FIRST", args.Contains("--probe-random-calls") ? Arg("--probe-call-first") : null);

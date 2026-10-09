@@ -27,6 +27,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             return LoadingRigidbodyValueBits.Decode(owner, nativeBody, transformPosition.x, transformPosition.y);
         }
 
+        internal Vector2 CaptureCheckpointVelocity(Rigidbody2D body)
+        {
+            ReadBody(body, out var owner, out var nativeBody);
+            if (nativeBody == null) throw new InvalidOperationException("Checkpoint Hero native body is absent.");
+            var values = LoadingRigidbodyValueBits.Decode(owner, nativeBody, 0f, 0f);
+            return new Vector2(values.Vx, values.Vy);
+        }
+
         internal object CaptureValues(Rigidbody2D body)
         {
             ReadBody(body, out var owner, out var nativeBody);

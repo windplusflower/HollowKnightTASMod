@@ -20,9 +20,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private const int MaximumRows = 50000;
         private const long MaximumBytes = 32L * 1024 * 1024;
         private readonly string path;
-        private readonly long first;
+        private long first;
         private readonly long end;
-        private readonly Tuple<long, long>[] windows;
+        private Tuple<long, long>[] windows;
+        private int headerBytes;
+        private long? checkpointWindow;
         private readonly Func<long> movieFrame;
         private readonly Func<long> nativeFrame;
         private readonly Func<string> rngHash;
@@ -53,6 +55,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             LoadingEngineClockProbe.Capture(directory);
             randomFirst = long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_FIRST"), out var rf) ? Math.Max(first, rf) : first;
             randomEnd = long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALL_END"), out var re) ? Math.Min(end, re) : end;
+            WriteHeader();
+            if (Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS") == "1")
+                randomTrace = new LoadingRandomCallTrace(SampleRandom);
+            GameManager.SceneTransitionBegan += TransitionBegan;
+            USceneManager.sceneLoaded += SceneLoaded;
+            USceneManager.sceneUnloaded += SceneUnloaded;
+            USceneManager.activeSceneChanged += ActiveSceneChanged;
+        }
+
+        private void WriteHeader()
+        {
             Write(new { kind = "header", schema = "hktas-loading-probe-v1", first, end,
                 windows = windows.Select(window => new { first = window.Item1, end = window.Item2 }).ToArray(),
                 observerModuleId = typeof(LoadingBoundaryProbe).Module.ModuleVersionId.ToString("D"),
@@ -66,13 +79,34 @@ namespace HollowKnightTAS.Runtime.FullRun
                 coverage = light ? "clock-hero-boss-sequence-only" : "clock-hero-boss-playerdata-scenedata-sequence-only",
                 randomCalls = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS") == "1" ? "Assembly-CSharp-nongeneric" : "off",
                 randomFirst, randomEnd,
+                checkpointWindow,
                 completeStateCoverage = false });
-            if (Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CALLS") == "1")
-                randomTrace = new LoadingRandomCallTrace(SampleRandom);
-            GameManager.SceneTransitionBegan += TransitionBegan;
-            USceneManager.sceneLoaded += SceneLoaded;
-            USceneManager.sceneUnloaded += SceneUnloaded;
-            USceneManager.activeSceneChanged += ActiveSceneChanged;
+            headerBytes = checked((int)buffer.Length);
+        }
+
+        internal void IncludeCheckpointK(long k)
+        {
+            if (Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CHECKPOINT_K") != "1") return;
+            if (sealedTrace || checkpointWindow.HasValue || k < 0 || k > end - 3)
+                throw new InvalidOperationException("Checkpoint probe window cannot be bound at this boundary.");
+            var merged = new List<Tuple<long, long>>();
+            foreach (var window in windows.Concat(new[] { Tuple.Create(k, k + 3) }).OrderBy(w => w.Item1))
+            {
+                if (merged.Count == 0 || merged[merged.Count - 1].Item2 < window.Item1) merged.Add(window);
+                else
+                {
+                    var previous = merged[merged.Count - 1];
+                    merged[merged.Count - 1] = Tuple.Create(previous.Item1, Math.Max(previous.Item2, window.Item2));
+                }
+            }
+            if (merged.Count > 17 || merged.Sum(w => w.Item2 - w.Item1) > 128)
+                throw new InvalidOperationException("Checkpoint probe exceeds its short-window budget.");
+            // Evidence is still an in-memory bounded stream. Preserve any
+            // earlier samples and replace only its declared header before seal.
+            var samples = buffer.ToArray().Skip(headerBytes).ToArray();
+            windows = merged.ToArray(); first = windows[0].Item1; checkpointWindow = k;
+            buffer.SetLength(0); buffer.Position = 0; WriteHeader();
+            buffer.Write(samples, 0, samples.Length);
         }
 
         public static LoadingBoundaryProbe? Create(string directory, Func<long> movieFrame,
@@ -131,10 +165,51 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (!light) Add("heroFlags", HashFields(hero.cState));
                     if (Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_FIELDS") == "hero")
                     {
+                        var cameras = GameCameras.instance;
+                        if (cameras != null && cameras.mainCamera != null && cameras.cameraTarget != null)
+                        {
+                            var cameraPosition = cameras.mainCamera.transform.position;
+                            var targetPosition = cameras.cameraTarget.transform.position;
+                            Add("cameraX", cameraPosition.x); Add("cameraY", cameraPosition.y); Add("cameraZ", cameraPosition.z);
+                            Add("cameraTargetX", targetPosition.x); Add("cameraTargetY", targetPosition.y);
+                            Add("cameraMode", cameras.cameraController.mode); Add("cameraTargetMode", cameras.cameraTarget.mode);
+                            Add("cameraFadeState", cameras.cameraFadeFSM.ActiveStateName); Add("cameraShakeState", cameras.cameraShakeFSM.ActiveStateName);
+                            Add("cameraParentX", cameras.cameraParent.position.x); Add("cameraParentY", cameras.cameraParent.position.y);
+                        }
+                        Add("heroLayer", hero.gameObject.layer);
+                        if (body != null)
+                        {
+                            Add("heroBodyType", body.bodyType);
+                            Add("heroGravityScale", body.gravityScale);
+                            Add("heroSimulated", body.simulated);
+                        }
+                        var collider = hero.GetComponent<Collider2D>();
+                        if (collider != null)
+                        {
+                            Add("heroColliderEnabled", collider.enabled);
+                            Add("heroColliderTrigger", collider.isTrigger);
+                        }
                         foreach (var field in CheckpointScalarFields.Declared(typeof(HeroControllerStates)))
                             Add("heroFlag." + field.Name, field.GetValue(hero.cState));
                         var fsms = hero.GetComponents<PlayMakerFSM>().OrderBy(fsm => fsm.FsmName, StringComparer.Ordinal).ToArray();
                         for (var i = 0; i < fsms.Length; i++) Add("heroFsm." + i + "." + fsms[i].FsmName, fsms[i].ActiveStateName);
+                        var buzzer = GameObject.Find("Angry Buzzer");
+                        if (buzzer != null)
+                        {
+                            var control = buzzer.GetComponents<PlayMakerFSM>().SingleOrDefault(f => f.FsmName == "Control");
+                            if (control != null)
+                            {
+                                var fsm = (HutongGames.PlayMaker.Fsm)typeof(PlayMakerFSM).GetField("fsm", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(control);
+                                var active = (HutongGames.PlayMaker.FsmState?)typeof(HutongGames.PlayMaker.Fsm).GetField("activeState", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(fsm);
+                                Add("buzzerState", active?.Name);
+                                var actions = active == null ? null : (HutongGames.PlayMaker.FsmStateAction[]?)typeof(HutongGames.PlayMaker.FsmState)
+                                    .GetField("actions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(active);
+                                var buzz = actions?.SingleOrDefault(a => a.GetType().FullName == "HutongGames.PlayMaker.Actions.IdleBuzz");
+                                if (buzz != null)
+                                    foreach (var field in buzz.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic).Where(f => f.FieldType == typeof(float)))
+                                        Add("buzzer." + field.Name, field.GetValue(buzz));
+                            }
+                        }
                     }
                 }
                 // Field-only recursive hashing: avoids getters and does not publish save data.

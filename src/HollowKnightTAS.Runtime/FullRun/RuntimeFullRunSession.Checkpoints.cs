@@ -207,6 +207,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     // The first prototype rebuilds an initialized existing-game
                     // transition. Keep the one-shot request armed across save entry.
                     if (boundary.Item2.IsFirstLevelForPlayer || boundary.Item3 == "Menu_Title" || HeroController.SilentInstance == null) return;
+                    loadingBoundaryProbe?.IncludeCheckpointK(movieFrame);
                     checkpointSaves!.AssertActive();
                     var rng = UnityRandomStateCodec_1_5_78_11833.Resolve();
                     if (!rng.Ready || rng.Codec == null) throw new InvalidDataException("Unity RNG checkpoint codec is unavailable.");
@@ -254,7 +255,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         private void ClearCheckpointCapture()
         { checkpointArm = null; frozenCheckpoint = null; checkpointEncoding = null; checkpointFailure = ""; checkpointCaptureId = ""; }
         private void DisposeSceneCheckpoints()
-        { lock (checkpointSync) { ClearCheckpointCapture(); checkpointImport?.Dispose(); checkpointImport = null; stagedCheckpoint = null; } }
+        {
+            UnhookCheckpointPreparation();
+            lock (checkpointSync) { ClearCheckpointCapture(); checkpointImport?.Dispose(); checkpointImport = null; stagedCheckpoint = null; }
+        }
         internal void DiscardCheckpointTransfersOnDisconnect()
         {
             lock (checkpointSync)

@@ -10,14 +10,17 @@ namespace HollowKnightTAS.Runtime.FullRun
     [Serializable]
     internal sealed class CheckpointManagedWorldData
     {
-        public int Version = 5;
+        public int Version = 9;
         public Dictionary<string, string> GameManager = null!, Hero = null!, HeroStates = null!;
         public Vector2[]? HeroPositionHistory;
         public Vector3 HeroLocalPosition, HeroLocalScale;
         public Quaternion HeroLocalRotation;
+        public RigidbodyType2D HeroBodyType;
+        public Vector2 HeroBodyVelocity;
+        public CheckpointCameraState Camera = null!;
         public CheckpointNailSlashState[] NailSlashes = null!;
         public CheckpointHeroSpellVariables SpellVariables = null!;
-        public CheckpointDreamReturnState DreamReturn = null!;
+        public CheckpointPersistentFsmState DreamReturn = null!;
         public CheckpointBossContext Boss = null!;
         // Explicit data coverage. Reference/native domains are not implied by
         // capturing their owner's scalar fields.
@@ -37,6 +40,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var hero = HeroController.SilentInstance ?? throw new InvalidOperationException("Checkpoint Hero is absent.");
             if (hero.transform.parent != null)
                 throw new InvalidOperationException("Checkpoint Hero must have left its scene parent at C.");
+            var body = hero.GetComponent<Rigidbody2D>() ?? throw new InvalidOperationException("Checkpoint Hero body is absent.");
             return new CheckpointManagedWorldData
             {
                 GameManager = CheckpointScalarFields.Capture(manager, ManagerFields),
@@ -45,24 +49,31 @@ namespace HollowKnightTAS.Runtime.FullRun
                 HeroLocalPosition = hero.transform.localPosition,
                 HeroLocalRotation = hero.transform.localRotation,
                 HeroLocalScale = hero.transform.localScale,
+                HeroBodyType = body.bodyType,
+                HeroBodyVelocity = new LoadingRigidbodyObservation().CaptureCheckpointVelocity(body),
+                Camera = CheckpointCameraState.Capture(),
                 NailSlashes = CheckpointNailSlashState.Capture(hero),
                 SpellVariables = CheckpointHeroSpellVariables.Capture(hero),
-                DreamReturn = CheckpointDreamReturnState.Capture(hero),
+                DreamReturn = CheckpointPersistentFsmState.Capture(hero),
                 Boss = CheckpointBossContext.Capture(LoadingSerialSceneProbe.CheckpointBossBindings),
                 HeroPositionHistory = PositionHistory.GetValue(hero) is Vector2[] history ? (Vector2[])history.Clone() : null
             };
         }
         internal Action PrepareApply(PlayerData playerData, SceneData sceneData)
         {
-            if (Version != 5 || RemainingDomains == null || !RemainingDomains.SequenceEqual(new[] { "persistent-object-bindings",
+            if (Version != 9 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
+                || RemainingDomains == null || !RemainingDomains.SequenceEqual(new[] { "persistent-object-bindings",
                 "fsm-actions-and-variables", "coroutine-scheduler", "physics-world", "mod-state", "animation-and-audio" })
                 || HeroPositionHistory?.Length > 1024)
                 throw new InvalidDataException("Unsupported managed world checkpoint coverage.");
             var manager = global::GameManager.instance ?? throw new InvalidOperationException("Restore GameManager is absent.");
             var hero = HeroController.SilentInstance ?? throw new InvalidOperationException("Restore Hero is absent.");
+            var body = hero.GetComponent<Rigidbody2D>() ?? throw new InvalidOperationException("Restore Hero body is absent.");
+            Modding.Logger.Log("[HKTAS] Checkpoint Hero body type: current=" + body.bodyType + " captured=" + HeroBodyType);
             if (hero.transform.parent != null || new[] { HeroLocalPosition.x, HeroLocalPosition.y, HeroLocalPosition.z,
                 HeroLocalRotation.x, HeroLocalRotation.y, HeroLocalRotation.z, HeroLocalRotation.w,
-                HeroLocalScale.x, HeroLocalScale.y, HeroLocalScale.z }.Any(v => float.IsNaN(v) || float.IsInfinity(v)))
+                HeroLocalScale.x, HeroLocalScale.y, HeroLocalScale.z, HeroBodyVelocity.x, HeroBodyVelocity.y }
+                .Any(v => float.IsNaN(v) || float.IsInfinity(v)))
                 throw new InvalidDataException("Checkpoint Hero transform or its binding is invalid.");
             var currentPlayer = PlayerData.instance;
             if (currentPlayer == null || manager.sceneData == null || hero.cState == null
@@ -74,6 +85,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var applySlashes = CheckpointNailSlashState.PrepareApply(hero, NailSlashes);
             var applySpellVariables = (SpellVariables ?? throw new InvalidDataException("Checkpoint Spell Control values are absent.")).PrepareApply(hero);
             var applyDreamReturn = (DreamReturn ?? throw new InvalidDataException("Checkpoint Dream Return state is absent.")).PrepareApply(hero);
+            var applyCamera = (Camera ?? throw new InvalidDataException("Checkpoint camera state is absent.")).PrepareApply();
             var history = HeroPositionHistory == null ? null : (Vector2[])HeroPositionHistory.Clone();
             var playerWrites = CheckpointScalarFields.Declared(typeof(PlayerData)).Select(f => Tuple.Create(f, f.GetValue(playerData))).ToArray();
             var sceneWrites = CheckpointScalarFields.Declared(typeof(SceneData)).Select(f => Tuple.Create(f, f.GetValue(sceneData))).ToArray();
@@ -90,6 +102,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 hero.transform.localPosition = HeroLocalPosition;
                 hero.transform.localRotation = HeroLocalRotation;
                 hero.transform.localScale = HeroLocalScale;
+                // Preparation's native Kinematic body survives a direct transition.
+                // Restore its actual captured mode; entering from above does
+                // not reset it and therefore cannot reconstruct it implicitly.
+                if (body.bodyType != HeroBodyType) body.bodyType = HeroBodyType;
+                body.velocity = HeroBodyVelocity;
+                applyCamera();
                 applySlashes();
                 applySpellVariables();
                 applyDreamReturn();

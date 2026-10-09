@@ -9,11 +9,12 @@ using UnityEngine;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
-    // One persistent, initialized FSM. Preserve its running state and action
+    // An explicitly bound, initialized FSM. Preserve its running state and action
     // lists without SetState/OnEnter, which would repeat completed game effects.
     [Serializable]
-    internal sealed class CheckpointDreamReturnState
+    internal sealed class CheckpointPersistentFsmState
     {
+        public string OwnerName = "", FsmName = "";
         public Dictionary<string, string> Fields = null!;
         public string? Active, Previous, SwitchTo;
         public CheckpointHeroSpellVariables Variables = null!;
@@ -34,7 +35,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public Dictionary<string, string>[] VariableValues = null!;
         }
         private static FieldInfo Field(Type type, string name) => type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            ?? throw new InvalidDataException("Dream Return field binding is absent: " + type.FullName + "/" + name);
+            ?? throw new InvalidDataException("Persistent FSM field binding is absent: " + type.FullName + "/" + name);
         private static FieldInfo[] Scalars(Type type)
         {
             var result = new List<FieldInfo>();
@@ -52,7 +53,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static void RequireNoDelayedEvents(Fsm fsm)
         {
             if (((IList)Field(typeof(Fsm), "delayedEvents").GetValue(fsm)).Count != 0)
-                throw new InvalidOperationException("Dream Return delayed events require a scheduler adapter.");
+                throw new InvalidOperationException("Persistent FSM delayed events require a scheduler adapter.");
         }
         private static FieldInfo[] NamedValues(Type type)
         {
@@ -67,7 +68,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static Dictionary<string, string> VariableValue(object? variable)
         {
             if (variable == null) return new Dictionary<string, string> { ["null"] = "true" };
-            if (((NamedVariable)variable).CastVariable != null) throw new InvalidDataException("Dream action cast variables require an adapter.");
+            if (((NamedVariable)variable).CastVariable != null) throw new InvalidDataException("Persistent FSM action cast variables require an adapter.");
             return CheckpointScalarFields.Capture(variable, new[] { Field(variable.GetType(), "value") });
         }
         private static int[]? ActionIndices(object? list, FsmStateAction[] actions)
@@ -76,17 +77,19 @@ namespace HollowKnightTAS.Runtime.FullRun
             return ((IEnumerable<FsmStateAction>)list).Select(action =>
             {
                 var index = Array.FindIndex(actions, candidate => ReferenceEquals(candidate, action));
-                if (index < 0) throw new InvalidDataException("Dream action list contains an unbound action.");
+                if (index < 0) throw new InvalidDataException("Persistent FSM action list contains an unbound action.");
                 return index;
             }).ToArray();
         }
-        internal static CheckpointDreamReturnState Capture(HeroController hero)
+        internal static CheckpointPersistentFsmState Capture(HeroController hero) => Capture(Bind(hero));
+        internal static CheckpointPersistentFsmState Capture(PlayMakerFSM component)
         {
-            var component = Bind(hero); var fsm = (Fsm)RawFsm.GetValue(component);
+            var fsm = (Fsm)RawFsm.GetValue(component);
             RequireNoDelayedEvents(fsm);
             var states = (FsmState[])StateArray.GetValue(fsm);
-            if (states.Length > 128) throw new InvalidDataException("Dream state layout exceeds its bound.");
-            var result = new CheckpointDreamReturnState { Fields = CheckpointScalarFields.Capture(fsm, FsmFields),
+            if (states.Length > 128) throw new InvalidDataException("Persistent FSM state layout exceeds its bound.");
+            var result = new CheckpointPersistentFsmState { OwnerName = component.gameObject.name, FsmName = component.FsmName,
+                Fields = CheckpointScalarFields.Capture(fsm, FsmFields),
                 Active = ((FsmState?)Field(typeof(Fsm), "activeState").GetValue(fsm))?.Name,
                 Previous = ((FsmState?)Field(typeof(Fsm), "previousActiveState").GetValue(fsm))?.Name,
                 SwitchTo = ((FsmState?)Field(typeof(Fsm), "switchToState").GetValue(fsm))?.Name,
@@ -94,7 +97,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 States = states.Select(state =>
                 {
                     var actions = (FsmStateAction[]?)ActionArray.GetValue(state);
-                    if (actions?.Length > 128) throw new InvalidDataException("Dream action layout exceeds its bound.");
+                    if (actions?.Length > 128) throw new InvalidDataException("Persistent FSM action layout exceeds its bound.");
                     var active = Field(typeof(FsmState), "activeAction").GetValue(state);
                     return new StateData { Name = state.Name, Fields = CheckpointScalarFields.Capture(state, StateFields),
                         ActiveAction = active == null ? -1 : Array.FindIndex(actions!, a => ReferenceEquals(a, active)),
@@ -105,16 +108,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                             VariableFields = NamedValues(action.GetType()).Select(Identity).ToArray(),
                             VariableValues = NamedValues(action.GetType()).Select(field => VariableValue(field.GetValue(action))).ToArray() }).ToArray() };
                 }).ToArray() };
-            Modding.Logger.Log("[HKTAS] Captured Dream Return C state=" + result.Active + " entered=" + result.Fields[typeof(Fsm).FullName + "/activeStateEntered"]
+            Modding.Logger.Log("[HKTAS] Captured " + result.FsmName + " C state=" + result.Active + " entered=" + result.Fields[typeof(Fsm).FullName + "/activeStateEntered"]
                 + " activeActions=" + string.Join(",", result.States.Where(s => s.Name == result.Active).SelectMany(s => s.Actions?.Select(a => a.Type) ?? Array.Empty<string>())));
             return result;
         }
-        internal Action PrepareApply(HeroController hero)
+        internal Action PrepareApply(HeroController hero) => PrepareApply(Bind(hero));
+        internal Action PrepareApply(PlayMakerFSM component)
         {
-            var component = Bind(hero); var fsm = (Fsm)RawFsm.GetValue(component); RequireNoDelayedEvents(fsm);
+            if (component.gameObject.name != OwnerName || component.FsmName != FsmName)
+                throw new InvalidDataException("Persistent FSM owner binding differs.");
+            var fsm = (Fsm)RawFsm.GetValue(component); RequireNoDelayedEvents(fsm);
             var states = (FsmState[])StateArray.GetValue(fsm);
             if (States == null || States.Length > 128 || !states.Select(s => s.Name).SequenceEqual(States.Select(s => s.Name)))
-                throw new InvalidDataException("Dream Return state layout differs.");
+                throw new InvalidDataException("Persistent FSM state layout differs.");
             FsmState? State(string? name) => name == null ? null : states.Single(s => s.Name == name);
             var active = State(Active); var previous = State(Previous); var switchTo = State(SwitchTo);
             var writes = new List<Action> { CheckpointScalarFields.PrepareApply(fsm, FsmFields, Fields), Variables.PrepareApply(component, false) };
@@ -124,41 +130,41 @@ namespace HollowKnightTAS.Runtime.FullRun
                 writes.Add(CheckpointScalarFields.PrepareApply(state, StateFields, data.Fields));
                 if (data.Actions == null)
                 {
-                    if (state == active) throw new InvalidDataException("Dream active state lacks loaded actions.");
+                    if (state == active) throw new InvalidDataException("Persistent FSM active state lacks loaded actions.");
                     continue;
                 }
                 // Normal action-data factory initializes managed action objects
                 // and prefab bindings; it never runs OnEnter or a game frame.
                 var actions = state.Actions;
                 if (data.Actions.Length > 128 || !actions.Select(a => a.GetType().FullName).SequenceEqual(data.Actions.Select(a => a.Type)))
-                    throw new InvalidDataException("Dream Return action layout differs: " + state.Name);
+                    throw new InvalidDataException("Persistent FSM action layout differs: " + state.Name);
                 for (var actionIndex = 0; actionIndex < actions.Length; actionIndex++)
                 {
                     var action = actions[actionIndex]; var saved = data.Actions[actionIndex];
                     var variables = NamedValues(action.GetType());
                     if (!variables.Select(Identity).SequenceEqual(saved.VariableFields) || variables.Length != saved.VariableValues.Length)
-                        throw new InvalidDataException("Dream Return action value layout differs.");
+                        throw new InvalidDataException("Persistent FSM action value layout differs.");
                     writes.Add(CheckpointScalarFields.PrepareApply(action, Scalars(action.GetType()), saved.Fields));
                     for (var v = 0; v < variables.Length; v++)
                     {
                         var variable = variables[v].GetValue(action); var value = saved.VariableValues[v];
-                        if (value.ContainsKey("null")) { if (variable != null || value.Count != 1 || value["null"] != "true") throw new InvalidDataException("Dream action null binding differs."); }
+                        if (value.ContainsKey("null")) { if (variable != null || value.Count != 1 || value["null"] != "true") throw new InvalidDataException("Persistent FSM action null binding differs."); }
                         else
                         {
-                            if (variable == null || ((NamedVariable)variable).CastVariable != null) throw new InvalidDataException("Dream action variable binding differs.");
+                            if (variable == null || ((NamedVariable)variable).CastVariable != null) throw new InvalidDataException("Persistent FSM action variable binding differs.");
                             writes.Add(CheckpointScalarFields.PrepareApply(variable, new[] { Field(variable.GetType(), "value") }, value));
                         }
                     }
                 }
                 FsmStateAction? ActionAt(int i) => i == -1 ? null : i >= 0 && i < actions.Length ? actions[i]
-                    : throw new InvalidDataException("Dream action ordinal is outside its bound.");
+                    : throw new InvalidDataException("Persistent FSM action ordinal is outside its bound.");
                 var currentAction = ActionAt(data.ActiveAction);
                 var activeActions = data.ActiveActions?.Select(i => ActionAt(i) ?? throw new InvalidDataException("Null active action.")).ToList();
                 var finishedActions = data.FinishedActions?.Select(i => ActionAt(i) ?? throw new InvalidDataException("Null finished action.")).ToList();
                 writes.Add(() => { Field(typeof(FsmState), "activeAction").SetValue(state, currentAction);
                     Field(typeof(FsmState), "activeActions").SetValue(state, activeActions); Field(typeof(FsmState), "_finishedActions").SetValue(state, finishedActions); });
             }
-            Modding.Logger.Log("[HKTAS] Applying Dream Return C state=" + Active + " current=" + component.ActiveStateName);
+            Modding.Logger.Log("[HKTAS] Applying " + FsmName + " C state=" + Active + " current=" + component.ActiveStateName);
             return () => { foreach (var write in writes) write(); Field(typeof(Fsm), "activeState").SetValue(fsm, active);
                 Field(typeof(Fsm), "previousActiveState").SetValue(fsm, previous); Field(typeof(Fsm), "switchToState").SetValue(fsm, switchTo); };
         }
