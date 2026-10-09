@@ -10,13 +10,14 @@ namespace HollowKnightTAS.Runtime.FullRun
     [Serializable]
     internal sealed class CheckpointManagedWorldData
     {
-        public int Version = 9;
+        public int Version = 10;
         public Dictionary<string, string> GameManager = null!, Hero = null!, HeroStates = null!;
         public Vector2[]? HeroPositionHistory;
         public Vector3 HeroLocalPosition, HeroLocalScale;
         public Quaternion HeroLocalRotation;
         public RigidbodyType2D HeroBodyType;
         public Vector2 HeroBodyVelocity;
+        public float HeroBodyGravityScale;
         public CheckpointCameraState Camera = null!;
         public CheckpointNailSlashState[] NailSlashes = null!;
         public CheckpointHeroSpellVariables SpellVariables = null!;
@@ -51,6 +52,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 HeroLocalScale = hero.transform.localScale,
                 HeroBodyType = body.bodyType,
                 HeroBodyVelocity = new LoadingRigidbodyObservation().CaptureCheckpointVelocity(body),
+                HeroBodyGravityScale = body.gravityScale,
                 Camera = CheckpointCameraState.Capture(),
                 NailSlashes = CheckpointNailSlashState.Capture(hero),
                 SpellVariables = CheckpointHeroSpellVariables.Capture(hero),
@@ -61,7 +63,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal Action PrepareApply(PlayerData playerData, SceneData sceneData)
         {
-            if (Version != 9 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
+            if (Version != 10 || !Enum.IsDefined(typeof(RigidbodyType2D), HeroBodyType)
                 || RemainingDomains == null || !RemainingDomains.SequenceEqual(new[] { "persistent-object-bindings",
                 "fsm-actions-and-variables", "coroutine-scheduler", "physics-world", "mod-state", "animation-and-audio" })
                 || HeroPositionHistory?.Length > 1024)
@@ -72,7 +74,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Modding.Logger.Log("[HKTAS] Checkpoint Hero body type: current=" + body.bodyType + " captured=" + HeroBodyType);
             if (hero.transform.parent != null || new[] { HeroLocalPosition.x, HeroLocalPosition.y, HeroLocalPosition.z,
                 HeroLocalRotation.x, HeroLocalRotation.y, HeroLocalRotation.z, HeroLocalRotation.w,
-                HeroLocalScale.x, HeroLocalScale.y, HeroLocalScale.z, HeroBodyVelocity.x, HeroBodyVelocity.y }
+                HeroLocalScale.x, HeroLocalScale.y, HeroLocalScale.z, HeroBodyVelocity.x, HeroBodyVelocity.y, HeroBodyGravityScale }
                 .Any(v => float.IsNaN(v) || float.IsInfinity(v)))
                 throw new InvalidDataException("Checkpoint Hero transform or its binding is invalid.");
             var currentPlayer = PlayerData.instance;
@@ -106,6 +108,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // Restore its actual captured mode; entering from above does
                 // not reset it and therefore cannot reconstruct it implicitly.
                 if (body.bodyType != HeroBodyType) body.bodyType = HeroBodyType;
+                // Horizontal entry saves the current native gravity as the
+                // previous value. A fresh preparation body can still have zero.
+                // Restore the captured property before the original entry runs.
+                body.gravityScale = HeroBodyGravityScale;
                 body.velocity = HeroBodyVelocity;
                 applyCamera();
                 applySlashes();
