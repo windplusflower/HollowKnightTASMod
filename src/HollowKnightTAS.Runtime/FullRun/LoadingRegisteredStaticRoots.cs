@@ -23,8 +23,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             var assemblies = AppDomain.CurrentDomain.GetAssemblies().Where(assembly => !assembly.IsDynamic).ToArray();
             foreach (var name in Names)
             {
-                var type = assemblies.Select(assembly => assembly.GetType(name, false)).FirstOrDefault(value => value != null)
-                    ?? throw new InvalidOperationException("Registered P0 static root is unavailable: " + name);
+                var type = assemblies.Select(assembly => assembly.GetType(name, false)).FirstOrDefault(value => value != null);
+                if (type == null)
+                {
+                    // A pure installation has no external Mod constructors or
+                    // static roots. Present Mods retain the explicit registry.
+                    if (name.StartsWith("CustomKnight.", StringComparison.Ordinal) || name.StartsWith("EnviousMarmu.", StringComparison.Ordinal)) continue;
+                    throw new InvalidOperationException("Registered P0 static root is unavailable: " + name);
+                }
                 foreach (var field in type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
                              .Where(field => !field.IsLiteral).OrderBy(field => field.Name, StringComparer.Ordinal))
                 {
@@ -34,6 +40,25 @@ namespace HollowKnightTAS.Runtime.FullRun
                         field.GetValue(null));
                 }
             }
+        }
+
+        internal static IEnumerable<Tuple<string, object?>> ReadCanonical()
+        {
+            foreach (var root in Read()) yield return root;
+            // Apply has already used these initialized singletons/policies.
+            // Reading this closed list cannot initialize arbitrary dormant types.
+            var types = new[] { typeof(ObjectPool), typeof(iTween), typeof(PlayMakerFSM), typeof(HutongGames.PlayMaker.FsmVariables),
+                typeof(HutongGames.PlayMaker.Fsm), typeof(HutongGames.PlayMaker.FsmEvent), typeof(HutongGames.PlayMaker.FsmExecutionStack),
+                typeof(HutongGames.PlayMaker.FsmStateAction), typeof(GameManager), typeof(HeroController), typeof(GameCameras), typeof(PlayMakerGlobals) };
+            foreach (var type in types.OrderBy(type => type.FullName, StringComparer.Ordinal))
+                foreach (var field in type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+                    .Where(field => !field.IsLiteral).OrderBy(field => field.Name, StringComparer.Ordinal))
+                {
+                    if (field.IsDefined(typeof(ThreadStaticAttribute), false))
+                        throw new InvalidOperationException("Canonical static root requires thread-local observation: " + type.FullName + "." + field.Name);
+                    yield return Tuple.Create<string, object?>("static:" + type.Assembly.GetName().Name + ":" + type.FullName + "." + field.Name,
+                        field.GetValue(null));
+                }
         }
     }
 }

@@ -32,6 +32,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ReadProcessMemory(IntPtr process, IntPtr address, byte[] bytes, UIntPtr size, out UIntPtr read);
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool WriteProcessMemory(IntPtr process, IntPtr address, byte[] bytes, UIntPtr size, out UIntPtr written);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int AllocateNode(IntPtr tree);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void InsertLeaf(IntPtr tree, int node);
         private static byte[] Read(IntPtr address, int length)
         {
             if (address == IntPtr.Zero || length < 0 || length > MaximumNodes * 40) throw new InvalidOperationException("Broadphase memory range differs.");
@@ -76,7 +77,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal byte[] Header = null!;
             internal Dictionary<string, IntPtr> Proxies = new Dictionary<string, IntPtr>();
         }
-        private static Live Bind(GameObject[]? restoredSpatters = null, GameObject[]? restoredGeos = null, GameObject[]? restoredProjectiles = null)
+        private static Live Bind(GameObject[]? restoredSpatters = null, GameObject[]? restoredGeos = null, GameObject[]? restoredProjectiles = null,
+            BoundaryObjectIdentity? canonicalIdentities = null)
         {
             LoadingEngineClockProbe.RequirePinnedEngine();
             var hero = HeroController.SilentInstance ?? throw new InvalidOperationException("Broadphase Hero is absent.");
@@ -113,7 +115,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (proxies == 0) continue;
                     if (Pointer(owner, 200) != IntPtr.Zero || Pointer(owner, 208) != IntPtr.Zero)
                         throw new InvalidOperationException("Broadphase effector/composite fixture binding is unsupported.");
-                    var id = OwnerKey(collider.transform, spatters, geos, projectiles) + "/collider[" + component + "]";
+                    var id = (canonicalIdentities == null ? OwnerKey(collider.transform, spatters, geos, projectiles)
+                        : canonicalIdentities.Get(collider.gameObject)) + "/collider[" + component + "]";
                     var nativeBody = Read(Pointer(fixture, 32), 200);
                     if (Pointer(nativeBody, 88) != world || Pointer(fixture, 80) != pointer)
                         throw new InvalidOperationException("Broadphase fixture world/owner binding differs.");
@@ -138,7 +141,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static CheckpointPhysicsBroadphaseState Capture(GameObject[]? restoredSpatters = null, GameObject[]? restoredGeos = null, GameObject[]? restoredProjectiles = null)
         {
-            var live = Bind(restoredSpatters, restoredGeos, restoredProjectiles); var b = live.Header; var capacity = Bound(Int(b, 28), MaximumNodes, "node capacity");
+            return Capture(Bind(restoredSpatters, restoredGeos, restoredProjectiles));
+        }
+        private static CheckpointPhysicsBroadphaseState Capture(Live live)
+        {
+            var b = live.Header; var capacity = Bound(Int(b, 28), MaximumNodes, "node capacity");
             var count = Bound(Int(b, 24), capacity, "node count"); var bytes = Read(Pointer(b, 16), capacity * 40);
             var aliases = live.Proxies.ToDictionary(p => p.Value, p => p.Key);
             var nodes = new Node[capacity];
@@ -162,6 +169,89 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (live.Proxies.Count != result.ProxyCount) throw new InvalidOperationException("Broadphase live proxy coverage differs.");
             Modding.Logger.Log("[HKTAS] Captured broadphase: nodes=" + count + " capacity=" + capacity + " proxies=" + result.ProxyCount + " free=" + result.FreeHead);
             return result;
+        }
+
+        // Pinned native InsertLeaf preserves the engine's tree algorithm. The
+        // allocator array has one fixed capacity and contains no dead bytes or
+        // history-dependent free links. Existing fixture addresses stay owned
+        // by Unity; only the broadphase topology is rebuilt.
+        internal static CheckpointPhysicsBroadphaseState Canonicalize(BoundaryObjectIdentity identities)
+        {
+            using var validation = new LoadingEngineClockProbe.CheckpointValidation();
+            var live = Bind(Array.Empty<GameObject>(), Array.Empty<GameObject>(), Array.Empty<GameObject>(), identities);
+            if (live.Proxies.Count * 2 > MaximumNodes) throw new InvalidOperationException("Canonical broadphase proxy budget exceeded.");
+            var engine = LoadingEngineClockProbe.RequirePinnedEngine();
+            var allocateAddress = IntPtr.Add(engine.BaseAddress, 0xb9d5a0);
+            var insertAddress = IntPtr.Add(engine.BaseAddress, 0xba0b10);
+            if (!Read(allocateAddress, 17).SequenceEqual(new byte[] { 0x40,0x53,0x48,0x83,0xec,0x20,0x83,0x79,0x18,0xff,0x48,0x8b,0xd9,0x0f,0x85,0xbe,0x00 })
+                || !Read(insertAddress, 24).SequenceEqual(new byte[] { 0x48,0x89,0x5c,0x24,0x18,0x56,0x57,0x41,0x57,0x48,0x81,0xec,0x80,0x00,0x00,0x00,0xff,0x41,0x20,0x48,0x8b,0xd9,0x48,0x63 }))
+                throw new InvalidOperationException("Canonical broadphase allocator/insertion code differs.");
+            var allocate = (AllocateNode)Marshal.GetDelegateForFunctionPointer(allocateAddress, typeof(AllocateNode));
+            var insert = (InsertLeaf)Marshal.GetDelegateForFunctionPointer(insertAddress, typeof(InsertLeaf));
+            var proxies = live.Proxies.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => new { pair.Key, Address = pair.Value, Bytes = Read(pair.Value, 32) }).ToArray();
+            if (proxies.Length > BitConverter.ToInt64(live.Header, 112)
+                || proxies.Any(proxy => Enumerable.Range(0, 4).Any(axis => float.IsNaN(BitConverter.ToSingle(proxy.Bytes, axis * 4))
+                    || float.IsInfinity(BitConverter.ToSingle(proxy.Bytes, axis * 4)))))
+                throw new InvalidOperationException("Canonical broadphase bounds or move buffer differ.");
+            var tree = Read(live.Tree, 40);
+            if (Int(tree, 20) > MaximumNodes) throw new InvalidOperationException("Canonical broadphase capacity exceeds its fixed contract.");
+            for (var attempts = 0; Int(tree, 20) < MaximumNodes; attempts++)
+            {
+                if (attempts >= MaximumNodes) throw new InvalidOperationException("Canonical broadphase capacity preparation exceeded its bound.");
+                allocate(live.Tree);
+                tree = Read(live.Tree, 40);
+            }
+            if (Int(tree, 20) != MaximumNodes) throw new InvalidOperationException("Canonical broadphase allocation differs from its fixed capacity.");
+            var nodes = new byte[MaximumNodes * 40];
+            for (var i = 0; i < MaximumNodes; i++)
+            {
+                Array.Copy(BitConverter.GetBytes(i + 1 == MaximumNodes ? -1 : i + 1), 0, nodes, i * 40 + 24, 4);
+                Array.Copy(BitConverter.GetBytes(-1), 0, nodes, i * 40 + 28, 4);
+                Array.Copy(BitConverter.GetBytes(-1), 0, nodes, i * 40 + 32, 4);
+                Array.Copy(BitConverter.GetBytes(-1), 0, nodes, i * 40 + 36, 4);
+            }
+            Write(Pointer(tree, 8), nodes);
+            Write(live.Tree, BitConverter.GetBytes(-1));
+            Write(IntPtr.Add(live.Tree, 16), new[] { 0, MaximumNodes, 0, 0, 0 }.SelectMany(BitConverter.GetBytes).ToArray());
+            Write(IntPtr.Add(live.Tree, 40), BitConverter.GetBytes(0));
+            // The source unload already removed all contacts. Re-query every
+            // live proxy in stable order when the target is activated.
+            if (proxies.Length > BitConverter.ToInt64(live.Header, 112))
+                throw new InvalidOperationException("Canonical broadphase move buffer is too small.");
+            Write(IntPtr.Add(live.State, 72), BitConverter.GetBytes(0L));
+            var moves = new List<int>();
+            foreach (var proxy in proxies)
+            {
+                var node = allocate(live.Tree);
+                var leaf = new byte[40];
+                for (var axis = 0; axis < 4; axis++)
+                {
+                    var value = BitConverter.ToSingle(proxy.Bytes, axis * 4);
+                    if (float.IsNaN(value) || float.IsInfinity(value)) throw new InvalidOperationException("Canonical broadphase bounds are not finite.");
+                    // The policy uses fixed 0.1 loose-bound padding. Clear the
+                    // movement-history expansion; retain the live fixture AABB.
+                    Array.Copy(BitConverter.GetBytes(value + (axis < 2 ? -0.1f : 0.1f)), 0, leaf, axis * 4, 4);
+                }
+                Array.Copy(BitConverter.GetBytes(proxy.Address.ToInt64()), 0, leaf, 16, 8);
+                Array.Copy(BitConverter.GetBytes(-1), 0, leaf, 24, 4);
+                Array.Copy(BitConverter.GetBytes(-1), 0, leaf, 28, 4);
+                Array.Copy(BitConverter.GetBytes(-1), 0, leaf, 32, 4);
+                tree = Read(live.Tree, 40);
+                Write(IntPtr.Add(Pointer(tree, 8), node * 40), leaf);
+                Write(IntPtr.Add(proxy.Address, 28), BitConverter.GetBytes(node));
+                insert(live.Tree, node);
+                moves.Add(node);
+            }
+            Write(IntPtr.Add(live.Tree, 40), BitConverter.GetBytes(proxies.Length));
+            Write(IntPtr.Add(live.Tree, 112), BitConverter.GetBytes(-1));
+            if (moves.Count != 0) Write(Pointer(live.Header, 88), moves.SelectMany(BitConverter.GetBytes).ToArray());
+            Write(IntPtr.Add(live.State, 104), BitConverter.GetBytes((long)moves.Count));
+            var after = Capture(Bind(Array.Empty<GameObject>(), Array.Empty<GameObject>(), Array.Empty<GameObject>(), identities));
+            if (after.Nodes.Length != MaximumNodes || after.ProxyCount != proxies.Length || after.InsertionCount != proxies.Length
+                || after.Path != 0 || after.Pairs.Length != 0 || !after.Moves.SequenceEqual(moves))
+                throw new InvalidOperationException("Canonical broadphase topology readback differs.");
+            return after;
         }
         private void Validate()
         {

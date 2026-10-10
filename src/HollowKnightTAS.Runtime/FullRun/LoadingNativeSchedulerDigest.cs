@@ -35,6 +35,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private Func<IntPtr, string?> behaviourId = _ => null;
         private readonly List<object> inventory = new List<object>();
         private object[] fieldDiagnostics = Array.Empty<object>();
+        private readonly List<CallbackView> nonCoroutineCallbacks = new List<CallbackView>();
 
         internal LoadingNativeSchedulerDigest()
         {
@@ -51,13 +52,38 @@ namespace HollowKnightTAS.Runtime.FullRun
             RequireCode(0x629ef0, "b908000000e9068ef4ff");
             RequireCode(0x572d00, "4863c1488d0d264d4601488b04c1c3");
             RequireCode(0x771ec0, "8b414883f8020f94c0c3"); // PreloadManagerOperation.IsDone: status == 2.
+            // Matching PDB: MonoBehaviour::DelayedStartCall. Only a validated
+            // newly allocated Canon pool or already-started visual reset owner
+            // may register this callback. Both owner registries are closed.
+            RequireCode(0x8ac680, "4883ec2880b92801000000742d80b925010000007524c6812501000001");
         }
 
         internal object[] Inventory => inventory.ToArray();
         internal string[] Unsupported => unsupported.ToArray();
         internal object[] FieldDiagnostics => fieldDiagnostics;
         internal int AsyncOperationCount => coroutines.Values.Count(value => value.HasAsyncOperation);
-        internal void Release() { coroutines.Clear(); behaviourId = _ => null; }
+        internal string[] CanonicalWaitIssues(HeroController? hero, Func<int, bool> ownsCanonicalStart)
+        {
+            var issues = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (var coroutine in coroutines.Values)
+            {
+                if (!(coroutine.Enumerator is IEnumerator iterator)
+                    || !(hero != null && CheckpointHeroInvulnerability.IsBoundIterator(iterator, hero)
+                        || LoadingSerialSceneProbe.OwnsBoundaryIterator(iterator)))
+                    issues.Add("unregistered-iterator:" + coroutine.Id);
+                if (coroutine.Done || coroutine.HasAsyncOperation)
+                    issues.Add("completed-or-async-carry:" + coroutine.Id);
+            }
+            foreach (var callback in nonCoroutineCallbacks)
+                if (callback.Call != "UnityPlayer:8ac680" || callback.Cleanup != "none" || callback.UserDataPresent
+                    || callback.Frame != -1 || callback.Rate != 0 || callback.Repeat != 0 || callback.Mode != 7
+                    || callback.TimestampAge != 0 || double.IsNaN(callback.WakeTime) || double.IsInfinity(callback.WakeTime)
+                    || !ownsCanonicalStart(callback.OwnerInstanceId))
+                    issues.Add("unregistered-native-callback:" + callback.Description);
+            foreach (var omission in unsupported) issues.Add("native-scheduler-coverage:" + omission);
+            return issues.ToArray();
+        }
+        internal void Release() { coroutines.Clear(); nonCoroutineCallbacks.Clear(); behaviourId = _ => null; }
 
         internal sealed class InvulnerabilityWait
         {
@@ -116,6 +142,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<IntPtr, string?> nativeBehaviourId, bool includeFieldDiagnostics = false)
         {
             coroutines.Clear(); unsupported.Clear(); inventory.Clear(); behaviourId = nativeBehaviourId;
+            nonCoroutineCallbacks.Clear();
             var manager = Pointer(Read(IntPtr.Add(engine, 0x19d7a70), 8), 0);
             if (manager == IntPtr.Zero) throw new InvalidOperationException("P0 delayed-call manager is unavailable.");
             var state = Read(manager, 80);
@@ -139,6 +166,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             inventory.Add(new { kind = "manager", timestamp = BitConverter.ToUInt32(state, 72), callbackCount = count });
             foreach (var callback in callbacks)
             {
+                if (callback.Coroutine == IntPtr.Zero) nonCoroutineCallbacks.Add(callback);
                 text.Append(callback.Description).Append(':');
                 if (callback.Coroutine == IntPtr.Zero) text.Append(callback.UserDataPresent ? "opaque-user-data" : "no-user-data");
                 else text.Append(coroutines[callback.Coroutine].Id);
@@ -274,7 +302,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 + ":call=" + Function(call) + ":cleanup=" + Function(cleanup);
             callbacks.Add(new CallbackView { Description = description, Coroutine = coroutine, UserDataPresent = userData != IntPtr.Zero,
                 WakeTime = BitConverter.ToDouble(bytes, 32), Frame = BitConverter.ToInt64(bytes, 40),
-                Rate = BitConverter.ToInt32(bytes, 48), Repeat = bytes[52], Mode = BitConverter.ToInt32(bytes, 84), Call = Function(call) });
+                Rate = BitConverter.ToInt32(bytes, 48), Repeat = bytes[52], Mode = BitConverter.ToInt32(bytes, 84), Call = Function(call),
+                Cleanup = Function(cleanup), OwnerInstanceId = ownerNumber,
+                TimestampAge = unchecked(timestamp - BitConverter.ToUInt32(bytes, 88)) });
             Walk(Pointer(bytes, 16), head, callbacks, visited, objectId, timestamp);
         }
 
@@ -320,6 +350,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal int Rate, Mode;
             internal byte Repeat;
             internal string Call = "";
+            internal string Cleanup = "";
+            internal int OwnerInstanceId;
+            internal uint TimestampAge;
         }
     }
 }

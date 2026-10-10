@@ -106,11 +106,23 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal void EndSharedGraph() { sharedGraph?.Clear(); sharedGraph = null; }
 
+        internal int BindSharedReference(object value)
+        {
+            if (sharedGraph == null || value.GetType().IsValueType)
+                throw new InvalidOperationException("Boundary reference binding needs its shared managed graph.");
+            if (sharedGraph.TryGetValue(value, out var id)) return id;
+            if (sharedGraph.Count >= 1048576)
+                throw new InvalidOperationException("P0 shared field graph reference budget exceeded at " + CurrentPath);
+            id = sharedGraph.Count; sharedGraph.Add(value, id); return id;
+        }
+
         internal object? Read(object owner, string name)
         {
             var field = Fields(owner.GetType()).FirstOrDefault(value => value.Name == name);
             return field == null ? null : fieldReader.Read(field, owner);
         }
+
+        internal object? Read(object owner, FieldInfo field) => fieldReader.Read(field, owner);
 
         internal object Schema()
         {

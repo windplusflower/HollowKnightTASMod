@@ -116,6 +116,7 @@ $clockRoot = Join-Path $companion 'ClockStartup'
 $harnessBuild = Join-Path $repo 'scripts/StudioScenarioHarness/bin/Release/net8.0-windows10.0.19041.0/win-x64'
 $bundleTool = Join-Path $repo 'src/HollowKnightTAS.BundleTool/bin/Release/net8.0/HollowKnightTAS.BundleTool.dll'
 $runtime = Join-Path $repo 'src/HollowKnightTAS.Runtime/bin/Release/HollowKnightTAS.dll'
+$runtimeCore = Join-Path $repo 'src/HollowKnightTAS.Runtime/bin/Release/HollowKnightTAS.Core.dll'
 $clockPayload = Join-Path $repo 'src/HollowKnightTAS.ClockPayload/bin/Release/HollowKnightTAS.ClockPayload.dll'
 $clockBridge = if ($ClockBridgePath) { [IO.Path]::GetFullPath($ClockBridgePath) }
     else { Join-Path $repo 'artifacts/scene-checkpoints/p0/native-clock-build/HollowKnightTAS.ClockBridge.dll' }
@@ -147,11 +148,15 @@ if ($stageCompleteCandidate) { $clockCandidateFiles += @('HollowKnightTAS.ClockB
 $saveRoot = Join-Path $env:USERPROFILE 'AppData/LocalLow/Team Cherry/Hollow Knight'
 $hostFiles = @('StudioScenarioHarness.exe','StudioScenarioHarness.dll','StudioScenarioHarness.deps.json','StudioScenarioHarness.runtimeconfig.json')
 foreach ($name in $hostFiles) { if (Test-Path -LiteralPath (Join-Path $companion $name)) { throw "Existing test host: $name" } }
-foreach ($path in @($runtime,$bundleTool,$Movie) + @($hostFiles | ForEach-Object { Join-Path $harnessBuild $_ })) {
+foreach ($path in @($runtime,$runtimeCore,$bundleTool,$Movie) + @($hostFiles | ForEach-Object { Join-Path $harnessBuild $_ })) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required file missing: $path" }
 }
 foreach ($entry in $profileCandidateFiles) {
     if (-not (Test-Path -LiteralPath $entry.source -PathType Leaf)) { throw "Required profile assembly missing: $($entry.source)" }
+}
+if ((Get-FileHash -LiteralPath $runtimeCore -Algorithm SHA256).Hash -ne
+    (Get-FileHash -LiteralPath (Join-Path $harnessBuild 'HollowKnightTAS.Core.dll') -Algorithm SHA256).Hash) {
+    throw 'Runtime and Studio harness Core assemblies differ. Build both candidates before the protected probe.'
 }
 if ($stageCompleteCandidate) {
     foreach ($name in $injectorFiles) { if (-not (Test-Path -LiteralPath (Join-Path $injectorBuild $name) -PathType Leaf)) { throw "Required injector file missing: $name" } }
@@ -322,9 +327,11 @@ try {
                 $shadowOrdinal++
                 $diagnosticNames = @('loading-boundary-probe.jsonl','loading-gameplay-oracle.jsonl','loading-state-inventory.json',
                     'loading-field-digests.json','loading-oracle-progress.json','loading-oracle-stage-progress.json',
-                    'engine-clock-layout.json','engine-clock-roundtrip.json','full-run-fault.txt','boundary-inventory.json')
+                    'engine-clock-layout.json','engine-clock-roundtrip.json','full-run-fault.txt','boundary-inventory.json',
+                    'canonical-boundary-progress.jsonl','boundary-observer-audit.json','boundary-field-schema.json')
                 foreach ($file in (Get-ChildItem -LiteralPath $resolvedShadow -Recurse -File | Where-Object {
-                    $_.Name -in $diagnosticNames -or $_.Name -match '^loading-candidate-[0-9]+-inventory\.json$'
+                    ($_.Name -in $diagnosticNames -or $_.Name -match '^loading-candidate-[0-9]+-inventory\.json$' -or
+                        $_.Name -match '^boundary-digest-[0-9]+(?:-repeat)?\.json$')
                 })) {
                     $relative = [IO.Path]::GetRelativePath($resolvedShadow, $file.FullName)
                     $copy = Join-Path $destination (Join-Path ('recovered-shadow-{0:d2}' -f $shadowOrdinal) $relative)

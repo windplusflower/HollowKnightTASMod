@@ -502,7 +502,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var ready = IsMovieFrameReady(out var boundary);
                 LoadingAudioLifetimePolicy.CheckFailure();
                 LoadingOnlineIsolationObservation.CheckFailure();
-                if (LoadingSerialSceneProbe.ObserveNativeBoundary(movieFrame, completed))
+                if (LoadingSerialSceneProbe.ObserveNativeBoundary(movieFrame, completed, sessionDirectory))
                 {
                     loadingGameplayOracle?.Sample("candidate", "serial-source-unloaded");
                     CaptureSceneCheckpointAtBoundary(completed);

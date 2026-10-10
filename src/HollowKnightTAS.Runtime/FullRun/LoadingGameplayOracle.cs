@@ -36,12 +36,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Dictionary<object, string> unityIds = new Dictionary<object, string>(ReferenceComparer<object>.Instance);
         private readonly Dictionary<string, int> sceneObjectOwners = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly LoadingSceneRootIdentity sceneRoots = new LoadingSceneRootIdentity();
+        private readonly bool boundaryCapture;
+        private BoundaryObjectIdentity? canonicalIdentities;
+        private long boundaryMovieFrame, boundaryNativeFrame;
         private readonly Dictionary<int, string> gameObjectPaths = new Dictionary<int, string>();
         private readonly LoadingUnityAssetIdentity assetIdentities = new LoadingUnityAssetIdentity();
         private readonly LoadingAssetProvenanceObservation assetProvenance = new LoadingAssetProvenanceObservation();
         private readonly List<Tuple<UnityEngine.Object, string>> assetRoots = new List<Tuple<UnityEngine.Object, string>>();
         private readonly HashSet<int> assetInstances = new HashSet<int>();
         private readonly LoadingAssetValueObservation assetValues = new LoadingAssetValueObservation();
+        private readonly BoundaryAssetArrayRegistry assetArrays = new BoundaryAssetArrayRegistry();
         private readonly SortedSet<string> omissions = new SortedSet<string>(StringComparer.Ordinal);
         private readonly SortedSet<string> detachedFsmReferences = new SortedSet<string>(StringComparer.Ordinal);
         private readonly List<Tuple<object, string>> detachedFsmRoots = new List<Tuple<object, string>>();
@@ -75,16 +79,18 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool transitionSourceUnloaded, candidateCaptured;
 
         private LoadingGameplayOracle(string directory, long first, long end,
-            Func<long> movieFrame, Func<long> nativeFrame, Func<string> gameplayRng)
+            Func<long> movieFrame, Func<long> nativeFrame, Func<string> gameplayRng, bool boundaryCapture = false)
         {
+            this.boundaryCapture = boundaryCapture;
+            if (boundaryCapture) canonicalIdentities = new BoundaryObjectIdentity();
             this.directory = directory; this.first = first; this.end = end;
             samplingWindows = LoadingOracleSamplingWindows.Parse(
-                Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_WINDOWS"), first, end);
+                boundaryCapture ? null : Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_WINDOWS"), first, end);
             this.movieFrame = movieFrame; this.nativeFrame = nativeFrame; this.gameplayRng = gameplayRng;
             controlledNativeOrigin = nativeFrame();
             fieldDetails = Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_FIELD_DETAILS") == "1";
-            nativePhysicsOnly = Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_ONLY") == "1";
-            serialBoundaryOnly = Environment.GetEnvironmentVariable("HKTAS_LOADING_SERIAL_BOUNDARY_ONLY") == "1";
+            nativePhysicsOnly = !boundaryCapture && Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_ONLY") == "1";
+            serialBoundaryOnly = boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_SERIAL_BOUNDARY_ONLY") == "1";
             if (serialBoundaryOnly && samplingWindows.ExplicitWindows)
                 throw new InvalidOperationException("Candidate-only diagnostics cannot declare gameplay sampling windows.");
             observationIdentity = new LoadingObservationIdentity(directory);
@@ -97,15 +103,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                     // The registered native pointers, roots, GUIDs and integer
                     // epochs do not bind any Single/Double instance field.
                     directFloatingField: _ => true);
-            if (Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1")
+            if (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1")
                 nativeScheduler = new LoadingNativeSchedulerDigest();
-            if (Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
+            if (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
                 nativePhysics = new LoadingNativePhysicsDigest();
             if (nativePhysicsOnly && nativePhysics == null)
                 throw new InvalidOperationException("Native-physics-only diagnostics require NativePhysics.");
             payloadType = AppDomain.CurrentDomain.GetAssemblies()
                 .FirstOrDefault(assembly => assembly.GetName().Name == "HollowKnightTAS.ClockPayload")
                 ?.GetType("HollowKnightTAS.ClockPayload.ClockController", false);
+            if (boundaryCapture) return;
             Write(new { kind = "header", schema = "hktas-loading-oracle-v1", first, end,
                 observerModuleId = typeof(LoadingGameplayOracle).Module.ModuleVersionId.ToString("D"),
                 nativeProfile = HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId,
@@ -163,6 +170,40 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || first < 0 || end <= first || end - first > 10000)
                 throw new InvalidOperationException("P0 gameplay oracle requires a bounded Movie window.");
             return new LoadingGameplayOracle(directory, first, end, movieFrame, nativeFrame, gameplayRng);
+        }
+
+        internal static LoadingGameplayOracle CreateBoundaryObserver(string directory)
+        {
+            var rng = HollowKnightTAS.Runtime.Rng.UnityRandomStateCodec_1_5_78_11833.Resolve().Codec
+                ?? throw new InvalidOperationException("Boundary digest RNG codec is unavailable.");
+            LoadingGameplayOracle? observer = null;
+            observer = new LoadingGameplayOracle(directory, 0, 1,
+                () => observer?.boundaryMovieFrame ?? 0, () => observer?.boundaryNativeFrame ?? 0,
+                () => rng.CaptureCurrent().Sha256, boundaryCapture: true);
+            return observer;
+        }
+
+        internal BoundaryDigestSnapshot CaptureBoundaryFrame(long movie, long native, Func<int, bool> ownsNewPoolStart)
+        {
+            if (!boundaryCapture) throw new InvalidOperationException("The observer is not bound to a canonical boundary.");
+            using var validation = new LoadingEngineClockProbe.CheckpointValidation();
+            boundaryMovieFrame = movie; boundaryNativeFrame = native;
+            captureProgress = Stopwatch.StartNew(); captureStages.Clear(); captureStageStarted = 0;
+            capturePhase = "canonical-boundary"; captureBoundary = "source-unloaded-target-not-started";
+            var groups = CaptureState(fullInventory: true);
+            groups["movieFrame"] = movie.ToString(CultureInfo.InvariantCulture);
+            groups["nativeFrame"] = native.ToString(CultureInfo.InvariantCulture);
+            // The capture remains unqualified while P0's explicitly reported
+            // native/asset domains and the new carry-field registry are open.
+            return new BoundaryDigestSnapshot(groups, lastInventory, omissions.ToArray(),
+                nativeScheduler!.Inventory, nativePhysics!.Inventory,
+                nativeScheduler.CanonicalWaitIssues(HeroController.SilentInstance, ownsNewPoolStart));
+        }
+
+        internal object BoundaryFieldSchema()
+        {
+            if (!boundaryCapture) throw new InvalidOperationException("Field schema is not bound to a canonical boundary.");
+            return fields.Schema();
         }
 
         internal void Sample(string phase, string boundary)
@@ -245,7 +286,18 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private SortedDictionary<string, string> CaptureState(bool fullInventory)
         {
+            if (!boundaryCapture) return CaptureStateCore(fullInventory);
+            // Retain aliases from gameplay fields into resource elements and
+            // between array element roots, not only aliases inside one root.
+            fields.BeginSharedGraph();
+            try { return CaptureStateCore(fullInventory); }
+            finally { fields.EndSharedGraph(); }
+        }
+
+        private SortedDictionary<string, string> CaptureStateCore(bool fullInventory)
+        {
             var elapsed = Stopwatch.StartNew();
+            if (boundaryCapture) canonicalIdentities = new BoundaryObjectIdentity();
             observationIdentity.Refresh();
             nativeValues.BeginSample();
             detachedFsmReferences.Clear();
@@ -256,6 +308,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             assetIdentities.Clear();
             assetProvenance.Clear();
             assetRoots.Clear(); assetInstances.Clear();
+            assetArrays.Clear();
             assetValues.BeginSample();
             textCacheDetails.Clear();
             var allBehaviours = Resources.FindObjectsOfTypeAll<MonoBehaviour>()
@@ -320,7 +373,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             CaptureProgress("managed-and-fsm-fields");
             var fieldDiagnostics = new List<object>();
             var mono = new StringBuilder(); var fsms = new StringBuilder(); var staticRoots = new StringBuilder();
-            fields.BeginSharedGraph();
+            if (!boundaryCapture) fields.BeginSharedGraph();
             try
             {
             foreach (var item in nativePhysicsOnly ? behaviours.Take(0) : behaviours)
@@ -384,7 +437,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     digest = digest.Sha256, nodes = digest.Nodes, unsupported = digest.Unsupported, fieldDigests });
             }
             if (!nativePhysicsOnly)
-                foreach (var root in LoadingRegisteredStaticRoots.Read())
+                foreach (var root in boundaryCapture ? LoadingRegisteredStaticRoots.ReadCanonical() : LoadingRegisteredStaticRoots.Read())
                 {
                     var detailedStatic = root.Item1.EndsWith("InControl.InputManager.ActiveDevices", StringComparison.Ordinal)
                         || root.Item1.EndsWith("Modding.ModLoader.<ModInstances>k__BackingField", StringComparison.Ordinal);
@@ -405,7 +458,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     digest = digest.Sha256, nodes = digest.Nodes, unsupported = digest.Unsupported });
             }
             }
-            finally { fields.EndSharedGraph(); }
+            finally { if (!boundaryCapture) fields.EndSharedGraph(); }
             CaptureProgress("native-physics");
             var allBodies = Resources.FindObjectsOfTypeAll<Rigidbody2D>().Where(body => body != null && Loaded(body.gameObject)).ToArray();
             var physicsDigest = nativePhysics == null ? "disabled" : nativePhysics.Capture(allBodies,
@@ -478,19 +531,55 @@ namespace HollowKnightTAS.Runtime.FullRun
             var text = new StringBuilder();
             // Copying a Sprite/Material can discover additional resource references.
             // Process each native identity once and include the newly found leaves.
-            for (var i = 0; i < assetRoots.Count; i++)
+            var assetIndex = 0; var arrayIndex = 0;
+            while (assetIndex < assetRoots.Count || arrayIndex < assetArrays.Entries.Count)
             {
-                var entry = assetRoots[i];
+                if (assetIndex == assetRoots.Count)
+                {
+                    var array = assetArrays.Entries[arrayIndex++];
+                    AddAssetRecord(array.Id, array.Value.GetType().FullName!,
+                        fields.Capture(new { length = array.Value.Length, elementType = array.Value.GetType().GetElementType()!.FullName },
+                            array.Id, expandRoot: true), text, inventory);
+                    for (var element = 0; element < array.Value.Length; element++)
+                    {
+                        var elementId = array.Id + "[" + element.ToString(CultureInfo.InvariantCulture) + "]";
+                        var value = array.Value.GetValue(element);
+                        AddAssetRecord(elementId, value?.GetType().FullName,
+                            fields.Capture(value, elementId), text, inventory);
+                    }
+                    continue;
+                }
+                var entry = assetRoots[assetIndex++];
+                // A Unity reference token does not cover the managed content
+                // of animation libraries, sprite collections or cue assets.
+                // Read their actual fields, with the same bounded reader and
+                // without evaluating asset getters or running callbacks.
+                if (boundaryCapture && (entry.Item1 is ScriptableObject || entry.Item1 is MonoBehaviour))
+                {
+                    var managedId = entry.Item2 + "/asset-managed-fields";
+                    foreach (var field in fields.Fields(entry.Item1.GetType()))
+                        if (fields.Read(entry.Item1, field) is Array array)
+                            assetArrays.Register(array, managedId + "/array:" + field.DeclaringType!.FullName + "." + field.Name);
+                    var managed = fields.Capture(entry.Item1, managedId, expandRoot: true);
+                    AddAssetRecord(managedId, entry.Item1.GetType().FullName, managed, text, inventory);
+                    // Native resource headers/configuration are still open.
+                    // Observing the managed half must not clear that omission.
+                }
                 var snapshot = assetValues.Capture(entry.Item1, value => omissions.Add(value));
                 if (snapshot == null) continue;
                 var id = entry.Item2 + "/asset-values";
                 var digest = fields.Capture(snapshot, id, expandRoot: true);
-                foreach (var omitted in digest.Unsupported) omissions.Add(omitted);
-                text.Append(id).Append(':').Append(digest.Sha256).Append('\n');
-                inventory.Add(new { id, type = entry.Item1.GetType().FullName,
-                    digest = digest.Sha256, nodes = digest.Nodes, unsupported = digest.Unsupported });
+                AddAssetRecord(id, entry.Item1.GetType().FullName, digest, text, inventory);
             }
             return Hash(text.ToString());
+        }
+
+        private void AddAssetRecord(string id, string? type, LoadingFieldDigestResult digest, StringBuilder text, List<object> inventory)
+        {
+            foreach (var omitted in digest.Unsupported) omissions.Add(omitted);
+            text.Append(id).Append(':').Append(digest.Sha256).Append('\n');
+            if (inventory.Count >= 200000) throw new InvalidOperationException("Boundary asset root budget exceeded.");
+            inventory.Add(new { id, type, digest = digest.Sha256, nodes = digest.Nodes, unsupported = digest.Unsupported });
         }
 
         private string CaptureHierarchy(bool fullInventory, List<object> inventory)
@@ -554,6 +643,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private object? CaptureNativeComponent(Component component, bool diagnostics)
         {
             var state = LoadingNativeComponentObservation.Capture(component, message => omissions.Add(message));
+            if (boundaryCapture && component is MonoBehaviour behaviour)
+                state = BoundaryMonoLifecycle.Read(behaviour);
             if (diagnostics && component is Animator animator && animator.isInitialized)
             {
                 var id = UnityId(component);
@@ -613,6 +704,8 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private string? Reference(object value)
         {
+            if (boundaryCapture && assetArrays.Reference(value) is string arrayId)
+                return "asset-array:" + arrayId + ":shared:" + fields.BindSharedReference(value).ToString(CultureInfo.InvariantCulture);
             if (value is ParticleSystem.MinMaxGradient gradient) return GradientIdentity(gradient);
             if (value is Coroutine coroutine && nativeScheduler != null) return nativeScheduler.Reference(coroutine, fields);
             if (value is UnityEngine.Object unity) return UnityId(unity);
@@ -724,6 +817,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (value is Component component) go = component.gameObject;
             if (go != null && Loaded(go))
             {
+                if (canonicalIdentities != null)
+                {
+                    id = canonicalIdentities.Get(value);
+                    unityIds.Add(value, id);
+                    return id;
+                }
                 var objectOwner = go.GetInstanceID();
                 if (!gameObjectPaths.TryGetValue(objectOwner, out id))
                 {
@@ -887,6 +986,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             => Sample("event", "active-scene:" + previous.name + "->" + current.name);
         public void Dispose()
         {
+            if (boundaryCapture)
+            {
+                nativeScheduler?.Release();
+                fields.Dispose();
+                buffer.Dispose();
+                return;
+            }
             currentTransition = null;
             GameManager.SceneTransitionBegan -= TransitionBegan;
             USceneManager.sceneLoaded -= SceneLoaded;

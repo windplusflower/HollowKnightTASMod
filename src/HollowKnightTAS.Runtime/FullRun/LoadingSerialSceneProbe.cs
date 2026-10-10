@@ -26,6 +26,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Hook transitionHook;
         private readonly Hook lightingHook;
         private readonly string report;
+        private readonly CanonicalBoundaryPolicy? canonical;
         private static LoadingSerialSceneProbe? instance;
         private SceneLoad? transition;
         private GameManager.SceneLoadInfo? checkpointLoadInfo;
@@ -45,15 +46,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (!NativeExecutionProfile.UsesSerialScenes(NativeExecutionProfile.SelectedProfileId))
                 throw new InvalidOperationException("Serial scenes require their own V6 execution profile.");
-            // Do not label a legacy trajectory as Canon while Phase 1 is being
-            // implemented. Remove this gate only with the shared startup/Canon
-            // path and its closed registry, before making a new recording.
             if (NativeExecutionProfile.UsesCanonicalBoundary(NativeExecutionProfile.SelectedProfileId))
             {
                 HollowKnightTAS.Core.SceneCheckpoints.SceneCheckpointEnvironmentPolicy.ValidateMods(
                     NativeExecutionProfile.SelectedProfileId, Modding.ModHooks.GetAllMods(onlyEnabled: false, allowLoadError: true)
                         .Select(mod => mod.GetName()));
-                throw new InvalidOperationException("Canonical boundary profile is not ready: Phase 0 pending domains, startup warmup and Canon must be implemented before recording.");
+                canonical = new CanonicalBoundaryPolicy();
             }
             if (instance != null) throw new InvalidOperationException("Serial scene policy is already installed.");
             report = Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")
@@ -112,6 +110,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // is also called by the original loader; the second call sees no pending work.
                 yield return ScenePreloader.FinishPendingOperations();
                 while (!load.IsFetchAllowed || !load.IsActivationAllowed) yield return null;
+                while (canonical != null && !canonical.AdvanceStartup()) yield return null;
                 source = USceneManager.GetActiveScene();
                 sourceName = source.name;
                 if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") == "1")
@@ -217,7 +216,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return original(name);
         }
 
-        internal static bool ObserveNativeBoundary(long movie, long native)
+        internal static bool ObserveNativeBoundary(long movie, long native, string? sessionDirectory = null)
         {
             var self = instance;
             if (self?.failure != null) throw new InvalidOperationException(self.failure);
@@ -227,10 +226,20 @@ namespace HollowKnightTAS.Runtime.FullRun
             var target = USceneManager.GetSceneByName(self.transition.TargetSceneName);
             if (target.IsValid() && target.isLoaded)
                 throw new InvalidOperationException("Serial native boundary already has the target scene.");
+            self.canonical?.Apply(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native,
+                sessionDirectory ?? throw new InvalidOperationException("Canonical boundary needs its protected Runtime session binding."));
             self.Inventory("native-empty-boundary", movie, native);
             LoadingBoundaryInventory.Capture(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native);
             self.observedBoundary = true;
             return true;
+        }
+
+        internal static bool OwnsBoundaryIterator(IEnumerator iterator)
+        {
+            var type = iterator.GetType();
+            if (type.DeclaringType != typeof(LoadingSerialSceneProbe) || !type.Name.StartsWith("<Begin>", StringComparison.Ordinal)) return false;
+            var owner = type.GetField("<>4__this", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            return instance != null && instance.awaitingBoundary && ReferenceEquals(owner?.GetValue(iterator), instance);
         }
 
         internal static Tuple<int, GameManager.SceneLoadInfo, string> GetCheckpointBoundary()
@@ -406,6 +415,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public void Dispose()
         {
             instance = null;
+            canonical?.Dispose();
             USceneManager.sceneLoaded -= TargetLoaded;
             lightingHook.Dispose();
             transitionHook.Dispose();
