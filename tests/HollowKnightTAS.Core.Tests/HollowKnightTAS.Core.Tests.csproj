@@ -15,6 +15,9 @@
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\WorldObservationCache.cs" Link="FullRun\WorldObservationCache.cs" />
     <Reference Include="Newtonsoft.Json"><HintPath>$(HKManagedDir)\Newtonsoft.Json.dll</HintPath></Reference>
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CheckpointDataCodec.cs" Link="FullRun\CheckpointDataCodec.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryGraphCodec.cs" Link="FullRun\CanonicalCarryGraphCodec.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryGraphWire.cs" Link="FullRun\CanonicalCarryGraphWire.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryReflectionBindings.cs" Link="FullRun\CanonicalCarryReflectionBindings.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\BoundaryDigestSnapshot.cs" Link="FullRun\BoundaryDigestSnapshot.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\BoundaryAssetArrayRegistry.cs" Link="FullRun\BoundaryAssetArrayRegistry.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\BoundaryDigestComparison.cs" Link="FullRun\BoundaryDigestComparison.cs" />

@@ -1,0 +1,146 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using HollowKnightTAS.Core.SceneCheckpoints;
+using HutongGames.PlayMaker;
+using UnityEngine;
+
+namespace HollowKnightTAS.Runtime.FullRun
+{
+    // This is actual data, with explicit unsupported values, never a payload
+    // inferred from a digest. Native/asset/R6 closure remains a separate gate.
+    internal sealed class CanonicalCarryCapture
+    {
+        private readonly CanonicalCarryGraphCodec codec = CanonicalCarryFieldRegistry.Create();
+        private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+        private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
+        private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
+            ?? throw new InvalidDataException("Carry field binding is absent: " + type.FullName + "/" + name);
+
+        internal CanonicalCarryGraphData Capture(BoundaryObjectIdentity identities)
+        {
+            var hero = HeroController.SilentInstance ?? throw new InvalidDataException("Carry Hero is absent.");
+            var manager = GameManager.instance ?? throw new InvalidDataException("Carry GameManager is absent.");
+            var player = PlayerData.instance;
+            if (player == null || manager.sceneData == null || !ReferenceEquals(hero.playerData, player)
+                || !ReferenceEquals(manager.playerData, player)) throw new InvalidDataException("Carry data root aliases differ.");
+            var roots = new SortedDictionary<string, object>(StringComparer.Ordinal) {
+                ["PlayerData"] = player, ["SceneData"] = manager.sceneData };
+            foreach (var pair in CanonicalHeroFsmBindings.Snapshot(identities))
+            {
+                var fsm = (Fsm)RawFsm.GetValue(pair.Value);
+                if (!CanonicalHeroFsmBindingRegistry.IsCanonicalVisual(pair.Key, fsm.Name)) roots.Add("HeroFSM/" + pair.Key, fsm);
+            }
+            var globals = typeof(PlayMakerGlobals).GetField("instance", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null);
+            var initialized = typeof(PlayMakerGlobals).GetField("<Initialized>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null);
+            if (globals == null || !Equals(initialized, true)) throw new InvalidDataException("Original PlayMaker globals are not initialized.");
+            roots.Add("PlayMakerGlobals/variables", Required(typeof(PlayMakerGlobals), "variables").GetValue(globals));
+            var bindings = new ExternalBindings(identities);
+            var result = codec.Capture(roots, bindings.Bind);
+            // Shared event objects use reference equality in PlayMaker. They
+            // cannot be cloned as local action data or considered immutable
+            // until the global table/cache and every consumer are closed.
+            if (bindings.HasEvents) result.Unsupported = result.Unsupported.Concat(new[] { "R6/FsmEvent-global-state-and-reference-rebinding" })
+                .OrderBy(value => value, StringComparer.Ordinal).ToArray();
+            return result;
+        }
+        internal byte[] Encode(CanonicalCarryGraphData value) => codec.Encode(value);
+
+        private sealed class ExternalBindings
+        {
+            private readonly BoundaryObjectIdentity identities;
+            private readonly Dictionary<Type, UnityEngine.Object[]> assets = new Dictionary<Type, UnityEngine.Object[]>();
+            private readonly Dictionary<object, string> known = new Dictionary<object, string>(new References());
+            private readonly CanonicalCarryReflectionBindings metadata;
+            internal bool HasEvents { get; private set; }
+            internal ExternalBindings(BoundaryObjectIdentity identities)
+            {
+                this.identities = identities;
+                var action = typeof(CheckCanDreamWarpInScene);
+                var checks = Required(action, "sceneCheckFunctions").GetValue(actionInstance()) as Dictionary<string, Func<bool>>
+                    ?? throw new InvalidDataException("Original dream-warp action checks are absent.");
+                // Dictionary.Keys lazily caches a KeyCollection in the live
+                // dictionary. Enumerating the original key/value slots does
+                // not create that cache or write a game field.
+                if (!checks.Select(pair => pair.Key).OrderBy(key => key, StringComparer.Ordinal).SequenceEqual(new[] {
+                    "GG_Atrium", "GG_Atrium_Roof", "GG_Blue_Room", "GG_Land_of_Storms", "GG_Unlock_Wastes", "GG_Workshop" }))
+                    throw new InvalidDataException("Original dream-warp check binding differs.");
+                var compiler = action.Assembly.GetType("CheckCanDreamWarpInScene+<>c", true)!;
+                var callbackSlots = action.GetFields(BindingFlags.Static | BindingFlags.NonPublic).Concat(
+                    compiler.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                    .Where(field => field.FieldType == typeof(Func<bool>)).ToArray();
+                metadata = new CanonicalCarryReflectionBindings(new[] { typeof(object).Assembly, action.Assembly,
+                    typeof(Fsm).Assembly, typeof(GameObject).Assembly, typeof(AudioClip).Assembly, typeof(Rigidbody2D).Assembly,
+                    typeof(RaycastHit).Assembly }, callbackSlots);
+            }
+            private static CheckCanDreamWarpInScene actionInstance()
+            {
+                // Raw fields only: accessing state.Actions can instantiate
+                // previously unloaded actions and is forbidden in this reader.
+                foreach (var component in HeroController.SilentInstance.GetComponentsInChildren<PlayMakerFSM>(true))
+                {
+                    var fsm = (Fsm)RawFsm.GetValue(component);
+                    foreach (var state in (FsmState[])Required(typeof(Fsm), "states").GetValue(fsm))
+                    {
+                        var actions = Required(typeof(FsmState), "actions").GetValue(state) as FsmStateAction[];
+                        var result = actions?.OfType<CheckCanDreamWarpInScene>().FirstOrDefault();
+                        if (result != null) return result;
+                    }
+                }
+                throw new InvalidDataException("Original initialized dream-warp action is absent.");
+            }
+            internal string? Bind(object value)
+            {
+                if (known.TryGetValue(value, out var bound)) return bound;
+                if (value is UnityEngine.Object native)
+                {
+                    if (native == null) throw new InvalidDataException("destroyed-Unity-wrapper-needs-rebinding");
+                    var key = identities.Get(native);
+                    if (key.StartsWith("asset:", StringComparison.Ordinal))
+                    {
+                        var type = native.GetType();
+                        if (!assets.TryGetValue(type, out var candidates))
+                        {
+                            candidates = Resources.FindObjectsOfTypeAll(type).Where(owner => owner != null && owner.GetType() == type).ToArray();
+                            if (candidates.Length > 100000) throw new InvalidDataException("asset-binding-candidate-budget");
+                            assets.Add(type, candidates);
+                        }
+                        var same = candidates.Where(owner => owner.name == native.name).ToArray();
+                        if (same.Length != 1 || same[0].GetInstanceID() != native.GetInstanceID())
+                            throw new InvalidDataException("ambiguous-asset-binding:" + key);
+                    }
+                    known.Add(value, key); return key;
+                }
+                if (value is Fsm fsm)
+                {
+                    var owner = Required(typeof(Fsm), "owner").GetValue(fsm) as PlayMakerFSM;
+                    if (owner == null || !ReferenceEquals(RawFsm.GetValue(owner), fsm))
+                        throw new InvalidDataException("foreign-FSM-needs-explicit-owner-binding");
+                    var key = "FSM/" + identities.Get(owner);
+                    known.Add(value, key); return key;
+                }
+                if (value is FsmEvent fsmEvent)
+                {
+                    var name = (string)Required(typeof(FsmEvent), "name").GetValue(fsmEvent);
+                    var table = typeof(FsmEvent).GetField("_eventLookup", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)
+                        as Dictionary<string, FsmEvent>;
+                    if (name == null || table == null || !table.TryGetValue(name, out var registered) || !ReferenceEquals(registered, fsmEvent))
+                        throw new InvalidDataException("unregistered-global-FSM-event");
+                    HasEvents = true; var key = "FsmEvent/" + name;
+                    known.Add(value, key); return key;
+                }
+                var reflective = metadata.Bind(value);
+                if (reflective != null) { known.Add(value, reflective); return reflective; }
+                return null;
+            }
+        }
+        private sealed class References : IEqualityComparer<object>
+        {
+            public new bool Equals(object? left, object? right) => ReferenceEquals(left, right);
+            public int GetHashCode(object value) => RuntimeHelpers.GetHashCode(value);
+        }
+    }
+}

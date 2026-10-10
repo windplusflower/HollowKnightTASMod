@@ -13,6 +13,12 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal static int Validate(BoundaryObjectIdentity identities)
         {
+            var actual = Snapshot(identities);
+            return actual.Count(entry => !CanonicalHeroFsmBindingRegistry.IsCanonicalVisual(entry.Key, ((Fsm)Raw.GetValue(entry.Value)).Name));
+        }
+
+        internal static IReadOnlyDictionary<string, PlayMakerFSM> Snapshot(BoundaryObjectIdentity identities)
+        {
             var hero = HeroController.SilentInstance ?? throw new InvalidOperationException("Canonical Hero FSM owner is absent.");
             var scenePrefix = hero.gameObject.scene.name + "/";
             var actual = hero.GetComponentsInChildren<PlayMakerFSM>(true).Select(component =>
@@ -20,10 +26,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var path = identities.Get(component);
                 if (!path.StartsWith(scenePrefix, StringComparison.Ordinal) || !(Raw.GetValue(component) is Fsm fsm))
                     throw new InvalidOperationException("Canonical Hero FSM scene or raw configuration differs.");
-                return new KeyValuePair<string, string>(path.Substring(scenePrefix.Length), fsm.Name);
+                return new KeyValuePair<string, PlayMakerFSM>(path.Substring(scenePrefix.Length), component);
             }).ToArray();
-            CanonicalHeroFsmBindingRegistry.Validate(actual);
-            return actual.Count(entry => !CanonicalHeroFsmBindingRegistry.IsCanonicalVisual(entry.Key, entry.Value));
+            CanonicalHeroFsmBindingRegistry.Validate(actual.Select(entry => new KeyValuePair<string, string>(entry.Key,
+                ((Fsm)Raw.GetValue(entry.Value)).Name)));
+            return actual.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
         }
     }
 }

@@ -1,0 +1,241 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using HollowKnightTAS.Runtime.FullRun;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace HollowKnightTAS.Core.Tests.FullRun;
+
+[TestClass]
+public sealed class CanonicalCarryGraphCodecTests
+{
+    private static CanonicalCarryGraphCodec Codec() => new(new[] { typeof(Owner), typeof(Value), typeof(Pair),
+        typeof(Owner[]), typeof(Value[]), typeof(Pair[]), typeof(List<Value>), typeof(Hidden), typeof(ScalarBits) }, "test-fields-v1");
+    private static Dictionary<string, object> Roots(params (string key, object value)[] entries)
+        => entries.ToDictionary(e => e.key, e => e.value, StringComparer.Ordinal);
+    private static string? NoExternal(object value) => null;
+    private static object NoBinding(string key) => throw new InvalidDataException("Unexpected external: " + key);
+
+    [TestMethod]
+    public void Restores_cross_root_cycles_variable_cast_aliases_action_lists_and_structs()
+    {
+        var first = new Owner(); var second = new Owner(); var shared = new Value { Number = 71 };
+        first.Next = second; second.Next = first; first.Current = shared; second.Current = shared;
+        first.Values = new[] { shared, shared, new Value { Number = 9, Cast = shared } };
+        first.Active = new List<Value> { first.Values[2], shared };
+        first.Vector = new Pair { X = -3.5f, Y = 4.75f };
+        first.Vectors = new[] { first.Vector, new Pair { X = 6, Y = -8 } };
+        var codec = Codec(); var payload = codec.Capture(Roots(("first", first), ("second", second)), NoExternal);
+        Assert.AreEqual(0, payload.Unsupported.Length);
+        var restoredFirst = new Owner(); var restoredSecond = new Owner();
+        var apply = codec.PrepareApply(codec.Decode(codec.Encode(payload)), Roots(("first", restoredFirst), ("second", restoredSecond)), NoBinding);
+        Assert.IsNull(restoredFirst.Next);
+        apply();
+        Assert.AreSame(restoredSecond, restoredFirst.Next); Assert.AreSame(restoredFirst, restoredSecond.Next);
+        Assert.AreSame(restoredFirst.Current, restoredSecond.Current);
+        Assert.AreSame(restoredFirst.Current, restoredFirst.Values![0]); Assert.AreSame(restoredFirst.Values[0], restoredFirst.Values[1]);
+        Assert.AreSame(restoredFirst.Current, restoredFirst.Values[2].Cast);
+        Assert.AreSame(restoredFirst.Values[2], restoredFirst.Active![0]); Assert.AreSame(restoredFirst.Current, restoredFirst.Active[1]);
+        Assert.AreEqual(71, restoredFirst.Current!.Number); Assert.AreEqual(-3.5f, restoredFirst.Vector.X);
+        Assert.AreEqual(-8f, restoredFirst.Vectors![1].Y);
+        CollectionAssert.AreEqual(codec.Encode(payload), codec.Encode(codec.Capture(Roots(("first", restoredFirst), ("second", restoredSecond)), NoExternal)));
+    }
+
+    [TestMethod]
+    public void Detached_allocation_never_calls_game_constructors_getters_or_serialization_callbacks()
+    {
+        var source = new Owner { Current = new Value { Number = 12 } }; var target = new Owner();
+        var codec = Codec(); var payload = codec.Capture(Roots(("owner", source)), NoExternal);
+        Value.Constructors = 0; Value.Properties = 0;
+        var apply = codec.PrepareApply(payload, Roots(("owner", target)), NoBinding);
+        Assert.AreEqual(0, Value.Constructors); Assert.AreEqual(0, Value.Properties); Assert.IsNull(target.Current);
+        apply();
+        Assert.AreEqual(12, target.Current!.Number); Assert.AreEqual(0, Value.Constructors); Assert.AreEqual(0, Value.Properties);
+    }
+
+    [TestMethod]
+    public void Keeps_exact_signed_zero_nan_payload_and_hidden_field_identities()
+    {
+        var source = new ScalarBits { First = BitConverter.Int32BitsToSingle(unchecked((int)0x80000000)),
+            Second = BitConverter.Int64BitsToDouble(unchecked((long)0x7ff8000000000137)), Decimal = new decimal(100, 0, 0, true, 2) };
+        var target = new ScalarBits(); var hidden = new Hidden(); hidden.Set(7, 29); var restored = new Hidden();
+        var codec = Codec(); var payload = codec.Capture(Roots(("bits", source), ("hidden", hidden)), NoExternal);
+        codec.PrepareApply(payload, Roots(("bits", target), ("hidden", restored)), NoBinding)();
+        Assert.AreEqual(unchecked((int)0x80000000), BitConverter.SingleToInt32Bits(target.First));
+        Assert.AreEqual(unchecked((long)0x7ff8000000000137), BitConverter.DoubleToInt64Bits(target.Second));
+        CollectionAssert.AreEqual(decimal.GetBits(source.Decimal), decimal.GetBits(target.Decimal));
+        Assert.AreEqual((7, 29), restored.Read());
+    }
+
+    [TestMethod]
+    public void Freezes_prepared_input_and_validates_all_fields_before_any_live_write()
+    {
+        var codec = Codec(); var source = new Owner { Current = new Value { Number = 42 }, Counter = 99 };
+        var payload = codec.Capture(Roots(("root", source)), NoExternal); var target = new Owner { Counter = 5 };
+        var damaged = codec.Decode(codec.Encode(payload));
+        var ownerNode = damaged.Nodes.First(n => n.Type == CanonicalCarryGraphCodec.Identity(typeof(Owner)));
+        var field = Array.FindIndex(ownerNode.Fields!, f => f.Name.EndsWith("/Counter", StringComparison.Ordinal));
+        ownerNode.Fields![field].Value.Text = "099";
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(damaged, Roots(("root", target)), NoBinding));
+        Assert.AreEqual(5, target.Counter); Assert.IsNull(target.Current);
+        var apply = codec.PrepareApply(payload, Roots(("root", target)), NoBinding);
+        payload.Nodes[0].Fields![field].Value.Text = "123";
+        apply(); Assert.AreEqual(99, target.Counter); Assert.AreEqual(42, target.Current!.Number);
+    }
+
+    [TestMethod]
+    public void Unknown_managed_and_native_types_are_recorded_and_block_apply()
+    {
+        var codec = Codec(); var source = new Owner { Other = new Unregistered() }; var target = new Owner();
+        var unknown = codec.Capture(Roots(("root", source)), NoExternal);
+        Assert.IsTrue(unknown.Unsupported.Single().Contains("unregistered-managed-type", StringComparison.Ordinal));
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(unknown, Roots(("root", target)), NoBinding));
+        source.Other = new IntPtr(123);
+        var native = codec.Capture(Roots(("root", source)), NoExternal);
+        Assert.IsTrue(native.Unsupported.Single().Contains("System.IntPtr", StringComparison.Ordinal));
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(native, Roots(("root", target)), NoBinding));
+    }
+
+    [TestMethod]
+    public void External_owner_rebinding_preserves_aliases_and_rejects_ambiguous_or_collapsed_bindings()
+    {
+        var external = new Unregistered(); var source = new Owner { Other = external, Other2 = external };
+        var codec = Codec(); var payload = codec.Capture(Roots(("root", source)), o => o is Unregistered ? "native-owner" : null);
+        Assert.AreEqual(1, payload.Externals.Length); var target = new Owner(); var targetExternal = new Unregistered();
+        codec.PrepareApply(payload, Roots(("root", target)), _ => targetExternal)();
+        Assert.AreSame(targetExternal, target.Other); Assert.AreSame(target.Other, target.Other2);
+        source.Other2 = new Unregistered();
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.Capture(Roots(("root", source)), o => o is Unregistered ? "duplicate-owner" : null));
+        var separate = codec.Capture(Roots(("root", source)), o => o is Unregistered ? ReferenceEquals(o, external) ? "one" : "two" : null);
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(separate, Roots(("root", target)), _ => targetExternal));
+    }
+
+    [TestMethod]
+    public void Rejects_schema_field_type_reference_root_alias_and_unreachable_node_tampering()
+    {
+        var codec = Codec(); var source = new Owner { Current = new Value { Number = 9 } }; var target = new Owner();
+        var original = codec.Capture(Roots(("a", source), ("b", source)), NoExternal);
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(original, Roots(("a", target), ("b", new Owner())), NoBinding));
+        var p = codec.Decode(codec.Encode(original)); p.Schema = "changed";
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(p, Roots(("a", target), ("b", target)), NoBinding));
+        p = codec.Decode(codec.Encode(original)); p.Nodes[0].Type = "payload-controlled:type";
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(p, Roots(("a", target), ("b", target)), NoBinding));
+        p = codec.Decode(codec.Encode(original)); p.Nodes[0].Fields![0].Name = "unknown-field";
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(p, Roots(("a", target), ("b", target)), NoBinding));
+        p = codec.Decode(codec.Encode(original));
+        var current = Array.FindIndex(p.Nodes[0].Fields!, f => f.Name.EndsWith("/Current", StringComparison.Ordinal));
+        p.Nodes[0].Fields![current].Value.Reference = int.MaxValue;
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(p, Roots(("a", target), ("b", target)), NoBinding));
+        p = codec.Decode(codec.Encode(original)); p.Nodes[0].Fields![current].Value = new CanonicalCarryGraphData.Value { Kind = "null" };
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(p, Roots(("a", target), ("b", target)), NoBinding));
+        Assert.IsNull(target.Current);
+    }
+
+    [TestMethod]
+    public void Rejects_allocating_delegate_pointer_native_object_and_unbounded_array_schemas()
+    {
+        foreach (var type in new[] { typeof(Action), typeof(IntPtr), typeof(UnityEngine.GameObject), typeof(Value).MakeArrayType(2) })
+        {
+            if (type.IsArray)
+            {
+                var codec = new CanonicalCarryGraphCodec(new[] { typeof(Owner), type }, "array-v1");
+                Assert.ThrowsExactly<InvalidDataException>(() => codec.Capture(Roots(("root", new Owner { Other = new Value[2, 2] })), NoExternal));
+            }
+            else Assert.ThrowsExactly<InvalidDataException>(() => new CanonicalCarryGraphCodec(new[] { type }, "blocked-v1"));
+        }
+    }
+
+    [TestMethod]
+    public void Reports_exact_depth_budget_and_never_loosens_graph_or_array_limits()
+    {
+        var first = new Owner(); var next = first;
+        for (var i = 0; i < 130; i++) { next.Next = new Owner(); next = next.Next; }
+        var error = Assert.ThrowsExactly<InvalidDataException>(() => Codec().Capture(Roots(("root", first)), NoExternal));
+        StringAssert.Contains(error.Message, "depth=129"); StringAssert.Contains(error.Message, "node[129]");
+        var array = new Owner[CanonicalCarryGraphCodec.MaximumNodes + 1];
+        Assert.ThrowsExactly<InvalidDataException>(() => Codec().Capture(Roots(("root", new Owner { Other = array })), NoExternal));
+    }
+
+    [TestMethod]
+    public void Plain_structs_are_inline_but_boxed_scalars_and_structs_keep_reference_aliases()
+    {
+        var codec = Codec(); var target = new Owner(); var source = new Owner();
+        foreach (var boxed in new object[] { 17, true, new Pair { X = 2, Y = 4 } })
+        {
+            source.Other = boxed; source.Other2 = boxed;
+            var payload = codec.Capture(Roots(("root", source)), NoExternal);
+            codec.PrepareApply(payload, Roots(("root", target)), NoBinding)();
+            Assert.AreSame(target.Other, target.Other2); Assert.AreEqual(boxed, target.Other);
+        }
+        source.Other = 17; source.Other2 = 17;
+        var separate = codec.Capture(Roots(("root", source)), NoExternal);
+        codec.PrepareApply(separate, Roots(("root", target)), NoBinding)();
+        Assert.AreNotSame(target.Other, target.Other2);
+        source.Other = null; source.Other2 = null; source.Vectors = new Pair[60000];
+        var large = codec.Capture(Roots(("root", source)), NoExternal);
+        Assert.AreEqual(2, large.Nodes.Length);
+        codec.PrepareApply(large, Roots(("root", target)), NoBinding)();
+        Assert.AreEqual(60000, target.Vectors!.Length);
+    }
+
+    [TestMethod]
+    public void Wire_rejects_truncated_trailing_invalid_counts_and_encoding_before_any_live_write()
+    {
+        var codec = Codec(); var payload = codec.Encode(codec.Capture(Roots(("root", new Owner { Counter = 19 })), NoExternal));
+        foreach (var length in new[] { 0, 3, 11, payload.Length - 1 })
+            Assert.ThrowsExactly<InvalidDataException>(() => codec.Decode(payload.Take(length).ToArray()));
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.Decode(payload.Concat(new byte[] { 0 }).ToArray()));
+        var count = (byte[])payload.Clone(); Array.Copy(BitConverter.GetBytes(int.MaxValue), 0, count, 8, 4);
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.Decode(count));
+        var invalid = (byte[])payload.Clone(); invalid[16] = 0xff;
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.Decode(invalid));
+    }
+
+    [TestMethod]
+    public void Conditional_native_value_rules_validate_capture_and_every_imported_leaf_before_writing()
+    {
+        var codec = new CanonicalCarryGraphCodec(new[] { typeof(Owner), typeof(Pair) }, "conditional-native-v1",
+            value => value is Pair pair && pair.X != 0 ? "native-id-needs-binding" : null);
+        var source = new Owner { Vector = new Pair { X = 9 } }; var target = new Owner { Counter = 7 };
+        var invalid = codec.Capture(Roots(("root", source)), NoExternal);
+        Assert.AreEqual(1, invalid.Unsupported.Length);
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(invalid, Roots(("root", target)), NoBinding));
+        source.Vector.X = 0;
+        var payload = codec.Capture(Roots(("root", source)), NoExternal);
+        var vector = Array.FindIndex(payload.Nodes[0].Fields!, field => field.Name.EndsWith("/Vector", StringComparison.Ordinal));
+        payload.Nodes[0].Fields![vector].Value.Text = "3f800000|00000000";
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(payload, Roots(("root", target)), NoBinding));
+        Assert.AreEqual(7, target.Counter);
+    }
+
+    private sealed class Owner
+    {
+        public int Counter;
+        public Owner? Next;
+        public Value? Current;
+        public Value[]? Values;
+        public List<Value>? Active;
+        public Pair Vector;
+        public Pair[]? Vectors;
+        public object? Other, Other2;
+    }
+    private sealed class Value
+    {
+        public static int Constructors, Properties;
+        public int Number;
+        public Value? Cast;
+        public Value() { Constructors++; }
+        public int Dangerous { get { Properties++; throw new InvalidOperationException("Getter must not run."); } }
+    }
+    private struct Pair { public float X, Y; }
+    private sealed class ScalarBits { public float First; public double Second; public decimal Decimal; }
+    private class BaseHidden { protected int number; }
+    private sealed class Hidden : BaseHidden
+    {
+        private new int number;
+        public void Set(int first, int second) { base.number = first; number = second; }
+        public (int, int) Read() => (base.number, number);
+    }
+    private sealed class Unregistered { }
+}

@@ -12,6 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="FullRun\CanonicalCarryFieldRegistry.json" />
     <ProjectReference Include="..\HollowKnightTAS.Core\HollowKnightTAS.Core.csproj">
       <Private>true</Private>
     </ProjectReference>
@@ -32,6 +33,10 @@
     </Reference>
     <Reference Include="UnityEngine.Physics2DModule">
       <HintPath>$(HKManagedDir)\UnityEngine.Physics2DModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(HKManagedDir)\UnityEngine.PhysicsModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.ParticleSystemModule">

@@ -1,0 +1,420 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.Serialization;
+using HollowKnightTAS.Core.SceneCheckpoints;
+
+namespace HollowKnightTAS.Runtime.FullRun
+{
+    // A field-only graph, separate from the observation digest. All allocating
+    // types and live roots come from the caller's frozen registry. Import never
+    // resolves a payload type name, invokes a constructor or runs game events.
+    internal sealed class CanonicalCarryGraphCodec
+    {
+        internal const int MaximumNodes = 100000, MaximumValues = 1000000;
+        private readonly Dictionary<string, Layout> layouts = new Dictionary<string, Layout>(StringComparer.Ordinal);
+        private readonly Dictionary<string, Type> types = new Dictionary<string, Type>(StringComparer.Ordinal);
+        private readonly string schema;
+        private readonly Dictionary<Type, int> leafSizes = new Dictionary<Type, int>();
+        private readonly Func<object, string?>? portability;
+
+        internal CanonicalCarryGraphCodec(IEnumerable<Type> registered, string schema, Func<object, string?>? portability = null)
+        {
+            if (string.IsNullOrEmpty(schema)) throw new ArgumentException("Carry schema identity is required.", nameof(schema));
+            this.schema = schema;
+            this.portability = portability;
+            foreach (var type in new[] { typeof(bool), typeof(byte), typeof(sbyte), typeof(char), typeof(short), typeof(ushort),
+                typeof(int), typeof(uint), typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(string), typeof(decimal) })
+                types.Add(Identity(type), type);
+            foreach (var type in registered.Distinct())
+            {
+                if (type.ContainsGenericParameters || type.IsPointer || type.IsByRef || type == typeof(IntPtr) || type == typeof(UIntPtr)
+                    || typeof(Delegate).IsAssignableFrom(type) || typeof(MemberInfo).IsAssignableFrom(type)
+                    || typeof(MarshalByRefObject).IsAssignableFrom(type) || type.IsInterface || type.IsAbstract
+                    || Hierarchy(type).Any(t => t.FullName == "UnityEngine.Object"))
+                    throw new InvalidDataException("Carry allocation type is not managed data: " + type.FullName);
+                var id = Identity(type);
+                types[id] = type;
+                if (!IsScalar(type) && !type.IsArray)
+                    layouts.Add(id, new Layout(type, Fields(type)));
+            }
+        }
+
+        internal static string Identity(Type type) => type.Assembly.GetName().Name + ":" + type.FullName;
+        internal static FieldInfo[] Fields(Type type) => Hierarchy(type).SelectMany(t => t.GetFields(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+            .OrderBy(f => f.DeclaringType!.FullName, StringComparer.Ordinal).ThenBy(f => f.Name, StringComparer.Ordinal).ToArray();
+        private static IEnumerable<Type> Hierarchy(Type type)
+        { for (var current = type; current != null && current != typeof(object); current = current.BaseType) yield return current; }
+        private static string FieldIdentity(FieldInfo field) => Identity(field.DeclaringType!) + "/" + field.Name;
+        private static bool IsScalar(Type type) => type == typeof(string) || type == typeof(decimal)
+            || type.IsEnum || (type.IsPrimitive && type != typeof(IntPtr) && type != typeof(UIntPtr));
+
+        internal CanonicalCarryGraphData Capture(IReadOnlyDictionary<string, object> roots,
+            Func<object, string?> externalBinding)
+        {
+            var nodes = new List<CanonicalCarryGraphData.Node>();
+            var pending = new Queue<Tuple<object, int, int>>();
+            var seen = new Dictionary<object, int>(new References());
+            var externals = new List<CanonicalCarryGraphData.External>();
+            var externalValues = new Dictionary<string, object>(StringComparer.Ordinal);
+            var externalIds = new Dictionary<object, int>(new References());
+            var unsupported = new SortedSet<string>(StringComparer.Ordinal);
+            var count = 0;
+            int AddNode(object value, int depth, string path)
+            {
+                if (seen.TryGetValue(value, out var known)) return known;
+                if (nodes.Count >= MaximumNodes || depth > 128) throw new InvalidDataException("Carry graph exceeds its bound at " + path
+                    + ";nodes=" + nodes.Count + ";depth=" + depth + ";type=" + Identity(value.GetType()));
+                var id = nodes.Count + 1;
+                seen.Add(value, id);
+                nodes.Add(new CanonicalCarryGraphData.Node { Id = id, Type = Identity(value.GetType()) });
+                pending.Enqueue(Tuple.Create(value, id, depth));
+                return id;
+            }
+            CanonicalCarryGraphData.Value Visit(object? value, Type declared, string path, int depth)
+            {
+                if (++count > MaximumValues || depth > 128) throw new InvalidDataException("Carry field graph exceeds its bound at " + path
+                    + ";values=" + count + ";depth=" + depth);
+                if (value == null) return new CanonicalCarryGraphData.Value { Kind = "null" };
+                var type = value.GetType(); var id = Identity(type);
+                var issue = portability?.Invoke(value);
+                if (issue != null) { unsupported.Add(path + ":" + issue); return Unsupported(id, issue); }
+                if (type.IsValueType && !declared.IsValueType && IsScalar(type) && types.ContainsKey(id))
+                    return new CanonicalCarryGraphData.Value { Kind = "node", Type = id, Reference = AddNode(value, depth, path) };
+                if (IsScalar(type))
+                {
+                    if (!types.ContainsKey(id))
+                    { unsupported.Add(path + ":unregistered-scalar:" + id); return Unsupported(id, "unregistered-scalar"); }
+                    return new CanonicalCarryGraphData.Value { Kind = "scalar", Type = id, Text = EncodeScalar(value, type) };
+                }
+                // Plain structs are inline field values, not reference-graph
+                // nodes. Keep their original logical field cost. A struct boxed
+                // into object/interface storage stays a node to retain aliases.
+                if (declared.IsValueType && types.ContainsKey(id) && LeafSize(type) > 0)
+                {
+                    count = checked(count + LeafSize(type) - 1);
+                    if (count > MaximumValues) throw new InvalidDataException("Carry leaf field count exceeds its bound at " + path);
+                    return new CanonicalCarryGraphData.Value { Kind = "value", Type = id, Text = EncodeLeaf(value, type) };
+                }
+                // Root references remain inside the graph, even if the caller
+                // also has an external binding for the same singleton.
+                if (seen.TryGetValue(value, out var existing))
+                    return new CanonicalCarryGraphData.Value { Kind = "node", Type = id, Reference = existing };
+                string? binding;
+                try { binding = externalBinding(value); }
+                catch (InvalidDataException error)
+                { unsupported.Add(path + ":" + error.Message); return Unsupported(id, error.Message); }
+                if (binding != null)
+                {
+                    if (type.IsValueType || binding.Length == 0) throw new InvalidDataException("Carry external binding is invalid.");
+                    if (externalValues.TryGetValue(binding, out var bound) && !ReferenceEquals(bound, value))
+                        throw new InvalidDataException("Carry external identity is ambiguous: " + binding);
+                    if (!externalIds.TryGetValue(value, out var ordinal))
+                    {
+                        ordinal = externals.Count + 1; externalIds.Add(value, ordinal); externalValues.Add(binding, value);
+                        externals.Add(new CanonicalCarryGraphData.External { Binding = binding, Type = id });
+                    }
+                    else if (externals[ordinal - 1].Binding != binding)
+                        throw new InvalidDataException("Carry external alias changed identity.");
+                    return new CanonicalCarryGraphData.Value { Kind = "external", Type = id, Reference = ordinal };
+                }
+                if (!types.ContainsKey(id) || (!type.IsArray && !layouts.ContainsKey(id)))
+                { unsupported.Add(path + ":unregistered-managed-type:" + id); return Unsupported(id, "unregistered-managed-type"); }
+                return new CanonicalCarryGraphData.Value { Kind = "node", Type = id, Reference = AddNode(value, depth, path) };
+            }
+            var rootData = roots.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair =>
+            {
+                if (string.IsNullOrEmpty(pair.Key) || pair.Value == null || pair.Value.GetType().IsValueType)
+                    throw new InvalidDataException("Carry root must bind an existing managed reference.");
+                var id = Identity(pair.Value.GetType());
+                if (!layouts.ContainsKey(id)) throw new InvalidDataException("Carry root type is unregistered: " + id);
+                return new CanonicalCarryGraphData.Root { Binding = pair.Key, Node = AddNode(pair.Value, 0, pair.Key) };
+            }).ToArray();
+            if (rootData.Length == 0) throw new InvalidDataException("Carry roots are absent.");
+            while (pending.Count != 0)
+            {
+                var entry = pending.Dequeue(); var owner = entry.Item1; var node = nodes[entry.Item2 - 1];
+                var path = "node[" + entry.Item2 + "]";
+                if (IsScalar(owner.GetType()))
+                { node.Kind = "boxed-scalar"; node.Text = EncodeScalar(owner, owner.GetType()); }
+                else if (owner is Array array)
+                {
+                    if (array.Rank != 1 || array.GetLowerBound(0) != 0 || array.Length > MaximumNodes)
+                        throw new InvalidDataException("Carry array shape exceeds its bound.");
+                    node.Kind = "array"; node.Items = new CanonicalCarryGraphData.Value[array.Length];
+                    for (var i = 0; i < array.Length; i++) node.Items[i] = Visit(array.GetValue(i), array.GetType().GetElementType()!, path + "[" + i + "]", entry.Item3 + 1);
+                }
+                else
+                {
+                    node.Kind = "object"; var layout = layouts[node.Type];
+                    node.Fields = layout.Fields.Select(field => new CanonicalCarryGraphData.Field {
+                        Name = FieldIdentity(field), Value = Visit(field.GetValue(owner), field.FieldType, path + "/" + FieldIdentity(field), entry.Item3 + 1) }).ToArray();
+                }
+            }
+            return new CanonicalCarryGraphData { Schema = schema, Roots = rootData, Nodes = nodes.ToArray(),
+                Externals = externals.ToArray(), Unsupported = unsupported.ToArray() };
+        }
+        private static CanonicalCarryGraphData.Value Unsupported(string type, string reason)
+            => new CanonicalCarryGraphData.Value { Kind = "unsupported", Type = type, Text = reason };
+
+        internal byte[] Encode(CanonicalCarryGraphData value) => CanonicalCarryGraphWire.Encode(value);
+        internal CanonicalCarryGraphData Decode(byte[] bytes) => CanonicalCarryGraphWire.Decode(bytes);
+
+        // Freeze the caller's data by a bounded canonical round trip, then
+        // resolve every value before exposing a single live field write.
+        internal Action PrepareApply(CanonicalCarryGraphData input, IReadOnlyDictionary<string, object> roots,
+            Func<string, object> resolveExternal)
+        {
+            var value = Decode(Encode(input));
+            if (value.Version != 1 || value.Schema != schema || value.Unsupported == null || value.Unsupported.Length != 0
+                || value.Nodes == null || value.Nodes.Length == 0 || value.Nodes.Length > MaximumNodes || value.Roots == null
+                || value.Externals == null || value.Externals.Length > MaximumNodes
+                || !value.Roots.Select(r => r.Binding).SequenceEqual(roots.Keys.OrderBy(key => key, StringComparer.Ordinal)))
+                throw new InvalidDataException("Carry graph schema, roots or coverage differs.");
+            var objects = new object[value.Nodes.Length];
+            var nodeTypes = new Type[value.Nodes.Length];
+            for (var i = 0; i < value.Nodes.Length; i++)
+            {
+                var node = value.Nodes[i];
+                if (node == null || node.Id != i + 1 || node.Type == null || !types.TryGetValue(node.Type, out var type)
+                    || node.Kind != (type.IsArray ? "array" : IsScalar(type) ? "boxed-scalar" : "object")
+                    || (IsScalar(type) ? node.Text == null || node.Items != null || node.Fields != null || !type.IsValueType
+                        : type.IsArray ? node.Items == null || node.Items.Length > MaximumNodes || node.Fields != null || node.Text != null
+                        : node.Items != null || node.Text != null || node.Fields == null || !layouts.ContainsKey(node.Type)
+                        || !node.Fields.Select(f => f.Name).SequenceEqual(layouts[node.Type].Fields.Select(FieldIdentity))))
+                    throw new InvalidDataException("Carry node type or field layout differs: " + (i + 1));
+                nodeTypes[i] = type;
+            }
+            var boundNodes = new HashSet<int>(); var boundObjects = new Dictionary<object, int>(new References());
+            foreach (var root in value.Roots)
+            {
+                if (root.Node < 1 || root.Node > objects.Length || roots[root.Binding] == null
+                    || roots[root.Binding].GetType() != nodeTypes[root.Node - 1] || nodeTypes[root.Node - 1].IsValueType)
+                    throw new InvalidDataException("Carry live root binding differs: " + root.Binding);
+                var owner = roots[root.Binding];
+                if (objects[root.Node - 1] != null && !ReferenceEquals(objects[root.Node - 1], owner)
+                    || boundObjects.TryGetValue(owner, out var prior) && prior != root.Node)
+                    throw new InvalidDataException("Carry live root aliases differ.");
+                objects[root.Node - 1] = owner; boundNodes.Add(root.Node); boundObjects[owner] = root.Node;
+            }
+            for (var i = 0; i < objects.Length; i++)
+                if (objects[i] == null)
+                {
+                    var type = nodeTypes[i];
+#pragma warning disable SYSLIB0050
+                    objects[i] = IsScalar(type) ? DecodeBox(value.Nodes[i].Text!, type)
+                        : type.IsArray ? Array.CreateInstance(type.GetElementType()!, value.Nodes[i].Items!.Length)
+                        : FormatterServices.GetUninitializedObject(type);
+#pragma warning restore SYSLIB0050
+                }
+            var external = new object[value.Externals.Length];
+            var externalKeys = new HashSet<string>(StringComparer.Ordinal); var externalObjects = new HashSet<object>(new References());
+            for (var i = 0; i < external.Length; i++)
+            {
+                var saved = value.Externals[i];
+                if (saved == null || string.IsNullOrEmpty(saved.Binding) || !externalKeys.Add(saved.Binding))
+                    throw new InvalidDataException("Carry external identity is invalid or duplicated.");
+                var owner = resolveExternal(saved.Binding);
+                if (owner == null || owner.GetType().IsValueType || Identity(owner.GetType()) != saved.Type
+                    || !externalObjects.Add(owner) || boundObjects.ContainsKey(owner))
+                    throw new InvalidDataException("Carry external type or alias binding differs: " + saved.Binding);
+                external[i] = owner;
+            }
+            var visitedNodes = new HashSet<int>(); var visitedExternal = new HashSet<int>(); var valueCount = 0;
+            object? Read(CanonicalCarryGraphData.Value item, Type expected)
+            {
+                if (++valueCount > MaximumValues) throw new InvalidDataException("Carry value count exceeds its bound.");
+                object? result;
+                switch (item.Kind)
+                {
+                    case "null":
+                        if (item.Type != null || item.Text != null || item.Reference != 0 || expected.IsValueType && Nullable.GetUnderlyingType(expected) == null)
+                            throw new InvalidDataException("Carry null field is invalid.");
+                        return null;
+                    case "scalar":
+                        if (item.Reference != 0 || item.Type == null || !types.TryGetValue(item.Type, out var scalar) || !IsScalar(scalar)
+                            || item.Text == null) throw new InvalidDataException("Carry scalar type is invalid.");
+                        result = DecodeScalar(item.Text, scalar); break;
+                    case "value":
+                        if (item.Reference != 0 || item.Type == null || !types.TryGetValue(item.Type, out var leaf)
+                            || !expected.IsValueType || LeafSize(leaf) <= 0 || item.Text == null)
+                            throw new InvalidDataException("Carry inline value type is invalid.");
+                        valueCount = checked(valueCount + LeafSize(leaf) - 1);
+                        if (valueCount > MaximumValues) throw new InvalidDataException("Carry leaf field count exceeds its bound.");
+                        result = DecodeLeaf(item.Text, leaf); break;
+                    case "node":
+                        if (item.Text != null || item.Reference < 1 || item.Reference > objects.Length
+                            || item.Type != value.Nodes[item.Reference - 1].Type) throw new InvalidDataException("Carry managed reference is invalid.");
+                        if (expected.IsValueType && (IsScalar(nodeTypes[item.Reference - 1]) || LeafSize(nodeTypes[item.Reference - 1]) > 0))
+                            throw new InvalidDataException("Carry boxed value cannot replace an inline field.");
+                        visitedNodes.Add(item.Reference); result = objects[item.Reference - 1]; break;
+                    case "external":
+                        if (item.Text != null || item.Reference < 1 || item.Reference > external.Length
+                            || item.Type != value.Externals[item.Reference - 1].Type) throw new InvalidDataException("Carry external reference is invalid.");
+                        visitedExternal.Add(item.Reference); result = external[item.Reference - 1]; break;
+                    default: throw new InvalidDataException("Unresolved carry field kind.");
+                }
+                if (!expected.IsInstanceOfType(result) && !(Nullable.GetUnderlyingType(expected)?.IsInstanceOfType(result) ?? false))
+                    throw new InvalidDataException("Carry value does not match its declared field type.");
+                if (item.Kind != "node" && portability?.Invoke(result!) is string issue)
+                    throw new InvalidDataException("Carry value is not portable: " + issue);
+                return result;
+            }
+            // Fill detached nodes first. Value-type nodes must be filled before
+            // their parent copies the boxed struct into a field or array.
+            var status = new byte[objects.Length]; var writes = new List<Action>();
+            void Fill(int index, int depth)
+            {
+                if (depth > 128) throw new InvalidDataException("Carry restore graph exceeds its depth bound.");
+                if (status[index] == 2) return;
+                if (status[index] == 1)
+                { if (nodeTypes[index].IsValueType) throw new InvalidDataException("Carry value-type cycle is invalid."); return; }
+                status[index] = 1;
+                var node = value.Nodes[index]; var owner = objects[index];
+                object? Prepared(CanonicalCarryGraphData.Value item, Type expected)
+                {
+                    var result = Read(item, expected);
+                    if (item.Kind == "node") Fill(item.Reference - 1, depth + 1);
+                    return result;
+                }
+                if (node.Kind == "boxed-scalar") { }
+                else if (node.Kind == "array")
+                {
+                    var array = (Array)owner; var element = nodeTypes[index].GetElementType()!;
+                    for (var i = 0; i < node.Items!.Length; i++) array.SetValue(Prepared(node.Items[i], element), i);
+                }
+                else
+                {
+                    var layout = layouts[node.Type];
+                    for (var i = 0; i < layout.Fields.Length; i++)
+                    {
+                        var field = layout.Fields[i]; var fieldValue = Prepared(node.Fields![i].Value, field.FieldType);
+                        if (boundNodes.Contains(index + 1)) writes.Add(() => field.SetValue(owner, fieldValue));
+                        else field.SetValue(owner, fieldValue);
+                    }
+                }
+                if (portability?.Invoke(owner) is string issue) throw new InvalidDataException("Carry node is not portable: " + issue);
+                status[index] = 2;
+            }
+            foreach (var root in value.Roots) { visitedNodes.Add(root.Node); Fill(root.Node - 1, 0); }
+            if (visitedNodes.Count != objects.Length || visitedExternal.Count != external.Length)
+                throw new InvalidDataException("Carry graph contains unreachable nodes or bindings.");
+            return () => { foreach (var write in writes) write(); };
+        }
+
+        private static string EncodeScalar(object value, Type type)
+        {
+            if (type == typeof(string)) return (string)value;
+            if (type == typeof(float)) return BitConverter.ToUInt32(BitConverter.GetBytes((float)value), 0).ToString("x8", CultureInfo.InvariantCulture);
+            if (type == typeof(double)) return BitConverter.DoubleToInt64Bits((double)value).ToString("x16", CultureInfo.InvariantCulture);
+            if (type == typeof(decimal)) return string.Join(",", decimal.GetBits((decimal)value).Select(v => v.ToString("x8", CultureInfo.InvariantCulture)));
+            if (type == typeof(char)) return ((int)(char)value).ToString(CultureInfo.InvariantCulture);
+            return Convert.ToString(type.IsEnum ? Convert.ChangeType(value, Enum.GetUnderlyingType(type), CultureInfo.InvariantCulture) : value,
+                CultureInfo.InvariantCulture)!;
+        }
+        private int LeafSize(Type type)
+        {
+            if (type.IsPrimitive && type != typeof(IntPtr) && type != typeof(UIntPtr) || type.IsEnum || type == typeof(decimal)) return 1;
+            if (!type.IsValueType || !layouts.TryGetValue(Identity(type), out var layout)) return 0;
+            if (leafSizes.TryGetValue(type, out var cached)) return cached;
+            var total = 1;
+            foreach (var field in layout.Fields)
+            {
+                var size = LeafSize(field.FieldType);
+                if (size == 0) { leafSizes.Add(type, 0); return 0; }
+                total = checked(total + size);
+            }
+            if (layout.Fields.Length == 0) total = 0;
+            leafSizes.Add(type, total); return total;
+        }
+        private string EncodeLeaf(object value, Type type)
+        {
+            var parts = new List<string>();
+            void Append(object owner, Type current)
+            {
+                if (IsScalar(current)) { parts.Add(EncodeScalar(owner, current)); return; }
+                foreach (var field in layouts[Identity(current)].Fields) Append(field.GetValue(owner)!, field.FieldType);
+            }
+            Append(value, type); return string.Join("|", parts);
+        }
+        private object DecodeLeaf(string text, Type type)
+        {
+            var parts = text.Split('|'); var cursor = 0;
+            object Read(Type current)
+            {
+                if (IsScalar(current))
+                {
+                    if (cursor >= parts.Length) throw new InvalidDataException("Carry leaf bits are incomplete.");
+                    return DecodeScalar(parts[cursor++], current);
+                }
+#pragma warning disable SYSLIB0050
+                var result = FormatterServices.GetUninitializedObject(current);
+#pragma warning restore SYSLIB0050
+                foreach (var field in layouts[Identity(current)].Fields) field.SetValue(result, Read(field.FieldType));
+                return result;
+            }
+            var value = Read(type);
+            if (cursor != parts.Length || EncodeLeaf(value, type) != text) throw new InvalidDataException("Carry leaf bits are noncanonical.");
+            return value;
+        }
+        private static object DecodeScalar(string text, Type type)
+        {
+            object value;
+            try
+            {
+                if (type == typeof(string)) value = text;
+                else if (type == typeof(float)) value = BitConverter.ToSingle(BitConverter.GetBytes(uint.Parse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture)), 0);
+                else if (type == typeof(double)) value = BitConverter.Int64BitsToDouble(long.Parse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+                else if (type == typeof(decimal)) value = new decimal(text.Split(',').Select(part => int.Parse(part, NumberStyles.HexNumber, CultureInfo.InvariantCulture)).ToArray());
+                else if (type == typeof(char)) value = (char)ushort.Parse(text, NumberStyles.None, CultureInfo.InvariantCulture);
+                else if (type.IsEnum) value = Enum.ToObject(type, Convert.ChangeType(text, Enum.GetUnderlyingType(type), CultureInfo.InvariantCulture)!);
+                else value = Convert.ChangeType(text, type, CultureInfo.InvariantCulture)!;
+            }
+            catch (Exception error) when (error is FormatException || error is OverflowException || error is ArgumentException)
+            { throw new InvalidDataException("Invalid carry scalar bits.", error); }
+            if (EncodeScalar(value, type) != text) throw new InvalidDataException("Noncanonical carry scalar.");
+            return value;
+        }
+        private static object DecodeBox(string text, Type type)
+        {
+            // Array.GetValue returns a fresh boxed value. Distinct source boxes
+            // must not collapse merely because their scalar bits are equal.
+            var array = Array.CreateInstance(type, 1);
+            array.SetValue(DecodeScalar(text, type), 0);
+            return array.GetValue(0)!;
+        }
+        private sealed class Layout
+        {
+            internal Layout(Type type, FieldInfo[] fields) { Type = type; Fields = fields; }
+            internal Type Type { get; }
+            internal FieldInfo[] Fields { get; }
+        }
+        private sealed class References : IEqualityComparer<object>
+        {
+            public new bool Equals(object? left, object? right) => ReferenceEquals(left, right);
+            public int GetHashCode(object value) => RuntimeHelpers.GetHashCode(value);
+        }
+    }
+
+    [Serializable]
+    internal sealed class CanonicalCarryGraphData
+    {
+        public int Version = 1;
+        public string Schema = "";
+        public Root[] Roots = null!;
+        public Node[] Nodes = null!;
+        public External[] Externals = null!;
+        public string[] Unsupported = null!;
+        [Serializable] internal struct Root { public string Binding; public int Node; }
+        [Serializable] internal sealed class Node
+        { public int Id; public string Type = "", Kind = ""; public string? Text; public Field[]? Fields; public Value[]? Items; }
+        [Serializable] internal struct Field { public string Name; public Value Value; }
+        [Serializable] internal struct Value { public string Kind; public string? Type, Text; public int Reference; }
+        [Serializable] internal sealed class External { public string Binding = "", Type = ""; }
+    }
+}

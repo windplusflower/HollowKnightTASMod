@@ -15,6 +15,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalVisualFsmTemplates visualTemplates = new CanonicalVisualFsmTemplates();
         private LoadingGameplayOracle? observer;
         private string? observerSession;
+        private CanonicalCarryCapture? carry;
         internal CanonicalBoundaryPolicy() { startup = new CanonicalHeroStartupWarmup(); }
         internal bool AdvanceStartup() => startup.Advance();
 
@@ -59,11 +60,19 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("boundary-digest-captured", new { digest.FullSha256, roots = digest.Roots.Length, unsupported = digest.Unsupported.Length });
             if (digest.CanonicalWaitIssues.Length != 0)
                 throw new InvalidOperationException("Canonical scheduler registry is incomplete: " + string.Join(", ", digest.CanonicalWaitIssues));
+            carry ??= new CanonicalCarryCapture();
+            var candidate = carry.Capture(identities);
+            var candidateBytes = carry.Encode(candidate);
+            File.WriteAllBytes(Path.Combine(directory, "canonical-carry-" + ordinal + ".bin"), candidateBytes);
+            Progress("D-candidate-data-captured", new { roots = candidate.Roots.Length, nodes = candidate.Nodes.Length,
+                externalBindings = candidate.Externals.Length, unsupported = candidate.Unsupported, bytes = candidateBytes.Length });
             if (ordinal == 1)
             {
                 // Audit that the full reader and retained reflection caches do
                 // not change the frozen world. No Canon, game loop or input
-                // runs between these captures. This is not cold-replay D0.
+                // runs between these captures. The D reader/encoder also runs
+                // inside this audit, including its first reflection binding.
+                // This is not cold-replay D0.
                 var repeated = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart);
                 var comparison = BoundaryDigestComparison.Compare(digest, repeated);
                 File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + "-repeat.json"), JsonConvert.SerializeObject(repeated));

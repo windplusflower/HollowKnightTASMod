@@ -331,7 +331,8 @@ try {
                     'canonical-boundary-progress.jsonl','boundary-observer-audit.json','boundary-field-schema.json')
                 foreach ($file in (Get-ChildItem -LiteralPath $resolvedShadow -Recurse -File | Where-Object {
                     ($_.Name -in $diagnosticNames -or $_.Name -match '^loading-candidate-[0-9]+-inventory\.json$' -or
-                        $_.Name -match '^boundary-digest-[0-9]+(?:-repeat)?\.json$')
+                        $_.Name -match '^boundary-digest-[0-9]+(?:-repeat)?\.json$' -or
+                        $_.Name -match '^canonical-carry-[0-9]+\.bin$')
                 })) {
                     $relative = [IO.Path]::GetRelativePath($resolvedShadow, $file.FullName)
                     $copy = Join-Path $destination (Join-Path ('recovered-shadow-{0:d2}' -f $shadowOrdinal) $relative)
