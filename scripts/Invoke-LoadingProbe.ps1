@@ -31,6 +31,7 @@ param(
     [switch] $CanonicalParticles,
     [switch] $CanonicalBoundary,
     [switch] $BoundaryInventory,
+    [switch] $OnlyTasMods,
     [switch] $ExportVideo,
     [switch] $CheckpointPrototype,
     [long] $CheckpointAfterFrame = 0,
@@ -46,6 +47,7 @@ if ($VirtualAudio -and -not $SerialScenes) { throw 'VirtualAudio requires Serial
 if ($IsolatedOnline -and -not $VirtualAudio) { throw 'IsolatedOnline requires VirtualAudio.' }
 if ($CanonicalParticles -and -not $IsolatedOnline) { throw 'CanonicalParticles requires IsolatedOnline.' }
 if ($CanonicalBoundary -and -not $CanonicalParticles) { throw 'CanonicalBoundary requires CanonicalParticles.' }
+if ($CanonicalBoundary) { $OnlyTasMods = $true }
 if ($BoundaryInventory -and -not $SerialScenes) { throw 'BoundaryInventory requires SerialScenes.' }
 if ($CanonicalStartupClock -and (-not $SynchronousFetch -or -not $DisableLegacyCalibration)) { throw 'The v4 experiment requires synchronous fetch and disabled legacy calibration.' }
 if ($ModWallClock -and -not $CanonicalStartupClock) { throw 'The v5 Mod wall-clock experiment requires canonical startup clocks.' }
@@ -104,6 +106,11 @@ if (-not $outputRoot.StartsWith($ownedRoot, [StringComparison]::OrdinalIgnoreCas
 if (Test-Path -LiteralPath $outputRoot) { throw 'Choose a fresh evidence directory.' }
 if (Get-Process hollow_knight,HollowKnightTAS.Companion,StudioScenarioHarness -ErrorAction SilentlyContinue) { throw 'A game or Studio session is already running.' }
 $install = 'D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/Managed/Mods/HollowKnightTAS'
+$modRoot = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($install))
+$modQuarantine = Join-Path (Join-Path $modRoot 'disabled') ('__HKTAS_VanillaProbe_' + [Guid]::NewGuid().ToString('N'))
+$modMoves = [Collections.Generic.List[object]]::new()
+$modIsolationStatus = 'not-requested'
+. (Join-Path $PSScriptRoot 'LoadingProbeModIsolation.ps1')
 $companion = Join-Path $install 'Companion/win-x64'
 $clockRoot = Join-Path $companion 'ClockStartup'
 $harnessBuild = Join-Path $repo 'scripts/StudioScenarioHarness/bin/Release/net8.0-windows10.0.19041.0/win-x64'
@@ -171,6 +178,7 @@ $before = Read-SaveAudit
 [IO.File]::WriteAllText((Join-Path $outputRoot 'saves-before.json'), $before)
 $hostProcess = $null
 try {
+    Isolate-OtherMods
     Copy-Item -LiteralPath $runtime -Destination (Join-Path $install 'HollowKnightTAS.dll')
     foreach ($entry in $profileCandidateFiles) { Copy-Item -LiteralPath $entry.source -Destination $entry.destination }
     if ($usesClockCandidate) {
@@ -336,8 +344,10 @@ finally {
     # through its owned host if App shutdown has not already completed. Do not kill unrelated PIDs.
     $remainingGame = Get-Process hollow_knight -ErrorAction SilentlyContinue
     if ($remainingGame) {
+        if ($OnlyTasMods) { $script:modIsolationStatus = 'retained-game-running'; Write-ModIsolation }
         Write-Warning 'Game remains running. Candidate installation retained; restore after identifying and closing the owned process.'
     } else {
+        Restore-OtherMods
         foreach ($name in @('HollowKnightTAS.dll','companion.manifest.json')) {
             Copy-Item -LiteralPath (Join-Path $backup $name) -Destination (Join-Path $install $name)
         }

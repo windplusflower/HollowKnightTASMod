@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using HollowKnightTAS.Core.Cryptography;
 using HollowKnightTAS.Core.Manifest;
 using HollowKnightTAS.Runtime.Settings;
@@ -14,6 +15,9 @@ namespace HollowKnightTAS.Runtime.Manifest
     {
         public static IReadOnlyDictionary<string, string> CaptureLoadedMods()
         {
+            HollowKnightTAS.Core.SceneCheckpoints.SceneCheckpointEnvironmentPolicy.ValidateMods(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId,
+                ModHooks.GetAllMods(onlyEnabled: false, allowLoadError: true).Select(mod => mod.GetName()));
             var loadedMods = new SortedDictionary<string, string>(StringComparer.Ordinal);
             foreach (var mod in ModHooks.GetAllMods(
                          onlyEnabled: true,

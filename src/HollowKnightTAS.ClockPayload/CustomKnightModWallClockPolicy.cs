@@ -104,6 +104,9 @@ namespace HollowKnightTAS.ClockPayload
         internal void Verify()
         {
             if (failure != null) throw new InvalidOperationException("V5 Mod wall-clock installation failed: " + failure);
+            // No installed Mod means there are no Mod clocks to adapt. Present
+            // adapters retain their pinned signatures and late-install checks.
+            if (target == null) return;
             if (!installed || Volatile.Read(ref constructorReads) < 1)
                 throw new InvalidOperationException("V5 requires its pinned CustomKnight constructor to run through the wall-clock policy.");
         }
