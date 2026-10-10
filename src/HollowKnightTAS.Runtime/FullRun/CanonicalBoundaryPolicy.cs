@@ -13,10 +13,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalHeroStartupWarmup startup;
         private readonly CanonicalBoundaryPoolPolicy pools = new CanonicalBoundaryPoolPolicy();
         private readonly CanonicalVisualFsmTemplates visualTemplates = new CanonicalVisualFsmTemplates();
+        private readonly CanonicalHeroAssetTemplates assetTemplates = new CanonicalHeroAssetTemplates();
         private LoadingGameplayOracle? observer;
         private string? observerSession;
         private CanonicalCarryCapture? carry;
-        internal CanonicalBoundaryPolicy() { startup = new CanonicalHeroStartupWarmup(); }
+        internal CanonicalBoundaryPolicy() { startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart); }
         internal bool AdvanceStartup() => startup.Advance();
 
         internal void Apply(int ordinal, string source, string target, long movie, long native, string sessionDirectory)
@@ -37,6 +38,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             var identities = new BoundaryObjectIdentity();
             var carryFsmBindings = CanonicalHeroFsmBindings.Validate(identities);
             Progress("D-Hero-FSM-bindings-validated", new { carryFsmBindings, canonicalVisualBindings = 2 });
+            var assetOrigins = assetTemplates.Validate(identities);
+            File.WriteAllText(Path.Combine(directory, "canonical-asset-origins.json"), JsonConvert.SerializeObject(new {
+                schema = 1, diagnosticOnly = true, completeStateCoverage = false, origins = assetOrigins }));
+            Progress("D-Hero-asset-origins-validated", new { assets = assetOrigins.Length });
             var broadphase = CheckpointPhysicsBroadphaseState.Canonicalize(identities);
             Progress("R4-broadphase-readback", new { broadphase.Count, capacity = broadphase.Nodes.Length, broadphase.ProxyCount });
             CanonicalBoundaryVisualPolicy.ResetFsmOrder(identities);
@@ -60,10 +65,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("boundary-digest-captured", new { digest.FullSha256, roots = digest.Roots.Length, unsupported = digest.Unsupported.Length });
             if (digest.CanonicalWaitIssues.Length != 0)
                 throw new InvalidOperationException("Canonical scheduler registry is incomplete: " + string.Join(", ", digest.CanonicalWaitIssues));
-            carry ??= new CanonicalCarryCapture();
+            carry ??= new CanonicalCarryCapture(assetTemplates);
             var candidate = carry.Capture(identities);
             var candidateBytes = carry.Encode(candidate);
             File.WriteAllBytes(Path.Combine(directory, "canonical-carry-" + ordinal + ".bin"), candidateBytes);
+            File.WriteAllText(Path.Combine(directory, "canonical-event-binding-audit.json"), JsonConvert.SerializeObject(new {
+                schema = 1, diagnosticOnly = true, completeStateCoverage = false, events = carry.EventBindingAudit }));
             Progress("D-candidate-data-captured", new { roots = candidate.Roots.Length, nodes = candidate.Nodes.Length,
                 externalBindings = candidate.Externals.Length, unsupported = candidate.Unsupported, bytes = candidateBytes.Length });
             if (ordinal == 1)
@@ -87,6 +94,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 elapsedMilliseconds = elapsed.ElapsedMilliseconds, pending, completeStateCoverage = false }) + "\n");
             throw new InvalidOperationException("Canonical boundary registry is incomplete: " + string.Join(", ", pending));
         }
-        public void Dispose() { observer?.Dispose(); visualTemplates.Dispose(); startup.Dispose(); }
+        public void Dispose() { observer?.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
     }
 }

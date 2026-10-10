@@ -15,6 +15,9 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal sealed class CanonicalCarryCapture
     {
         private readonly CanonicalCarryGraphCodec codec = CanonicalCarryFieldRegistry.Create();
+        private readonly CanonicalHeroAssetTemplates assetTemplates;
+        internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates) { this.assetTemplates = assetTemplates; }
+        internal EventAudit[] EventBindingAudit { get; private set; } = Array.Empty<EventAudit>();
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
@@ -38,8 +41,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             var initialized = typeof(PlayMakerGlobals).GetField("<Initialized>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null);
             if (globals == null || !Equals(initialized, true)) throw new InvalidDataException("Original PlayMaker globals are not initialized.");
             roots.Add("PlayMakerGlobals/variables", Required(typeof(PlayMakerGlobals), "variables").GetValue(globals));
-            var bindings = new ExternalBindings(identities);
+            var bindings = new ExternalBindings(identities, assetTemplates);
             var result = codec.Capture(roots, bindings.Bind);
+            EventBindingAudit = bindings.Events.ToArray();
             // Shared event objects use reference equality in PlayMaker. They
             // cannot be cloned as local action data or considered immutable
             // until the global table/cache and every consumer are closed.
@@ -55,10 +59,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly Dictionary<Type, UnityEngine.Object[]> assets = new Dictionary<Type, UnityEngine.Object[]>();
             private readonly Dictionary<object, string> known = new Dictionary<object, string>(new References());
             private readonly CanonicalCarryReflectionBindings metadata;
+            private readonly CanonicalHeroAssetTemplates assetTemplates;
+            internal readonly List<EventAudit> Events = new List<EventAudit>();
             internal bool HasEvents { get; private set; }
-            internal ExternalBindings(BoundaryObjectIdentity identities)
+            internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates)
             {
                 this.identities = identities;
+                this.assetTemplates = assetTemplates;
                 var action = typeof(CheckCanDreamWarpInScene);
                 var checks = Required(action, "sceneCheckFunctions").GetValue(actionInstance()) as Dictionary<string, Func<bool>>
                     ?? throw new InvalidDataException("Original dream-warp action checks are absent.");
@@ -101,6 +108,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var key = identities.Get(native);
                     if (key.StartsWith("asset:", StringComparison.Ordinal))
                     {
+                        var originalOrigin = assetTemplates.Bind(native);
+                        if (originalOrigin != null) { known.Add(value, originalOrigin); return originalOrigin; }
                         var type = native.GetType();
                         if (!assets.TryGetValue(type, out var candidates))
                         {
@@ -127,15 +136,31 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var name = (string)Required(typeof(FsmEvent), "name").GetValue(fsmEvent);
                     var table = typeof(FsmEvent).GetField("_eventLookup", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)
                         as Dictionary<string, FsmEvent>;
-                    if (name == null || table == null || !table.TryGetValue(name, out var registered) || !ReferenceEquals(registered, fsmEvent))
+                    var cached = name != null && table != null && table.TryGetValue(name, out var found) ? found : null;
+                    Events.Add(new EventAudit { Name = name, IsGlobal = (bool)Required(typeof(FsmEvent), "isGlobal").GetValue(fsmEvent),
+                        IsSystemEvent = (bool)Required(typeof(FsmEvent), "isSystemEvent").GetValue(fsmEvent),
+                        Path = (string?)Required(typeof(FsmEvent), "<Path>k__BackingField").GetValue(fsmEvent),
+                        CachedNameExists = cached != null, SameCachedReference = ReferenceEquals(cached, fsmEvent) });
+                    HasEvents = true;
+                    if (cached == null && CanonicalCarryFieldRegistry.IsLocalEmptyEvent(fsmEvent)) return null;
+                    if (cached == null || !ReferenceEquals(cached, fsmEvent))
                         throw new InvalidDataException("unregistered-global-FSM-event");
-                    HasEvents = true; var key = "FsmEvent/" + name;
+                    var key = "FsmEvent/" + name;
                     known.Add(value, key); return key;
                 }
                 var reflective = metadata.Bind(value);
                 if (reflective != null) { known.Add(value, reflective); return reflective; }
                 return null;
             }
+        }
+        internal sealed class EventAudit
+        {
+            public string? Name { get; set; }
+            public bool IsGlobal { get; set; }
+            public bool IsSystemEvent { get; set; }
+            public string? Path { get; set; }
+            public bool CachedNameExists { get; set; }
+            public bool SameCachedReference { get; set; }
         }
         private sealed class References : IEqualityComparer<object>
         {

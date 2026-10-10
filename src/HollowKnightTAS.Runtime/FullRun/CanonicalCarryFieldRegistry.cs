@@ -19,6 +19,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             "UnityEngine.LayerMask", "UnityEngine.Matrix4x4", "UnityEngine.RaycastHit" };
         private static readonly FieldInfo RaycastCollider = typeof(RaycastHit).GetField("m_Collider", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidDataException("Pinned RaycastHit collider binding is absent.");
+        private static readonly FieldInfo[] LocalEventFields = new[] { "name", "isGlobal", "isSystemEvent", "<Path>k__BackingField" }
+            .Select(name => typeof(FsmEvent).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new InvalidDataException("Pinned FsmEvent field binding is absent: " + name)).ToArray();
 
         internal static CanonicalCarryGraphCodec Create()
         {
@@ -61,8 +64,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             types.Add(typeof(HutongGames.PlayMaker.None));
             using var hash = SHA256.Create();
             return new CanonicalCarryGraphCodec(types, "canonical-carry-fields-v1:" + BitConverter.ToString(
-                hash.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", "").ToLowerInvariant(), PortableValue);
+                hash.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", "").ToLowerInvariant(), PortableValue, AllocatedValue);
         }
+        // Only the original empty placeholder can be allocated as local data.
+        // Named/global/system events must retain their shared external identity.
+        internal static bool IsLocalEmptyEvent(FsmEvent value) => Equals(LocalEventFields[0].GetValue(value), "")
+            && Equals(LocalEventFields[1].GetValue(value), false) && Equals(LocalEventFields[2].GetValue(value), false)
+            && LocalEventFields[3].GetValue(value) == null;
+        private static string? AllocatedValue(object value) => value is FsmEvent fsmEvent && !IsLocalEmptyEvent(fsmEvent)
+            ? "allocated-FsmEvent-needs-shared-global-binding" : null;
         private static string? PortableValue(object value) => value is RaycastHit && (int)RaycastCollider.GetValue(value) != 0
             ? "RaycastHit-native-collider-id-needs-portable-rebinding" : null;
         private static bool Allocatable(Type type)

@@ -21,12 +21,15 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly string schema;
         private readonly Dictionary<Type, int> leafSizes = new Dictionary<Type, int>();
         private readonly Func<object, string?>? portability;
+        private readonly Func<object, string?>? allocationPortability;
 
-        internal CanonicalCarryGraphCodec(IEnumerable<Type> registered, string schema, Func<object, string?>? portability = null)
+        internal CanonicalCarryGraphCodec(IEnumerable<Type> registered, string schema, Func<object, string?>? portability = null,
+            Func<object, string?>? allocationPortability = null)
         {
             if (string.IsNullOrEmpty(schema)) throw new ArgumentException("Carry schema identity is required.", nameof(schema));
             this.schema = schema;
             this.portability = portability;
+            this.allocationPortability = allocationPortability;
             foreach (var type in new[] { typeof(bool), typeof(byte), typeof(sbyte), typeof(char), typeof(short), typeof(ushort),
                 typeof(int), typeof(uint), typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(string), typeof(decimal) })
                 types.Add(Identity(type), type);
@@ -125,6 +128,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 if (!types.ContainsKey(id) || (!type.IsArray && !layouts.ContainsKey(id)))
                 { unsupported.Add(path + ":unregistered-managed-type:" + id); return Unsupported(id, "unregistered-managed-type"); }
+                var allocationIssue = allocationPortability?.Invoke(value);
+                if (allocationIssue != null) { unsupported.Add(path + ":" + allocationIssue); return Unsupported(id, allocationIssue); }
                 return new CanonicalCarryGraphData.Value { Kind = "node", Type = id, Reference = AddNode(value, depth, path) };
             }
             var rootData = roots.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair =>
@@ -299,6 +304,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     }
                 }
                 if (portability?.Invoke(owner) is string issue) throw new InvalidDataException("Carry node is not portable: " + issue);
+                if (!boundNodes.Contains(index + 1) && allocationPortability?.Invoke(owner) is string allocationIssue)
+                    throw new InvalidDataException("Carry allocated node is not portable: " + allocationIssue);
                 status[index] = 2;
             }
             foreach (var root in value.Roots) { visitedNodes.Add(root.Node); Fill(root.Node - 1, 0); }

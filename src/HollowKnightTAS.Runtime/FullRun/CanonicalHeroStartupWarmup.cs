@@ -14,6 +14,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         private delegate void OriginalStart(HeroController hero);
         private readonly Hook startHook;
+        private readonly Action<HeroController>? beforeHeroStart;
         private HeroController? hero;
         private GameObject? crack;
         private bool started, complete;
@@ -28,8 +29,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ReadProcessMemory(IntPtr process, IntPtr address,
             byte[] bytes, UIntPtr size, out UIntPtr read);
 
-        internal CanonicalHeroStartupWarmup()
+        internal CanonicalHeroStartupWarmup(Action<HeroController>? beforeHeroStart = null)
         {
+            this.beforeHeroStart = beforeHeroStart;
             if (HeroController.SilentInstance != null) throw new InvalidOperationException("Canonical Hero startup hook was installed too late.");
             var start = typeof(HeroController).GetMethod("Start", BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new MissingMethodException("HeroController.Start");
@@ -38,6 +40,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private void Start(OriginalStart original, HeroController value)
         {
+            if (value == HeroController.SilentInstance) beforeHeroStart?.Invoke(value);
             original(value);
             if (value != HeroController.SilentInstance) return;
             if (hero != null) throw new InvalidOperationException("Canonical startup cannot bind a second Hero.");

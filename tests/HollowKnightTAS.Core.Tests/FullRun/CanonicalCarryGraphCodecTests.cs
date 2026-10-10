@@ -209,6 +209,27 @@ public sealed class CanonicalCarryGraphCodecTests
         Assert.AreEqual(7, target.Counter);
     }
 
+    [TestMethod]
+    public void Local_allocation_rules_preserve_external_singletons_and_reject_tampered_local_fields_before_write()
+    {
+        var codec = new CanonicalCarryGraphCodec(new[] { typeof(Owner), typeof(Value), typeof(Pair) }, "local-allocation-v1",
+            allocationPortability: value => value is Value data && data.Number != 0 ? "must-bind-shared-singleton" : null);
+        var shared = new Value { Number = 19 }; var source = new Owner { Other = shared, Current = new Value(), Counter = 9 };
+        var payload = codec.Capture(Roots(("root", source)), value => ReferenceEquals(value, shared) ? "singleton" : null);
+        Assert.AreEqual(0, payload.Unsupported.Length); Assert.AreEqual(1, payload.Externals.Length);
+        var target = new Owner { Counter = 7 };
+        codec.PrepareApply(payload, Roots(("root", target)), _ => shared)();
+        Assert.AreSame(shared, target.Other); Assert.AreEqual(0, target.Current!.Number);
+        var local = payload.Nodes.Single(node => node.Type == CanonicalCarryGraphCodec.Identity(typeof(Value)));
+        var number = Array.FindIndex(local.Fields!, field => field.Name.EndsWith("/Number", StringComparison.Ordinal));
+        local.Fields![number].Value.Text = "1";
+        target.Counter = 7;
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(payload, Roots(("root", target)), _ => shared));
+        Assert.AreEqual(7, target.Counter);
+        source.Current!.Number = 1;
+        Assert.AreEqual(1, codec.Capture(Roots(("root", source)), value => ReferenceEquals(value, shared) ? "singleton" : null).Unsupported.Length);
+    }
+
     private sealed class Owner
     {
         public int Counter;
