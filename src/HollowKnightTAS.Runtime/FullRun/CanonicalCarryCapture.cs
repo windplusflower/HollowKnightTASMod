@@ -33,16 +33,21 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal bool InputPreparedManagerScalars { get; private set; }
         internal bool InputPreparedCallbacks { get; private set; }
         internal bool SceneLoadScalarsPrepared { get; private set; }
+        internal bool MainGraphPrepared { get; private set; }
+        internal bool GameplayPrepared { get; private set; }
+        internal bool EventStaticSlotsGuarded { get; private set; }
+        internal bool InvulnerabilityPrepared { get; private set; }
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
             ?? throw new InvalidDataException("Carry field binding is absent: " + type.FullName + "/" + name);
 
         internal CanonicalCarryGraphData Capture(BoundaryObjectIdentity identities, CanonicalInputEpoch inputEpoch,
-            HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, CanonicalSchedulerCarry scheduler)
+            HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, CanonicalSchedulerCarry scheduler, CheckpointHeroInvulnerability invulnerability)
         {
             InputPreparedLeaseActions = 0; InputPreparedCursor = false; InputPreparedManagerScalars = false; InputPreparedCallbacks = false;
-            SceneLoadScalarsPrepared = false;
+            SceneLoadScalarsPrepared = false; MainGraphPrepared = false; GameplayPrepared = false; EventStaticSlotsGuarded = false;
+            InvulnerabilityPrepared = false;
             var hero = HeroController.SilentInstance ?? throw new InvalidDataException("Carry Hero is absent.");
             var manager = GameManager.instance ?? throw new InvalidDataException("Carry GameManager is absent.");
             var player = PlayerData.instance;
@@ -58,6 +63,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var clock = CanonicalClockCarry.Capture(inputEpoch.SourceNative);
             roots.Add("D/Clock", clock);
             scheduler.RequireEpoch(inputEpoch); roots.Add(CanonicalSchedulerCarry.Root, scheduler);
+            roots.Add("D/HeroInvulnerability", invulnerability);
             LoadingSerialSceneProbe.AddCanonicalLoadInfo(roots);
             LoadingSerialSceneProbe.PrepareCanonicalLoadScalars((CanonicalSceneLoadCarry.Data)roots[CanonicalSceneLoadCarry.Root]);
             SceneLoadScalarsPrepared = true;
@@ -81,6 +87,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var canonicalSenders = CanonicalVisualSenderBindings.Create(visualTemplates.CurrentResetOwners(), identities);
             CanonicalSenderAudit = canonicalSenders.Snapshot();
             EventDataAudit = CanonicalEventDataCarry.Add(roots, canonicalSenders.Bind);
+            var guardEventSlots = CanonicalEventStaticSlots.PrepareGuard(roots);
             var inputBindings = CanonicalCarryRootBindings.Merge(InputCarryAudit.FixedBindings, inputRoots);
             var bindings = new ExternalBindings(identities, assetTemplates, canonicalSenders, inputBindings);
             var result = codec.Capture(roots, bindings.Bind);
@@ -88,6 +95,20 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var pair in roots) mainBindings.Add("canonical-main-root/" + pair.Key, pair.Value);
             var inputExternal = new ExternalBindings(identities, assetTemplates, canonicalSenders, mainBindings);
             InputGraph = inputCodec.Capture(inputRoots, inputExternal.Bind);
+            var sourceEpoch = inputEpoch.Copy();
+            if (result.Unsupported.Length == 0)
+                codec.PrepareApply(result, roots, bindings.ResolveCaptured, view => {
+                    var source = CanonicalCarryContinuationContract.Read(view);
+                    inputEpoch.RequireReadback(source.Epoch, inputEpoch.SourceNative);
+                    CanonicalSchedulerRestorePlan.Prepare(source.Scheduler, scheduler);
+                    LoadingSerialSceneProbe.PrepareCanonicalLoadScalars(source.SceneLoad);
+                    CanonicalGameplayCarry.PrepareApply(CanonicalGameplayCarry.FromPrepared(view), identities);
+                    GameplayPrepared = true;
+                    CheckpointHeroInvulnerability.FromCanonicalPrepared(view, source.Scheduler).PrepareCanonicalPulseApply(hero);
+                    InvulnerabilityPrepared = true;
+                    sourceEpoch = source.Epoch;
+                    MainGraphPrepared = true;
+                });
             var guardInputSlots = CanonicalInputStaticSlots.PrepareGuard(inputRoots, InputCarryAudit.FixedBindings);
             // Prepare against the same parked source only as a read-only
             // consumer audit. Never execute the returned application here.
@@ -97,13 +118,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     InputPreparedLeaseActions = input.ValidateCanonicalSourceBindings(view, inputRoots);
                     InputPreparedCursor = input.PrepareCanonicalCursorAudit(view);
                     var managerSource = CanonicalInputManagerScalars.FromPrepared(view);
-                    CanonicalInputManagerScalars.RequireEpoch(managerSource, inputEpoch);
+                    CanonicalInputManagerScalars.RequireEpoch(managerSource, sourceEpoch);
                     CanonicalInputManagerScalars.PrepareApply(managerSource);
                     InputPreparedManagerScalars = true;
                     CanonicalInputCallbackContract.RequireSame(CanonicalInputCallbackContract.FromPrepared(view), InputCarryAudit.CallbackData);
                     InputPreparedCallbacks = true;
                 });
             guardInputSlots();
+            guardEventSlots(); EventStaticSlotsGuarded = true;
             InputGraph.Unsupported = InputGraph.Unsupported.Concat(InputCarryAudit.Unsupported).OrderBy(value => value, StringComparer.Ordinal).ToArray();
             InputGraph.Unsupported = InputGraph.Unsupported.Concat(new[] { "R6/InputTAS-lease-and-original-bindings-rebinding-unqualified" }).ToArray();
             EventGraphAudit = CanonicalEventCarryRoots.ValidateGraph(result);
@@ -115,6 +137,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 .Concat(InputCarryAudit.Unsupported)
                 .Concat(new[] { "R6/FsmEvent-consumer-and-static-root-rebinding-unqualified",
                     "D/native-scheduler-timestamp-queue-and-wait-restoration-unqualified",
+                    "D/HeroInvulnerability-original-iterator-and-native-wait-restoration-unqualified",
                     "D/SceneLoad-continuation-references-and-native-wait-rebinding-unqualified" })
                 .OrderBy(value => value, StringComparer.Ordinal).ToArray();
             return result;

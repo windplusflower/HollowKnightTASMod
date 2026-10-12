@@ -14,7 +14,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             .Single(assembly => assembly.GetName().Name == "HollowKnightTAS.ClockPayload")
             .GetType("HollowKnightTAS.ClockPayload.ClockController", true)!.GetMethod(name, BindingFlags.Static | BindingFlags.Public)
             ?? throw new MissingMethodException("Original clock continuation method is absent: " + name);
-        private static byte[] Export(string name) => (byte[])Method(name).Invoke(null, null);
+        private static byte[] Export(string name) => Method(name).Invoke(null, null) as byte[]
+            ?? throw new InvalidDataException("Original clock continuation export returned no byte array: " + name);
         internal static CanonicalClockCarry Capture(long nativeFrame)
         {
             var value = new CanonicalClockCarry { Native = Export("ExportCheckpointNativeClock"),

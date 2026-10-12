@@ -131,6 +131,28 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal InvulnerabilityWait[] CaptureInvulnerabilityWaits(HeroController hero)
             => CaptureWaits(iterator => CheckpointHeroInvulnerability.IsBoundIterator(iterator, hero), 8, "Hero invulnerability");
 
+        // Reuse the complete boundary sample. The legacy wait-only traversal
+        // replaces the sample and cannot be used while preparing the D queue.
+        internal InvulnerabilityWait[] CapturedInvulnerabilityWaits(HeroController hero)
+        {
+            if (!capturedQueueValid || !capturedManagerBytes.SequenceEqual(Read(capturedManager, 80))
+                || capturedCallbacks.Any(item => !item.NodeBytes.SequenceEqual(Read(item.NodeAddress, 96)))
+                || coroutines.Any(item => !item.Value.NativeBytes.SequenceEqual(Read(item.Key, 136))))
+                throw new InvalidOperationException("Hero wait carry has no unchanged complete scheduler sample.");
+            var result = new List<InvulnerabilityWait>();
+            foreach (var callback in capturedCallbacks.Where(item => item.Coroutine != IntPtr.Zero)) {
+                var view = coroutines[callback.Coroutine];
+                if (!(view.Enumerator is IEnumerator iterator) || !CheckpointHeroInvulnerability.IsBoundIterator(iterator, hero)) continue;
+                if (view.Done || view.HasAsyncOperation || view.WaitingFor != IntPtr.Zero || view.ContinueWhenFinished != IntPtr.Zero
+                    || callback.Repeat != 0 || double.IsNaN(callback.WakeTime) || double.IsInfinity(callback.WakeTime))
+                    throw new InvalidOperationException("Hero wait carry has an unregistered native state or relation.");
+                result.Add(new InvulnerabilityWait { Enumerator = iterator, WakeTime = callback.WakeTime, Frame = callback.Frame,
+                    Rate = callback.Rate, Mode = callback.Mode, Repeat = callback.Repeat, Call = callback.Call, Flag128 = view.EnumeratorBased });
+            }
+            if (result.Count > 8) throw new InvalidOperationException("Hero wait carry exceeds its bound.");
+            return result.ToArray();
+        }
+
         internal InvulnerabilityWait[] CaptureWaits(Func<IEnumerator, bool> accepts, int maximum, string family)
         {
             capturedQueueValid = false; capturedCallbacks = Array.Empty<CallbackView>();

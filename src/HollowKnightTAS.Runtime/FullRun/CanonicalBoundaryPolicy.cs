@@ -83,7 +83,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
             inputEpoch.RequireControlOrigin();
             CanonicalCarryGraphData candidate;
-            try { candidate = carry.Capture(identities, inputEpoch, input, observer.BoundarySchedulerCarry(inputEpoch)); }
+            try { candidate = carry.Capture(identities, inputEpoch, input, observer.BoundarySchedulerCarry(inputEpoch), observer.BoundaryHeroInvulnerabilityCarry(inputEpoch)); }
             finally {
                 // Retain completed domain audits when a later graph/layout
                 // guard rejects. Audit availability never implies full D.
@@ -126,6 +126,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 externalBindings = candidate.Externals.Length, unsupported = candidate.Unsupported, bytes = candidateBytes.Length,
                 sceneLoadScalarsPrepared = carry.SceneLoadScalarsPrepared, sceneLoadApplicationExecuted = false,
                 nativeSchedulerPrepared = observer.BoundarySchedulerRestorePrepared, nativeSchedulerApplicationExecuted = false,
+                mainGraphPrepared = carry.MainGraphPrepared, mainGraphApplicationExecuted = false,
+                gameplayPrepared = carry.GameplayPrepared, gameplayApplicationExecuted = false,
+                eventStaticSlotsGuarded = carry.EventStaticSlotsGuarded,
+                invulnerabilityPrepared = carry.InvulnerabilityPrepared, invulnerabilityApplicationExecuted = false,
                 inputRoots = carry.InputGraph!.Roots.Length, inputNodes = carry.InputGraph.Nodes.Length,
                 inputUnsupported = carry.InputGraph.Unsupported, inputBytes = inputBytes.Length });
             if (ordinal == 1)

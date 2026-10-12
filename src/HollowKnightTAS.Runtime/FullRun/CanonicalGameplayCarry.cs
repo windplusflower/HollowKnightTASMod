@@ -115,6 +115,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Gameplay native values are not finite.");
         }
 
+        internal static Data FromPrepared(CanonicalCarryGraphCodec.PreparedView view)
+        {
+            var owner = view.Root(Root); var type = typeof(Data);
+            object? Field(string name) => view.Field(owner, type, name);
+            var data = new Data { Version = (int)Field(nameof(Data.Version))!,
+                Owners = (ScalarOwner[])Field(nameof(Data.Owners))!, Transforms = (Pose[])Field(nameof(Data.Transforms))!,
+                BodyIdentity = (string)Field(nameof(Data.BodyIdentity))!, BodyType = (RigidbodyType2D)Field(nameof(Data.BodyType))!,
+                BodyVelocity = (Vector2)Field(nameof(Data.BodyVelocity))!, GravityScale = (float)Field(nameof(Data.GravityScale))!,
+                Simulated = (bool)Field(nameof(Data.Simulated))!, History = (Vector2[]?)Field(nameof(Data.History)) };
+            ValidateNative(data); return data;
+        }
+
         internal static Action PrepareApply(Data input, BoundaryObjectIdentity identities)
         {
             // The caller supplies the already frozen/decoded graph root.
@@ -141,7 +153,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             var history = input.History == null ? null : (Vector2[])input.History.Clone();
             var poses = input.Transforms.Select(pose => new Pose { Position = pose.Position, Rotation = pose.Rotation, Scale = pose.Scale }).ToArray();
             var bodyType = input.BodyType; var velocity = input.BodyVelocity; var gravity = input.GravityScale; var simulated = input.Simulated;
+            var consumed = false;
             return () => {
+                if (consumed) throw new InvalidOperationException("Gameplay preparation was already consumed.");
+                var currentOwners = Bind(out var currentHero, out var currentBody);
+                var currentTransforms = Transforms(currentHero);
+                if (!ReferenceEquals(hero, currentHero) || !ReferenceEquals(body, currentBody)
+                    || owners.Any(pair => !ReferenceEquals(pair.Value, currentOwners[pair.Key]))
+                    || currentTransforms.Length != transforms.Length
+                    || currentTransforms.Where((item, index) => !ReferenceEquals(item, transforms[index])).Any())
+                    throw new InvalidOperationException("Gameplay persistent owners changed before application.");
+                consumed = true;
                 foreach (var application in applications) application();
                 History.SetValue(hero, history);
                 for (var index = 0; index < transforms.Length; index++) {

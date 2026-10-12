@@ -240,6 +240,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             BoundarySchedulerRestorePrepared = true;
             return data;
         }
+        internal CheckpointHeroInvulnerability BoundaryHeroInvulnerabilityCarry(CanonicalInputEpoch epoch)
+        {
+            if (!boundaryCapture || !BoundarySchedulerRestorePrepared || epoch.SourceNative != boundaryNativeFrame || nativeScheduler == null)
+                throw new InvalidOperationException("Hero wait carry is outside its original scheduler boundary sample.");
+            var hero = HeroController.SilentInstance ?? throw new InvalidOperationException("Hero wait carry owner is absent.");
+            return CheckpointHeroInvulnerability.CaptureCanonical(hero, nativeScheduler);
+        }
 
         internal CanonicalCoverageCatalog.Snapshot BoundaryCoverageCatalog() => lastCoverage?.Copy()
             ?? throw new InvalidOperationException("No canonical boundary coverage sample is available.");

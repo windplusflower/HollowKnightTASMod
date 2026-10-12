@@ -86,6 +86,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             types.AddRange(CanonicalInputCallbackContract.DataTypes);
             types.AddRange(CanonicalSceneLoadCarry.DataTypes);
             types.AddRange(CanonicalSchedulerCarry.DataTypes);
+            var invulnerabilityTypes = new[] { typeof(CheckpointHeroInvulnerability), typeof(CheckpointHeroInvulnerability.WaitData),
+                typeof(CheckpointHeroInvulnerability.WaitData[]), typeof(float[]) };
+            types.AddRange(invulnerabilityTypes);
             using var hash = SHA256.Create();
             return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v1:" : "canonical-carry-fields-v5:") + BitConverter.ToString(
                 hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + loadingText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
@@ -98,6 +101,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                         CanonicalCarryGraphCodec.Identity(type) + ":" + string.Join(";", CanonicalCarryGraphCodec.Fields(type)
                             .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType)))))
                     + "\n" + string.Join("\n", CanonicalSchedulerCarry.DataTypes.Where(type => !type.IsArray).Select(type =>
+                        CanonicalCarryGraphCodec.Identity(type) + ":" + string.Join(";", CanonicalCarryGraphCodec.Fields(type)
+                            .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType)))))
+                    + "\n" + string.Join("\n", invulnerabilityTypes.Where(type => !type.IsArray).Select(type =>
                         CanonicalCarryGraphCodec.Identity(type) + ":" + string.Join(";", CanonicalCarryGraphCodec.Fields(type)
                             .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType)))))
                     + "\n" + CanonicalInputManagerScalars.SchemaIdentity + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalInputAdapterState))
