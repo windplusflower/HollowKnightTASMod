@@ -37,6 +37,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal bool GameplayPrepared { get; private set; }
         internal bool EventStaticSlotsGuarded { get; private set; }
         internal bool InvulnerabilityPrepared { get; private set; }
+        internal bool SceneMappingPrepared { get; private set; }
+        internal int SceneMappingCallbacks { get; private set; }
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
@@ -48,6 +50,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             InputPreparedLeaseActions = 0; InputPreparedCursor = false; InputPreparedManagerScalars = false; InputPreparedCallbacks = false;
             SceneLoadScalarsPrepared = false; MainGraphPrepared = false; GameplayPrepared = false; EventStaticSlotsGuarded = false;
             InvulnerabilityPrepared = false;
+            SceneMappingPrepared = false; SceneMappingCallbacks = 0;
             var hero = HeroController.SilentInstance ?? throw new InvalidDataException("Carry Hero is absent.");
             var manager = GameManager.instance ?? throw new InvalidDataException("Carry GameManager is absent.");
             var player = PlayerData.instance;
@@ -67,6 +70,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             LoadingSerialSceneProbe.AddCanonicalLoadInfo(roots);
             LoadingSerialSceneProbe.PrepareCanonicalLoadScalars((CanonicalSceneLoadCarry.Data)roots[CanonicalSceneLoadCarry.Root]);
             SceneLoadScalarsPrepared = true;
+            var sceneMapping = new CanonicalSceneMappingBindings();
+            roots.Add(CanonicalSceneMappingCarry.Root, sceneMapping.Data);
+            if (sceneMapping.HasDetachedPlayer) roots.Add(CanonicalSceneMappingCarry.DetachedPlayerRoot, sceneMapping.OwnedPlayer);
+            SceneMappingCallbacks = sceneMapping.Data.Items.Length;
             var observer = CheckpointClockObserverState.Decode(clock.Observer);
             ClockCarryAudit = new { nativeBytes = clock.Native.Length, randomBytes = clock.Random.Length, observerBytes = clock.Observer.Length,
                 observer.UnityFrameObserved, observer.LastUnityFrameCount, observer.CaptureUnityFrameCount, observer.AdvanceSequence,
@@ -106,6 +113,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     GameplayPrepared = true;
                     CheckpointHeroInvulnerability.FromCanonicalPrepared(view, source.Scheduler).PrepareCanonicalPulseApply(hero);
                     InvulnerabilityPrepared = true;
+                    var sourceMapping = CanonicalSceneMappingCarry.FromPrepared(view);
+                    sceneMapping.PrepareApply(sourceMapping, sourceMapping.Items.Length == 0 ? null :
+                        (PlayerData)view.Root(sourceMapping.Items[0].UsesCurrentPlayerData ? "PlayerData" : CanonicalSceneMappingCarry.DetachedPlayerRoot));
+                    SceneMappingPrepared = true;
                     sourceEpoch = source.Epoch;
                     MainGraphPrepared = true;
                 });
@@ -126,6 +137,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 });
             guardInputSlots();
             guardEventSlots(); EventStaticSlotsGuarded = true;
+            sceneMapping.Guard();
             InputGraph.Unsupported = InputGraph.Unsupported.Concat(InputCarryAudit.Unsupported).OrderBy(value => value, StringComparer.Ordinal).ToArray();
             InputGraph.Unsupported = InputGraph.Unsupported.Concat(new[] { "R6/InputTAS-lease-and-original-bindings-rebinding-unqualified" }).ToArray();
             EventGraphAudit = CanonicalEventCarryRoots.ValidateGraph(result);
@@ -138,6 +150,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 .Concat(new[] { "R6/FsmEvent-consumer-and-static-root-rebinding-unqualified",
                     "D/native-scheduler-timestamp-queue-and-wait-restoration-unqualified",
                     "D/HeroInvulnerability-original-iterator-and-native-wait-restoration-unqualified",
+                    "D/SceneManager-entry-mapping-delegate-and-ghost-restoration-unqualified",
                     "D/SceneLoad-continuation-references-and-native-wait-rebinding-unqualified" })
                 .OrderBy(value => value, StringComparer.Ordinal).ToArray();
             return result;

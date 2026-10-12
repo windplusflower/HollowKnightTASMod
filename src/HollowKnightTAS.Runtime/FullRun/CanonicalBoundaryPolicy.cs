@@ -84,6 +84,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             inputEpoch.RequireControlOrigin();
             CanonicalCarryGraphData candidate;
             try { candidate = carry.Capture(identities, inputEpoch, input, observer.BoundarySchedulerCarry(inputEpoch), observer.BoundaryHeroInvulnerabilityCarry(inputEpoch)); }
+            catch (Exception error) {
+                Progress("D-candidate-data-rejected", new { type = error.GetType().FullName, detail = error.Message });
+                throw;
+            }
             finally {
                 // Retain completed domain audits when a later graph/layout
                 // guard rejects. Audit availability never implies full D.
@@ -130,6 +134,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 gameplayPrepared = carry.GameplayPrepared, gameplayApplicationExecuted = false,
                 eventStaticSlotsGuarded = carry.EventStaticSlotsGuarded,
                 invulnerabilityPrepared = carry.InvulnerabilityPrepared, invulnerabilityApplicationExecuted = false,
+                sceneMappingPrepared = carry.SceneMappingPrepared, sceneMappingCallbacks = carry.SceneMappingCallbacks, sceneMappingApplicationExecuted = false,
+                detachedMappingPlayerCarried = Array.Exists(candidate.Roots, root => root.Binding == CanonicalSceneMappingCarry.DetachedPlayerRoot),
                 inputRoots = carry.InputGraph!.Roots.Length, inputNodes = carry.InputGraph.Nodes.Length,
                 inputUnsupported = carry.InputGraph.Unsupported, inputBytes = inputBytes.Length });
             if (ordinal == 1)

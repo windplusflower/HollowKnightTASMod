@@ -89,8 +89,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             var invulnerabilityTypes = new[] { typeof(CheckpointHeroInvulnerability), typeof(CheckpointHeroInvulnerability.WaitData),
                 typeof(CheckpointHeroInvulnerability.WaitData[]), typeof(float[]) };
             types.AddRange(invulnerabilityTypes);
+            types.AddRange(CanonicalSceneMappingCarry.DataTypes);
             using var hash = SHA256.Create();
-            return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v1:" : "canonical-carry-fields-v5:") + BitConverter.ToString(
+            return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v1:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
                 hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + loadingText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
                     + "\n" + CanonicalGameplayCarry.SchemaIdentity + "\n" + CanonicalClockCarry.SchemaIdentity
                     + "\n" + HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter.CanonicalSourceSchema
@@ -106,6 +107,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     + "\n" + string.Join("\n", invulnerabilityTypes.Where(type => !type.IsArray).Select(type =>
                         CanonicalCarryGraphCodec.Identity(type) + ":" + string.Join(";", CanonicalCarryGraphCodec.Fields(type)
                             .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType)))))
+                    + "\n" + string.Join("\n", CanonicalSceneMappingCarry.DataTypes.Where(type => !type.IsArray).Select(type =>
+                        CanonicalCarryGraphCodec.Identity(type) + ":" + string.Join(";", CanonicalCarryGraphCodec.Fields(type)
+                            .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType)))))
+                    + "\n" + CanonicalSceneMappingCarry.ModuleMvid + ":" + CanonicalSceneMappingCarry.ClosureType + ":"
+                    + CanonicalSceneMappingCarry.HandlerName + ":" + CanonicalSceneMappingCarry.HandlerToken
                     + "\n" + CanonicalInputManagerScalars.SchemaIdentity + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalInputAdapterState))
                         .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType))) + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalInputEpoch))
                         .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType))))))
