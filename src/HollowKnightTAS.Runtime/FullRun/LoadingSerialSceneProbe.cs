@@ -216,7 +216,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return original(name);
         }
 
-        internal static bool ObserveNativeBoundary(long movie, long native, string? sessionDirectory = null)
+        internal static bool ObserveNativeBoundary(long movie, long native, string? sessionDirectory = null, long? movieInputNativeOrigin = null)
         {
             var self = instance;
             if (self?.failure != null) throw new InvalidOperationException(self.failure);
@@ -227,7 +227,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (target.IsValid() && target.isLoaded)
                 throw new InvalidOperationException("Serial native boundary already has the target scene.");
             self.canonical?.Apply(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native,
-                sessionDirectory ?? throw new InvalidOperationException("Canonical boundary needs its protected Runtime session binding."));
+                sessionDirectory ?? throw new InvalidOperationException("Canonical boundary needs its protected Runtime session binding."),
+                movieInputNativeOrigin ?? throw new InvalidOperationException("Canonical boundary requires the actual StartInputAt frame origin."));
             self.Inventory("native-empty-boundary", movie, native);
             LoadingBoundaryInventory.Capture(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native);
             self.observedBoundary = true;

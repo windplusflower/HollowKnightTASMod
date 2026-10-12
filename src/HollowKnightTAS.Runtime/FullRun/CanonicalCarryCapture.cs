@@ -16,10 +16,14 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         private readonly CanonicalCarryGraphCodec codec = CanonicalCarryFieldRegistry.Create();
         private readonly CanonicalHeroAssetTemplates assetTemplates;
-        internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates) { this.assetTemplates = assetTemplates; }
+        private readonly CanonicalVisualFsmTemplates visualTemplates;
+        internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates)
+        { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; }
         internal EventAudit[] EventBindingAudit { get; private set; } = Array.Empty<EventAudit>();
         internal CanonicalEventCarryRoots.Audit? EventGlobalsAudit { get; private set; }
         internal CanonicalEventGraphContract.Audit? EventGraphAudit { get; private set; }
+        internal CanonicalEventDataCarry.Audit? EventDataAudit { get; private set; }
+        internal CanonicalVisualSenderBindings.Audit? CanonicalSenderAudit { get; private set; }
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
@@ -44,14 +48,18 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (globals == null || !Equals(initialized, true)) throw new InvalidDataException("Original PlayMaker globals are not initialized.");
             roots.Add("PlayMakerGlobals/variables", Required(typeof(PlayMakerGlobals), "variables").GetValue(globals));
             EventGlobalsAudit = CanonicalEventCarryRoots.Add(roots, globals);
-            var bindings = new ExternalBindings(identities, assetTemplates);
+            var canonicalSenders = CanonicalVisualSenderBindings.Create(visualTemplates.CurrentResetOwners(), identities);
+            CanonicalSenderAudit = canonicalSenders.Snapshot();
+            EventDataAudit = CanonicalEventDataCarry.Add(roots, canonicalSenders.Bind);
+            var bindings = new ExternalBindings(identities, assetTemplates, canonicalSenders);
             var result = codec.Capture(roots, bindings.Bind);
             EventGraphAudit = CanonicalEventCarryRoots.ValidateGraph(result);
             EventBindingAudit = bindings.Events.ToArray();
             // Shared event objects use reference equality in PlayMaker. They
             // cannot be cloned as local action data or considered immutable
             // until the global table/cache and every consumer are closed.
-            result.Unsupported = result.Unsupported.Concat(new[] { "R6/FsmEvent-consumer-and-static-root-rebinding-unqualified" })
+            result.Unsupported = result.Unsupported.Concat(EventDataAudit.Unsupported)
+                .Concat(new[] { "R6/FsmEvent-consumer-and-static-root-rebinding-unqualified" })
                 .OrderBy(value => value, StringComparer.Ordinal).ToArray();
             return result;
         }
@@ -64,12 +72,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly Dictionary<object, string> known = new Dictionary<object, string>(new References());
             private readonly CanonicalCarryReflectionBindings metadata;
             private readonly CanonicalHeroAssetTemplates assetTemplates;
+            private readonly CanonicalVisualSenderBindings canonicalSenders;
             internal readonly List<EventAudit> Events = new List<EventAudit>();
             internal bool HasEvents { get; private set; }
-            internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates)
+            internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualSenderBindings canonicalSenders)
             {
                 this.identities = identities;
                 this.assetTemplates = assetTemplates;
+                this.canonicalSenders = canonicalSenders;
                 var action = typeof(CheckCanDreamWarpInScene);
                 var checks = Required(action, "sceneCheckFunctions").GetValue(actionInstance()) as Dictionary<string, Func<bool>>
                     ?? throw new InvalidDataException("Original dream-warp action checks are absent.");
@@ -106,6 +116,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal string? Bind(object value)
             {
                 if (known.TryGetValue(value, out var bound)) return bound;
+                var canonicalSlot = canonicalSenders.Bind(value);
+                if (canonicalSlot != null) { known.Add(value, canonicalSlot); return canonicalSlot; }
                 if (value is UnityEngine.Object native)
                 {
                     if (native == null) throw new InvalidDataException("destroyed-Unity-wrapper-needs-rebinding");

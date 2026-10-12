@@ -21,6 +21,13 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal void BeginBoundaryReset() => resetStartOwners.Clear();
 
+        internal IReadOnlyList<PlayMakerFSM> CurrentResetOwners()
+        {
+            if (resetStartOwners.Count != 3 || resetStartOwners.Any(pair => !OwnsResetStart(pair.Key)))
+                throw new InvalidOperationException("Canonical visual sender owners have not completed the current three original resets.");
+            return resetStartOwners.OrderBy(pair => pair.Key).Select(pair => pair.Value).ToArray();
+        }
+
         internal bool OwnsResetStart(int instance)
         {
             if (!resetStartOwners.TryGetValue(instance, out var component) || component == null

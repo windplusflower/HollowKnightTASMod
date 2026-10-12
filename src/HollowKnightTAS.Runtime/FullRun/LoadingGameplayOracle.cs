@@ -79,7 +79,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool transitionSourceUnloaded, candidateCaptured;
 
         private LoadingGameplayOracle(string directory, long first, long end,
-            Func<long> movieFrame, Func<long> nativeFrame, Func<string> gameplayRng, bool boundaryCapture = false)
+            Func<long> movieFrame, Func<long> nativeFrame, Func<string> gameplayRng, bool boundaryCapture = false, long? inputNativeOrigin = null)
         {
             this.boundaryCapture = boundaryCapture;
             if (boundaryCapture) canonicalIdentities = new BoundaryObjectIdentity();
@@ -87,7 +87,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             samplingWindows = LoadingOracleSamplingWindows.Parse(
                 boundaryCapture ? null : Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_WINDOWS"), first, end);
             this.movieFrame = movieFrame; this.nativeFrame = nativeFrame; this.gameplayRng = gameplayRng;
-            controlledNativeOrigin = nativeFrame();
+            controlledNativeOrigin = inputNativeOrigin ?? nativeFrame();
+            if (controlledNativeOrigin < 0) throw new InvalidOperationException("Input native frame origin is invalid.");
             fieldDetails = Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_FIELD_DETAILS") == "1";
             nativePhysicsOnly = !boundaryCapture && Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_ONLY") == "1";
             serialBoundaryOnly = boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_SERIAL_BOUNDARY_ONLY") == "1";
@@ -172,20 +173,21 @@ namespace HollowKnightTAS.Runtime.FullRun
             return new LoadingGameplayOracle(directory, first, end, movieFrame, nativeFrame, gameplayRng);
         }
 
-        internal static LoadingGameplayOracle CreateBoundaryObserver(string directory)
+        internal static LoadingGameplayOracle CreateBoundaryObserver(string directory, long inputNativeOrigin)
         {
             var rng = HollowKnightTAS.Runtime.Rng.UnityRandomStateCodec_1_5_78_11833.Resolve().Codec
                 ?? throw new InvalidOperationException("Boundary digest RNG codec is unavailable.");
             LoadingGameplayOracle? observer = null;
             observer = new LoadingGameplayOracle(directory, 0, 1,
                 () => observer?.boundaryMovieFrame ?? 0, () => observer?.boundaryNativeFrame ?? 0,
-                () => rng.CaptureCurrent().Sha256, boundaryCapture: true);
+                () => rng.CaptureCurrent().Sha256, boundaryCapture: true, inputNativeOrigin: inputNativeOrigin);
             return observer;
         }
 
         internal BoundaryDigestSnapshot CaptureBoundaryFrame(long movie, long native, Func<int, bool> ownsNewPoolStart)
         {
             if (!boundaryCapture) throw new InvalidOperationException("The observer is not bound to a canonical boundary.");
+            if (native < controlledNativeOrigin) throw new InvalidOperationException("Boundary native cursor precedes its input frame origin.");
             using var validation = new LoadingEngineClockProbe.CheckpointValidation();
             boundaryMovieFrame = movie; boundaryNativeFrame = native;
             captureProgress = Stopwatch.StartNew(); captureStages.Clear(); captureStageStarted = 0;

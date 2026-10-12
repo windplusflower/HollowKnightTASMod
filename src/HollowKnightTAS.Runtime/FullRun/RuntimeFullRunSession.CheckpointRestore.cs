@@ -235,7 +235,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (job.Elapsed.ElapsedMilliseconds > 240000) throw new TimeoutException("Checkpoint reconstruction exceeded the four-minute deadline.");
                 clock.SetFrameRate(50); input.SetNativeFrameActive(false); frameInputEnabled = false;
-                var observed = LoadingSerialSceneProbe.ObserveNativeBoundary(0, nativeFrame, sessionDirectory);
+                var observed = LoadingSerialSceneProbe.ObserveNativeBoundary(0, nativeFrame, sessionDirectory, movieInputNativeOrigin);
                 if (job.Phase == "AwaitingTargetC" && observed)
                 {
                     var boundary = LoadingSerialSceneProbe.GetCheckpointBoundary();

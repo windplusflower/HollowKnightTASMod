@@ -16,12 +16,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalHeroAssetTemplates assetTemplates = new CanonicalHeroAssetTemplates();
         private LoadingGameplayOracle? observer;
         private string? observerSession;
+        private long? observerInputOrigin;
         private CanonicalCarryCapture? carry;
         internal CanonicalBoundaryPolicy() { startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart); }
         internal bool AdvanceStartup() => startup.Advance();
 
-        internal void Apply(int ordinal, string source, string target, long movie, long native, string sessionDirectory)
+        internal void Apply(int ordinal, string source, string target, long movie, long native, string sessionDirectory, long movieInputNativeOrigin)
         {
+            if (movieInputNativeOrigin < 0 || native < movieInputNativeOrigin || observerInputOrigin.HasValue && observerInputOrigin.Value != movieInputNativeOrigin)
+                throw new InvalidOperationException("Canonical boundary input frame origin is absent, changed or ahead of the native cursor.");
+            observerInputOrigin = movieInputNativeOrigin;
             if (!startup.CompleteFor(HeroController.SilentInstance))
                 throw new InvalidOperationException("Canonical boundary preceded registered Hero warmup.");
             var elapsed = Stopwatch.StartNew();
@@ -30,7 +34,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             void Progress(string phase, object detail) => File.AppendAllText(Path.Combine(directory, "canonical-boundary-progress.jsonl"),
                 JsonConvert.SerializeObject(new { ordinal, source, target, movie, native, phase, detail,
                     elapsedMilliseconds = elapsed.ElapsedMilliseconds, completeStateCoverage = false }) + "\n");
-            Progress("begin", new { });
+            Progress("begin", new { movieInputNativeOrigin, controlledNativeFrame = checked(native - movieInputNativeOrigin) });
             var destroyed = pools.Reset();
             Progress("R1-pools-rebuilt", new { destroyed });
             var stopped = CanonicalBoundaryVisualPolicy.Reset(visualTemplates);
@@ -51,7 +55,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("R6-action-metadata-caches-reset", metadataAudit);
             if (observer == null)
             {
-                observer = LoadingGameplayOracle.CreateBoundaryObserver(sessionDirectory);
+                observer = LoadingGameplayOracle.CreateBoundaryObserver(sessionDirectory, movieInputNativeOrigin);
                 observerSession = sessionDirectory;
             }
             if (!StringComparer.Ordinal.Equals(observerSession, sessionDirectory))
@@ -67,7 +71,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("boundary-digest-captured", new { digest.FullSha256, roots = digest.Roots.Length, unsupported = digest.Unsupported.Length });
             if (digest.CanonicalWaitIssues.Length != 0)
                 throw new InvalidOperationException("Canonical scheduler registry is incomplete: " + string.Join(", ", digest.CanonicalWaitIssues));
-            carry ??= new CanonicalCarryCapture(assetTemplates);
+            carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates);
             var candidate = carry.Capture(identities);
             var candidateBytes = carry.Encode(candidate);
             File.WriteAllBytes(Path.Combine(directory, "canonical-carry-" + ordinal + ".bin"), candidateBytes);
@@ -76,6 +80,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             File.WriteAllText(Path.Combine(directory, "canonical-event-globals.json"), JsonConvert.SerializeObject(new {
                 schema = 1, diagnosticOnly = true, completeStateCoverage = false, events = carry.EventGlobalsAudit,
                 contract = carry.EventGraphAudit }));
+            File.WriteAllText(Path.Combine(directory, "canonical-event-data-audit.json"), JsonConvert.SerializeObject(new {
+                schema = 1, diagnosticOnly = true, completeStateCoverage = false, eventData = carry.EventDataAudit,
+                canonicalSenders = carry.CanonicalSenderAudit }));
             Progress("D-candidate-data-captured", new { roots = candidate.Roots.Length, nodes = candidate.Nodes.Length,
                 externalBindings = candidate.Externals.Length, unsupported = candidate.Unsupported, bytes = candidateBytes.Length });
             if (ordinal == 1)
