@@ -22,14 +22,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Dictionary<Type, int> leafSizes = new Dictionary<Type, int>();
         private readonly Func<object, string?>? portability;
         private readonly Func<object, string?>? allocationPortability;
+        private readonly Action<CanonicalCarryGraphData>? importValidation;
 
         internal CanonicalCarryGraphCodec(IEnumerable<Type> registered, string schema, Func<object, string?>? portability = null,
-            Func<object, string?>? allocationPortability = null)
+            Func<object, string?>? allocationPortability = null, Action<CanonicalCarryGraphData>? importValidation = null)
         {
             if (string.IsNullOrEmpty(schema)) throw new ArgumentException("Carry schema identity is required.", nameof(schema));
             this.schema = schema;
             this.portability = portability;
             this.allocationPortability = allocationPortability;
+            this.importValidation = importValidation;
             foreach (var type in new[] { typeof(bool), typeof(byte), typeof(sbyte), typeof(char), typeof(short), typeof(ushort),
                 typeof(int), typeof(uint), typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(string), typeof(decimal) })
                 types.Add(Identity(type), type);
@@ -176,6 +178,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<string, object> resolveExternal)
         {
             var value = Decode(Encode(input));
+            // Domain checks receive the frozen input before allocation or
+            // external resolution. All generic checks still run afterwards.
+            importValidation?.Invoke(value);
             if (value.Version != 1 || value.Schema != schema || value.Unsupported == null || value.Unsupported.Length != 0
                 || value.Nodes == null || value.Nodes.Length == 0 || value.Nodes.Length > MaximumNodes || value.Roots == null
                 || value.Externals == null || value.Externals.Length > MaximumNodes

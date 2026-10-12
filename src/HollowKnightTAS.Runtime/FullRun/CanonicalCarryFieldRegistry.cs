@@ -14,6 +14,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal static class CanonicalCarryFieldRegistry
     {
         private const string Resource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryFieldRegistry.json";
+        private const string EventResource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryEventFieldRegistry.json";
         private static readonly string[] NativeValues = { "UnityEngine.Vector2", "UnityEngine.Vector3", "UnityEngine.Vector4",
             "UnityEngine.Quaternion", "UnityEngine.Color", "UnityEngine.Color32", "UnityEngine.Rect", "UnityEngine.Bounds",
             "UnityEngine.LayerMask", "UnityEngine.Matrix4x4", "UnityEngine.RaycastHit" };
@@ -25,19 +26,26 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal static CanonicalCarryGraphCodec Create()
         {
-            using var stream = typeof(CanonicalCarryFieldRegistry).Assembly.GetManifestResourceStream(Resource)
-                ?? throw new InvalidDataException("Frozen carry field registry is absent.");
-            using var reader = new StreamReader(stream, new UTF8Encoding(false, true));
-            var text = reader.ReadToEnd();
-            if (Encoding.UTF8.GetByteCount(text) > 2 * 1024 * 1024) throw new InvalidDataException("Carry field registry exceeds its bound.");
+            string ReadResource(string name)
+            {
+                using var stream = typeof(CanonicalCarryFieldRegistry).Assembly.GetManifestResourceStream(name)
+                    ?? throw new InvalidDataException("Frozen carry field registry is absent: " + name);
+                using var reader = new StreamReader(stream, new UTF8Encoding(false, true));
+                var result = reader.ReadToEnd();
+                if (Encoding.UTF8.GetByteCount(result) > 2 * 1024 * 1024) throw new InvalidDataException("Carry field registry exceeds its bound.");
+                return result;
+            }
+            var text = ReadResource(Resource); var eventText = ReadResource(EventResource);
             var registry = JObject.Parse(text);
-            if ((int?)registry["version"] != 1 || (bool?)registry["diagnosticOnly"] != true || !(registry["types"] is JArray entries))
+            var eventRegistry = JObject.Parse(eventText);
+            if ((int?)registry["version"] != 1 || (bool?)registry["diagnosticOnly"] != true || !(registry["types"] is JArray entries)
+                || (int?)eventRegistry["version"] != 1 || (bool?)eventRegistry["diagnosticOnly"] != true || !(eventRegistry["types"] is JArray eventEntries))
                 throw new InvalidDataException("Unsupported frozen carry field registry.");
             var assemblies = new[] { typeof(object).Assembly, typeof(Fsm).Assembly, typeof(HeroController).Assembly,
                 typeof(Vector3).Assembly, typeof(UnityEngine.UI.Image).Assembly, typeof(AudioClip).Assembly,
                 typeof(RaycastHit).Assembly, typeof(Rigidbody2D).Assembly }.Distinct().ToArray();
             var types = new List<Type>(); var names = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var entry in entries)
+            foreach (var entry in entries.Concat(eventEntries))
             {
                 var name = (string?)entry["name"] ?? throw new InvalidDataException("Frozen carry type name is absent.");
                 if (!names.Add(name)) throw new InvalidDataException("Frozen carry type name is duplicated.");
@@ -63,8 +71,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             // in the original schema. It carries only its underlying bits.
             types.Add(typeof(HutongGames.PlayMaker.None));
             using var hash = SHA256.Create();
-            return new CanonicalCarryGraphCodec(types, "canonical-carry-fields-v1:" + BitConverter.ToString(
-                hash.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", "").ToLowerInvariant(), PortableValue, AllocatedValue);
+            return new CanonicalCarryGraphCodec(types, "canonical-carry-fields-v3:" + BitConverter.ToString(
+                hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + CanonicalSystemEventBindings.SchemaIdentity)))
+                .Replace("-", "").ToLowerInvariant(), PortableValue, AllocatedValue,
+                graph => { CanonicalEventCarryRoots.ValidateGraph(graph); });
         }
         // Only the original empty placeholder can be allocated as local data.
         // Named/global/system events must retain their shared external identity.

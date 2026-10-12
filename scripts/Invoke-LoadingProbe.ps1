@@ -329,7 +329,7 @@ try {
                     'loading-field-digests.json','loading-oracle-progress.json','loading-oracle-stage-progress.json',
                     'engine-clock-layout.json','engine-clock-roundtrip.json','full-run-fault.txt','boundary-inventory.json',
                     'canonical-boundary-progress.jsonl','boundary-observer-audit.json','boundary-field-schema.json',
-                    'canonical-asset-origins.json','canonical-event-binding-audit.json')
+                    'canonical-asset-origins.json','canonical-event-binding-audit.json','canonical-event-globals.json')
                 foreach ($file in (Get-ChildItem -LiteralPath $resolvedShadow -Recurse -File | Where-Object {
                     ($_.Name -in $diagnosticNames -or $_.Name -match '^loading-candidate-[0-9]+-inventory\.json$' -or
                         $_.Name -match '^boundary-digest-[0-9]+(?:-repeat)?\.json$' -or

@@ -18,6 +18,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalHeroAssetTemplates assetTemplates;
         internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates) { this.assetTemplates = assetTemplates; }
         internal EventAudit[] EventBindingAudit { get; private set; } = Array.Empty<EventAudit>();
+        internal CanonicalEventCarryRoots.Audit? EventGlobalsAudit { get; private set; }
+        internal CanonicalEventGraphContract.Audit? EventGraphAudit { get; private set; }
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
@@ -41,13 +43,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             var initialized = typeof(PlayMakerGlobals).GetField("<Initialized>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null);
             if (globals == null || !Equals(initialized, true)) throw new InvalidDataException("Original PlayMaker globals are not initialized.");
             roots.Add("PlayMakerGlobals/variables", Required(typeof(PlayMakerGlobals), "variables").GetValue(globals));
+            EventGlobalsAudit = CanonicalEventCarryRoots.Add(roots, globals);
             var bindings = new ExternalBindings(identities, assetTemplates);
             var result = codec.Capture(roots, bindings.Bind);
+            EventGraphAudit = CanonicalEventCarryRoots.ValidateGraph(result);
             EventBindingAudit = bindings.Events.ToArray();
             // Shared event objects use reference equality in PlayMaker. They
             // cannot be cloned as local action data or considered immutable
             // until the global table/cache and every consumer are closed.
-            if (bindings.HasEvents) result.Unsupported = result.Unsupported.Concat(new[] { "R6/FsmEvent-global-state-and-reference-rebinding" })
+            result.Unsupported = result.Unsupported.Concat(new[] { "R6/FsmEvent-consumer-and-static-root-rebinding-unqualified" })
                 .OrderBy(value => value, StringComparer.Ordinal).ToArray();
             return result;
         }

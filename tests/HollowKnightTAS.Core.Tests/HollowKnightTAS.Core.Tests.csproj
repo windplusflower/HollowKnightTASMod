@@ -17,8 +17,10 @@
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CheckpointDataCodec.cs" Link="FullRun\CheckpointDataCodec.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryGraphCodec.cs" Link="FullRun\CanonicalCarryGraphCodec.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryGraphWire.cs" Link="FullRun\CanonicalCarryGraphWire.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalEventGraphContract.cs" Link="FullRun\CanonicalEventGraphContract.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryReflectionBindings.cs" Link="FullRun\CanonicalCarryReflectionBindings.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalAssetOriginRegistry.cs" Link="FullRun\CanonicalAssetOriginRegistry.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalFieldWriteTransaction.cs" Link="FullRun\CanonicalFieldWriteTransaction.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\BoundaryDigestSnapshot.cs" Link="FullRun\BoundaryDigestSnapshot.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\BoundaryAssetArrayRegistry.cs" Link="FullRun\BoundaryAssetArrayRegistry.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\BoundaryDigestComparison.cs" Link="FullRun\BoundaryDigestComparison.cs" />

@@ -18,6 +18,38 @@ public sealed class CanonicalCarryGraphCodecTests
     private static object NoBinding(string key) => throw new InvalidDataException("Unexpected external: " + key);
 
     [TestMethod]
+    public void Import_domain_validation_reads_the_frozen_graph_before_live_writes()
+    {
+        CanonicalCarryGraphData? input = null;
+        var validated = false;
+        var codec = new CanonicalCarryGraphCodec(new[] { typeof(Owner), typeof(Pair) }, "domain-test", importValidation: frozen => {
+            Assert.AreNotSame(input, frozen);
+            var counter = Array.FindIndex(input!.Nodes[0].Fields!, field => field.Name.EndsWith("/Counter", StringComparison.Ordinal));
+            input.Nodes[0].Fields![counter].Value.Text = "88";
+            validated = true;
+        });
+        var source = new Owner { Counter = 17 }; var target = new Owner { Counter = 5 };
+        input = codec.Capture(Roots(("owner", source)), NoExternal);
+        var apply = codec.PrepareApply(input, Roots(("owner", target)), NoBinding);
+        Assert.IsTrue(validated); Assert.AreEqual(5, target.Counter);
+        apply(); Assert.AreEqual(17, target.Counter);
+    }
+
+    [TestMethod]
+    public void Rejected_import_domain_does_not_resolve_external_objects_or_write_roots()
+    {
+        var codec = new CanonicalCarryGraphCodec(new[] { typeof(Owner), typeof(Pair) }, "domain-test",
+            importValidation: graph => throw new InvalidDataException("Rejected domain alias."));
+        var source = new Owner { Counter = 17, Other = new Unregistered() }; var target = new Owner { Counter = 5 };
+        var graph = codec.Capture(Roots(("owner", source)), value => "external/one");
+        var resolutions = 0;
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(graph, Roots(("owner", target)), key => {
+            resolutions++; return source.Other!;
+        }));
+        Assert.AreEqual(0, resolutions); Assert.AreEqual(5, target.Counter); Assert.IsNull(target.Other);
+    }
+
+    [TestMethod]
     public void Restores_cross_root_cycles_variable_cast_aliases_action_lists_and_structs()
     {
         var first = new Owner(); var second = new Owner(); var shared = new Value { Number = 71 };

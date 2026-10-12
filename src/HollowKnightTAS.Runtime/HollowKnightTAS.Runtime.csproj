@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="FullRun\CanonicalCarryFieldRegistry.json" />
+    <EmbeddedResource Include="FullRun\CanonicalCarryEventFieldRegistry.json" />
     <ProjectReference Include="..\HollowKnightTAS.Core\HollowKnightTAS.Core.csproj">
       <Private>true</Private>
     </ProjectReference>

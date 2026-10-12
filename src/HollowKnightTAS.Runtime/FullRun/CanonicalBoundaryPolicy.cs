@@ -47,6 +47,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             CanonicalBoundaryVisualPolicy.ResetFsmOrder(identities);
             CanonicalBoundaryStaticPolicy.ResetExecutionStack();
             Progress("R6-FSM-execution-stack-reset", new { });
+            var metadataAudit = CanonicalBoundaryStaticPolicy.ResetActionMetadata();
+            Progress("R6-action-metadata-caches-reset", metadataAudit);
             if (observer == null)
             {
                 observer = LoadingGameplayOracle.CreateBoundaryObserver(sessionDirectory);
@@ -71,6 +73,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             File.WriteAllBytes(Path.Combine(directory, "canonical-carry-" + ordinal + ".bin"), candidateBytes);
             File.WriteAllText(Path.Combine(directory, "canonical-event-binding-audit.json"), JsonConvert.SerializeObject(new {
                 schema = 1, diagnosticOnly = true, completeStateCoverage = false, events = carry.EventBindingAudit }));
+            File.WriteAllText(Path.Combine(directory, "canonical-event-globals.json"), JsonConvert.SerializeObject(new {
+                schema = 1, diagnosticOnly = true, completeStateCoverage = false, events = carry.EventGlobalsAudit,
+                contract = carry.EventGraphAudit }));
             Progress("D-candidate-data-captured", new { roots = candidate.Roots.Length, nodes = candidate.Nodes.Length,
                 externalBindings = candidate.Externals.Length, unsupported = candidate.Unsupported, bytes = candidateBytes.Length });
             if (ordinal == 1)

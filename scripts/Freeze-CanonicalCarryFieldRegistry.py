@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 
-def freeze(source, output):
+def freeze(source, output, roots=()):
     document = json.loads(source.read_text(encoding='utf-8-sig'))
     if document.get('schema') != 1 or document.get('completeStateCoverage') is not False:
         raise ValueError('Expected a complete-schema diagnostic from the unqualified canonical observer')
@@ -23,6 +23,9 @@ def freeze(source, output):
     pending = [name for name, fields in layouts.items() if name.startswith('HutongGames.PlayMaker.')
                or any(f['owner'] == 'HutongGames.PlayMaker.FsmStateAction' for f in fields)]
     pending += ['PlayerData', 'SceneData']
+    if any(root not in layouts for root in roots):
+        raise ValueError('An explicit carry root has no observed field layout')
+    pending += list(roots)
     while pending:
         name = pending.pop()
         if name in selected:
@@ -40,7 +43,7 @@ def freeze(source, output):
         for field in layouts.get(name, []):
             pending.append(field['type'])
     entries = [dict(name=name, fields=layouts.get(name)) for name in sorted(selected)]
-    manifest = dict(version=1, diagnosticOnly=True, sourceSha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+    manifest = dict(version=1, diagnosticOnly=True, explicitRoots=list(roots), sourceSha256=hashlib.sha256(source.read_bytes()).hexdigest(),
                     sourceBoundary=document['ordinal'], types=entries)
     if output.exists():
         raise ValueError('Refusing to replace a frozen field registry')
@@ -54,5 +57,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--field-schema', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--root', action='append', default=[], help='Additional observed type to include with its field closure')
     args = parser.parse_args()
-    freeze(args.field_schema, args.output)
+    freeze(args.field_schema, args.output, args.root)

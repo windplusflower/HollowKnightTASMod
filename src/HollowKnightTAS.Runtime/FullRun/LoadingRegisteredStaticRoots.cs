@@ -49,7 +49,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Reading this closed list cannot initialize arbitrary dormant types.
             var types = new[] { typeof(ObjectPool), typeof(iTween), typeof(PlayMakerFSM), typeof(HutongGames.PlayMaker.FsmVariables),
                 typeof(HutongGames.PlayMaker.Fsm), typeof(HutongGames.PlayMaker.FsmEvent), typeof(HutongGames.PlayMaker.FsmExecutionStack),
-                typeof(HutongGames.PlayMaker.FsmStateAction), typeof(GameManager), typeof(HeroController), typeof(GameCameras), typeof(PlayMakerGlobals) };
+                typeof(HutongGames.PlayMaker.FsmStateAction), typeof(HutongGames.PlayMaker.ActionData), typeof(HutongGames.PlayMaker.ReflectionUtils),
+                typeof(GameManager), typeof(HeroController), typeof(GameCameras), typeof(PlayMakerGlobals) };
             foreach (var type in types.OrderBy(type => type.FullName, StringComparer.Ordinal))
                 foreach (var field in type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
                     .Where(field => !field.IsLiteral).OrderBy(field => field.Name, StringComparer.Ordinal))
