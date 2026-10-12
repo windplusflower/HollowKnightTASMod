@@ -32,15 +32,17 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal bool InputPreparedCursor { get; private set; }
         internal bool InputPreparedManagerScalars { get; private set; }
         internal bool InputPreparedCallbacks { get; private set; }
+        internal bool SceneLoadScalarsPrepared { get; private set; }
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
             ?? throw new InvalidDataException("Carry field binding is absent: " + type.FullName + "/" + name);
 
         internal CanonicalCarryGraphData Capture(BoundaryObjectIdentity identities, CanonicalInputEpoch inputEpoch,
-            HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input)
+            HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, CanonicalSchedulerCarry scheduler)
         {
             InputPreparedLeaseActions = 0; InputPreparedCursor = false; InputPreparedManagerScalars = false; InputPreparedCallbacks = false;
+            SceneLoadScalarsPrepared = false;
             var hero = HeroController.SilentInstance ?? throw new InvalidDataException("Carry Hero is absent.");
             var manager = GameManager.instance ?? throw new InvalidDataException("Carry GameManager is absent.");
             var player = PlayerData.instance;
@@ -55,6 +57,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             roots.Add("D/InputEpoch", inputEpoch.Copy());
             var clock = CanonicalClockCarry.Capture(inputEpoch.SourceNative);
             roots.Add("D/Clock", clock);
+            scheduler.RequireEpoch(inputEpoch); roots.Add(CanonicalSchedulerCarry.Root, scheduler);
+            LoadingSerialSceneProbe.AddCanonicalLoadInfo(roots);
+            LoadingSerialSceneProbe.PrepareCanonicalLoadScalars((CanonicalSceneLoadCarry.Data)roots[CanonicalSceneLoadCarry.Root]);
+            SceneLoadScalarsPrepared = true;
             var observer = CheckpointClockObserverState.Decode(clock.Observer);
             ClockCarryAudit = new { nativeBytes = clock.Native.Length, randomBytes = clock.Random.Length, observerBytes = clock.Observer.Length,
                 observer.UnityFrameObserved, observer.LastUnityFrameCount, observer.CaptureUnityFrameCount, observer.AdvanceSequence,
@@ -107,7 +113,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             // until the global table/cache and every consumer are closed.
             result.Unsupported = result.Unsupported.Concat(EventDataAudit.Unsupported)
                 .Concat(InputCarryAudit.Unsupported)
-                .Concat(new[] { "R6/FsmEvent-consumer-and-static-root-rebinding-unqualified" })
+                .Concat(new[] { "R6/FsmEvent-consumer-and-static-root-rebinding-unqualified",
+                    "D/native-scheduler-timestamp-queue-and-wait-restoration-unqualified",
+                    "D/SceneLoad-continuation-references-and-native-wait-rebinding-unqualified" })
                 .OrderBy(value => value, StringComparer.Ordinal).ToArray();
             return result;
         }

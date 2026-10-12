@@ -225,6 +225,21 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!boundaryCapture) throw new InvalidOperationException("Field schema is not bound to a canonical boundary.");
             return fields.Schema();
         }
+        internal bool BoundarySchedulerRestorePrepared { get; private set; }
+        internal CanonicalSchedulerCarry BoundarySchedulerCarry(CanonicalInputEpoch epoch)
+        {
+            BoundarySchedulerRestorePrepared = false;
+            if (!boundaryCapture || epoch.SourceNative != boundaryNativeFrame || nativeScheduler == null)
+                throw new InvalidOperationException("Scheduler carry is outside its original boundary observation.");
+            var hero = HeroController.SilentInstance ?? throw new InvalidOperationException("Scheduler carry Hero is absent.");
+            var data = nativeScheduler.CaptureCanonicalCarry(boundaryNativeFrame, hero);
+            data.RequireEpoch(epoch);
+            // Source-side read-only binding audit. The deliberately false
+            // pause guard also prevents accidental execution of this action.
+            nativeScheduler.PrepareCanonicalRestore(data, hero, () => false);
+            BoundarySchedulerRestorePrepared = true;
+            return data;
+        }
 
         internal CanonicalCoverageCatalog.Snapshot BoundaryCoverageCatalog() => lastCoverage?.Copy()
             ?? throw new InvalidOperationException("No canonical boundary coverage sample is available.");

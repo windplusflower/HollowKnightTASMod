@@ -16,6 +16,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private const string Resource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryFieldRegistry.json";
         private const string EventResource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryEventFieldRegistry.json";
         private const string InputResource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryInputFieldRegistry.json";
+        private const string LoadingResource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryLoadingFieldRegistry.json";
         private static readonly string[] NativeValues = { "UnityEngine.Vector2", "UnityEngine.Vector3", "UnityEngine.Vector4",
             "UnityEngine.Quaternion", "UnityEngine.Color", "UnityEngine.Color32", "UnityEngine.Rect", "UnityEngine.Bounds",
             "UnityEngine.LayerMask", "UnityEngine.Matrix4x4", "UnityEngine.RaycastHit" };
@@ -37,18 +38,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                 return result;
             }
             var text = ReadResource(Resource); var eventText = ReadResource(EventResource); var inputText = ReadResource(InputResource);
+            var loadingText = ReadResource(LoadingResource); var loadingRegistry = JObject.Parse(loadingText);
             var registry = JObject.Parse(text);
             var eventRegistry = JObject.Parse(eventText);
             var inputRegistry = JObject.Parse(inputText);
             if ((int?)registry["version"] != 1 || (bool?)registry["diagnosticOnly"] != true || !(registry["types"] is JArray entries)
                 || (int?)eventRegistry["version"] != 1 || (bool?)eventRegistry["diagnosticOnly"] != true || !(eventRegistry["types"] is JArray eventEntries)
-                || (int?)inputRegistry["version"] != 1 || (bool?)inputRegistry["diagnosticOnly"] != true || !(inputRegistry["types"] is JArray inputEntries))
+                || (int?)inputRegistry["version"] != 1 || (bool?)inputRegistry["diagnosticOnly"] != true || !(inputRegistry["types"] is JArray inputEntries)
+                || (int?)loadingRegistry["version"] != 1 || (bool?)loadingRegistry["diagnosticOnly"] != true || !(loadingRegistry["types"] is JArray loadingEntries)
+                || (string?)loadingRegistry["moduleMvid"] != typeof(GameManager).Module.ModuleVersionId.ToString("D"))
                 throw new InvalidDataException("Unsupported frozen carry field registry.");
             var assemblies = new[] { typeof(object).Assembly, typeof(Fsm).Assembly, typeof(HeroController).Assembly,
                 typeof(Vector3).Assembly, typeof(UnityEngine.UI.Image).Assembly, typeof(AudioClip).Assembly,
                 typeof(RaycastHit).Assembly, typeof(Rigidbody2D).Assembly }.Distinct().ToArray();
             var types = new List<Type>(); var names = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var entry in entries.Concat(eventEntries).Concat(inputEntries))
+            foreach (var entry in entries.Concat(eventEntries).Concat(inputEntries).Concat(loadingEntries))
             {
                 var name = (string?)entry["name"] ?? throw new InvalidDataException("Frozen carry type name is absent.");
                 if (!names.Add(name)) throw new InvalidDataException("Frozen carry type name is duplicated.");
@@ -80,12 +84,20 @@ namespace HollowKnightTAS.Runtime.FullRun
             types.Add(typeof(CanonicalInputManagerScalars.Data));
             types.Add(typeof(CanonicalInputAdapterState)); types.Add(typeof(HollowKnightTAS.Core.Movie.GameInputChannel[])); types.Add(typeof(short[]));
             types.AddRange(CanonicalInputCallbackContract.DataTypes);
+            types.AddRange(CanonicalSceneLoadCarry.DataTypes);
+            types.AddRange(CanonicalSchedulerCarry.DataTypes);
             using var hash = SHA256.Create();
-            return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v1:" : "canonical-carry-fields-v4:") + BitConverter.ToString(
-                hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
+            return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v1:" : "canonical-carry-fields-v5:") + BitConverter.ToString(
+                hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + loadingText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
                     + "\n" + CanonicalGameplayCarry.SchemaIdentity + "\n" + CanonicalClockCarry.SchemaIdentity
                     + "\n" + HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter.CanonicalSourceSchema
                     + "\n" + string.Join("\n", CanonicalInputCallbackContract.DataTypes.Where(type => !type.IsArray).Select(type =>
+                        CanonicalCarryGraphCodec.Identity(type) + ":" + string.Join(";", CanonicalCarryGraphCodec.Fields(type)
+                            .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType)))))
+                    + "\n" + string.Join("\n", CanonicalSceneLoadCarry.DataTypes.Where(type => !type.IsArray).Select(type =>
+                        CanonicalCarryGraphCodec.Identity(type) + ":" + string.Join(";", CanonicalCarryGraphCodec.Fields(type)
+                            .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType)))))
+                    + "\n" + string.Join("\n", CanonicalSchedulerCarry.DataTypes.Where(type => !type.IsArray).Select(type =>
                         CanonicalCarryGraphCodec.Identity(type) + ":" + string.Join(";", CanonicalCarryGraphCodec.Fields(type)
                             .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType)))))
                     + "\n" + CanonicalInputManagerScalars.SchemaIdentity + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalInputAdapterState))

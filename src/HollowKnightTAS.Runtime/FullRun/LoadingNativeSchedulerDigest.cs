@@ -9,9 +9,9 @@ using System.Text;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
-    // Read-only and engine-pinned. No queue changes, coroutine execution,
-    // pointer payload export, or calls to IEnumerator.Current/MoveNext.
-    internal sealed class LoadingNativeSchedulerDigest
+    // Engine-pinned reader; explicit parked restore preparation lives in the
+    // separate partial. No pointer payload or IEnumerator.Current/MoveNext.
+    internal sealed partial class LoadingNativeSchedulerDigest
     {
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool ReadProcessMemory(IntPtr process, IntPtr address,
@@ -36,6 +36,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly List<object> inventory = new List<object>();
         private object[] fieldDiagnostics = Array.Empty<object>();
         private readonly List<CallbackView> nonCoroutineCallbacks = new List<CallbackView>();
+        private CallbackView[] capturedCallbacks = Array.Empty<CallbackView>();
+        private uint capturedTimestamp;
+        private bool capturedQueueValid;
+        private IntPtr capturedManager;
+        private byte[] capturedManagerBytes = Array.Empty<byte>();
 
         internal LoadingNativeSchedulerDigest()
         {
@@ -91,7 +96,24 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var omission in unsupported) issues.Add("native-scheduler-coverage:" + omission);
             return issues.ToArray();
         }
-        internal void Release() { coroutines.Clear(); nonCoroutineCallbacks.Clear(); behaviourId = _ => null; }
+        internal void Release() { coroutines.Clear(); nonCoroutineCallbacks.Clear(); capturedCallbacks = Array.Empty<CallbackView>(); capturedQueueValid = false; behaviourId = _ => null; }
+        internal CanonicalSchedulerCarry CaptureCanonicalCarry(long sourceNative, HeroController hero)
+        {
+            if (!capturedQueueValid || unsupported.Count != 0 || CaptureManagerTimestamp() != capturedTimestamp)
+                throw new InvalidOperationException("Canonical scheduler carry has no unchanged complete native queue observation.");
+            var data = new CanonicalSchedulerCarry { SourceNative = sourceNative, Timestamp = capturedTimestamp,
+                Callbacks = capturedCallbacks.Select((callback, index) => new CanonicalSchedulerCarry.Callback {
+                    Order = index, Owner = callback.OwnerIdentity, Call = callback.Call, Cleanup = callback.Cleanup,
+                    WakeTimeBits = BitConverter.DoubleToInt64Bits(callback.WakeTime), Frame = callback.Frame,
+                    Rate = callback.Rate, Mode = callback.Mode, Repeat = callback.Repeat, TimestampAge = callback.TimestampAge,
+                    UserDataPresent = callback.UserDataPresent, Coroutine = callback.Coroutine == IntPtr.Zero ? "" : coroutines[callback.Coroutine].Id }).ToArray(),
+                Coroutines = coroutines.Values.OrderBy(item => item.Id, StringComparer.Ordinal).Select(item => new CanonicalSchedulerCarry.Coroutine {
+                    Identity = item.Id, Family = item.Enumerator is IEnumerator iterator && LoadingSerialSceneProbe.OwnsBoundaryIterator(iterator) ? "serial-boundary"
+                        : item.Enumerator is IEnumerator invulnerable && CheckpointHeroInvulnerability.IsBoundIterator(invulnerable, hero) ? "hero-invulnerability" : "unregistered",
+                    Done = item.Done, EnumeratorBased = item.EnumeratorBased, HasAsyncOperation = item.HasAsyncOperation,
+                    WaitingFor = Relation(item.WaitingFor), ContinueWhenFinished = Relation(item.ContinueWhenFinished) }).ToArray() };
+            data.Validate(); return data;
+        }
 
         internal sealed class InvulnerabilityWait
         {
@@ -111,6 +133,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal InvulnerabilityWait[] CaptureWaits(Func<IEnumerator, bool> accepts, int maximum, string family)
         {
+            capturedQueueValid = false; capturedCallbacks = Array.Empty<CallbackView>();
             coroutines.Clear(); unsupported.Clear(); behaviourId = _ => "existing-behaviour";
             var manager = Pointer(Read(IntPtr.Add(engine, 0x19d7a70), 8), 0);
             var before = Read(manager, 80);
@@ -150,6 +173,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<IntPtr, string?> nativeBehaviourId, bool includeFieldDiagnostics = false)
         {
             coroutines.Clear(); unsupported.Clear(); inventory.Clear(); behaviourId = nativeBehaviourId;
+            capturedQueueValid = false; capturedCallbacks = Array.Empty<CallbackView>();
             nonCoroutineCallbacks.Clear();
             var manager = Pointer(Read(IntPtr.Add(engine, 0x19d7a70), 8), 0);
             if (manager == IntPtr.Zero) throw new InvalidOperationException("P0 delayed-call manager is unavailable.");
@@ -204,6 +228,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (Pointer(after, 48) != head || BitConverter.ToUInt64(after, 56) != count
                 || BitConverter.ToUInt32(after, 72) != BitConverter.ToUInt32(state, 72))
                 throw new InvalidOperationException("P0 native callback queue changed during observation.");
+            capturedCallbacks = callbacks.ToArray(); capturedTimestamp = timestamp; capturedQueueValid = true;
+            capturedManager = manager; capturedManagerBytes = (byte[])after.Clone();
             text.Append(string.Join("\n", unsupported));
             if (includeFieldDiagnostics) fieldDiagnostics = diagnostics.ToArray();
             using (var sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(
@@ -257,6 +283,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var baseId = owner + "/" + (enumerator?.GetType().FullName ?? "no-enumerator");
             var view = new CoroutineView
             {
+                NativeBytes = (byte[])bytes.Clone(),
                 Id = baseId + "[" + coroutines.Values.Count(value => value.Id.StartsWith(baseId + "[", StringComparison.Ordinal)) + "]",
                 Enumerator = enumerator, Done = bytes[100] != 0, EnumeratorBased = bytes[128] != 0,
                 WaitingFor = Pointer(bytes, 112), ContinueWhenFinished = Pointer(bytes, 104),
@@ -308,7 +335,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 + ":repeat=" + bytes[52] + ":mode=" + BitConverter.ToInt32(bytes, 84)
                 + ":stamp-age=" + unchecked(timestamp - BitConverter.ToUInt32(bytes, 88))
                 + ":call=" + Function(call) + ":cleanup=" + Function(cleanup);
-            callbacks.Add(new CallbackView { Description = description, Coroutine = coroutine, UserDataPresent = userData != IntPtr.Zero,
+            callbacks.Add(new CallbackView { Description = description, OwnerIdentity = owner, NodeAddress = node, NodeBytes = (byte[])bytes.Clone(),
+                Coroutine = coroutine, UserDataPresent = userData != IntPtr.Zero,
                 WakeTime = BitConverter.ToDouble(bytes, 32), Frame = BitConverter.ToInt64(bytes, 40),
                 Rate = BitConverter.ToInt32(bytes, 48), Repeat = bytes[52], Mode = BitConverter.ToInt32(bytes, 84), Call = Function(call),
                 Cleanup = Function(cleanup), OwnerInstanceId = ownerNumber,
@@ -342,6 +370,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private sealed class CoroutineView
         {
+            internal byte[] NativeBytes = Array.Empty<byte>();
             internal string Id = "";
             internal string AsyncOperationState = "none";
             internal object? Enumerator;
@@ -351,6 +380,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private sealed class CallbackView
         {
             internal string Description = "";
+            internal string OwnerIdentity = "";
+            internal IntPtr NodeAddress;
+            internal byte[] NodeBytes = Array.Empty<byte>();
             internal IntPtr Coroutine;
             internal bool UserDataPresent;
             internal double WakeTime;

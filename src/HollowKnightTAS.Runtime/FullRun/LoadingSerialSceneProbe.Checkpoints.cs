@@ -7,14 +7,6 @@ using System.Reflection;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
-    [Serializable]
-    internal sealed class CheckpointSceneLoadState
-    {
-        public bool TransitionIteratorFinished;
-        public string IteratorType = "", ClosureType = "";
-        public Dictionary<string, string> LoadFields = null!, IteratorFields = null!, ClosureFields = null!;
-        public Dictionary<string, string>[] Phases = null!;
-    }
     internal sealed partial class LoadingSerialSceneProbe
     {
         private IEnumerator? checkpointTransitionRoutine;
@@ -41,7 +33,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static CheckpointSceneLoadState CaptureCheckpointLoadState()
         {
             GetCheckpointBoundary();
-            var self = instance!; var routine = self.checkpointTransitionRoutine ?? throw new InvalidOperationException("Scene transition iterator is unavailable.");
+            return CaptureParkedLoadState(instance!);
+        }
+        private static CheckpointSceneLoadState CaptureParkedLoadState(LoadingSerialSceneProbe self)
+        {
+            var routine = self.checkpointTransitionRoutine ?? throw new InvalidOperationException("Scene transition iterator is unavailable.");
             if (!self.checkpointTransitionFinished) throw new InvalidOperationException("Scene transition activation iterator has not finished at C.");
             var closure = Closure(routine);
             return new CheckpointSceneLoadState
@@ -56,7 +52,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static Action PrepareCheckpointLoadState(CheckpointSceneLoadState state)
         {
-            GetCheckpointBoundary(); var self = instance!;
+            GetCheckpointBoundary(); return PrepareParkedLoadState(state, instance!);
+        }
+        private static Action PrepareParkedLoadState(CheckpointSceneLoadState state, LoadingSerialSceneProbe self)
+        {
             var routine = self.checkpointTransitionRoutine ?? throw new InvalidOperationException("Restore scene transition iterator is unavailable.");
             var closure = Closure(routine); var phaseArray = PhaseArray(self.transition!); var phases = phaseArray.Cast<object>().ToArray();
             if (!state.TransitionIteratorFinished || !self.checkpointTransitionFinished

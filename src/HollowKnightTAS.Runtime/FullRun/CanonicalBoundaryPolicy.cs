@@ -75,11 +75,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("boundary-digest-captured", new { digest.FullSha256, roots = digest.Roots.Length, unsupported = digest.Unsupported.Length });
             if (digest.CanonicalWaitIssues.Length != 0)
                 throw new InvalidOperationException("Canonical scheduler registry is incomplete: " + string.Join(", ", digest.CanonicalWaitIssues));
-            carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates);
+            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates); }
+            catch (Exception error) {
+                Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
+                throw;
+            }
             var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
             inputEpoch.RequireControlOrigin();
             CanonicalCarryGraphData candidate;
-            try { candidate = carry.Capture(identities, inputEpoch, input); }
+            try { candidate = carry.Capture(identities, inputEpoch, input, observer.BoundarySchedulerCarry(inputEpoch)); }
             finally {
                 // Retain completed domain audits when a later graph/layout
                 // guard rejects. Audit availability never implies full D.
@@ -120,6 +124,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 applicationExecuted = false }));
             Progress("D-candidate-data-captured", new { roots = candidate.Roots.Length, nodes = candidate.Nodes.Length,
                 externalBindings = candidate.Externals.Length, unsupported = candidate.Unsupported, bytes = candidateBytes.Length,
+                sceneLoadScalarsPrepared = carry.SceneLoadScalarsPrepared, sceneLoadApplicationExecuted = false,
+                nativeSchedulerPrepared = observer.BoundarySchedulerRestorePrepared, nativeSchedulerApplicationExecuted = false,
                 inputRoots = carry.InputGraph!.Roots.Length, inputNodes = carry.InputGraph.Nodes.Length,
                 inputUnsupported = carry.InputGraph.Unsupported, inputBytes = inputBytes.Length });
             if (ordinal == 1)
