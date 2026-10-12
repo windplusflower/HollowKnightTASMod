@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
+using HollowKnightTAS.Core.SceneCheckpoints;
 using HutongGames.PlayMaker;
 using Newtonsoft.Json;
 using UnityEngine;
@@ -43,6 +44,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly LoadingUnityAssetIdentity assetIdentities = new LoadingUnityAssetIdentity();
         private readonly LoadingAssetProvenanceObservation assetProvenance = new LoadingAssetProvenanceObservation();
         private readonly List<Tuple<UnityEngine.Object, string>> assetRoots = new List<Tuple<UnityEngine.Object, string>>();
+        private readonly CanonicalCoverageCatalog coverage = new CanonicalCoverageCatalog();
+        private readonly Dictionary<UnityEngine.Object, string> unityCoverageLabels = new Dictionary<UnityEngine.Object, string>(ReferenceComparer<UnityEngine.Object>.Instance);
+        private readonly IReadOnlyDictionary<string, string>? coverageHeroBindings;
+        private CanonicalCoverageCatalog.Snapshot? lastCoverage;
+        private long coverageMovie = -1, coverageNative = -1;
+        private string coverageRoot = "", coverageField = "";
+        private readonly Dictionary<Type, FieldInfo[]> coverageProvenanceFields = new Dictionary<Type, FieldInfo[]>();
+        private object? coverageReadAudit;
         private readonly HashSet<int> assetInstances = new HashSet<int>();
         private readonly LoadingAssetValueObservation assetValues = new LoadingAssetValueObservation();
         private readonly BoundaryAssetArrayRegistry assetArrays = new BoundaryAssetArrayRegistry();
@@ -82,7 +91,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<long> movieFrame, Func<long> nativeFrame, Func<string> gameplayRng, bool boundaryCapture = false, long? inputNativeOrigin = null)
         {
             this.boundaryCapture = boundaryCapture;
-            if (boundaryCapture) canonicalIdentities = new BoundaryObjectIdentity();
+            if (boundaryCapture) { canonicalIdentities = new BoundaryObjectIdentity(); coverageHeroBindings = CanonicalHeroFsmBindingRegistry.Snapshot(); }
             this.directory = directory; this.first = first; this.end = end;
             samplingWindows = LoadingOracleSamplingWindows.Parse(
                 boundaryCapture ? null : Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_WINDOWS"), first, end);
@@ -195,6 +204,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             var groups = CaptureState(fullInventory: true);
             groups["movieFrame"] = movie.ToString(CultureInfo.InvariantCulture);
             groups["nativeFrame"] = native.ToString(CultureInfo.InvariantCulture);
+            var observedCoverage = coverage.Capture(omissions);
+            var repeatedCoverage = lastCoverage != null && coverageMovie == movie && coverageNative == native;
+            var coverageEqual = !repeatedCoverage || lastCoverage!.ReadSha256 == observedCoverage.ReadSha256;
+            coverageReadAudit = new { repeatedRead = repeatedCoverage, observedEqual = coverageEqual,
+                expectedReadSha256 = repeatedCoverage ? lastCoverage!.ReadSha256 : null,
+                actualReadSha256 = observedCoverage.ReadSha256, records = observedCoverage.Records.Length,
+                completeStateCoverage = false };
+            if (!coverageEqual) throw new InvalidOperationException("Boundary coverage ownership reader changed its frozen sample.");
+            lastCoverage = observedCoverage; coverageMovie = movie; coverageNative = native;
             // The capture remains unqualified while P0's explicitly reported
             // native/asset domains and the new carry-field registry are open.
             return new BoundaryDigestSnapshot(groups, lastInventory, omissions.ToArray(),
@@ -206,6 +224,107 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (!boundaryCapture) throw new InvalidOperationException("Field schema is not bound to a canonical boundary.");
             return fields.Schema();
+        }
+
+        internal CanonicalCoverageCatalog.Snapshot BoundaryCoverageCatalog() => lastCoverage?.Copy()
+            ?? throw new InvalidOperationException("No canonical boundary coverage sample is available.");
+        internal object BoundaryCoverageReadAudit() => coverageReadAudit
+            ?? throw new InvalidOperationException("No canonical boundary coverage read audit is available.");
+
+        private void RegisterCoverageFsm(string root, Fsm fsm)
+        {
+            if (!boundaryCapture || coverageHeroBindings == null) return;
+            var sceneEnd = root.IndexOf('/');
+            if (sceneEnd < 0) return;
+            var path = root.Substring(sceneEnd + 1);
+            if (!coverageHeroBindings.TryGetValue(path, out var expected) || !Equals(fields.Read(fsm, "name"), expected)) return;
+            var visual = CanonicalHeroFsmBindingRegistry.IsCanonicalVisual(path, expected);
+            coverage.BindRoot(root, visual ? CanonicalCoverageCatalog.Domain.S0 : CanonicalCoverageCatalog.Domain.D,
+                visual ? "canonical-hero-visual-FSM-registry" : "canonical-hero-FSM-carry-registry");
+        }
+
+        private void RegisterCoverageStatic(string root)
+        {
+            if (!boundaryCapture) return;
+            if (root == "static:PlayMaker:HutongGames.PlayMaker.Fsm.EventData"
+                || root.StartsWith("static:PlayMaker:HutongGames.PlayMaker.FsmEvent.", StringComparison.Ordinal)
+                    && !root.EndsWith(".syncObj", StringComparison.Ordinal))
+                coverage.BindRoot(root, CanonicalCoverageCatalog.Domain.D, "canonical-event-carry-roots");
+            else if (new[] { "FsmExecutionStack", "ActionData", "ReflectionUtils" }.Any(type =>
+                root.StartsWith("static:PlayMaker:HutongGames.PlayMaker." + type + ".", StringComparison.Ordinal)))
+                coverage.BindRoot(root, CanonicalCoverageCatalog.Domain.S0, "canonical-static-policy-reset");
+        }
+
+        private void RecordCoverageGap(string label, string root, string field, string? objectId)
+        {
+            omissions.Add(label);
+            if (boundaryCapture) coverage.Record(label, root, field, objectId);
+        }
+
+        private void RecordUnityCoverage(UnityEngine.Object value, string id)
+        {
+            if (!boundaryCapture || !unityCoverageLabels.TryGetValue(value, out var label)) return;
+            coverage.Record(label, coverageRoot.Length == 0 ? "<observer-object-binding>" : coverageRoot,
+                coverageField.Length == 0 ? "$reference-binding" : coverageField, id);
+        }
+
+        private string? RegisterCoverageComponent(Component component)
+        {
+            if (!boundaryCapture) return null;
+            var id = UnityId(component);
+            coverage.RegisterObject(id, component.GetType().FullName!, "loaded-native-component", component.GetInstanceID());
+            return id;
+        }
+
+        private void RegisterCoverageAsset(string id, string type, int instance, object provenance)
+        {
+            // Provenance is a closed Runtime-owned scalar DTO. Copy its existing
+            // fields, not properties or any Unity object, and perform no new
+            // native query. This preserves the original alias discovery order.
+            var dataType = provenance.GetType();
+            if (!coverageProvenanceFields.TryGetValue(dataType, out var bound))
+            {
+                if (dataType.Assembly != typeof(LoadingAssetProvenanceObservation).Assembly
+                    || !dataType.IsDefined(typeof(CompilerGeneratedAttribute), false))
+                    throw new InvalidOperationException("Coverage provenance is not the original Runtime scalar record.");
+                var raw = dataType.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.DeclaredOnly);
+                var fieldNames = new[] { "<kind>i__Field", "<sourcePath>i__Field", "<localIdentifier>i__Field" };
+                bound = fieldNames.Select(name => raw.SingleOrDefault(field => field.Name == name)
+                    ?? throw new InvalidOperationException("Coverage provenance raw field is absent: " + name)).ToArray();
+                if (raw.Length != 3 || bound[0].FieldType != typeof(string) || bound[1].FieldType != typeof(string) || bound[2].FieldType != typeof(long))
+                    throw new InvalidOperationException("Coverage provenance raw layout differs.");
+                coverageProvenanceFields.Add(dataType, bound);
+            }
+            coverage.RegisterObject(id, type, "asset-reference", instance,
+                (string)bound[0].GetValue(provenance)!, (string)bound[1].GetValue(provenance)!, (long)bound[2].GetValue(provenance)!);
+        }
+
+        private static string AssetCoverageField(string label)
+        {
+            switch (label)
+            {
+                case "asset-font-atlas-cpu-data-unavailable": return "$native.FontImpl.atlas";
+                case "asset-font-dynamic-face-and-packer-codec": return "$native.FontImpl.face-and-packer";
+                case "asset-render-texture-gpu-contents": return "$native.RenderTexture.gpuContents";
+                case "asset-sprite-native-uv-physics-and-skinning-data": return "$native.Sprite.rendering-physics-skinning-data";
+                case "asset-texture-cpu-data-unreadable": return "$native.Texture2D.cpuData";
+                case "asset-texture-native-copy-contract": return "$native.Texture2D.copyContract";
+                case "asset-mesh-cpu-data-unreadable": return "$native.Mesh.cpuData";
+                case "asset-mesh-native-skinning-data": return "$native.Mesh.skinningData";
+                case "asset-material-unsupported-property-sheet": return "$native.Material.propertySheet";
+                default: return "$native.resource-values";
+            }
+        }
+
+        private static string NativeCoverageField(string label)
+        {
+            switch (label)
+            {
+                case "native-animator-hidden-controller-state": return ".running.$hidden-controller-state";
+                case "native-animator-trigger-latch": return ".running.parameters.$trigger-latch";
+                case "native-particle-pending-sync-not-observed": return ".playback.$pending-sync";
+                default: return ".$native-state";
+            }
         }
 
         internal void Sample(string phase, string boundary)
@@ -302,6 +421,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (boundaryCapture) canonicalIdentities = new BoundaryObjectIdentity();
             observationIdentity.Refresh();
             nativeValues.BeginSample();
+            if (boundaryCapture) { coverage.BeginSample(); unityCoverageLabels.Clear(); coverageRoot = ""; coverageField = ""; }
             detachedFsmReferences.Clear();
             detachedFsmRoots.Clear();
             unityIds.Clear(); fsmIds.Clear(); fsmMemberIds.Clear();
@@ -332,6 +452,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var item in behaviours)
                 if (item.component is PlayMakerFSM && fields.Read(item.component, "fsm") is Fsm fsm)
                 {
+                    RegisterCoverageFsm(item.id, fsm);
                     fsmIds[fsm] = item.id;
                     var states = fields.Read(fsm, "states") as Array;
                     if (states == null) continue;
@@ -341,12 +462,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (state == null) continue;
                         var stateId = item.id + "/state[" + stateIndex + "]:" + fields.Read(state, "name");
                         fsmMemberIds[state] = stateId;
+                        if (boundaryCapture) coverage.InheritRoot(stateId, item.id);
                         var actions = fields.Read(state, "actions") as Array;
                         if (actions == null) continue;
                         for (var actionIndex = 0; actionIndex < actions.Length; actionIndex++)
                         {
                             var action = actions.GetValue(actionIndex);
-                            if (action != null) fsmMemberIds[action] = stateId + "/action[" + actionIndex + "]";
+                            if (action != null)
+                            {
+                                var actionId = stateId + "/action[" + actionIndex + "]";
+                                fsmMemberIds[action] = actionId;
+                                if (boundaryCapture) coverage.InheritRoot(actionId, item.id);
+                            }
                         }
                     }
                 }
@@ -441,6 +568,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!nativePhysicsOnly)
                 foreach (var root in boundaryCapture ? LoadingRegisteredStaticRoots.ReadCanonical() : LoadingRegisteredStaticRoots.Read())
                 {
+                    RegisterCoverageStatic(root.Item1);
                     var detailedStatic = root.Item1.EndsWith("InControl.InputManager.ActiveDevices", StringComparison.Ordinal)
                         || root.Item1.EndsWith("Modding.ModLoader.<ModInstances>k__BackingField", StringComparison.Ordinal);
                     var digest = fields.Capture(root.Item2, root.Item1, includeFieldDiagnostics: detailedStatic);
@@ -567,7 +695,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     // Native resource headers/configuration are still open.
                     // Observing the managed half must not clear that omission.
                 }
-                var snapshot = assetValues.Capture(entry.Item1, value => omissions.Add(value));
+                var snapshot = assetValues.Capture(entry.Item1, value =>
+                    RecordCoverageGap(value, entry.Item2 + "/asset-values", AssetCoverageField(value), entry.Item2));
                 if (snapshot == null) continue;
                 var id = entry.Item2 + "/asset-values";
                 var digest = fields.Capture(snapshot, id, expandRoot: true);
@@ -598,7 +727,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 var go = item.value;
                 var transform = go.transform;
-                foreach (var component in go.GetComponents<Component>())
+                var observedComponents = go.GetComponents<Component>();
+                for (var componentIndex = 0; componentIndex < observedComponents.Length; componentIndex++)
+                {
+                    var component = observedComponents[componentIndex];
                     if (component != null && !(component is MonoBehaviour))
                     {
                         var type = component.GetType().FullName ?? component.GetType().Name;
@@ -615,16 +747,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                             nativeComponentSurvey[key] = stateCount + 1;
                         }
                         if (!(component is Transform) && !(component is Rigidbody2D) && !(component is Collider2D))
-                            omissions.Add("native-component-codec:" + type);
+                        {
+                            var componentId = RegisterCoverageComponent(component);
+                            RecordCoverageGap("native-component-codec:" + type, item.id + "/native-hierarchy",
+                                ".components[" + componentIndex + "].nativePayload", componentId);
+                        }
                     }
+                }
                 object? rect = transform is RectTransform rt ? new { rt.anchorMin, rt.anchorMax,
                     rt.anchoredPosition, rt.sizeDelta, rt.pivot, rt.offsetMin, rt.offsetMax, rt.rect } : null;
-                var components = go.GetComponents<Component>().Select(component => component == null
+                var components = go.GetComponents<Component>().Select((component, index) => component == null
                     ? (object)new { type = "missing-script" }
                     : new { type = component.GetType().FullName,
                         enabled = component is Behaviour b ? (bool?)b.enabled : null,
                         hideFlags = (int)component.hideFlags,
-                        runtime = CaptureNativeComponent(component, fullInventory),
+                        runtime = CaptureNativeComponent(component, fullInventory, item.id + "/native-hierarchy", ".components[" + index + "].runtime"),
                         nativePayload = component is MonoBehaviour ? "managed-fields-separate"
                             : component is Transform ? "local-transform-and-layout"
                             : component is Rigidbody2D || component is Collider2D ? "native-physics-separate"
@@ -642,9 +779,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             return Hash(text.ToString());
         }
 
-        private object? CaptureNativeComponent(Component component, bool diagnostics)
+        private object? CaptureNativeComponent(Component component, bool diagnostics, string root, string field)
         {
-            var state = LoadingNativeComponentObservation.Capture(component, message => omissions.Add(message));
+            var state = LoadingNativeComponentObservation.Capture(component, message =>
+                RecordCoverageGap(message, root, field + NativeCoverageField(message), RegisterCoverageComponent(component)));
             if (boundaryCapture && component is MonoBehaviour behaviour)
                 state = BoundaryMonoLifecycle.Read(behaviour);
             if (diagnostics && component is Animator animator && animator.isInitialized)
@@ -705,6 +843,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || (component is UnityEngine.UI.Text && (id.Contains("/MainMenuButtons[") || id.Contains("/ControllerMessage[")));
 
         private string? Reference(object value)
+        {
+            if (!boundaryCapture) return ReferenceCore(value);
+            var priorRoot = coverageRoot; var priorField = coverageField;
+            coverageRoot = fields.DiagnosticRoot;
+            var path = fields.DiagnosticPath;
+            coverageField = path.StartsWith(coverageRoot, StringComparison.Ordinal) ? path.Substring(coverageRoot.Length) : path;
+            if (coverageField.Length == 0) coverageField = "$reference";
+            try { return ReferenceCore(value); }
+            finally { coverageRoot = priorRoot; coverageField = priorField; }
+        }
+
+        private string? ReferenceCore(object value)
         {
             if (boundaryCapture && assetArrays.Reference(value) is string arrayId)
                 return "asset-array:" + arrayId + ":shared:" + fields.BindSharedReference(value).ToString(CultureInfo.InvariantCulture);
@@ -802,7 +952,11 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private string UnityId(UnityEngine.Object value)
         {
-            if (unityIds.TryGetValue(value, out var id)) return id;
+            if (unityIds.TryGetValue(value, out var id))
+            {
+                RecordUnityCoverage(value, id);
+                return id;
+            }
             if (value == null)
             {
                 // Unity's overloaded null means a live managed wrapper whose
@@ -813,6 +967,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 id = instance == 0 ? assetIdentities.BindFakeNull(unityIds.Count, destroyed.GetType().FullName!)
                     : assetIdentities.Bind(instance, "destroyed", destroyed.GetType().FullName!, "");
                 unityIds.Add(destroyed, id);
+                if (boundaryCapture)
+                {
+                    coverage.RegisterObject(id, destroyed.GetType().FullName!, "destroyed-wrapper", instance);
+                    unityCoverageLabels.Add(destroyed, "destroyed-unity-wrapper-rebind-codec:" + destroyed.GetType().FullName);
+                    RecordUnityCoverage(destroyed, id);
+                }
                 return id;
             }
             GameObject? go = value as GameObject;
@@ -867,7 +1027,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 omissions.Add("asset-value-provenance-codec:" + value.GetType().FullName);
                 var instance = value.GetInstanceID();
-                id = assetIdentities.Bind(instance, "asset", value.GetType().FullName!, value.name, assetProvenance.Capture(instance));
+                var provenance = assetProvenance.Capture(instance);
+                id = assetIdentities.Bind(instance, "asset", value.GetType().FullName!, value.name, provenance);
+                if (boundaryCapture)
+                {
+                    RegisterCoverageAsset(id, value.GetType().FullName!, instance, provenance);
+                    unityCoverageLabels.Add(value, "asset-value-provenance-codec:" + value.GetType().FullName);
+                    RecordUnityCoverage(value, id);
+                }
                 if (assetInstances.Add(instance)) assetRoots.Add(Tuple.Create(value, id));
             }
             unityIds.Add(value, id);

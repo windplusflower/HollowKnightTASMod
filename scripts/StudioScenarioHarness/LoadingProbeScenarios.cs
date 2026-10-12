@@ -41,6 +41,9 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_SERIAL_BOUNDARY_ONLY", args.Contains("--probe-serial-boundary-only") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_BOUNDARY_INVENTORY", args.Contains("--probe-boundary-inventory") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CANONICAL_BOUNDARY", args.Contains("--probe-canonical-boundary") ? "1" : null);
+        // All canonical diagnostics capture the actual clock portion of D.
+        // This enables the existing bounded native codec, never qualification.
+        if (args.Contains("--probe-canonical-boundary")) Environment.SetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT", "1");
         Environment.SetEnvironmentVariable("HKTAS_LOADING_VIRTUAL_AUDIO", args.Contains("--probe-virtual-audio") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_ISOLATED_ONLINE", args.Contains("--probe-isolated-online") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CANONICAL_PARTICLES", args.Contains("--probe-canonical-particles") ? "1" : null);

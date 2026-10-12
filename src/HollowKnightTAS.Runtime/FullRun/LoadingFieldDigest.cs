@@ -182,6 +182,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         internal string DiagnosticPath => CurrentPath;
+        internal string DiagnosticRoot => rootPath;
 
         private void Omit(string reason)
         {

@@ -216,7 +216,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             return original(name);
         }
 
-        internal static bool ObserveNativeBoundary(long movie, long native, string? sessionDirectory = null, long? movieInputNativeOrigin = null)
+        internal static bool ObserveNativeBoundary(long movie, long native, string? sessionDirectory = null, long? movieInputNativeOrigin = null,
+            CanonicalInputEpoch? inputControlOrigin = null, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter? input = null)
         {
             var self = instance;
             if (self?.failure != null) throw new InvalidOperationException(self.failure);
@@ -228,7 +229,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Serial native boundary already has the target scene.");
             self.canonical?.Apply(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native,
                 sessionDirectory ?? throw new InvalidOperationException("Canonical boundary needs its protected Runtime session binding."),
-                movieInputNativeOrigin ?? throw new InvalidOperationException("Canonical boundary requires the actual StartInputAt frame origin."));
+                movieInputNativeOrigin ?? throw new InvalidOperationException("Canonical boundary requires the actual StartInputAt frame origin."),
+                inputControlOrigin ?? throw new InvalidOperationException("Canonical boundary requires the actual input tick/scheduler origin."),
+                input ?? throw new InvalidOperationException("Canonical boundary requires its actual input adapter."));
             self.Inventory("native-empty-boundary", movie, native);
             LoadingBoundaryInventory.Capture(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native);
             self.observedBoundary = true;
@@ -241,6 +244,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (type.DeclaringType != typeof(LoadingSerialSceneProbe) || !type.Name.StartsWith("<Begin>", StringComparison.Ordinal)) return false;
             var owner = type.GetField("<>4__this", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
             return instance != null && instance.awaitingBoundary && ReferenceEquals(owner?.GetValue(iterator), instance);
+        }
+        internal static void RestoreCanonicalInputOrigin(CanonicalInputEpoch source)
+        {
+            GetCheckpointBoundary();
+            var policy = instance!.canonical ?? throw new InvalidOperationException("Canonical input restore policy is absent.");
+            policy.RestoreInputOrigin(source);
         }
 
         internal static Tuple<int, GameManager.SceneLoadInfo, string> GetCheckpointBoundary()

@@ -120,6 +120,10 @@ $runtimeCore = Join-Path $repo 'src/HollowKnightTAS.Runtime/bin/Release/HollowKn
 $clockPayload = Join-Path $repo 'src/HollowKnightTAS.ClockPayload/bin/Release/HollowKnightTAS.ClockPayload.dll'
 $clockBridge = if ($ClockBridgePath) { [IO.Path]::GetFullPath($ClockBridgePath) }
     else { Join-Path $repo 'artifacts/scene-checkpoints/p0/native-clock-build/HollowKnightTAS.ClockBridge.dll' }
+if ($CanonicalBoundary -or $CheckpointPrototype) {
+    . (Join-Path $PSScriptRoot 'Assert-ClockBridgeExports.ps1')
+    Assert-ClockBridgeExports -Path $clockBridge
+}
 $injectorBuild = Join-Path $repo 'src/HollowKnightTAS.ClockInjector/bin/Release/net8.0-windows/win-x64'
 $injectorFiles = @('HollowKnightTAS.ClockInjector.exe','HollowKnightTAS.ClockInjector.dll','HollowKnightTAS.ClockInjector.deps.json','HollowKnightTAS.ClockInjector.runtimeconfig.json')
 $injectorConfig = Get-Content -LiteralPath (Join-Path $injectorBuild 'HollowKnightTAS.ClockInjector.runtimeconfig.json') -Raw | ConvertFrom-Json
@@ -329,11 +333,13 @@ try {
                     'loading-field-digests.json','loading-oracle-progress.json','loading-oracle-stage-progress.json',
                     'engine-clock-layout.json','engine-clock-roundtrip.json','full-run-fault.txt','boundary-inventory.json',
                     'canonical-boundary-progress.jsonl','boundary-observer-audit.json','boundary-field-schema.json',
-                    'canonical-asset-origins.json','canonical-event-binding-audit.json','canonical-event-globals.json','canonical-event-data-audit.json')
+                    'canonical-asset-origins.json','canonical-event-binding-audit.json','canonical-event-globals.json','canonical-event-data-audit.json',
+                    'canonical-input-epoch.json','canonical-input-carry-audit.json','canonical-clock-carry-audit.json',
+                    'boundary-coverage-catalog.json','boundary-coverage-reader-audit.json')
                 foreach ($file in (Get-ChildItem -LiteralPath $resolvedShadow -Recurse -File | Where-Object {
                     ($_.Name -in $diagnosticNames -or $_.Name -match '^loading-candidate-[0-9]+-inventory\.json$' -or
                         $_.Name -match '^boundary-digest-[0-9]+(?:-repeat)?\.json$' -or
-                        $_.Name -match '^canonical-carry-[0-9]+\.bin$')
+                        $_.Name -match '^canonical-(?:input-)?carry-[0-9]+\.bin$')
                 })) {
                     $relative = [IO.Path]::GetRelativePath($resolvedShadow, $file.FullName)
                     $copy = Join-Path $destination (Join-Path ('recovered-shadow-{0:d2}' -f $shadowOrdinal) $relative)

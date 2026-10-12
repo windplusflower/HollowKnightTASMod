@@ -16,6 +16,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         private CheckpointRestoreJob? checkpointRestore;
         private bool checkpointPreparationHooked;
+        private readonly CanonicalInputEpoch.RestoreBinding checkpointInputEpochRestore = new CanonicalInputEpoch.RestoreBinding();
 
         private void HookCheckpointPreparation()
         {
@@ -218,6 +219,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             input.ImportCheckpoint(data.Input, replayMovie); mouse.ImportCheckpoint(data.Mouse);
             CheckpointClockMethod("ImportCheckpointRandomState").Invoke(null, new object[] { data.Random, expectedNative });
             clock.ImportContinuation(data.NativeClock, expectedNative);
+            CheckpointClockMethod("ImportCheckpointClockObserver").Invoke(null, new object[] { data.ClockObserver, data.NativeFrame });
+            var restoredOrigin = data.InputEpoch.Copy();
+            checkpointInputEpochRestore.ApplyOnce(restoredOrigin, clock.CurrentFrameIndex, sourceOrigin => {
+                LoadingSerialSceneProbe.RestoreCanonicalInputOrigin(restoredOrigin);
+                movieInputNativeOrigin = sourceOrigin; movieInputControlOrigin = restoredOrigin.Copy();
+            }, () => CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, clock.CurrentFrameIndex, movieInputControlOrigin));
             movieFrame = data.MovieFrame; expectedNativeStart = data.NativeFrame; skippedLoadFrames = data.SkippedLoadingFrames;
             timingRunIndex = index; timingRunStart = start; activeFrameRate = data.ActiveFrameRate; recordingFrameRate = data.RecordingFrameRate;
             titleReadySeen = data.TitleReadySeen; firstLevelActivationPending = data.FirstLevelActivationPending;
@@ -235,7 +242,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (job.Elapsed.ElapsedMilliseconds > 240000) throw new TimeoutException("Checkpoint reconstruction exceeded the four-minute deadline.");
                 clock.SetFrameRate(50); input.SetNativeFrameActive(false); frameInputEnabled = false;
-                var observed = LoadingSerialSceneProbe.ObserveNativeBoundary(0, nativeFrame, sessionDirectory, movieInputNativeOrigin);
+                var observed = LoadingSerialSceneProbe.ObserveNativeBoundary(0, nativeFrame, sessionDirectory, movieInputNativeOrigin, movieInputControlOrigin, input);
                 if (job.Phase == "AwaitingTargetC" && observed)
                 {
                     var boundary = LoadingSerialSceneProbe.GetCheckpointBoundary();

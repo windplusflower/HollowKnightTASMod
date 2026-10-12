@@ -494,6 +494,20 @@ namespace HollowKnightTAS.Runtime.Input
             public PlayerActionSet Set { get; }
             public GameInputChannel Channel { get; }
             public BindingSource[] OriginalBindings(int index) => originals[index];
+            internal void AddCanonicalRoots(IDictionary<string, object> roots, string binding)
+            {
+                if (restored || injected.Length != actions.Length || originals.Length != actions.Length || actions.Length > 1024)
+                    throw new InvalidDataException("Canonical lease sources are incomplete or already restored.");
+                for (var index = 0; index < injected.Length; index++) {
+                    if (injected[index] == null || originals[index] == null || originals[index].Length > 256)
+                        throw new InvalidDataException("Canonical action source slots exceed their bound.");
+                    roots.Add("R6/InputTAS-source/" + binding + "/" + index, injected[index]);
+                    for (var slot = 0; slot < originals[index].Length; slot++) {
+                        if (originals[index][slot] == null) throw new InvalidDataException("Canonical original input binding is absent.");
+                        roots.Add("R6/InputOriginal-source/" + binding + "/" + index + "/" + slot, originals[index][slot]);
+                    }
+                }
+            }
 
             public static ActionSetLease Attach(PlayerActionSet set, GameInputChannel channel,
                 PlayerAction[] actions)

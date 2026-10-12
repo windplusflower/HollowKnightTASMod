@@ -112,6 +112,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private LoadingGameplayOracle? loadingGameplayOracle;
         private long expectedNativeStart = -1;
         private long? movieInputNativeOrigin;
+        private CanonicalInputEpoch? movieInputControlOrigin;
         private bool frameInputEnabled;
         private bool titleReadySeen;
         private bool returningToMainMenu;
@@ -503,7 +504,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var ready = IsMovieFrameReady(out var boundary);
                 LoadingAudioLifetimePolicy.CheckFailure();
                 LoadingOnlineIsolationObservation.CheckFailure();
-                if (LoadingSerialSceneProbe.ObserveNativeBoundary(movieFrame, completed, sessionDirectory, movieInputNativeOrigin))
+                if (LoadingSerialSceneProbe.ObserveNativeBoundary(movieFrame, completed, sessionDirectory, movieInputNativeOrigin, movieInputControlOrigin, input))
                 {
                     loadingGameplayOracle?.Sample("candidate", "serial-source-unloaded");
                     CaptureSceneCheckpointAtBoundary(completed);
@@ -786,6 +787,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (frame < 0 || movieInputNativeOrigin.HasValue)
                 throw new InvalidOperationException("Runtime input frame origin cannot be invalid or rebound.");
             movieInputNativeOrigin = frame;
+            if (NativeExecutionProfile.UsesCanonicalBoundary(NativeExecutionProfile.SelectedProfileId))
+                movieInputControlOrigin = CanonicalInputEpochRuntime.Capture(frame, frame);
             loadingBoundaryProbe = LoadingBoundaryProbe.Create(sessionDirectory, () => movieFrame,
                 () => clock.CurrentFrameIndex,
                 () => (bossTraceRngCodec = bossTraceRngCodec ?? UnityRandomStateCodec_1_5_78_11833.Resolve().Codec

@@ -48,7 +48,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             new[] { typeof(PlayerData), typeof(SceneData), typeof(CheckpointTransitionData), typeof(GameManager.SceneLoadInfo),
                 typeof(CheckpointContinuationData), typeof(CheckpointInputState), typeof(CheckpointActionSetState),
                 typeof(CheckpointMouseState), typeof(CheckpointMouseModule), typeof(CheckpointMouseValue),
-                typeof(CheckpointManagedWorldData), typeof(CheckpointSceneLoadState), typeof(CheckpointBossContext) },
+                typeof(CheckpointManagedWorldData), typeof(CheckpointSceneLoadState), typeof(CheckpointBossContext), typeof(CanonicalInputEpoch) },
             new[] { typeof(UnityEngine.Vector3), typeof(UnityEngine.Vector2), typeof(UnityEngine.Quaternion) });
         private static MethodInfo CheckpointClockMethod(string name) => AppDomain.CurrentDomain.GetAssemblies()
             .Single(assembly => assembly.GetName().Name == "HollowKnightTAS.ClockPayload")
@@ -70,8 +70,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 GameUpdateDeltaSeconds = gameUpdateDeltaSeconds, GameUpdateTimeSeconds = gameUpdateTimeSeconds,
                 ExecutedMovieSeconds = executedMovieSeconds, NativeClock = clock.ExportContinuation(),
                 Random = (byte[])CheckpointClockMethod("ExportCheckpointRandomState").Invoke(null, null),
+                ClockObserver = (byte[])CheckpointClockMethod("ExportCheckpointClockObserver").Invoke(null, null),
                 Input = input.CaptureCheckpoint(), Mouse = mouse.CaptureCheckpoint(), ManagedWorld = CheckpointManagedWorldData.Capture(),
-                SceneLoad = LoadingSerialSceneProbe.CaptureCheckpointLoadState()
+                SceneLoad = LoadingSerialSceneProbe.CaptureCheckpointLoadState(),
+                InputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, nativeFrame,
+                    movieInputControlOrigin ?? throw new InvalidOperationException("Actual input control origin is absent."))
             };
             data.Validate(movieFrame, nativeFrame); return data;
         }

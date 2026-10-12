@@ -61,6 +61,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal object[] Inventory => inventory.ToArray();
         internal string[] Unsupported => unsupported.ToArray();
         internal object[] FieldDiagnostics => fieldDiagnostics;
+        internal uint CaptureManagerTimestamp()
+        {
+            var manager = Pointer(Read(IntPtr.Add(engine, 0x19d7a70), 8), 0);
+            var before = Read(manager, 80);
+            var after = Read(manager, 80);
+            if (!before.SequenceEqual(after)) throw new InvalidOperationException("Scheduler manager changed during epoch capture.");
+            return BitConverter.ToUInt32(before, 72);
+        }
         internal int AsyncOperationCount => coroutines.Values.Count(value => value.HasAsyncOperation);
         internal string[] CanonicalWaitIssues(HeroController? hero, Func<int, bool> ownsCanonicalStart)
         {

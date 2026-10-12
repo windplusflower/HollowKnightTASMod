@@ -15,6 +15,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal sealed class CanonicalCarryCapture
     {
         private readonly CanonicalCarryGraphCodec codec = CanonicalCarryFieldRegistry.Create();
+        private readonly CanonicalCarryGraphCodec inputCodec = CanonicalCarryFieldRegistry.Create(inputDomain: true);
         private readonly CanonicalHeroAssetTemplates assetTemplates;
         private readonly CanonicalVisualFsmTemplates visualTemplates;
         internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates)
@@ -24,12 +25,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal CanonicalEventGraphContract.Audit? EventGraphAudit { get; private set; }
         internal CanonicalEventDataCarry.Audit? EventDataAudit { get; private set; }
         internal CanonicalVisualSenderBindings.Audit? CanonicalSenderAudit { get; private set; }
+        internal object? ClockCarryAudit { get; private set; }
+        internal CanonicalInputCarryRoots.Audit? InputCarryAudit { get; private set; }
+        internal CanonicalCarryGraphData? InputGraph { get; private set; }
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
             ?? throw new InvalidDataException("Carry field binding is absent: " + type.FullName + "/" + name);
 
-        internal CanonicalCarryGraphData Capture(BoundaryObjectIdentity identities)
+        internal CanonicalCarryGraphData Capture(BoundaryObjectIdentity identities, CanonicalInputEpoch inputEpoch,
+            HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input)
         {
             var hero = HeroController.SilentInstance ?? throw new InvalidDataException("Carry Hero is absent.");
             var manager = GameManager.instance ?? throw new InvalidDataException("Carry GameManager is absent.");
@@ -38,6 +43,20 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || !ReferenceEquals(manager.playerData, player)) throw new InvalidDataException("Carry data root aliases differ.");
             var roots = new SortedDictionary<string, object>(StringComparer.Ordinal) {
                 ["PlayerData"] = player, ["SceneData"] = manager.sceneData };
+            if (hero.cState == null) throw new InvalidDataException("Carry Hero state root is absent.");
+            roots.Add("D/HeroControllerStates", hero.cState);
+            roots.Add(CanonicalGameplayCarry.Root, CanonicalGameplayCarry.Capture(identities));
+            inputEpoch.Validate(inputEpoch.SourceNative);
+            roots.Add("D/InputEpoch", inputEpoch.Copy());
+            var clock = CanonicalClockCarry.Capture(inputEpoch.SourceNative);
+            roots.Add("D/Clock", clock);
+            var observer = CheckpointClockObserverState.Decode(clock.Observer);
+            ClockCarryAudit = new { nativeBytes = clock.Native.Length, randomBytes = clock.Random.Length, observerBytes = clock.Observer.Length,
+                observer.UnityFrameObserved, observer.LastUnityFrameCount, observer.CaptureUnityFrameCount, observer.AdvanceSequence,
+                observedReadback = true, restoreBindingQualified = false };
+            var inputRoots = new SortedDictionary<string, object>(StringComparer.Ordinal);
+            InputCarryAudit = CanonicalInputCarryRoots.Add(inputRoots);
+            input.AddCanonicalSourceRoots(inputRoots);
             foreach (var pair in CanonicalHeroFsmBindings.Snapshot(identities))
             {
                 var fsm = (Fsm)RawFsm.GetValue(pair.Value);
@@ -51,19 +70,28 @@ namespace HollowKnightTAS.Runtime.FullRun
             var canonicalSenders = CanonicalVisualSenderBindings.Create(visualTemplates.CurrentResetOwners(), identities);
             CanonicalSenderAudit = canonicalSenders.Snapshot();
             EventDataAudit = CanonicalEventDataCarry.Add(roots, canonicalSenders.Bind);
-            var bindings = new ExternalBindings(identities, assetTemplates, canonicalSenders);
+            var inputBindings = CanonicalCarryRootBindings.Merge(InputCarryAudit.FixedBindings, inputRoots);
+            var bindings = new ExternalBindings(identities, assetTemplates, canonicalSenders, inputBindings);
             var result = codec.Capture(roots, bindings.Bind);
+            var mainBindings = new SortedDictionary<string, object>(InputCarryAudit.FixedBindings.ToDictionary(pair => pair.Key, pair => pair.Value), StringComparer.Ordinal);
+            foreach (var pair in roots) mainBindings.Add("canonical-main-root/" + pair.Key, pair.Value);
+            var inputExternal = new ExternalBindings(identities, assetTemplates, canonicalSenders, mainBindings);
+            InputGraph = inputCodec.Capture(inputRoots, inputExternal.Bind);
+            InputGraph.Unsupported = InputGraph.Unsupported.Concat(InputCarryAudit.Unsupported).OrderBy(value => value, StringComparer.Ordinal).ToArray();
+            InputGraph.Unsupported = InputGraph.Unsupported.Concat(new[] { "R6/InputTAS-lease-and-original-bindings-rebinding-unqualified" }).ToArray();
             EventGraphAudit = CanonicalEventCarryRoots.ValidateGraph(result);
             EventBindingAudit = bindings.Events.ToArray();
             // Shared event objects use reference equality in PlayMaker. They
             // cannot be cloned as local action data or considered immutable
             // until the global table/cache and every consumer are closed.
             result.Unsupported = result.Unsupported.Concat(EventDataAudit.Unsupported)
+                .Concat(InputCarryAudit.Unsupported)
                 .Concat(new[] { "R6/FsmEvent-consumer-and-static-root-rebinding-unqualified" })
                 .OrderBy(value => value, StringComparer.Ordinal).ToArray();
             return result;
         }
         internal byte[] Encode(CanonicalCarryGraphData value) => codec.Encode(value);
+        internal byte[] EncodeInput() => inputCodec.Encode(InputGraph ?? throw new InvalidDataException("Input carry domain was not captured."));
 
         private sealed class ExternalBindings
         {
@@ -75,11 +103,18 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly CanonicalVisualSenderBindings canonicalSenders;
             internal readonly List<EventAudit> Events = new List<EventAudit>();
             internal bool HasEvents { get; private set; }
-            internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualSenderBindings canonicalSenders)
+            internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualSenderBindings canonicalSenders,
+                IReadOnlyDictionary<string, object> fixedInputBindings)
             {
                 this.identities = identities;
                 this.assetTemplates = assetTemplates;
                 this.canonicalSenders = canonicalSenders;
+                foreach (var pair in fixedInputBindings) {
+                    // Multiple named roots can alias the same live object.
+                    // Select the first canonical name; the root graph retains
+                    // every original alias rather than allocating another copy.
+                    if (!known.ContainsKey(pair.Value)) known.Add(pair.Value, pair.Key);
+                }
                 var action = typeof(CheckCanDreamWarpInScene);
                 var checks = Required(action, "sceneCheckFunctions").GetValue(actionInstance()) as Dictionary<string, Func<bool>>
                     ?? throw new InvalidDataException("Original dream-warp action checks are absent.");

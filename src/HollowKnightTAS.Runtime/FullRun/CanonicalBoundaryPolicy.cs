@@ -18,10 +18,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         private string? observerSession;
         private long? observerInputOrigin;
         private CanonicalCarryCapture? carry;
+        private bool inputOriginRestored;
         internal CanonicalBoundaryPolicy() { startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart); }
         internal bool AdvanceStartup() => startup.Advance();
 
-        internal void Apply(int ordinal, string source, string target, long movie, long native, string sessionDirectory, long movieInputNativeOrigin)
+        internal void Apply(int ordinal, string source, string target, long movie, long native, string sessionDirectory, long movieInputNativeOrigin,
+            CanonicalInputEpoch inputControlOrigin, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input)
         {
             if (movieInputNativeOrigin < 0 || native < movieInputNativeOrigin || observerInputOrigin.HasValue && observerInputOrigin.Value != movieInputNativeOrigin)
                 throw new InvalidOperationException("Canonical boundary input frame origin is absent, changed or ahead of the native cursor.");
@@ -63,6 +65,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             bool OwnsCanonicalStart(int instance) => pools.OwnsNewPoolStart(instance) || visualTemplates.OwnsResetStart(instance);
             var digest = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart);
             File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + ".json"), JsonConvert.SerializeObject(digest));
+            File.WriteAllText(Path.Combine(directory, "boundary-coverage-catalog.json"), JsonConvert.SerializeObject(observer.BoundaryCoverageCatalog()));
+            File.WriteAllText(Path.Combine(directory, "boundary-coverage-reader-audit.json"), JsonConvert.SerializeObject(observer.BoundaryCoverageReadAudit()));
             var fieldSchema = JsonConvert.SerializeObject(new { schema = 1, diagnosticOnly = true, ordinal,
                 completeStateCoverage = false, fields = observer.BoundaryFieldSchema() });
             if (System.Text.Encoding.UTF8.GetByteCount(fieldSchema) > 16 * 1024 * 1024)
@@ -72,9 +76,28 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (digest.CanonicalWaitIssues.Length != 0)
                 throw new InvalidOperationException("Canonical scheduler registry is incomplete: " + string.Join(", ", digest.CanonicalWaitIssues));
             carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates);
-            var candidate = carry.Capture(identities);
+            var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
+            inputEpoch.RequireControlOrigin();
+            CanonicalCarryGraphData candidate;
+            try { candidate = carry.Capture(identities, inputEpoch, input); }
+            finally {
+                // Retain completed domain audits when a later graph/layout
+                // guard rejects. Audit availability never implies full D.
+                File.WriteAllText(Path.Combine(directory, "canonical-clock-carry-audit.json"), JsonConvert.SerializeObject(new {
+                    schema = 1, diagnosticOnly = true, completeStateCoverage = false, clock = carry.ClockCarryAudit }));
+                File.WriteAllText(Path.Combine(directory, "canonical-input-carry-audit.json"), JsonConvert.SerializeObject(new {
+                    schema = 1, diagnosticOnly = true, completeStateCoverage = false, input = carry.InputCarryAudit }));
+            }
+            File.WriteAllText(Path.Combine(directory, "canonical-input-epoch.json"), JsonConvert.SerializeObject(new {
+                schema = 1, diagnosticOnly = true, completeStateCoverage = false, inputEpoch,
+                controlledNativeFrame = inputEpoch.NativeFramesFromOrigin,
+                tickAge = inputEpoch.TickAge(inputEpoch.OriginTick), schedulerAge = inputEpoch.SchedulerAge(inputEpoch.OriginSchedulerTimestamp) }));
             var candidateBytes = carry.Encode(candidate);
+            var inputBytes = carry.EncodeInput();
+            if ((long)candidateBytes.Length + inputBytes.Length > 32 * 1024 * 1024)
+                throw new InvalidOperationException("Combined canonical D exceeds its 32 MiB bound.");
             File.WriteAllBytes(Path.Combine(directory, "canonical-carry-" + ordinal + ".bin"), candidateBytes);
+            File.WriteAllBytes(Path.Combine(directory, "canonical-input-carry-" + ordinal + ".bin"), inputBytes);
             File.WriteAllText(Path.Combine(directory, "canonical-event-binding-audit.json"), JsonConvert.SerializeObject(new {
                 schema = 1, diagnosticOnly = true, completeStateCoverage = false, events = carry.EventBindingAudit }));
             File.WriteAllText(Path.Combine(directory, "canonical-event-globals.json"), JsonConvert.SerializeObject(new {
@@ -83,8 +106,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             File.WriteAllText(Path.Combine(directory, "canonical-event-data-audit.json"), JsonConvert.SerializeObject(new {
                 schema = 1, diagnosticOnly = true, completeStateCoverage = false, eventData = carry.EventDataAudit,
                 canonicalSenders = carry.CanonicalSenderAudit }));
+            File.WriteAllText(Path.Combine(directory, "canonical-clock-carry-audit.json"), JsonConvert.SerializeObject(new {
+                schema = 1, diagnosticOnly = true, completeStateCoverage = false, clock = carry.ClockCarryAudit }));
+            File.WriteAllText(Path.Combine(directory, "canonical-input-carry-audit.json"), JsonConvert.SerializeObject(new {
+                schema = 1, diagnosticOnly = true, completeStateCoverage = false, input = carry.InputCarryAudit }));
             Progress("D-candidate-data-captured", new { roots = candidate.Roots.Length, nodes = candidate.Nodes.Length,
-                externalBindings = candidate.Externals.Length, unsupported = candidate.Unsupported, bytes = candidateBytes.Length });
+                externalBindings = candidate.Externals.Length, unsupported = candidate.Unsupported, bytes = candidateBytes.Length,
+                inputRoots = carry.InputGraph!.Roots.Length, inputNodes = carry.InputGraph.Nodes.Length,
+                inputUnsupported = carry.InputGraph.Unsupported, inputBytes = inputBytes.Length });
             if (ordinal == 1)
             {
                 // Audit that the full reader and retained reflection caches do
@@ -96,6 +125,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var comparison = BoundaryDigestComparison.Compare(digest, repeated);
                 File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + "-repeat.json"), JsonConvert.SerializeObject(repeated));
                 File.WriteAllText(Path.Combine(directory, "boundary-observer-audit.json"), JsonConvert.SerializeObject(comparison));
+                File.WriteAllText(Path.Combine(directory, "boundary-coverage-reader-audit.json"), JsonConvert.SerializeObject(observer.BoundaryCoverageReadAudit()));
                 Progress("boundary-observer-audit", new { comparison.ObservedEqual, comparison.FirstDifference });
                 if (!comparison.ObservedEqual) throw new InvalidOperationException("Boundary reader changed frozen observed state: " + comparison.FirstDifference);
             }
@@ -105,6 +135,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 broadphaseNodes = broadphase.Count, broadphaseCapacity = broadphase.Nodes.Length, broadphaseProxies = broadphase.ProxyCount,
                 elapsedMilliseconds = elapsed.ElapsedMilliseconds, pending, completeStateCoverage = false }) + "\n");
             throw new InvalidOperationException("Canonical boundary registry is incomplete: " + string.Join(", ", pending));
+        }
+        internal void RestoreInputOrigin(CanonicalInputEpoch source)
+        {
+            source.RequireControlOrigin();
+            if (inputOriginRestored || observer == null || observerSession == null || !observerInputOrigin.HasValue)
+                throw new InvalidOperationException("Canonical observer origin restore requires its single prepared boundary.");
+            inputOriginRestored = true;
+            observer.Dispose(); observer = null;
+            observerInputOrigin = source.OriginNative;
+            observer = LoadingGameplayOracle.CreateBoundaryObserver(observerSession, source.OriginNative!.Value);
         }
         public void Dispose() { observer?.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
     }

@@ -15,6 +15,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         private const string Resource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryFieldRegistry.json";
         private const string EventResource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryEventFieldRegistry.json";
+        private const string InputResource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryInputFieldRegistry.json";
         private static readonly string[] NativeValues = { "UnityEngine.Vector2", "UnityEngine.Vector3", "UnityEngine.Vector4",
             "UnityEngine.Quaternion", "UnityEngine.Color", "UnityEngine.Color32", "UnityEngine.Rect", "UnityEngine.Bounds",
             "UnityEngine.LayerMask", "UnityEngine.Matrix4x4", "UnityEngine.RaycastHit" };
@@ -24,7 +25,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             .Select(name => typeof(FsmEvent).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new InvalidDataException("Pinned FsmEvent field binding is absent: " + name)).ToArray();
 
-        internal static CanonicalCarryGraphCodec Create()
+        internal static CanonicalCarryGraphCodec Create(bool inputDomain = false)
         {
             string ReadResource(string name)
             {
@@ -35,17 +36,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (Encoding.UTF8.GetByteCount(result) > 2 * 1024 * 1024) throw new InvalidDataException("Carry field registry exceeds its bound.");
                 return result;
             }
-            var text = ReadResource(Resource); var eventText = ReadResource(EventResource);
+            var text = ReadResource(Resource); var eventText = ReadResource(EventResource); var inputText = ReadResource(InputResource);
             var registry = JObject.Parse(text);
             var eventRegistry = JObject.Parse(eventText);
+            var inputRegistry = JObject.Parse(inputText);
             if ((int?)registry["version"] != 1 || (bool?)registry["diagnosticOnly"] != true || !(registry["types"] is JArray entries)
-                || (int?)eventRegistry["version"] != 1 || (bool?)eventRegistry["diagnosticOnly"] != true || !(eventRegistry["types"] is JArray eventEntries))
+                || (int?)eventRegistry["version"] != 1 || (bool?)eventRegistry["diagnosticOnly"] != true || !(eventRegistry["types"] is JArray eventEntries)
+                || (int?)inputRegistry["version"] != 1 || (bool?)inputRegistry["diagnosticOnly"] != true || !(inputRegistry["types"] is JArray inputEntries))
                 throw new InvalidDataException("Unsupported frozen carry field registry.");
             var assemblies = new[] { typeof(object).Assembly, typeof(Fsm).Assembly, typeof(HeroController).Assembly,
                 typeof(Vector3).Assembly, typeof(UnityEngine.UI.Image).Assembly, typeof(AudioClip).Assembly,
                 typeof(RaycastHit).Assembly, typeof(Rigidbody2D).Assembly }.Distinct().ToArray();
             var types = new List<Type>(); var names = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var entry in entries.Concat(eventEntries))
+            foreach (var entry in entries.Concat(eventEntries).Concat(inputEntries))
             {
                 var name = (string?)entry["name"] ?? throw new InvalidDataException("Frozen carry type name is absent.");
                 if (!names.Add(name)) throw new InvalidDataException("Frozen carry type name is duplicated.");
@@ -70,11 +73,23 @@ namespace HollowKnightTAS.Runtime.FullRun
             // FsmEnum.value (declared System.Object), so it is not a field type
             // in the original schema. It carries only its underlying bits.
             types.Add(typeof(HutongGames.PlayMaker.None));
+            types.AddRange(CanonicalGameplayCarry.DataTypes);
+            types.Add(typeof(CanonicalInputEpoch));
+            types.Add(typeof(CanonicalClockCarry)); types.Add(typeof(byte[]));
+            types.AddRange(HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter.CanonicalSourceTypes);
             using var hash = SHA256.Create();
-            return new CanonicalCarryGraphCodec(types, "canonical-carry-fields-v3:" + BitConverter.ToString(
-                hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + CanonicalSystemEventBindings.SchemaIdentity)))
+            return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v1:" : "canonical-carry-fields-v4:") + BitConverter.ToString(
+                hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
+                    + "\n" + CanonicalGameplayCarry.SchemaIdentity + "\n" + CanonicalClockCarry.SchemaIdentity
+                    + "\n" + HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter.CanonicalSourceSchema + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalInputEpoch))
+                        .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType))))))
                 .Replace("-", "").ToLowerInvariant(), PortableValue, AllocatedValue,
-                graph => { CanonicalEventCarryRoots.ValidateGraph(graph); });
+                graph => {
+                    if (!inputDomain) CanonicalEventCarryRoots.ValidateGraph(graph);
+                    else if (graph.Roots == null || graph.Roots.Length == 0 || graph.Roots.Any(root =>
+                        root.Binding == null || !root.Binding.StartsWith("R6/Input", StringComparison.Ordinal)))
+                        throw new InvalidDataException("Input carry domain contains foreign roots.");
+                });
         }
         // Only the original empty placeholder can be allocated as local data.
         // Named/global/system events must retain their shared external identity.
@@ -82,7 +97,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             && Equals(LocalEventFields[1].GetValue(value), false) && Equals(LocalEventFields[2].GetValue(value), false)
             && LocalEventFields[3].GetValue(value) == null;
         private static string? AllocatedValue(object value) => value is FsmEvent fsmEvent && !IsLocalEmptyEvent(fsmEvent)
-            ? "allocated-FsmEvent-needs-shared-global-binding" : null;
+            ? "allocated-FsmEvent-needs-shared-global-binding"
+            : value.GetType().DeclaringType == typeof(HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter) ? "TAS-input-source-needs-existing-lease-root"
+            : value is InControl.IKeyboardProvider || value is InControl.IMouseProvider ? "input-provider-needs-existing-slot-binding" : null;
         private static string? PortableValue(object value) => value is RaycastHit && (int)RaycastCollider.GetValue(value) != 0
             ? "RaycastHit-native-collider-id-needs-portable-rebinding" : null;
         private static bool Allocatable(Type type)
