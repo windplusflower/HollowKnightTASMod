@@ -86,7 +86,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 File.WriteAllText(Path.Combine(directory, "canonical-clock-carry-audit.json"), JsonConvert.SerializeObject(new {
                     schema = 1, diagnosticOnly = true, completeStateCoverage = false, clock = carry.ClockCarryAudit }));
                 File.WriteAllText(Path.Combine(directory, "canonical-input-carry-audit.json"), JsonConvert.SerializeObject(new {
-                    schema = 1, diagnosticOnly = true, completeStateCoverage = false, input = carry.InputCarryAudit }));
+                    schema = 1, diagnosticOnly = true, completeStateCoverage = false, input = carry.InputCarryAudit,
+                    preparedLeaseActions = carry.InputPreparedLeaseActions, preparedCursor = carry.InputPreparedCursor,
+                    preparedManagerScalars = carry.InputPreparedManagerScalars,
+                    preparedCallbacks = carry.InputPreparedCallbacks,
+                    applicationExecuted = false }));
             }
             File.WriteAllText(Path.Combine(directory, "canonical-input-epoch.json"), JsonConvert.SerializeObject(new {
                 schema = 1, diagnosticOnly = true, completeStateCoverage = false, inputEpoch,
@@ -109,7 +113,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             File.WriteAllText(Path.Combine(directory, "canonical-clock-carry-audit.json"), JsonConvert.SerializeObject(new {
                 schema = 1, diagnosticOnly = true, completeStateCoverage = false, clock = carry.ClockCarryAudit }));
             File.WriteAllText(Path.Combine(directory, "canonical-input-carry-audit.json"), JsonConvert.SerializeObject(new {
-                schema = 1, diagnosticOnly = true, completeStateCoverage = false, input = carry.InputCarryAudit }));
+                schema = 1, diagnosticOnly = true, completeStateCoverage = false, input = carry.InputCarryAudit,
+                preparedLeaseActions = carry.InputPreparedLeaseActions, preparedCursor = carry.InputPreparedCursor,
+                preparedManagerScalars = carry.InputPreparedManagerScalars,
+                preparedCallbacks = carry.InputPreparedCallbacks,
+                applicationExecuted = false }));
             Progress("D-candidate-data-captured", new { roots = candidate.Roots.Length, nodes = candidate.Nodes.Length,
                 externalBindings = candidate.Externals.Length, unsupported = candidate.Unsupported, bytes = candidateBytes.Length,
                 inputRoots = carry.InputGraph!.Roots.Length, inputNodes = carry.InputGraph.Nodes.Length,

@@ -24,8 +24,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             typeof(PreMenuInputModuleActionAdaptor.PreMenuInputModuleActions) };
         private static readonly string[] DeviceTypes = { "InControl.InputDevice", "InControl.NativeInputDevice",
             "InControl.UnityInputDevice", "InControl.XInputDevice" };
-        private static readonly string[] CallbackFields = { "OnSetup", "OnUpdate", "OnReset", "OnDeviceAttached",
-            "OnDeviceDetached", "OnActiveDeviceChanged", "OnUpdateDevices", "OnCommitDevices" };
+        private static readonly string[] CallbackFields = CanonicalInputCallbackContract.Slots;
 
         internal static Audit Add(IDictionary<string, object> roots)
         {
@@ -76,6 +75,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 ["R6/InputManager-activeDevices"] = active.Owner, ["R6/InputManager-Devices-view"] = deviceWrapper,
                 ["R6/InputManager-ActiveDevices-view"] = activeWrapper, ["R6/InputDevice-Null"] = nullDevice!,
                 ["R6/InputManager-activeDevice"] = activeDevice! };
+            proposed.Add("R6/InputManager-scalars", CanonicalInputManagerScalars.Capture());
             foreach (var device in deviceAudits) proposed.Add(device.Binding, devices.Items[device.Ordinal]);
             var setReferences = new HashSet<object>(new References());
             var actionReferences = new HashSet<object>(new References());
@@ -97,11 +97,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 totalActions = checked(totalActions + actions.Count);
                 if (totalActions > MaximumItems) throw new InvalidDataException("Original registered action count exceeds its bound.");
                 retainedLists.Add(actions.Validate);
-                Wrapper<PlayerAction>(Field(typeof(PlayerActionSet), "<Actions>k__BackingField", typeof(ReadOnlyCollection<PlayerAction>), Instance).GetValue(set),
+                var actionView = Wrapper<PlayerAction>(Field(typeof(PlayerActionSet), "<Actions>k__BackingField", typeof(ReadOnlyCollection<PlayerAction>), Instance).GetValue(set),
                     actions.Owner, "action-set readonly view");
                 var names = Field(typeof(PlayerActionSet), "actionsByName", typeof(Dictionary<string, PlayerAction>), Instance).GetValue(set)
                     as Dictionary<string, PlayerAction> ?? throw new InvalidDataException("Original action name lookup is absent.");
                 if (names.Count != actions.Count) throw new InvalidDataException("Original action name lookup count differs from its action list.");
+                proposed.Add(key + "/actions", actions.Owner);
+                proposed.Add(key + "/actions-view", actionView);
+                proposed.Add(key + "/actions-by-name", names);
                 var actionNames = new string[actions.Count];
                 for (var actionIndex = 0; actionIndex < actions.Count; actionIndex++)
                 {
@@ -115,7 +118,23 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidDataException("Original action name and dictionary/list alias differ.");
                     actionNames[actionIndex] = name;
                     localActions.Add(action);
-                    proposed.Add(key + "/action/" + actionIndex.ToString(CultureInfo.InvariantCulture) + ":" + name, action);
+                    var actionKey = key + "/action/" + actionIndex.ToString(CultureInfo.InvariantCulture) + ":" + name;
+                    proposed.Add(actionKey, action);
+                    var bindingLists = new Dictionary<string, object>(StringComparer.Ordinal);
+                    foreach (var slot in new[] { "defaultBindings", "regularBindings", "visibleBindings" }) {
+                        var list = ReadList<BindingSource>(Field(typeof(PlayerAction), slot, typeof(List<BindingSource>), Instance).GetValue(action),
+                            256, "action " + slot);
+                        if (list.Items.Take(list.Count).Any(source => ReferenceEquals(source, null)))
+                            throw new InvalidDataException("Original action binding list contains an absent source.");
+                        retainedLists.Add(list.Validate); bindingLists.Add(slot, list.Owner);
+                        proposed.Add(actionKey + "/" + slot, list.Owner);
+                    }
+                    var visibleView = Wrapper<BindingSource>(Field(typeof(PlayerAction), "bindings", typeof(ReadOnlyCollection<BindingSource>), Instance).GetValue(action),
+                        bindingLists["visibleBindings"], "action visible bindings view");
+                    var regularView = Wrapper<BindingSource>(Field(typeof(PlayerAction), "unfilteredBindings", typeof(ReadOnlyCollection<BindingSource>), Instance).GetValue(action),
+                        bindingLists["regularBindings"], "action regular bindings view");
+                    proposed.Add(actionKey + "/bindings-view", visibleView);
+                    proposed.Add(actionKey + "/unfiltered-bindings-view", regularView);
                 }
                 var listening = Field(typeof(PlayerActionSet), "listenWithAction", typeof(PlayerAction), Instance).GetValue(set);
                 if (!ReferenceEquals(listening, null) && !localActions.Contains(listening!))
@@ -152,11 +171,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 proposed.Add("R6/InputProvider/Mouse-original", originalMouse!);
             }
             else proposed.Add("R6/InputProvider/Mouse", mouse);
+            var controlRoots = CanonicalInputOwnerRoots.Add(proposed);
             foreach (var binding in CanonicalInputDeadzoneBindings.Create(proposed)) fixedBindings.Add(binding.Key, binding.Value);
             var callbackTargets = new Dictionary<object, string>(new References());
             var callbackAudits = CallbackFields.Select(name => Callback(name, fixedBindings, callbackTargets)).ToArray();
+            var callbackData = CanonicalInputCallbackContract.Copy(callbackAudits.Select(slot => new CanonicalInputCallbackContract.Slot {
+                Field = slot.Field, Methods = slot.Invocations.Select(method => new CanonicalInputCallbackContract.Method {
+                    Assembly = method.Assembly, ModuleMvid = method.ModuleMvid, Token = method.MetadataToken,
+                    DeclaringType = method.DeclaringType, Name = method.MethodName, IsStatic = method.MethodIsStatic,
+                    TargetBinding = method.TargetBinding, TargetType = method.TargetRuntimeType }).ToArray() }).ToArray());
+            proposed.Add(CanonicalInputCallbackContract.Root, callbackData);
             var unsupported = new List<string> {
-                "R6/InputManager-static-clock-focus-configuration-not-in-collection-payload",
+                "R6/InputManager-static-clock-focus-configuration-restoration-unqualified",
                 "R6/InputManager-device-manager-native-state-and-update-order-unqualified",
                 "R6/InputProvider-fixed-slot-and-native-state-rebinding-unqualified",
                 "R6/UnityMouseProvider-existing-slot-and-consumer-rebinding-unqualified",
@@ -188,6 +214,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                         OriginalBinding = originalMouse == null ? "" : "R6/InputProvider/Mouse-original" } },
                 Callbacks = callbackAudits, RootCount = proposed.Count, ActionCount = totalActions,
                 FixedBindings = new ReadOnlyDictionary<string, object>(fixedBindings), FixedBindingCount = fixedBindings.Count, HeroActionSetCount = heroSets,
+                CallbackData = callbackData,
+                StatefulControlRoots = controlRoots,
                 Unsupported = unsupported.OrderBy(value => value, StringComparer.Ordinal).ToArray() };
         }
 
@@ -284,6 +312,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public int ActionCount { get; set; }
             public int FixedBindingCount { get; set; }
             public int HeroActionSetCount { get; set; }
+            public int StatefulControlRoots { get; set; }
             // Live fixed-slot identities stay out of JSON and out of codec
             // allocation roots. The caller must supply an explicit resolver.
             [Newtonsoft.Json.JsonIgnore]
@@ -297,6 +326,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             public ListAudit ActiveDeviceList { get; set; } = new ListAudit();
             public ProviderAudit[] Providers { get; set; } = Array.Empty<ProviderAudit>();
             public CallbackAudit[] Callbacks { get; set; } = Array.Empty<CallbackAudit>();
+            [Newtonsoft.Json.JsonIgnore]
+            internal CanonicalInputCallbackContract.Data CallbackData { get; set; } = new CanonicalInputCallbackContract.Data();
             public string[] Unsupported { get; set; } = Array.Empty<string>();
             public bool RestoreBindingQualified => false;
         }

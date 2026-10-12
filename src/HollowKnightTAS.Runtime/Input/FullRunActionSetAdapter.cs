@@ -494,6 +494,11 @@ namespace HollowKnightTAS.Runtime.Input
             public PlayerActionSet Set { get; }
             public GameInputChannel Channel { get; }
             public BindingSource[] OriginalBindings(int index) => originals[index];
+            internal int ValidateCanonicalBindings(HollowKnightTAS.Runtime.FullRun.CanonicalCarryGraphCodec.PreparedView view, string binding)
+            {
+                if (restored) throw new InvalidDataException("Canonical lease has already restored its original bindings.");
+                return HollowKnightTAS.Runtime.FullRun.CanonicalInputLeaseBindings.Validate(view, binding, Set, Channel, actions, injected, originals);
+            }
             internal void AddCanonicalRoots(IDictionary<string, object> roots, string binding)
             {
                 if (restored || injected.Length != actions.Length || originals.Length != actions.Length || actions.Length > 1024)

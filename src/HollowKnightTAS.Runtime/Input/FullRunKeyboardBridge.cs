@@ -72,6 +72,22 @@ namespace HollowKnightTAS.Runtime.Input
         public void Complete() => state.Complete();
         internal short[] CapturePrevious() => state.CapturePrevious();
         internal short[] CaptureCurrent() => state.CaptureCurrent();
+        internal short[] CaptureConfigured() => keys.OrderBy(key => key).ToArray();
+        internal Action PrepareCanonicalRestore(short[] previous, short[] current, short[] configured)
+        {
+            if (configured == null || !configured.SequenceEqual(CaptureConfigured()))
+                throw new System.IO.InvalidDataException("Canonical keyboard hook key set differs.");
+            var configuredKeys = (short[])configured.Clone();
+            var prior = (short[])previous.Clone(); var next = (short[])current.Clone();
+            var validation = new CustomKeyState(); validation.Restore(prior, next);
+            if (prior.Concat(next).Any(key => !keys.Contains(key)))
+                throw new System.IO.InvalidDataException("Canonical keyboard state is outside configured hooks.");
+            return () => {
+                if (!configuredKeys.SequenceEqual(CaptureConfigured()))
+                    throw new System.IO.InvalidDataException("Canonical keyboard hooks changed after preparation.");
+                state.Restore(prior, next);
+            };
+        }
         internal void Restore(short[] previous, short[] current)
         {
             if (previous.Concat(current).Any(key => !keys.Contains(key)))

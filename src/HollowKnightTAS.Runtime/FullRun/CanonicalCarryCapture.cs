@@ -28,6 +28,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal object? ClockCarryAudit { get; private set; }
         internal CanonicalInputCarryRoots.Audit? InputCarryAudit { get; private set; }
         internal CanonicalCarryGraphData? InputGraph { get; private set; }
+        internal int InputPreparedLeaseActions { get; private set; }
+        internal bool InputPreparedCursor { get; private set; }
+        internal bool InputPreparedManagerScalars { get; private set; }
+        internal bool InputPreparedCallbacks { get; private set; }
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
@@ -36,6 +40,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal CanonicalCarryGraphData Capture(BoundaryObjectIdentity identities, CanonicalInputEpoch inputEpoch,
             HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input)
         {
+            InputPreparedLeaseActions = 0; InputPreparedCursor = false; InputPreparedManagerScalars = false; InputPreparedCallbacks = false;
             var hero = HeroController.SilentInstance ?? throw new InvalidDataException("Carry Hero is absent.");
             var manager = GameManager.instance ?? throw new InvalidDataException("Carry GameManager is absent.");
             var player = PlayerData.instance;
@@ -77,6 +82,22 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var pair in roots) mainBindings.Add("canonical-main-root/" + pair.Key, pair.Value);
             var inputExternal = new ExternalBindings(identities, assetTemplates, canonicalSenders, mainBindings);
             InputGraph = inputCodec.Capture(inputRoots, inputExternal.Bind);
+            var guardInputSlots = CanonicalInputStaticSlots.PrepareGuard(inputRoots, InputCarryAudit.FixedBindings);
+            // Prepare against the same parked source only as a read-only
+            // consumer audit. Never execute the returned application here.
+            // Qualification records are appended below and remain blocking.
+            if (InputGraph.Unsupported.Length == 0)
+                inputCodec.PrepareApply(InputGraph, inputRoots, inputExternal.ResolveCaptured, view => {
+                    InputPreparedLeaseActions = input.ValidateCanonicalSourceBindings(view, inputRoots);
+                    InputPreparedCursor = input.PrepareCanonicalCursorAudit(view);
+                    var managerSource = CanonicalInputManagerScalars.FromPrepared(view);
+                    CanonicalInputManagerScalars.RequireEpoch(managerSource, inputEpoch);
+                    CanonicalInputManagerScalars.PrepareApply(managerSource);
+                    InputPreparedManagerScalars = true;
+                    CanonicalInputCallbackContract.RequireSame(CanonicalInputCallbackContract.FromPrepared(view), InputCarryAudit.CallbackData);
+                    InputPreparedCallbacks = true;
+                });
+            guardInputSlots();
             InputGraph.Unsupported = InputGraph.Unsupported.Concat(InputCarryAudit.Unsupported).OrderBy(value => value, StringComparer.Ordinal).ToArray();
             InputGraph.Unsupported = InputGraph.Unsupported.Concat(new[] { "R6/InputTAS-lease-and-original-bindings-rebinding-unqualified" }).ToArray();
             EventGraphAudit = CanonicalEventCarryRoots.ValidateGraph(result);
@@ -103,6 +124,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly CanonicalVisualSenderBindings canonicalSenders;
             internal readonly List<EventAudit> Events = new List<EventAudit>();
             internal bool HasEvents { get; private set; }
+            internal object ResolveCaptured(string binding)
+            {
+                var matches = known.Where(pair => pair.Value == binding).Select(pair => pair.Key).ToArray();
+                if (matches.Length != 1) throw new InvalidDataException("Captured carry external binding is absent or ambiguous: " + binding);
+                return matches[0];
+            }
             internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualSenderBindings canonicalSenders,
                 IReadOnlyDictionary<string, object> fixedInputBindings)
             {

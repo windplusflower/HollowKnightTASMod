@@ -77,11 +77,19 @@ namespace HollowKnightTAS.Runtime.FullRun
             types.Add(typeof(CanonicalInputEpoch));
             types.Add(typeof(CanonicalClockCarry)); types.Add(typeof(byte[]));
             types.AddRange(HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter.CanonicalSourceTypes);
+            types.Add(typeof(CanonicalInputManagerScalars.Data));
+            types.Add(typeof(CanonicalInputAdapterState)); types.Add(typeof(HollowKnightTAS.Core.Movie.GameInputChannel[])); types.Add(typeof(short[]));
+            types.AddRange(CanonicalInputCallbackContract.DataTypes);
             using var hash = SHA256.Create();
             return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v1:" : "canonical-carry-fields-v4:") + BitConverter.ToString(
                 hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
                     + "\n" + CanonicalGameplayCarry.SchemaIdentity + "\n" + CanonicalClockCarry.SchemaIdentity
-                    + "\n" + HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter.CanonicalSourceSchema + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalInputEpoch))
+                    + "\n" + HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter.CanonicalSourceSchema
+                    + "\n" + string.Join("\n", CanonicalInputCallbackContract.DataTypes.Where(type => !type.IsArray).Select(type =>
+                        CanonicalCarryGraphCodec.Identity(type) + ":" + string.Join(";", CanonicalCarryGraphCodec.Fields(type)
+                            .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType)))))
+                    + "\n" + CanonicalInputManagerScalars.SchemaIdentity + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalInputAdapterState))
+                        .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType))) + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalInputEpoch))
                         .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType))))))
                 .Replace("-", "").ToLowerInvariant(), PortableValue, AllocatedValue,
                 graph => {

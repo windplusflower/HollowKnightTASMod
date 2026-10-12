@@ -18,6 +18,57 @@ public sealed class CanonicalCarryGraphCodecTests
     private static object NoBinding(string key) => throw new InvalidDataException("Unexpected external: " + key);
 
     [TestMethod]
+    public void Consumer_preflight_reads_source_fields_and_target_aliases_before_any_live_write()
+    {
+        var source = new Owner { Counter = 17, Current = new Value { Number = 29 } };
+        source.Next = source;
+        var target = new Owner { Counter = -4 };
+        var codec = Codec(); var graph = codec.Capture(Roots(("root", source)), NoExternal);
+        var checkedSource = false;
+        var apply = codec.PrepareApply(graph, Roots(("root", target)), NoBinding, view => {
+            Assert.AreSame(target, view.Root("root"));
+            Assert.AreEqual(-4, target.Counter); Assert.IsNull(target.Next); Assert.IsNull(target.Current);
+            Assert.AreEqual(17, view.Field(target, typeof(Owner), "Counter"));
+            Assert.AreSame(target, view.Field(target, typeof(Owner), "Next"));
+            var current = view.Field(target, typeof(Owner), "Current")!;
+            Assert.AreEqual(29, view.Field(current, typeof(Value), "Number"));
+            Assert.ThrowsExactly<InvalidDataException>(() => view.Field(new Value(), typeof(Value), "Number"));
+            checkedSource = true;
+        });
+        Assert.IsTrue(checkedSource); Assert.AreEqual(-4, target.Counter);
+        source.Counter = 999; source.Current.Number = 999;
+        apply(); Assert.AreEqual(17, target.Counter); Assert.AreEqual(29, target.Current!.Number);
+        Assert.AreSame(target, target.Next);
+    }
+
+    [TestMethod]
+    public void Rejected_consumer_alias_preflight_preserves_every_live_root()
+    {
+        var first = new Owner { Counter = 17 }; var second = new Owner { Counter = 31 };
+        first.Next = second; second.Next = first;
+        var targetFirst = new Owner { Counter = -1 }; var targetSecond = new Owner { Counter = -2 };
+        var codec = Codec(); var graph = codec.Capture(Roots(("a", first), ("b", second)), NoExternal);
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(graph,
+            Roots(("a", targetFirst), ("b", targetSecond)), NoBinding, view => {
+                Assert.AreSame(targetSecond, view.Field(targetFirst, typeof(Owner), "Next"));
+                throw new InvalidDataException("consumer binding rejects the prepared source");
+            }));
+        Assert.AreEqual(-1, targetFirst.Counter); Assert.AreEqual(-2, targetSecond.Counter);
+        Assert.IsNull(targetFirst.Next); Assert.IsNull(targetSecond.Next);
+    }
+
+    [TestMethod]
+    public void Malformed_graph_never_reaches_consumer_preflight()
+    {
+        var codec = Codec(); var graph = codec.Capture(Roots(("root", new Owner { Counter = 17 })), NoExternal);
+        graph.Nodes[0].Fields![0].Value.Kind = "unsupported";
+        var entered = false; var target = new Owner { Counter = -1 };
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(graph, Roots(("root", target)), NoBinding,
+            _ => entered = true));
+        Assert.IsFalse(entered); Assert.AreEqual(-1, target.Counter);
+    }
+
+    [TestMethod]
     public void Import_domain_validation_reads_the_frozen_graph_before_live_writes()
     {
         CanonicalCarryGraphData? input = null;

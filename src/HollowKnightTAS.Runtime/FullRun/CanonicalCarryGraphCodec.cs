@@ -175,7 +175,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         // Freeze the caller's data by a bounded canonical round trip, then
         // resolve every value before exposing a single live field write.
         internal Action PrepareApply(CanonicalCarryGraphData input, IReadOnlyDictionary<string, object> roots,
-            Func<string, object> resolveExternal)
+            Func<string, object> resolveExternal, Action<PreparedView>? preflight = null)
         {
             var value = Decode(Encode(input));
             // Domain checks receive the frozen input before allocation or
@@ -278,6 +278,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Fill detached nodes first. Value-type nodes must be filled before
             // their parent copies the boxed struct into a field or array.
             var status = new byte[objects.Length]; var writes = new List<Action>();
+            var preparedFields = preflight == null ? null : new object?[objects.Length][];
             void Fill(int index, int depth)
             {
                 if (depth > 128) throw new InvalidDataException("Carry restore graph exceeds its depth bound.");
@@ -301,9 +302,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 else
                 {
                     var layout = layouts[node.Type];
+                    if (preparedFields != null) preparedFields[index] = new object?[layout.Fields.Length];
                     for (var i = 0; i < layout.Fields.Length; i++)
                     {
                         var field = layout.Fields[i]; var fieldValue = Prepared(node.Fields![i].Value, field.FieldType);
+                        if (preparedFields != null) preparedFields[index][i] = fieldValue;
                         if (boundNodes.Contains(index + 1)) writes.Add(() => field.SetValue(owner, fieldValue));
                         else field.SetValue(owner, fieldValue);
                     }
@@ -316,7 +319,39 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var root in value.Roots) { visitedNodes.Add(root.Node); Fill(root.Node - 1, 0); }
             if (visitedNodes.Count != objects.Length || visitedExternal.Count != external.Length)
                 throw new InvalidDataException("Carry graph contains unreachable nodes or bindings.");
+            if (preflight != null) preflight(new PreparedView(roots, objects, preparedFields!, nodeTypes.Select(type =>
+                layouts.TryGetValue(Identity(type), out var layout) ? layout.Fields : Array.Empty<FieldInfo>()).ToArray()));
             return () => { foreach (var write in writes) write(); };
+        }
+
+        // Reads decoded field values, including proposed fields of existing
+        // roots. Reading those roots with reflection would see preparation
+        // state instead of source state. No live writes or property getters
+        // are exposed here; callers can validate consumer aliases before apply.
+        internal sealed class PreparedView
+        {
+            private readonly Dictionary<string, object> roots;
+            private readonly Dictionary<object, int> nodes = new Dictionary<object, int>(new References());
+            private readonly object?[][] values;
+            private readonly FieldInfo[][] declarations;
+            internal PreparedView(IReadOnlyDictionary<string, object> roots, object[] objects,
+                object?[][] values, FieldInfo[][] declarations)
+            {
+                this.roots = roots.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                this.values = values; this.declarations = declarations;
+                for (var index = 0; index < objects.Length; index++) nodes.Add(objects[index], index);
+            }
+            internal object Root(string name) => roots.TryGetValue(name, out var root) ? root
+                : throw new InvalidDataException("Prepared carry root is absent: " + name);
+            internal object? Field(object owner, Type declaringType, string name)
+            {
+                if (!nodes.TryGetValue(owner, out var node) || values[node] == null)
+                    throw new InvalidDataException("Prepared carry field owner is outside the managed graph.");
+                for (var index = 0; index < declarations[node].Length; index++)
+                    if (declarations[node][index].DeclaringType == declaringType && declarations[node][index].Name == name)
+                        return values[node][index];
+                throw new InvalidDataException("Prepared carry field is absent: " + declaringType.FullName + "/" + name);
+            }
         }
 
         private static string EncodeScalar(object value, Type type)
