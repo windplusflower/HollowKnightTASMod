@@ -92,6 +92,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             types.AddRange(CanonicalSceneMappingCarry.DataTypes);
             types.AddRange(CanonicalMouseCarry.DataTypes);
             types.AddRange(CanonicalDeviceManagerCarry.DataTypes);
+            types.AddRange(CanonicalSceneLoadCallbacks.DataTypes);
             using var hash = SHA256.Create();
             return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v2:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
                 hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + loadingText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
@@ -122,6 +123,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                             .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType)))))
                     + "\n" + CanonicalInputProfileContract.SchemaIdentity
                     + "\n" + CanonicalBoundaryInputTablePolicy.SchemaIdentity
+                    + "\n" + CanonicalSceneLoadCallbacks.SchemaIdentity + "\n" + string.Join(";", CanonicalSceneLoadCallbacks.DataTypes.Where(type => !type.IsArray)
+                        .SelectMany(type => CanonicalCarryGraphCodec.Fields(type)).Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName))
                     + "\n" + CanonicalInputManagerScalars.SchemaIdentity + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalInputAdapterState))
                         .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType))) + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalInputEpoch))
                         .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType))))))

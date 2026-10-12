@@ -1158,13 +1158,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             SceneLoad.CompleteDelegate complete = () => Sample("event", "load-complete");
             SceneLoad.StartCalledDelegate started = () => Sample("event", "start-called");
             SceneLoad.FinishDelegate finish = null!;
+            Action unregister = () => { };
             Action remove = () => { load.FetchComplete -= fetch; load.WillActivate -= activate;
                 load.ActivationComplete -= activated; load.Complete -= complete;
-                load.StartCalled -= started; load.Finish -= finish; };
+                load.StartCalled -= started; load.Finish -= finish; unregister(); };
             finish = () => { Sample("event", "load-finish"); remove(); detach.Remove(remove); };
             load.FetchComplete += fetch; load.WillActivate += activate;
             load.ActivationComplete += activated; load.Complete += complete;
             load.StartCalled += started; load.Finish += finish; detach.Add(remove);
+            unregister = CanonicalSceneLoadDiagnosticRegistry.Register(load, this, new Dictionary<string, Delegate> {
+                ["FetchComplete"] = fetch, ["WillActivate"] = activate, ["ActivationComplete"] = activated,
+                ["Complete"] = complete, ["StartCalled"] = started, ["Finish"] = finish });
         }
         private void SceneLoaded(UnityEngine.SceneManagement.Scene scene, UnityEngine.SceneManagement.LoadSceneMode mode)
             => Sample("event", "scene-loaded:" + scene.name + ":" + mode);

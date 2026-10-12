@@ -65,5 +65,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 consumed = true; apply(); self.sourceName = source;
             };
         }
+        internal static CanonicalSceneLoadCallbackBindings ReadCanonicalCallbackBindings()
+        {
+            AddCanonicalLoadInfo(new Dictionary<string, object>(StringComparer.Ordinal));
+            var self = instance!;
+            return new CanonicalSceneLoadCallbackBindings(self.transition!, GameManager.instance, self.checkpointLoadInfo!,
+                Closure(self.checkpointTransitionRoutine!), self.sourceName);
+        }
     }
 }

@@ -153,6 +153,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 mousePrepared = carry.MousePrepared, mouseApplicationExecuted = false,
                 deviceManagersPrepared = carry.DeviceManagersPrepared, deviceManagerCount = carry.DeviceManagerCount, deviceManagerApplicationExecuted = false,
                 graphPairPrepared = carry.GraphPairPrepared, graphPairApplicationExecuted = false,
+                sceneLoadCallbacksPrepared = carry.SceneLoadCallbacksPrepared, sceneLoadCallbacksApplicationExecuted = false,
                 inputRoots = carry.InputGraph!.Roots.Length, inputNodes = carry.InputGraph.Nodes.Length,
                 inputUnsupported = carry.InputGraph.Unsupported, inputBytes = inputBytes.Length });
             if (ordinal == 1)

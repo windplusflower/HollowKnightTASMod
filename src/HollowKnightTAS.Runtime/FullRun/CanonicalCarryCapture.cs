@@ -43,6 +43,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal bool DeviceManagersPrepared { get; private set; }
         internal int DeviceManagerCount { get; private set; }
         internal bool GraphPairPrepared { get; private set; }
+        internal bool SceneLoadCallbacksPrepared { get; private set; }
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
@@ -73,6 +74,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             MousePrepared = false;
             DeviceManagersPrepared = false; DeviceManagerCount = 0;
             GraphPairPrepared = false;
+            SceneLoadCallbacksPrepared = false;
             var hero = HeroController.SilentInstance ?? throw new InvalidDataException("Carry Hero is absent.");
             var manager = GameManager.instance ?? throw new InvalidDataException("Carry GameManager is absent.");
             var player = PlayerData.instance;
@@ -92,6 +94,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             LoadingSerialSceneProbe.AddCanonicalLoadInfo(roots);
             LoadingSerialSceneProbe.PrepareCanonicalLoadScalars((CanonicalSceneLoadCarry.Data)roots[CanonicalSceneLoadCarry.Root]);
             SceneLoadScalarsPrepared = true;
+            var loadCallbacks = LoadingSerialSceneProbe.ReadCanonicalCallbackBindings();
+            roots.Add(CanonicalSceneLoadCallbacks.Root, loadCallbacks.Data);
             var sceneMapping = new CanonicalSceneMappingBindings();
             roots.Add(CanonicalSceneMappingCarry.Root, sceneMapping.Data);
             if (sceneMapping.HasDetachedPlayer) roots.Add(CanonicalSceneMappingCarry.DetachedPlayerRoot, sceneMapping.OwnedPlayer);
@@ -136,6 +140,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     inputEpoch.RequireReadback(source.Epoch, inputEpoch.SourceNative);
                     CanonicalSchedulerRestorePlan.Prepare(source.Scheduler, scheduler);
                     LoadingSerialSceneProbe.PrepareCanonicalLoadScalars(source.SceneLoad);
+                    loadCallbacks.RequireSource(CanonicalSceneLoadCallbacks.FromPrepared(view), source.SceneLoad);
+                    SceneLoadCallbacksPrepared = true;
                     CanonicalGameplayCarry.PrepareApply(CanonicalGameplayCarry.FromPrepared(view), identities);
                     GameplayPrepared = true;
                     CheckpointHeroInvulnerability.FromCanonicalPrepared(view, source.Scheduler).PrepareCanonicalPulseApply(hero);
@@ -170,9 +176,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             guardEventSlots(); EventStaticSlotsGuarded = true;
             sceneMapping.Guard();
             deviceManagers.Guard();
+            loadCallbacks.Guard();
             if (mainPlan != null && inputPlan != null) {
                 var pair = new CanonicalCarryPairPreparation(mainPlan, inputPlan, () => {
-                    guardInputSlots(); guardEventSlots(); sceneMapping.Guard(); deviceManagers.Guard();
+                    guardInputSlots(); guardEventSlots(); sceneMapping.Guard(); deviceManagers.Guard(); loadCallbacks.Guard();
                 }, () => false); // Source-only audit has no restore admission.
                 pair.Guard(); GraphPairPrepared = true;
             }
