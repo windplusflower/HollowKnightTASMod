@@ -137,6 +137,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 sceneMappingPrepared = carry.SceneMappingPrepared, sceneMappingCallbacks = carry.SceneMappingCallbacks, sceneMappingApplicationExecuted = false,
                 detachedMappingPlayerCarried = Array.Exists(candidate.Roots, root => root.Binding == CanonicalSceneMappingCarry.DetachedPlayerRoot),
                 mousePrepared = carry.MousePrepared, mouseApplicationExecuted = false,
+                deviceManagersPrepared = carry.DeviceManagersPrepared, deviceManagerCount = carry.DeviceManagerCount, deviceManagerApplicationExecuted = false,
                 inputRoots = carry.InputGraph!.Roots.Length, inputNodes = carry.InputGraph.Nodes.Length,
                 inputUnsupported = carry.InputGraph.Unsupported, inputBytes = inputBytes.Length });
             if (ordinal == 1)

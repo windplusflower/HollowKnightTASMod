@@ -40,6 +40,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal bool SceneMappingPrepared { get; private set; }
         internal int SceneMappingCallbacks { get; private set; }
         internal bool MousePrepared { get; private set; }
+        internal bool DeviceManagersPrepared { get; private set; }
+        internal int DeviceManagerCount { get; private set; }
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
@@ -54,6 +56,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             InvulnerabilityPrepared = false;
             SceneMappingPrepared = false; SceneMappingCallbacks = 0;
             MousePrepared = false;
+            DeviceManagersPrepared = false; DeviceManagerCount = 0;
             var hero = HeroController.SilentInstance ?? throw new InvalidDataException("Carry Hero is absent.");
             var manager = GameManager.instance ?? throw new InvalidDataException("Carry GameManager is absent.");
             var player = PlayerData.instance;
@@ -85,6 +88,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             InputCarryAudit = CanonicalInputCarryRoots.Add(inputRoots);
             input.AddCanonicalSourceRoots(inputRoots);
             mouse.AddCanonicalRoots(inputRoots);
+            var deviceManagers = new CanonicalDeviceManagerBindings();
+            inputRoots.Add(CanonicalDeviceManagerCarry.Root, deviceManagers.Data);
+            DeviceManagerCount = deviceManagers.Data.Managers.Length;
             foreach (var pair in CanonicalHeroFsmBindings.Snapshot(identities))
             {
                 var fsm = (Fsm)RawFsm.GetValue(pair.Value);
@@ -140,10 +146,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                     InputPreparedCallbacks = true;
                     mouse.PrepareCanonicalContinuation(CanonicalMouseCarry.FromPrepared(view));
                     MousePrepared = true;
+                    deviceManagers.PrepareApply(CanonicalDeviceManagerCarry.FromPrepared(view));
+                    DeviceManagersPrepared = true;
                 });
             guardInputSlots();
             guardEventSlots(); EventStaticSlotsGuarded = true;
             sceneMapping.Guard();
+            deviceManagers.Guard();
             InputGraph.Unsupported = InputGraph.Unsupported.Concat(InputCarryAudit.Unsupported).OrderBy(value => value, StringComparer.Ordinal).ToArray();
             InputGraph.Unsupported = InputGraph.Unsupported.Concat(new[] { "R6/InputTAS-lease-and-original-bindings-rebinding-unqualified" }).ToArray();
             EventGraphAudit = CanonicalEventCarryRoots.ValidateGraph(result);
