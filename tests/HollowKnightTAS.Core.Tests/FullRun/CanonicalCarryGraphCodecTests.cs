@@ -45,15 +45,17 @@ public sealed class CanonicalCarryGraphCodecTests
     [TestMethod]
     public void Changed_scalar_bits_reference_aliases_or_root_membership_reject_the_whole_prepared_graph()
     {
-        var codec = Codec(); var source = new Owner { Counter = 17 }; var first = new Owner(); var second = new Owner();
-        var graph = codec.Capture(Roots(("first", source), ("second", new Owner())), NoExternal);
-        var roots = Roots(("first", first), ("second", second)); var apply = codec.PrepareApply(graph, roots, NoBinding);
-        second.Vector.X = BitConverter.Int32BitsToSingle(unchecked((int)0x80000000));
-        Assert.ThrowsExactly<InvalidOperationException>(() => apply()); Assert.AreEqual(0, first.Counter);
-        second.Vector.X = 0; roots["second"] = new Owner();
-        Assert.ThrowsExactly<InvalidOperationException>(() => apply()); Assert.AreEqual(0, first.Counter);
-        roots["second"] = second; second.Current = new Value();
-        Assert.ThrowsExactly<InvalidOperationException>(() => apply()); Assert.AreEqual(0, first.Counter);
+        foreach (var fault in new[] { "bits", "owner", "alias" }) {
+            var codec = Codec(); var source = new Owner { Counter = 17 }; var first = new Owner(); var second = new Owner();
+            var graph = codec.Capture(Roots(("first", source), ("second", new Owner())), NoExternal);
+            var roots = Roots(("first", first), ("second", second)); var apply = codec.PrepareApply(graph, roots, NoBinding);
+            if (fault == "bits") second.Vector.X = BitConverter.Int32BitsToSingle(unchecked((int)0x80000000));
+            if (fault == "owner") roots["second"] = new Owner();
+            if (fault == "alias") second.Current = new Value();
+            Assert.ThrowsExactly<InvalidOperationException>(() => apply()); Assert.AreEqual(0, first.Counter);
+            second.Vector.X = 0; roots["second"] = second; second.Current = null;
+            Assert.ThrowsExactly<InvalidOperationException>(() => apply()); Assert.AreEqual(0, first.Counter);
+        }
     }
 
     [TestMethod]

@@ -37,6 +37,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                 JsonConvert.SerializeObject(new { ordinal, source, target, movie, native, phase, detail,
                     elapsedMilliseconds = elapsed.ElapsedMilliseconds, completeStateCoverage = false }) + "\n");
             Progress("begin", new { movieInputNativeOrigin, controlledNativeFrame = checked(native - movieInputNativeOrigin) });
+            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates); }
+            catch (Exception error) {
+                Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
+                throw;
+            }
+            CanonicalDataPreservationGuard preservation;
+            try { preservation = carry.PrepareDataPreservationGuard(); }
+            catch (Exception error) {
+                Progress("D-preservation-preparation-rejected", new { type = error.GetType().FullName, detail = error.Message });
+                throw;
+            }
             var destroyed = pools.Reset();
             Progress("R1-pools-rebuilt", new { destroyed });
             var stopped = CanonicalBoundaryVisualPolicy.Reset(visualTemplates);
@@ -55,6 +66,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("R6-FSM-execution-stack-reset", new { });
             var metadataAudit = CanonicalBoundaryStaticPolicy.ResetActionMetadata();
             Progress("R6-action-metadata-caches-reset", metadataAudit);
+            Progress("R6-SDK-device-type-table-reset", CanonicalBoundaryInputTablePolicy.Reset());
+            try { preservation.Verify(); }
+            catch (Exception error) {
+                Progress("D-preservation-readback-rejected", new { type = error.GetType().FullName, detail = error.Message });
+                throw;
+            }
+            Progress("D-gameplay-preserved-by-Canon", new { playerData = true, sceneData = true, heroState = true,
+                heroScalarsPoseBodyAndHistory = true, fullNativeStateQualified = false });
             if (observer == null)
             {
                 observer = LoadingGameplayOracle.CreateBoundaryObserver(sessionDirectory, movieInputNativeOrigin);
@@ -75,11 +94,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("boundary-digest-captured", new { digest.FullSha256, roots = digest.Roots.Length, unsupported = digest.Unsupported.Length });
             if (digest.CanonicalWaitIssues.Length != 0)
                 throw new InvalidOperationException("Canonical scheduler registry is incomplete: " + string.Join(", ", digest.CanonicalWaitIssues));
-            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates); }
-            catch (Exception error) {
-                Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
-                throw;
-            }
             var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
             inputEpoch.RequireControlOrigin();
             CanonicalCarryGraphData candidate;
@@ -138,6 +152,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 detachedMappingPlayerCarried = Array.Exists(candidate.Roots, root => root.Binding == CanonicalSceneMappingCarry.DetachedPlayerRoot),
                 mousePrepared = carry.MousePrepared, mouseApplicationExecuted = false,
                 deviceManagersPrepared = carry.DeviceManagersPrepared, deviceManagerCount = carry.DeviceManagerCount, deviceManagerApplicationExecuted = false,
+                graphPairPrepared = carry.GraphPairPrepared, graphPairApplicationExecuted = false,
                 inputRoots = carry.InputGraph!.Roots.Length, inputNodes = carry.InputGraph.Nodes.Length,
                 inputUnsupported = carry.InputGraph.Unsupported, inputBytes = inputBytes.Length });
             if (ordinal == 1)

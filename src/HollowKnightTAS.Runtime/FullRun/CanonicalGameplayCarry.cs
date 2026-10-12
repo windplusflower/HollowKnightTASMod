@@ -24,6 +24,41 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static readonly Type[] DataTypes = { typeof(Data), typeof(ScalarOwner), typeof(ScalarOwner[]),
             typeof(Pose), typeof(Pose[]), typeof(string[]), typeof(Vector2[]), typeof(RigidbodyType2D) };
 
+        internal static IReadOnlyDictionary<string, string> CaptureHeroPreservationScalars()
+        {
+            Bind(out var hero, out var body);
+            var result = CheckpointScalarFields.Capture(hero, Scalars(typeof(HeroController)));
+            using var validation = new LoadingEngineClockProbe.CheckpointValidation();
+            var physics = new LoadingRigidbodyObservation();
+            var native = new HeroNativeValues { Position = hero.transform.localPosition, Rotation = hero.transform.localRotation,
+                Scale = hero.transform.localScale, BodyType = body.bodyType, Velocity = physics.CaptureCheckpointVelocity(body),
+                Gravity = body.gravityScale, Simulated = body.simulated };
+            foreach (var item in CheckpointScalarFields.Capture(native, CheckpointScalarFields.Declared(typeof(HeroNativeValues)))) result.Add(item.Key, item.Value);
+            var history = History.GetValue(hero) as Vector2[];
+            if (history?.Length > 1024) throw new InvalidDataException("Hero preservation history bound exceeded.");
+            result.Add("HeroHistory/length", history == null ? "null" : history.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (history != null)
+                for (var index = 0; index < history.Length; index++) {
+                    result.Add("HeroHistory/" + index + "/x", BitConverter.ToUInt32(BitConverter.GetBytes(history[index].x), 0).ToString("x8"));
+                    result.Add("HeroHistory/" + index + "/y", BitConverter.ToUInt32(BitConverter.GetBytes(history[index].y), 0).ToString("x8"));
+                }
+            return result;
+        }
+        internal static object[] HeroPreservationOwners()
+        {
+            Bind(out var hero, out var body);
+            return new[] { (object)hero, body, hero.transform, History.GetValue(hero) ?? DBNull.Value };
+        }
+        private sealed class HeroNativeValues
+        {
+            public Vector3 Position, Scale;
+            public Quaternion Rotation;
+            public RigidbodyType2D BodyType;
+            public Vector2 Velocity;
+            public float Gravity;
+            public bool Simulated;
+        }
+
         // Own DTO layouts participate in the graph schema, independently of
         // the frozen original assembly field registry.
         internal static string SchemaIdentity => string.Join("\n", DataTypes.OrderBy(CanonicalCarryGraphCodec.Identity, StringComparer.Ordinal)

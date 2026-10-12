@@ -45,10 +45,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidOperationException("Canonical HeroLight has an unregistered visual state: " + light.ActiveStateName);
                     light.SendEvent("FINISHED");
                 }
-                var idle = light.FsmVariables.FindFsmVector3("Idle Scale")
-                    ?? throw new InvalidOperationException("Canonical HeroLight Idle Scale binding differs.");
-                light.transform.localScale = idle.Value;
                 templates.ResetLight(light);
+                // Read the fresh original configuration, not the outgoing
+                // runtime variable table. Otherwise the transform can retain
+                // a history-dependent value after its FSM was canonicalized.
+                var idle = light.FsmVariables.FindFsmVector3("Idle Scale")
+                    ?? throw new InvalidOperationException("Canonical HeroLight fresh Idle Scale binding differs.");
+                light.transform.localScale = idle.Value;
                 var colors = hero.GetComponentsInChildren<PlayMakerFSM>(true).Where(component => component.gameObject == light.gameObject
                     && fsmField.GetValue(component) is HutongGames.PlayMaker.Fsm fsm && fsm.Name == "color_fader").ToArray();
                 if (colors.Length != 1) throw new InvalidOperationException("Canonical HeroLight color_fader binding differs.");

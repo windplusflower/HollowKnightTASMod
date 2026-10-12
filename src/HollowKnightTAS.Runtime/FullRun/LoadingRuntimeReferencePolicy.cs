@@ -12,6 +12,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Array.Assembly follows its element type; the container still has
             // observable length/order/content and must be traversed.
             if (type.IsArray) return false;
+            // The SDK comparer is an explicitly registered zero-field S0
+            // value with a frozen algorithm; it is not an opaque controller.
+            if (type == typeof(CanonicalStableTypeComparer)) return false;
             // Copy-only native observations use compiler-generated anonymous
             // value records. Treating these as controllers discards their nested
             // data (GUIStyle states, material properties, component snapshots).

@@ -140,6 +140,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidDataException("Carry root must bind an existing managed reference.");
                 var id = Identity(pair.Value.GetType());
                 if (!layouts.ContainsKey(id)) throw new InvalidDataException("Carry root type is unregistered: " + id);
+                if (portability?.Invoke(pair.Value) is string rootIssue) unsupported.Add(pair.Key + ":" + rootIssue);
                 return new CanonicalCarryGraphData.Root { Binding = pair.Key, Node = AddNode(pair.Value, 0, pair.Key) };
             }).ToArray();
             if (rootData.Length == 0) throw new InvalidDataException("Carry roots are absent.");
@@ -175,6 +176,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         // Freeze the caller's data by a bounded canonical round trip, then
         // resolve every value before exposing a single live field write.
         internal Action PrepareApply(CanonicalCarryGraphData input, IReadOnlyDictionary<string, object> roots,
+            Func<string, object> resolveExternal, Action<PreparedView>? preflight = null)
+            => PrepareGraph(input, roots, resolveExternal, preflight).Apply;
+
+        internal CanonicalPreparedWritePlan PrepareGraph(CanonicalCarryGraphData input, IReadOnlyDictionary<string, object> roots,
             Func<string, object> resolveExternal, Action<PreparedView>? preflight = null)
         {
             var value = Decode(Encode(input));
@@ -343,13 +348,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || !ReferenceEquals(pair.Value, current))) throw new InvalidOperationException("Carry prepared root owners changed.");
                 foreach (var check in beforeChecks) check();
             }
-            Guard(); var consumed = false;
-            return () => {
-                if (consumed) throw new InvalidOperationException("Carry graph preparation was already consumed.");
-                Guard(); consumed = true;
-                foreach (var write in writes) write();
-                foreach (var check in afterChecks) check();
-            };
+            Guard();
+            return new CanonicalPreparedWritePlan(Guard, () => { foreach (var write in writes) write(); },
+                () => { foreach (var check in afterChecks) check(); }, rootOwners.Values.ToArray());
         }
 
         // Declared reference slots retain identity; value slots compare every

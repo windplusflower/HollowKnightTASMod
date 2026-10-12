@@ -16,6 +16,10 @@
     <Reference Include="Newtonsoft.Json"><HintPath>$(HKManagedDir)\Newtonsoft.Json.dll</HintPath></Reference>
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CheckpointDataCodec.cs" Link="FullRun\CheckpointDataCodec.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryGraphCodec.cs" Link="FullRun\CanonicalCarryGraphCodec.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalPreparedWritePlan.cs" Link="FullRun\CanonicalPreparedWritePlan.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryPairPreparation.cs" Link="FullRun\CanonicalCarryPairPreparation.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalStableTypeComparer.cs" Link="FullRun\CanonicalStableTypeComparer.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalDataPreservationGuard.cs" Link="FullRun\CanonicalDataPreservationGuard.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryGraphWire.cs" Link="FullRun\CanonicalCarryGraphWire.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalEventGraphContract.cs" Link="FullRun\CanonicalEventGraphContract.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSlotBindingCatalog.cs" Link="FullRun\CanonicalSlotBindingCatalog.cs" />

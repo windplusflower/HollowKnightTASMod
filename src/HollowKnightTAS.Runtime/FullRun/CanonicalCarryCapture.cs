@@ -42,10 +42,25 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal bool MousePrepared { get; private set; }
         internal bool DeviceManagersPrepared { get; private set; }
         internal int DeviceManagerCount { get; private set; }
+        internal bool GraphPairPrepared { get; private set; }
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
             ?? throw new InvalidDataException("Carry field binding is absent: " + type.FullName + "/" + name);
+        internal CanonicalDataPreservationGuard PrepareDataPreservationGuard()
+        {
+            IReadOnlyDictionary<string, object> Roots()
+            {
+                var hero = HeroController.SilentInstance ?? throw new InvalidDataException("Protected Hero is absent.");
+                var manager = GameManager.instance ?? throw new InvalidDataException("Protected GameManager is absent.");
+                var player = PlayerData.instance;
+                if (player == null || hero.cState == null || manager.sceneData == null || !ReferenceEquals(hero.playerData, player)
+                    || !ReferenceEquals(manager.playerData, player)) throw new InvalidDataException("Protected gameplay data aliases differ.");
+                return new SortedDictionary<string, object>(StringComparer.Ordinal) {
+                    ["PlayerData"] = player, ["SceneData"] = manager.sceneData, ["D/HeroControllerStates"] = hero.cState };
+            }
+            return new CanonicalDataPreservationGuard(codec, Roots, CanonicalGameplayCarry.CaptureHeroPreservationScalars, CanonicalGameplayCarry.HeroPreservationOwners);
+        }
 
         internal CanonicalCarryGraphData Capture(BoundaryObjectIdentity identities, CanonicalInputEpoch inputEpoch,
             HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse,
@@ -57,6 +72,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             SceneMappingPrepared = false; SceneMappingCallbacks = 0;
             MousePrepared = false;
             DeviceManagersPrepared = false; DeviceManagerCount = 0;
+            GraphPairPrepared = false;
             var hero = HeroController.SilentInstance ?? throw new InvalidDataException("Carry Hero is absent.");
             var manager = GameManager.instance ?? throw new InvalidDataException("Carry GameManager is absent.");
             var player = PlayerData.instance;
@@ -113,8 +129,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             var inputExternal = new ExternalBindings(identities, assetTemplates, canonicalSenders, mainBindings);
             InputGraph = inputCodec.Capture(inputRoots, inputExternal.Bind);
             var sourceEpoch = inputEpoch.Copy();
+            CanonicalPreparedWritePlan? mainPlan = null, inputPlan = null;
             if (result.Unsupported.Length == 0)
-                codec.PrepareApply(result, roots, bindings.ResolveCaptured, view => {
+                mainPlan = codec.PrepareGraph(result, roots, bindings.ResolveCaptured, view => {
                     var source = CanonicalCarryContinuationContract.Read(view);
                     inputEpoch.RequireReadback(source.Epoch, inputEpoch.SourceNative);
                     CanonicalSchedulerRestorePlan.Prepare(source.Scheduler, scheduler);
@@ -135,7 +152,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             // consumer audit. Never execute the returned application here.
             // Qualification records are appended below and remain blocking.
             if (InputGraph.Unsupported.Length == 0)
-                inputCodec.PrepareApply(InputGraph, inputRoots, inputExternal.ResolveCaptured, view => {
+                inputPlan = inputCodec.PrepareGraph(InputGraph, inputRoots, inputExternal.ResolveCaptured, view => {
                     InputPreparedLeaseActions = input.ValidateCanonicalSourceBindings(view, inputRoots);
                     InputPreparedCursor = input.PrepareCanonicalCursorAudit(view);
                     var managerSource = CanonicalInputManagerScalars.FromPrepared(view);
@@ -153,6 +170,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             guardEventSlots(); EventStaticSlotsGuarded = true;
             sceneMapping.Guard();
             deviceManagers.Guard();
+            if (mainPlan != null && inputPlan != null) {
+                var pair = new CanonicalCarryPairPreparation(mainPlan, inputPlan, () => {
+                    guardInputSlots(); guardEventSlots(); sceneMapping.Guard(); deviceManagers.Guard();
+                }, () => false); // Source-only audit has no restore admission.
+                pair.Guard(); GraphPairPrepared = true;
+            }
             InputGraph.Unsupported = InputGraph.Unsupported.Concat(InputCarryAudit.Unsupported).OrderBy(value => value, StringComparer.Ordinal).ToArray();
             InputGraph.Unsupported = InputGraph.Unsupported.Concat(new[] { "R6/InputTAS-lease-and-original-bindings-rebinding-unqualified" }).ToArray();
             EventGraphAudit = CanonicalEventCarryRoots.ValidateGraph(result);

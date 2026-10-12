@@ -40,5 +40,13 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         }
 
         private sealed class Controller { public int Value; }
+        [TestMethod]
+        public void RegisteredSdkComparerIsObservedAsItsExplicitZeroFieldValueContract()
+        {
+            Assert.IsFalse(LoadingRuntimeReferencePolicy.IsOpaqueController(typeof(CanonicalStableTypeComparer), typeof(CanonicalStableTypeComparer).Assembly));
+            using var digest = Observer();
+            var snapshot = digest.Capture(new { comparer = CanonicalStableTypeComparer.Instance }, "sdk-table", expandRoot: true);
+            Assert.AreEqual(0, snapshot.Unsupported.Count);
+        }
     }
 }
