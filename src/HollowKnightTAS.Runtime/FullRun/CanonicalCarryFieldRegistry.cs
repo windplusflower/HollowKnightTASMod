@@ -120,6 +120,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     + "\n" + string.Join("\n", CanonicalDeviceManagerCarry.DataTypes.Where(type => !type.IsArray).Select(type =>
                         CanonicalCarryGraphCodec.Identity(type) + ":" + string.Join(";", CanonicalCarryGraphCodec.Fields(type)
                             .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType)))))
+                    + "\n" + CanonicalInputProfileContract.SchemaIdentity
                     + "\n" + CanonicalInputManagerScalars.SchemaIdentity + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalInputAdapterState))
                         .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType))) + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalInputEpoch))
                         .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType))))))

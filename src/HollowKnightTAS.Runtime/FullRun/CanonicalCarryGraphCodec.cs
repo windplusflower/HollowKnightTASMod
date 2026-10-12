@@ -204,7 +204,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var root in value.Roots)
             {
                 if (root.Node < 1 || root.Node > objects.Length || roots[root.Binding] == null
-                    || roots[root.Binding].GetType() != nodeTypes[root.Node - 1] || nodeTypes[root.Node - 1].IsValueType)
+                    || roots[root.Binding].GetType() != nodeTypes[root.Node - 1] || nodeTypes[root.Node - 1].IsValueType
+                    || nodeTypes[root.Node - 1].IsArray)
                     throw new InvalidDataException("Carry live root binding differs: " + root.Binding);
                 var owner = roots[root.Binding];
                 if (objects[root.Node - 1] != null && !ReferenceEquals(objects[root.Node - 1], owner)
@@ -278,6 +279,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Fill detached nodes first. Value-type nodes must be filled before
             // their parent copies the boxed struct into a field or array.
             var status = new byte[objects.Length]; var writes = new List<Action>();
+            var beforeChecks = new List<Action>(); var afterChecks = new List<Action>();
+            var rootOwners = roots.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            void CheckSlot(object? expectedValue, object? currentValue, Type declared, string name)
+            {
+                if (!SameRawSlot(expectedValue, currentValue, declared, 0))
+                    throw new InvalidOperationException("Carry prepared live slot changed or readback differs: " + name);
+            }
             var preparedFields = preflight == null ? null : new object?[objects.Length][];
             void Fill(int index, int depth)
             {
@@ -297,6 +305,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 else if (node.Kind == "array")
                 {
                     var array = (Array)owner; var element = nodeTypes[index].GetElementType()!;
+                    // Capture and import both prohibit arrays as live roots.
+                    // Every array here is detached until its owning field is
+                    // applied; preparation cannot mutate an existing array.
                     for (var i = 0; i < node.Items!.Length; i++) array.SetValue(Prepared(node.Items[i], element), i);
                 }
                 else
@@ -307,7 +318,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                     {
                         var field = layout.Fields[i]; var fieldValue = Prepared(node.Fields![i].Value, field.FieldType);
                         if (preparedFields != null) preparedFields[index][i] = fieldValue;
-                        if (boundNodes.Contains(index + 1)) writes.Add(() => field.SetValue(owner, fieldValue));
+                        if (boundNodes.Contains(index + 1)) {
+                            var previous = field.GetValue(owner);
+                            beforeChecks.Add(() => CheckSlot(previous, field.GetValue(owner), field.FieldType, FieldIdentity(field)));
+                            writes.Add(() => field.SetValue(owner, fieldValue));
+                            afterChecks.Add(() => CheckSlot(fieldValue, field.GetValue(owner), field.FieldType, FieldIdentity(field)));
+                        }
                         else field.SetValue(owner, fieldValue);
                     }
                 }
@@ -321,7 +337,32 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Carry graph contains unreachable nodes or bindings.");
             if (preflight != null) preflight(new PreparedView(roots, objects, preparedFields!, nodeTypes.Select(type =>
                 layouts.TryGetValue(Identity(type), out var layout) ? layout.Fields : Array.Empty<FieldInfo>()).ToArray()));
-            return () => { foreach (var write in writes) write(); };
+            void Guard()
+            {
+                if (roots.Count != rootOwners.Count || rootOwners.Any(pair => !roots.TryGetValue(pair.Key, out var current)
+                    || !ReferenceEquals(pair.Value, current))) throw new InvalidOperationException("Carry prepared root owners changed.");
+                foreach (var check in beforeChecks) check();
+            }
+            Guard(); var consumed = false;
+            return () => {
+                if (consumed) throw new InvalidOperationException("Carry graph preparation was already consumed.");
+                Guard(); consumed = true;
+                foreach (var write in writes) write();
+                foreach (var check in afterChecks) check();
+            };
+        }
+
+        // Declared reference slots retain identity; value slots compare every
+        // frozen raw field and scalar bit, never user Equals or a property.
+        private bool SameRawSlot(object? expected, object? current, Type declared, int depth)
+        {
+            if (!declared.IsValueType) return ReferenceEquals(expected, current);
+            if (expected == null || current == null) return expected == null && current == null;
+            if (depth > 128 || expected.GetType() != current.GetType()) return false;
+            var type = Nullable.GetUnderlyingType(declared) ?? declared;
+            if (IsScalar(type)) return EncodeScalar(expected, type) == EncodeScalar(current, type);
+            if (!layouts.TryGetValue(Identity(type), out var layout)) throw new InvalidDataException("Carry stale-check value layout is absent.");
+            return layout.Fields.All(field => SameRawSlot(field.GetValue(expected), field.GetValue(current), field.FieldType, depth + 1));
         }
 
         // Reads decoded field values, including proposed fields of existing

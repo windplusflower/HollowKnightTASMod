@@ -53,14 +53,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var systemProfiles = Count<InputDeviceProfile>(type, "systemDeviceProfiles", out var profiles);
                 var customProfiles = Count<InputDeviceProfile>(type, "customDeviceProfiles", out _);
                 var profileOwners = profiles.ToArray();
+                var profileValues = CanonicalInputProfileContract.Capture(profiles, out var configurationOwners);
                 ownerChecks.Add(() => { if (profiles.Count != profileOwners.Length || profiles.Where((item, ordinal) => !ReferenceEquals(item, profileOwners[ordinal])).Any())
-                    throw new InvalidOperationException("SDK manager system profile order or identity changed."); });
+                    throw new InvalidOperationException("SDK manager system profile order or identity changed.");
+                    if (!CanonicalInputProfileContract.Capture(profiles, out var currentOwners).SequenceEqual(profileValues)
+                        || currentOwners.Length != configurationOwners.Length
+                        || currentOwners.Where((owner, ordinal) => !ReferenceEquals(owner, configurationOwners[ordinal])).Any())
+                        throw new InvalidOperationException("SDK manager system profile raw configuration or nested owner changed."); });
                 var eventsField = Field(type, "deviceEvents", Instance);
                 var events = eventsField.GetValue(manager) as uint[] ?? throw new InvalidDataException("SDK manager managed event buffer is absent.");
                 eventBuffers.Add(Tuple.Create<object, FieldInfo, uint[]>(manager, eventsField, events));
                 records.Add(new CanonicalDeviceManagerCarry.Manager { Order = index, Type = type.FullName!, ModuleMvid = type.Module.ModuleVersionId.ToString("D"),
                     RegisteredDevices = registered, AttachedDevices = attached, DetachedDevices = detached, SystemProfiles = systemProfiles,
-                    CustomProfiles = customProfiles, NativeEvents = (uint[])events.Clone() });
+                    CustomProfiles = customProfiles, NativeEvents = (uint[])events.Clone(), SystemProfileContract = Convert.ToBase64String(profileValues) });
             }
             Data = CanonicalDeviceManagerCarry.Copy(new CanonicalDeviceManagerCarry.Data { Managers = records.ToArray() });
             preparation = CanonicalDeviceManagerCarry.Copy(Data);
@@ -84,10 +89,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal Action PrepareApply(CanonicalDeviceManagerCarry.Data source)
         {
             var saved = CanonicalDeviceManagerCarry.Copy(source);
-            if (saved.Managers.Length != managers.Length || saved.Managers.Where((item, index) => item.Type != preparation.Managers[index].Type
-                || item.ModuleMvid != preparation.Managers[index].ModuleMvid || item.SystemProfiles != preparation.Managers[index].SystemProfiles
-                || item.NativeEvents.Length != eventBuffers[index].Item3.Length).Any())
-                throw new InvalidDataException("Saved SDK manager registration/configuration differs.");
+            CanonicalDeviceManagerCarry.RequireSameConfiguration(saved, preparation);
             Guard(); var consumed = false;
             return () => {
                 if (consumed) throw new InvalidOperationException("SDK manager managed buffer preparation was already consumed.");

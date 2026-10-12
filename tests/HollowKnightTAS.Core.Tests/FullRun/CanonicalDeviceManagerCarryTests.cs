@@ -12,7 +12,7 @@ public sealed class CanonicalDeviceManagerCarryTests
     private static CanonicalDeviceManagerCarry.Data Source() => new() { Managers = new[] { new CanonicalDeviceManagerCarry.Manager {
         Order = 0, ModuleMvid = CanonicalSceneMappingCarry.ModuleMvid, Type = "InControl.NativeInputDeviceManager",
         RegisteredDevices = 0, AttachedDevices = 0, DetachedDevices = 0, SystemProfiles = 100, CustomProfiles = 0,
-        NativeEvents = new uint[] { 0, 0, uint.MaxValue, 123 } } } };
+        NativeEvents = new uint[] { 0, 0, uint.MaxValue, 123 }, SystemProfileContract = Convert.ToBase64String(new byte[] { 70, 67, 80, 49, 0, 0, 0, 0 }) } } };
     [TestMethod]
     public void Zero_devices_preserve_the_actual_native_manager_and_its_full_managed_event_buffer()
     {
@@ -26,6 +26,18 @@ public sealed class CanonicalDeviceManagerCarryTests
         source.Managers[0].NativeEvents[3] = 999; Assert.AreEqual(123u, saved.Managers[0].NativeEvents[3]);
     }
     [TestMethod]
+    public void Full_configuration_mismatch_is_rejected_even_when_counts_and_manager_types_match()
+    {
+        var source = Source(); var target = Source();
+        CanonicalDeviceManagerCarry.RequireSameConfiguration(source, target);
+        source.Managers[0].NativeEvents[0] = 777; // This is mutable carry, not configuration.
+        CanonicalDeviceManagerCarry.RequireSameConfiguration(source, target);
+        source.Managers[0].SystemProfileContract = Convert.ToBase64String(new byte[] { 70, 67, 80, 49, 0, 0, 0, 1 });
+        Assert.ThrowsExactly<InvalidDataException>(() => CanonicalDeviceManagerCarry.RequireSameConfiguration(source, target));
+        Assert.AreEqual(Source().Managers[0].SystemProfileContract, target.Managers[0].SystemProfileContract);
+        Assert.AreEqual(0u, target.Managers[0].NativeEvents[0]);
+    }
+    [TestMethod]
     [DataRow("type")]
     [DataRow("mvid")]
     [DataRow("order")]
@@ -33,6 +45,9 @@ public sealed class CanonicalDeviceManagerCarryTests
     [DataRow("detached")]
     [DataRow("custom-profile")]
     [DataRow("buffer-bound")]
+    [DataRow("profile-encoding")]
+    [DataRow("profile-whitespace")]
+    [DataRow("profile-bound")]
     public void Unregistered_hardware_owner_or_layout_remains_fail_closed(string fault)
     {
         var source = Source(); var item = source.Managers[0];
@@ -43,6 +58,9 @@ public sealed class CanonicalDeviceManagerCarryTests
         if (fault == "detached") item.DetachedDevices = 1;
         if (fault == "custom-profile") item.CustomProfiles = 1;
         if (fault == "buffer-bound") item.NativeEvents = new uint[4097];
+        if (fault == "profile-encoding") item.SystemProfileContract = "invalid-content";
+        if (fault == "profile-whitespace") item.SystemProfileContract += "\n";
+        if (fault == "profile-bound") item.SystemProfileContract = Convert.ToBase64String(new byte[1024 * 1024 + 1]);
         Assert.ThrowsExactly<InvalidDataException>(() => CanonicalDeviceManagerCarry.Copy(source));
     }
 }

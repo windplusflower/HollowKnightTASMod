@@ -1,0 +1,345 @@
+{
+  "version": 1,
+  "moduleMvid": "2b54cdaf-7a93-4f0e-b297-d50c4090ea9f",
+  "types": [
+    {
+      "name": "InControl.InputControlMapping",
+      "fields": [
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "ignoreInitialZeroValue",
+          "type": "System.Boolean"
+        },
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "invert",
+          "type": "System.Boolean"
+        },
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "lowerDeadZone",
+          "type": "System.Single"
+        },
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "name",
+          "type": "System.String"
+        },
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "passive",
+          "type": "System.Boolean"
+        },
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "raw",
+          "type": "System.Boolean"
+        },
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "scale",
+          "type": "System.Single"
+        },
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "sensitivity",
+          "type": "System.Single"
+        },
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "source",
+          "type": "InControl.InputControlSource"
+        },
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "sourceRange",
+          "type": "InControl.InputRangeType"
+        },
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "target",
+          "type": "InControl.InputControlType"
+        },
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "targetRange",
+          "type": "InControl.InputRangeType"
+        },
+        {
+          "owner": "InControl.InputControlMapping",
+          "name": "upperDeadZone",
+          "type": "System.Single"
+        }
+      ]
+    },
+    {
+      "name": "InControl.InputControlSource",
+      "fields": [
+        {
+          "owner": "InControl.InputControlSource",
+          "name": "index",
+          "type": "System.Int32"
+        },
+        {
+          "owner": "InControl.InputControlSource",
+          "name": "sourceType",
+          "type": "InControl.InputControlSourceType"
+        }
+      ]
+    },
+    {
+      "name": "InControl.InputDeviceMatcher",
+      "fields": [
+        {
+          "owner": "InControl.InputDeviceMatcher",
+          "name": "driverType",
+          "type": "InControl.OptionalInputDeviceDriverType"
+        },
+        {
+          "owner": "InControl.InputDeviceMatcher",
+          "name": "nameLiteral",
+          "type": "System.String"
+        },
+        {
+          "owner": "InControl.InputDeviceMatcher",
+          "name": "namePattern",
+          "type": "System.String"
+        },
+        {
+          "owner": "InControl.InputDeviceMatcher",
+          "name": "productID",
+          "type": "InControl.OptionalUInt16"
+        },
+        {
+          "owner": "InControl.InputDeviceMatcher",
+          "name": "transportType",
+          "type": "InControl.OptionalInputDeviceTransportType"
+        },
+        {
+          "owner": "InControl.InputDeviceMatcher",
+          "name": "vendorID",
+          "type": "InControl.OptionalUInt16"
+        },
+        {
+          "owner": "InControl.InputDeviceMatcher",
+          "name": "versionNumber",
+          "type": "InControl.OptionalUInt32"
+        }
+      ]
+    },
+    {
+      "name": "InControl.InputDeviceProfile",
+      "fields": [
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "analogMappings",
+          "type": "InControl.InputControlMapping[]"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "buttonMappings",
+          "type": "InControl.InputControlMapping[]"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "deviceClass",
+          "type": "InControl.InputDeviceClass"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "deviceName",
+          "type": "System.String"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "deviceNotes",
+          "type": "System.String"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "deviceStyle",
+          "type": "InControl.InputDeviceStyle"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "excludePlatforms",
+          "type": "System.String[]"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "includePlatforms",
+          "type": "System.String[]"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "lastResortMatchers",
+          "type": "InControl.InputDeviceMatcher[]"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "lowerDeadZone",
+          "type": "System.Single"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "matchers",
+          "type": "InControl.InputDeviceMatcher[]"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "maxSystemBuildNumber",
+          "type": "System.Int32"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "maxUnityVersion",
+          "type": "InControl.VersionInfo"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "minSystemBuildNumber",
+          "type": "System.Int32"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "minUnityVersion",
+          "type": "InControl.VersionInfo"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "profileType",
+          "type": "InControl.InputDeviceProfileType"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "sensitivity",
+          "type": "System.Single"
+        },
+        {
+          "owner": "InControl.InputDeviceProfile",
+          "name": "upperDeadZone",
+          "type": "System.Single"
+        }
+      ]
+    },
+    {
+      "name": "InControl.OptionalInputDeviceDriverType",
+      "fields": [
+        {
+          "owner": "InControl.OptionalInputDeviceDriverType",
+          "name": "hasValue",
+          "type": "System.Boolean"
+        },
+        {
+          "owner": "InControl.OptionalInputDeviceDriverType",
+          "name": "value",
+          "type": "InControl.InputDeviceDriverType"
+        }
+      ]
+    },
+    {
+      "name": "InControl.OptionalInputDeviceTransportType",
+      "fields": [
+        {
+          "owner": "InControl.OptionalInputDeviceTransportType",
+          "name": "hasValue",
+          "type": "System.Boolean"
+        },
+        {
+          "owner": "InControl.OptionalInputDeviceTransportType",
+          "name": "value",
+          "type": "InControl.InputDeviceTransportType"
+        }
+      ]
+    },
+    {
+      "name": "InControl.OptionalUInt16",
+      "fields": [
+        {
+          "owner": "InControl.OptionalUInt16",
+          "name": "hasValue",
+          "type": "System.Boolean"
+        },
+        {
+          "owner": "InControl.OptionalUInt16",
+          "name": "value",
+          "type": "System.UInt16"
+        }
+      ]
+    },
+    {
+      "name": "InControl.OptionalUInt32",
+      "fields": [
+        {
+          "owner": "InControl.OptionalUInt32",
+          "name": "hasValue",
+          "type": "System.Boolean"
+        },
+        {
+          "owner": "InControl.OptionalUInt32",
+          "name": "value",
+          "type": "System.UInt32"
+        }
+      ]
+    },
+    {
+      "name": "InControl.VersionInfo",
+      "fields": [
+        {
+          "owner": "InControl.VersionInfo",
+          "name": "build",
+          "type": "System.Int32"
+        },
+        {
+          "owner": "InControl.VersionInfo",
+          "name": "major",
+          "type": "System.Int32"
+        },
+        {
+          "owner": "InControl.VersionInfo",
+          "name": "minor",
+          "type": "System.Int32"
+        },
+        {
+          "owner": "InControl.VersionInfo",
+          "name": "patch",
+          "type": "System.Int32"
+        }
+      ]
+    }
+  ],
+  "enums": [
+    {
+      "name": "InControl.InputControlSourceType",
+      "underlying": "System.Int32"
+    },
+    {
+      "name": "InControl.InputControlType",
+      "underlying": "System.Int32"
+    },
+    {
+      "name": "InControl.InputRangeType",
+      "underlying": "System.Int32"
+    },
+    {
+      "name": "InControl.InputDeviceClass",
+      "underlying": "System.Int32"
+    },
+    {
+      "name": "InControl.InputDeviceDriverType",
+      "underlying": "System.UInt16"
+    },
+    {
+      "name": "InControl.InputDeviceProfileType",
+      "underlying": "System.Int32"
+    },
+    {
+      "name": "InControl.InputDeviceStyle",
+      "underlying": "System.Int32"
+    },
+    {
+      "name": "InControl.InputDeviceTransportType",
+      "underlying": "System.UInt16"
+    }
+  ]
+}

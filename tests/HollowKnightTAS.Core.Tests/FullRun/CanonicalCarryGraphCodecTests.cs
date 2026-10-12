@@ -18,6 +18,45 @@ public sealed class CanonicalCarryGraphCodecTests
     private static object NoBinding(string key) => throw new InvalidDataException("Unexpected external: " + key);
 
     [TestMethod]
+    public void Array_roots_are_rejected_symmetrically_by_capture_and_import_before_any_live_write()
+    {
+        var codec = new CanonicalCarryGraphCodec(new[] { typeof(ArrayOwner), typeof(int[]) }, "bound-array-v1");
+        var source = new[] { 17, 29 }; var target = new[] { -1, -2 };
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.Capture(Roots(("array", source)), NoExternal));
+        var graph = codec.Capture(Roots(("array", new ArrayOwner { Items = source })), NoExternal);
+        graph.Roots[0].Node = graph.Nodes.Single(node => node.Kind == "array").Id;
+        Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareApply(graph, Roots(("array", target)), NoBinding));
+        CollectionAssert.AreEqual(new[] { -1, -2 }, target);
+    }
+
+    [TestMethod]
+    public void Graph_application_is_single_use_and_retains_existing_array_identity_until_apply()
+    {
+        var codec = new CanonicalCarryGraphCodec(new[] { typeof(ArrayOwner), typeof(int[]) }, "array-owner-v1");
+        var graph = codec.Capture(Roots(("owner", new ArrayOwner { Items = new[] { 17, 29 } })), NoExternal);
+        var old = new[] { -1, -2 }; var target = new ArrayOwner { Items = old };
+        var apply = codec.PrepareApply(graph, Roots(("owner", target)), NoBinding);
+        Assert.AreSame(old, target.Items); CollectionAssert.AreEqual(new[] { -1, -2 }, old);
+        apply(); CollectionAssert.AreEqual(new[] { 17, 29 }, target.Items);
+        target.Items[0] = 77; Assert.ThrowsExactly<InvalidOperationException>(() => apply()); Assert.AreEqual(77, target.Items[0]);
+    }
+    private sealed class ArrayOwner { public int[] Items = Array.Empty<int>(); }
+
+    [TestMethod]
+    public void Changed_scalar_bits_reference_aliases_or_root_membership_reject_the_whole_prepared_graph()
+    {
+        var codec = Codec(); var source = new Owner { Counter = 17 }; var first = new Owner(); var second = new Owner();
+        var graph = codec.Capture(Roots(("first", source), ("second", new Owner())), NoExternal);
+        var roots = Roots(("first", first), ("second", second)); var apply = codec.PrepareApply(graph, roots, NoBinding);
+        second.Vector.X = BitConverter.Int32BitsToSingle(unchecked((int)0x80000000));
+        Assert.ThrowsExactly<InvalidOperationException>(() => apply()); Assert.AreEqual(0, first.Counter);
+        second.Vector.X = 0; roots["second"] = new Owner();
+        Assert.ThrowsExactly<InvalidOperationException>(() => apply()); Assert.AreEqual(0, first.Counter);
+        roots["second"] = second; second.Current = new Value();
+        Assert.ThrowsExactly<InvalidOperationException>(() => apply()); Assert.AreEqual(0, first.Counter);
+    }
+
+    [TestMethod]
     public void Consumer_preflight_reads_source_fields_and_target_aliases_before_any_live_write()
     {
         var source = new Owner { Counter = 17, Current = new Value { Number = 29 } };
