@@ -217,7 +217,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         internal static bool ObserveNativeBoundary(long movie, long native, string? sessionDirectory = null, long? movieInputNativeOrigin = null,
-            CanonicalInputEpoch? inputControlOrigin = null, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter? input = null)
+            CanonicalInputEpoch? inputControlOrigin = null, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter? input = null,
+            HollowKnightTAS.Runtime.Input.FullRunMouseBridge? mouse = null)
         {
             var self = instance;
             if (self?.failure != null) throw new InvalidOperationException(self.failure);
@@ -231,7 +232,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 sessionDirectory ?? throw new InvalidOperationException("Canonical boundary needs its protected Runtime session binding."),
                 movieInputNativeOrigin ?? throw new InvalidOperationException("Canonical boundary requires the actual StartInputAt frame origin."),
                 inputControlOrigin ?? throw new InvalidOperationException("Canonical boundary requires the actual input tick/scheduler origin."),
-                input ?? throw new InvalidOperationException("Canonical boundary requires its actual input adapter."));
+                input ?? throw new InvalidOperationException("Canonical boundary requires its actual input adapter."),
+                mouse ?? throw new InvalidOperationException("Canonical boundary requires its actual mouse bridge."));
             self.Inventory("native-empty-boundary", movie, native);
             LoadingBoundaryInventory.Capture(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native);
             self.observedBoundary = true;

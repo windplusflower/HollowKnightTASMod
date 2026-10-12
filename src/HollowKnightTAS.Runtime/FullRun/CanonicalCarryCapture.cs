@@ -39,18 +39,21 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal bool InvulnerabilityPrepared { get; private set; }
         internal bool SceneMappingPrepared { get; private set; }
         internal int SceneMappingCallbacks { get; private set; }
+        internal bool MousePrepared { get; private set; }
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
             ?? throw new InvalidDataException("Carry field binding is absent: " + type.FullName + "/" + name);
 
         internal CanonicalCarryGraphData Capture(BoundaryObjectIdentity identities, CanonicalInputEpoch inputEpoch,
-            HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, CanonicalSchedulerCarry scheduler, CheckpointHeroInvulnerability invulnerability)
+            HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse,
+            CanonicalSchedulerCarry scheduler, CheckpointHeroInvulnerability invulnerability)
         {
             InputPreparedLeaseActions = 0; InputPreparedCursor = false; InputPreparedManagerScalars = false; InputPreparedCallbacks = false;
             SceneLoadScalarsPrepared = false; MainGraphPrepared = false; GameplayPrepared = false; EventStaticSlotsGuarded = false;
             InvulnerabilityPrepared = false;
             SceneMappingPrepared = false; SceneMappingCallbacks = 0;
+            MousePrepared = false;
             var hero = HeroController.SilentInstance ?? throw new InvalidDataException("Carry Hero is absent.");
             var manager = GameManager.instance ?? throw new InvalidDataException("Carry GameManager is absent.");
             var player = PlayerData.instance;
@@ -81,6 +84,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var inputRoots = new SortedDictionary<string, object>(StringComparer.Ordinal);
             InputCarryAudit = CanonicalInputCarryRoots.Add(inputRoots);
             input.AddCanonicalSourceRoots(inputRoots);
+            mouse.AddCanonicalRoots(inputRoots);
             foreach (var pair in CanonicalHeroFsmBindings.Snapshot(identities))
             {
                 var fsm = (Fsm)RawFsm.GetValue(pair.Value);
@@ -134,6 +138,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     InputPreparedManagerScalars = true;
                     CanonicalInputCallbackContract.RequireSame(CanonicalInputCallbackContract.FromPrepared(view), InputCarryAudit.CallbackData);
                     InputPreparedCallbacks = true;
+                    mouse.PrepareCanonicalContinuation(CanonicalMouseCarry.FromPrepared(view));
+                    MousePrepared = true;
                 });
             guardInputSlots();
             guardEventSlots(); EventStaticSlotsGuarded = true;

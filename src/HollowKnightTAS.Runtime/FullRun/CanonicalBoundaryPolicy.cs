@@ -23,7 +23,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal bool AdvanceStartup() => startup.Advance();
 
         internal void Apply(int ordinal, string source, string target, long movie, long native, string sessionDirectory, long movieInputNativeOrigin,
-            CanonicalInputEpoch inputControlOrigin, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input)
+            CanonicalInputEpoch inputControlOrigin, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse)
         {
             if (movieInputNativeOrigin < 0 || native < movieInputNativeOrigin || observerInputOrigin.HasValue && observerInputOrigin.Value != movieInputNativeOrigin)
                 throw new InvalidOperationException("Canonical boundary input frame origin is absent, changed or ahead of the native cursor.");
@@ -83,7 +83,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
             inputEpoch.RequireControlOrigin();
             CanonicalCarryGraphData candidate;
-            try { candidate = carry.Capture(identities, inputEpoch, input, observer.BoundarySchedulerCarry(inputEpoch), observer.BoundaryHeroInvulnerabilityCarry(inputEpoch)); }
+            try { candidate = carry.Capture(identities, inputEpoch, input, mouse, observer.BoundarySchedulerCarry(inputEpoch), observer.BoundaryHeroInvulnerabilityCarry(inputEpoch)); }
             catch (Exception error) {
                 Progress("D-candidate-data-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
@@ -136,6 +136,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 invulnerabilityPrepared = carry.InvulnerabilityPrepared, invulnerabilityApplicationExecuted = false,
                 sceneMappingPrepared = carry.SceneMappingPrepared, sceneMappingCallbacks = carry.SceneMappingCallbacks, sceneMappingApplicationExecuted = false,
                 detachedMappingPlayerCarried = Array.Exists(candidate.Roots, root => root.Binding == CanonicalSceneMappingCarry.DetachedPlayerRoot),
+                mousePrepared = carry.MousePrepared, mouseApplicationExecuted = false,
                 inputRoots = carry.InputGraph!.Roots.Length, inputNodes = carry.InputGraph.Nodes.Length,
                 inputUnsupported = carry.InputGraph.Unsupported, inputBytes = inputBytes.Length });
             if (ordinal == 1)

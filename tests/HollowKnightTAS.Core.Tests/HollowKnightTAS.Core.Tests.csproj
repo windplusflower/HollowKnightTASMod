@@ -33,6 +33,8 @@
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryContinuationContract.cs" Link="FullRun\CanonicalCarryContinuationContract.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalClockCarry.cs" Link="FullRun\CanonicalClockCarry.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSceneMappingCarry.cs" Link="FullRun\CanonicalSceneMappingCarry.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalMouseCarry.cs" Link="FullRun\CanonicalMouseCarry.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\Input\CheckpointMouseState.cs" Link="FullRun\CheckpointMouseState.cs" />
     <EmbeddedResource Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryLoadingFieldRegistry.json" LogicalName="canonical-scene-loading-fields.json" />
     <EmbeddedResource Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryFieldRegistry.json" LogicalName="canonical-main-fields.json" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCoverageCatalog.cs" Link="FullRun\CanonicalCoverageCatalog.cs" />
