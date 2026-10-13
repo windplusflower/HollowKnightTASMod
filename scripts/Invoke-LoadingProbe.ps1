@@ -33,6 +33,8 @@ param(
     [switch] $CanonicalPhaseOneTrace,
     [string] $S0ObservationTarget = '',
     [ValidateRange(1,4)][int] $S0ObservationSlot = 1,
+    [switch] $ClockCarryExperiment,
+    [string] $ClockApplySource = '',
     [switch] $BoundaryInventory,
     [switch] $OnlyTasMods,
     [switch] $ExportVideo,
@@ -44,6 +46,8 @@ param(
     [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
 )
 $ErrorActionPreference = 'Stop'
+if ($ClockCarryExperiment -and (-not $CanonicalPhaseOneTrace -or (-not $RecordInputs -and -not $S0ObservationTarget))) { throw 'Clock experiment requires a protected source recording or zero-Movie target.' }
+if ($ClockApplySource -and (-not $ClockCarryExperiment -or -not $S0ObservationTarget -or -not (Test-Path -LiteralPath $ClockApplySource -PathType Leaf))) { throw 'Clock D application requires the bounded source and protected zero-Movie target.' }
 if ($S0ObservationTarget -and (-not $CanonicalPhaseOneTrace -or $RecordInputs -or $CheckpointPrototype -or $ExportVideo)) {
     throw 'S0 observation requires a protected Phase 1 trace without recording, checkpoints or video.'
 }
@@ -312,6 +316,8 @@ try {
         if ($CanonicalBoundary) { $arguments += '--probe-canonical-boundary' }
         if ($CanonicalPhaseOneTrace) { $arguments += '--probe-canonical-phase1-trace' }
         if ($S0ObservationTarget) { $arguments += ('--probe-s0-target={0}' -f $S0ObservationTarget); $arguments += ('--probe-s0-slot={0}' -f $S0ObservationSlot) }
+        if ($ClockCarryExperiment) { $arguments += '--probe-clock-carry-experiment' }
+        if ($ClockApplySource) { $arguments += ('--probe-clock-apply-source={0}' -f [IO.Path]::GetFullPath($ClockApplySource)) }
         if ($BoundaryInventory) { $arguments += '--probe-boundary-inventory' }
         if ($ExportVideo) { $arguments += '--probe-export-video' }
         if ($CheckpointPrototype) { $arguments += '--checkpoint-prototype' }

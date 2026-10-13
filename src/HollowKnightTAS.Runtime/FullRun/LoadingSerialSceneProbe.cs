@@ -284,8 +284,19 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static Tuple<int, GameManager.SceneLoadInfo, string> GetCheckpointBoundary()
         {
             CanonicalPhaseOneTrace.RequireCheckpointAllowed(CanonicalPhaseOneTrace.Enabled);
+            return RequireActiveUnloadedBoundary();
+        }
+        internal static Tuple<int, GameManager.SceneLoadInfo, string> GetProtectedObservationBoundary()
+        {
+            CanonicalPhaseOneTrace.RequireContext(Environment.GetEnvironmentVariable);
+            if (!CanonicalPhaseOneTrace.Enabled || Environment.GetEnvironmentVariable("HKTAS_LOADING_S0_OBSERVING") != "1")
+                throw new InvalidOperationException("Protected S0 boundary identity is unavailable.");
+            return RequireActiveUnloadedBoundary();
+        }
+        private static Tuple<int, GameManager.SceneLoadInfo, string> RequireActiveUnloadedBoundary()
+        {
             var self = instance;
-            if (self == null || !self.observedBoundary || self.source.isLoaded || self.transition == null || self.checkpointLoadInfo == null)
+            if (self == null || !self.awaitingBoundary || !self.observedBoundary || self.source.isLoaded || self.transition == null || self.checkpointLoadInfo == null)
                 throw new InvalidOperationException("No serial source-unloaded checkpoint boundary is active.");
             var target = USceneManager.GetSceneByName(self.transition.TargetSceneName);
             if ((target.IsValid() && target.isLoaded) || self.checkpointLoadInfo.SceneName != self.transition.TargetSceneName)

@@ -101,6 +101,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + ".json"), JsonConvert.SerializeObject(digest));
             var s0 = observer.BoundaryS0Observation();
             File.WriteAllText(Path.Combine(directory, "s0-observation-" + ordinal + ".json"), JsonConvert.SerializeObject(s0));
+            if (CanonicalClockApplyExperiment.Enabled)
+                File.WriteAllText(Path.Combine(directory, "clock-d-source-" + ordinal + ".json"),
+                    JsonConvert.SerializeObject(CanonicalClockApplyExperiment.Capture(native)));
             File.WriteAllText(Path.Combine(directory, "boundary-coverage-catalog.json"), JsonConvert.SerializeObject(observer.BoundaryCoverageCatalog()));
             File.WriteAllText(Path.Combine(directory, "boundary-coverage-reader-audit.json"), JsonConvert.SerializeObject(observer.BoundaryCoverageReadAudit()));
             var fieldSchema = JsonConvert.SerializeObject(new { schema = 1, diagnosticOnly = true, ordinal,

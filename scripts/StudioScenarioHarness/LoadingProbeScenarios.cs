@@ -50,6 +50,12 @@ internal static partial class StudioScenarioHarness
         var s0TargetArgument = args.SingleOrDefault(value => value.StartsWith("--probe-s0-target=", StringComparison.Ordinal));
         Require(s0TargetArgument == null || phaseOneTrace, "S0-only preparation requires the protected Phase 1 observer");
         Environment.SetEnvironmentVariable("HKTAS_LOADING_S0_OBSERVING", s0TargetArgument != null ? "1" : null);
+        var clockExperiment = args.Contains("--probe-clock-carry-experiment");
+        var clockSourceArgument = args.SingleOrDefault(value => value.StartsWith("--probe-clock-apply-source=", StringComparison.Ordinal));
+        Require(!clockExperiment || phaseOneTrace, "limited clock D experiment requires the protected observer");
+        Require(clockSourceArgument == null || clockExperiment && s0TargetArgument != null, "clock D application requires zero-Movie preparation");
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_EXPERIMENT", clockExperiment ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_SOURCE", clockSourceArgument == null ? null : Arg("--probe-clock-apply-source"));
         // All canonical diagnostics capture the actual clock portion of D.
         // This enables the existing bounded native codec, never qualification.
         if (args.Contains("--probe-canonical-boundary")) Environment.SetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT", "1");
@@ -253,6 +259,19 @@ internal static partial class StudioScenarioHarness
                     "real zero Movie and sample counters preserved, no D applied or checkpoint qualified");
                 await CheckSerialPauseAsync(vm, boot);
                 await File.WriteAllTextAsync(Path.Combine(output, "s0-receipt.json"), JsonSerializer.Serialize(receipt));
+                if (clockSourceArgument != null)
+                {
+                    var applied = await Call(new Dictionary<string, string> { ["phase"] = "s0-clock-apply" });
+                    Require(applied["status"] == "ClockAppliedPaused" && applied["movieFrame"] == "0"
+                        && applied["consumedSamplesAfter"] == "0" && applied["restoreQualified"] == "false",
+                        "actual limited clock D write and raw readback, still zero Movie and unqualified");
+                    boot.Refresh();
+                    var stopped = boot.NativeCompletedFrames;
+                    await Task.Delay(400); boot.Refresh();
+                    Require(boot.IsWaiting && boot.NativeCompletedFrames == stopped && boot.FullRunFaultCode == 0,
+                        "clock D application stays natively parked without advancing any frame");
+                    await File.WriteAllTextAsync(Path.Combine(output, "clock-d-receipt.json"), JsonSerializer.Serialize(applied));
+                }
                 await File.WriteAllTextAsync(Path.Combine(output, "target-state.json"), JsonSerializer.Serialize(await VideoRuntimeState(vm)));
                 Require(sourceHash == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(source))), "input package bytes unchanged");
                 Log("S0 OBSERVATION COMPLETE; D1/D2/D3 not qualified");
