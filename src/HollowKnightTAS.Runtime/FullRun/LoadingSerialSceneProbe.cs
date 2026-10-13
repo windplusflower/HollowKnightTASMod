@@ -36,6 +36,20 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool sourceUnloaded;
         private bool awaitingBoundary;
         private bool observedBoundary;
+        private readonly System.Collections.Generic.Dictionary<int, string> retiredSourceOwners = new System.Collections.Generic.Dictionary<int, string>();
+        internal static string? RetiredSourceOwner(int instanceId) => instance != null
+            && instance.sourceUnloaded && instance.retiredSourceOwners.TryGetValue(instanceId, out var identity) ? identity : null;
+        internal static string? RetiringSourceOwner(int instanceId) => instance != null && instance.transition != null
+            && instance.retiredSourceOwners.TryGetValue(instanceId, out var identity) ? identity : null;
+        internal static void RequireCanonicalMutationBoundary()
+        {
+            var self = instance;
+            if (self == null || self.canonical == null || !self.awaitingBoundary || self.observedBoundary || !self.sourceUnloaded
+                || self.source.isLoaded || self.transition == null)
+                throw new InvalidOperationException("Canonical cleanup is outside the parked unloaded boundary.");
+            var target = USceneManager.GetSceneByName(self.transition.TargetSceneName);
+            if (target.IsValid() && target.isLoaded) throw new InvalidOperationException("Canonical cleanup target is already loaded.");
+        }
         private int ordinal;
         private int rows;
         private string? failure;
@@ -121,6 +135,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Inventory("before-unload");
                 if (!USceneManager.SetActiveScene(staging)) throw Fail("Cannot activate staging scene.");
                 Write("unload-requested", new { source = sourceName, target = load.TargetSceneName });
+                if (canonical != null)
+                {
+                    retiredSourceOwners.Clear();
+                    var outgoing = new BoundaryObjectIdentity();
+                    foreach (var root in source.GetRootGameObjects())
+                        foreach (var node in root.GetComponentsInChildren<Transform>(true))
+                        {
+                            retiredSourceOwners[node.gameObject.GetInstanceID()] = "source-unloaded:" + outgoing.Get(node.gameObject);
+                            foreach (var component in node.GetComponents<Component>())
+                                if (component != null) retiredSourceOwners[component.GetInstanceID()] = "source-unloaded:" + outgoing.Get(component);
+                        }
+                    if (retiredSourceOwners.Count > 200000) throw Fail("Outgoing source identity budget exceeded.");
+                }
                 var operation = USceneManager.UnloadSceneAsync(source);
                 if (operation == null) throw Fail("Source unload operation was not created.");
                 // Do not leave the completed native AsyncOperation retained by

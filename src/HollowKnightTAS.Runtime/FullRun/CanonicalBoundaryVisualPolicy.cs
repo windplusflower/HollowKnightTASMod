@@ -8,9 +8,14 @@ namespace HollowKnightTAS.Runtime.FullRun
 {
     internal static class CanonicalBoundaryVisualPolicy
     {
-        internal static int Reset(CanonicalVisualFsmTemplates templates)
+        internal static int Reset(CanonicalVisualFsmTemplates templates, out int removedTweenDestroyCallbacks)
         {
             using var validation = new LoadingEngineClockProbe.CheckpointValidation();
+            // OnExit in the registered FSM resets can already retire a Tween.
+            // Register its scalar ID before sending those original events.
+            var retiredTweens = Resources.FindObjectsOfTypeAll<iTween>().Where(tween => tween != null
+                && tween.gameObject.scene.IsValid() && tween.gameObject.scene.isLoaded).ToDictionary(tween => tween.GetInstanceID());
+            if (retiredTweens.Count > 4096) throw new InvalidOperationException("Canonical initial Tween budget exceeded.");
             templates.BeginBoundaryReset();
             var cameras = GameCameras.instance ?? throw new InvalidOperationException("Canonical visual reset requires GameCameras.");
             var shake = cameras.cameraShakeFSM;
@@ -60,6 +65,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             var tweens = Resources.FindObjectsOfTypeAll<iTween>().Where(tween => tween != null
                 && tween.gameObject.scene.IsValid() && tween.gameObject.scene.isLoaded).ToArray();
             if (tweens.Length > 4096) throw new InvalidOperationException("Canonical Tween budget exceeded.");
+            foreach (var tween in tweens)
+            {
+                var instance = tween.GetInstanceID();
+                if (retiredTweens.TryGetValue(instance, out var old) && !ReferenceEquals(old, tween))
+                    throw new InvalidOperationException("Canonical Tween instance ID was reused during its reset.");
+                retiredTweens[instance] = tween;
+            }
             foreach (var owner in tweens.Select(tween => tween.gameObject).Distinct()) iTween.Stop(owner);
             // Stop/OnExit use deferred Destroy; finish removing those same
             // components at the parked boundary before the state is observed.
@@ -68,7 +80,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (Resources.FindObjectsOfTypeAll<iTween>().Any(tween => tween != null
                 && tween.gameObject.scene.IsValid() && tween.gameObject.scene.isLoaded))
                 throw new InvalidOperationException("Canonical Tween stop left a loaded component alive.");
-            return tweens.Length;
+            var reader = new LoadingNativeSchedulerDigest();
+            try
+            {
+                removedTweenDestroyCallbacks = reader.CancelRetiredObjectDestroys(instance => {
+                    if (!retiredTweens.TryGetValue(instance, out var tween)) return null;
+                    return () => { if (tween != null) throw new InvalidOperationException("Canonical retired Tween is still alive."); };
+                });
+            }
+            finally { reader.Release(); }
+            return retiredTweens.Count;
         }
 
         internal static void ResetFsmOrder(BoundaryObjectIdentity identities)

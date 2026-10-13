@@ -72,7 +72,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly List<object> textCacheDetails = new List<object>();
         private object[] lastFieldDiagnostics = Array.Empty<object>();
         private readonly HashSet<string> detailedTypes = new HashSet<string>(new[] {
-            "DesktopPlatform", "GlobalPrefabDefaults", "ObjectPool", "InputHandler", "InControl.HollowKnightInputModule"
+            "DesktopPlatform", "GlobalPrefabDefaults", "ObjectPool", "InputHandler", "InControl.HollowKnightInputModule", "CheckpointSprite"
         }, StringComparer.Ordinal);
         private readonly Type? payloadType;
         private readonly LoadingNativeSchedulerDigest? nativeScheduler;
@@ -194,7 +194,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         private Func<int, string?>? boundaryRetiredOwner;
-        internal BoundaryDigestSnapshot CaptureBoundaryFrame(long movie, long native, Func<int, bool> ownsNewPoolStart, Func<int, string?>? retiredOwner = null)
+        internal BoundaryDigestSnapshot CaptureBoundaryFrame(long movie, long native, Func<int, bool> ownsNewPoolStart,
+            Func<int, string?>? retiredOwner = null)
         {
             if (!boundaryCapture) throw new InvalidOperationException("The observer is not bound to a canonical boundary.");
             if (native < controlledNativeOrigin) throw new InvalidOperationException("Boundary native cursor precedes its input frame origin.");
@@ -509,16 +510,36 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var nativeBehaviours = new Dictionary<IntPtr, string>();
                 var nativePointer = typeof(UnityEngine.Object).GetField("m_CachedPtr", BindingFlags.Instance | BindingFlags.NonPublic)
                     ?? throw new InvalidOperationException("P0 native behaviour pointer field is unavailable.");
-                foreach (var component in allBehaviours)
+                // Native delayed calls can target GameObjects/components with
+                // no MonoBehaviour (for example a temporary AudioSource). The
+                // native owner map must cover the loaded hierarchy, even though
+                // managed field roots are collected separately above.
+                var schedulerComponents = Resources.FindObjectsOfTypeAll<Component>()
+                    .Where(component => component != null && Loaded(component.gameObject)).ToArray();
+                if (schedulerComponents.Length > 100000) throw new InvalidOperationException("Native scheduler owner inventory exceeds 100000 components.");
+                foreach (var component in schedulerComponents)
                 {
                     var id = UnityId(component);
                     objects[component.GetInstanceID()] = id;
                     objects[component.gameObject.GetInstanceID()] = UnityId(component.gameObject);
                     var pointer = (IntPtr)nativePointer.GetValue(component)!;
-                    if (pointer != IntPtr.Zero) nativeBehaviours[pointer] = id;
+                    if (component is MonoBehaviour && pointer != IntPtr.Zero) nativeBehaviours[pointer] = id;
+                }
+                Dictionary<int, UnityEngine.Object>? otherNativeOwners = null;
+                string? SchedulerOwner(int instance)
+                {
+                    if (objects.TryGetValue(instance, out var known)) return known;
+                    if (!boundaryCapture) return null;
+                    if (otherNativeOwners == null)
+                    {
+                        var owners = Resources.FindObjectsOfTypeAll<UnityEngine.Object>();
+                        if (owners.Length > 200000) throw new InvalidOperationException("Native callback asset owner inventory exceeds its bound.");
+                        otherNativeOwners = owners.Where(owner => owner != null).ToDictionary(owner => owner.GetInstanceID());
+                    }
+                    return otherNativeOwners.TryGetValue(instance, out var owner) ? UnityId(owner) : null;
                 }
                 schedulerDigest = nativeScheduler.Capture(fields,
-                    id => objects.TryGetValue(id, out var value) ? value : null,
+                    SchedulerOwner,
                     pointer => nativeBehaviours.TryGetValue(pointer, out var value) ? value : null,
                     includeFieldDiagnostics: fullInventory && fieldDetails, retiredObjectId: boundaryRetiredOwner);
             }

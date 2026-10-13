@@ -18,6 +18,8 @@
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryGraphCodec.cs" Link="FullRun\CanonicalCarryGraphCodec.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalPreparedWritePlan.cs" Link="FullRun\CanonicalPreparedWritePlan.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalPhaseOneTrace.cs" Link="FullRun\CanonicalPhaseOneTrace.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalPolygonCapacity.cs" Link="FullRun\CanonicalPolygonCapacity.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalBoundaryEpochObservation.cs" Link="FullRun\CanonicalBoundaryEpochObservation.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryPairPreparation.cs" Link="FullRun\CanonicalCarryPairPreparation.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalStableTypeComparer.cs" Link="FullRun\CanonicalStableTypeComparer.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalDataPreservationGuard.cs" Link="FullRun\CanonicalDataPreservationGuard.cs" />

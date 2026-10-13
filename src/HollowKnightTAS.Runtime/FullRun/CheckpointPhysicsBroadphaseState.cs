@@ -12,7 +12,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     // addresses are rebound locally; only names, indices and value bytes travel.
     // Contacts, joints, body solver and movement caches remain separate domains.
     [Serializable]
-    internal sealed class CheckpointPhysicsBroadphaseState
+    internal sealed partial class CheckpointPhysicsBroadphaseState
     {
         public int Version = 1, Root, Count, FreeHead, InsertionCount, ProxyCount, QueryProxy, WorldFlags, SimulationId;
         public uint Path;

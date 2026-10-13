@@ -344,7 +344,8 @@ try {
                     'boundary-coverage-catalog.json','boundary-coverage-reader-audit.json')
                 foreach ($file in (Get-ChildItem -LiteralPath $resolvedShadow -Recurse -File | Where-Object {
                     ($_.Name -in $diagnosticNames -or $_.Name -match '^loading-candidate-[0-9]+-inventory\.json$' -or
-                        $_.Name -match '^boundary-digest-[0-9]+(?:-repeat)?\.json$' -or
+                        $_.Name -match '^boundary-(?:logical-)?digest-[0-9]+(?:-repeat)?\.json$' -or
+                        $_.Name -match '^boundary-epoch-[0-9]+\.json$' -or
                         $_.Name -match '^canonical-(?:input-)?carry-[0-9]+\.bin$')
                 })) {
                     $relative = [IO.Path]::GetRelativePath($resolvedShadow, $file.FullName)

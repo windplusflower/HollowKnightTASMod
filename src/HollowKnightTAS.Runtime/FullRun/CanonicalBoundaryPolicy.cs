@@ -20,10 +20,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         private CanonicalCarryCapture? carry;
         private bool inputOriginRestored;
         private readonly bool phaseOneTrace;
+        private readonly CanonicalRetiredMeshPolicy retiredMeshes;
         internal CanonicalBoundaryPolicy()
         {
             CanonicalPhaseOneTrace.RequireContext(Environment.GetEnvironmentVariable);
             phaseOneTrace = CanonicalPhaseOneTrace.Enabled;
+            retiredMeshes = new CanonicalRetiredMeshPolicy(id => pools.RetiredOwner(id) ?? LoadingSerialSceneProbe.RetiringSourceOwner(id));
             startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart);
         }
         internal bool AdvanceStartup() => startup.Advance();
@@ -56,8 +58,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             var destroyed = pools.Reset();
             Progress("R1-pools-rebuilt", new { destroyed });
-            var stopped = CanonicalBoundaryVisualPolicy.Reset(visualTemplates);
-            Progress("R2-registered-visual-stop", new { stopped });
+            Progress("R1-source-and-pool-meshes-retired", new { removedDelayedDestroyCallbacks = retiredMeshes.Flush() });
+            var stopped = CanonicalBoundaryVisualPolicy.Reset(visualTemplates, out var removedTweenDestroyCallbacks);
+            Progress("R2-registered-visual-stop", new { stopped, removedTweenDestroyCallbacks });
+            Progress("R2-checkpoint-icon-idle-timer", CanonicalCheckpointIconPolicy.ResetIdleTimer());
             var identities = new BoundaryObjectIdentity();
             var carryFsmBindings = CanonicalHeroFsmBindings.Validate(identities);
             Progress("D-Hero-FSM-bindings-validated", new { carryFsmBindings, canonicalVisualBindings = 2 });
@@ -67,6 +71,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("D-Hero-asset-origins-validated", new { assets = assetOrigins.Length });
             var broadphase = CheckpointPhysicsBroadphaseState.Canonicalize(identities);
             Progress("R4-broadphase-readback", new { broadphase.Count, capacity = broadphase.Nodes.Length, broadphase.ProxyCount });
+            Progress("R4-unused-polygon-capacity-readback", new { polygons = CheckpointPhysicsBroadphaseState.CanonicalizePolygonCapacity() });
             CanonicalBoundaryVisualPolicy.ResetFsmOrder(identities);
             CanonicalBoundaryStaticPolicy.ResetExecutionStack();
             Progress("R6-FSM-execution-stack-reset", new { });
@@ -89,7 +94,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!StringComparer.Ordinal.Equals(observerSession, sessionDirectory))
                 throw new InvalidOperationException("Canonical observer cannot change its protected session binding.");
             bool OwnsCanonicalStart(int instance) => pools.OwnsNewPoolStart(instance) || visualTemplates.OwnsResetStart(instance);
-            var digest = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, pools.RetiredOwner);
+            string? RetiredOwner(int instance) => pools.RetiredOwner(instance) ?? LoadingSerialSceneProbe.RetiredSourceOwner(instance);
+            var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
+            inputEpoch.RequireControlOrigin();
+            var digest = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, RetiredOwner);
             File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + ".json"), JsonConvert.SerializeObject(digest));
             File.WriteAllText(Path.Combine(directory, "boundary-coverage-catalog.json"), JsonConvert.SerializeObject(observer.BoundaryCoverageCatalog()));
             File.WriteAllText(Path.Combine(directory, "boundary-coverage-reader-audit.json"), JsonConvert.SerializeObject(observer.BoundaryCoverageReadAudit()));
@@ -101,6 +109,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("boundary-digest-captured", new { digest.FullSha256, roots = digest.Roots.Length, unsupported = digest.Unsupported.Length });
             if (digest.CanonicalWaitIssues.Length != 0)
                 throw new InvalidOperationException("Canonical scheduler registry is incomplete: " + string.Join(", ", digest.CanonicalWaitIssues));
+            // Retain all raw data. A separate, explicitly D0-only projection
+            // compares process cursor/stamp coordinates relative to StartInputAt.
+            File.WriteAllText(Path.Combine(directory, "boundary-epoch-" + ordinal + ".json"), JsonConvert.SerializeObject(new {
+                schema = 1, diagnosticOnly = true, d2ProjectionAllowed = false, epoch = inputEpoch }));
+            File.WriteAllText(Path.Combine(directory, "boundary-logical-digest-" + ordinal + ".json"),
+                JsonConvert.SerializeObject(CanonicalBoundaryEpochObservation.Project(digest, inputEpoch)));
             if (phaseOneTrace)
             {
                 // Keep all observed coverage gaps. This permits route discovery,
@@ -108,7 +122,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // Actual Canon/preservation/wait/readback failures still throw.
                 if (ordinal == 1)
                 {
-                    var repeated = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, pools.RetiredOwner);
+                    var repeated = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, RetiredOwner);
                     var comparison = BoundaryDigestComparison.Compare(digest, repeated);
                     File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + "-repeat.json"), JsonConvert.SerializeObject(repeated));
                     File.WriteAllText(Path.Combine(directory, "boundary-observer-audit.json"), JsonConvert.SerializeObject(comparison));
@@ -120,8 +134,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                         "BoundaryDigest-native-and-asset-coverage", "closed-D-field-registry" } });
                 return;
             }
-            var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
-            inputEpoch.RequireControlOrigin();
             CanonicalCarryGraphData candidate;
             try { candidate = carry.Capture(identities, inputEpoch, input, mouse, observer.BoundarySchedulerCarry(inputEpoch), observer.BoundaryHeroInvulnerabilityCarry(inputEpoch)); }
             catch (Exception error) {
@@ -189,7 +201,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // runs between these captures. The D reader/encoder also runs
                 // inside this audit, including its first reflection binding.
                 // This is not cold-replay D0.
-                var repeated = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, pools.RetiredOwner);
+                var repeated = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, RetiredOwner);
                 var comparison = BoundaryDigestComparison.Compare(digest, repeated);
                 File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + "-repeat.json"), JsonConvert.SerializeObject(repeated));
                 File.WriteAllText(Path.Combine(directory, "boundary-observer-audit.json"), JsonConvert.SerializeObject(comparison));
@@ -214,6 +226,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             observerInputOrigin = source.OriginNative;
             observer = LoadingGameplayOracle.CreateBoundaryObserver(observerSession, source.OriginNative!.Value);
         }
-        public void Dispose() { observer?.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
+        public void Dispose() { observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
     }
 }
