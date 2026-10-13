@@ -46,6 +46,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly List<Tuple<UnityEngine.Object, string>> assetRoots = new List<Tuple<UnityEngine.Object, string>>();
         private readonly CanonicalCoverageCatalog coverage = new CanonicalCoverageCatalog();
         private readonly List<CanonicalS0Observation.Root> s0Roots = new List<CanonicalS0Observation.Root>();
+        private object? s0EventLock;
         private CanonicalS0ObservationSnapshot? s0Sample;
         private readonly List<string> s0InvariantFailures = new List<string>();
         private readonly Dictionary<UnityEngine.Object, string> unityCoverageLabels = new Dictionary<UnityEngine.Object, string>(ReferenceComparer<UnityEngine.Object>.Instance);
@@ -238,6 +239,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             ?? throw new InvalidOperationException("No canonical S0 observation is available.");
         private string? S0ExternalBinding(object value)
         {
+            if (ReferenceEquals(value, s0EventLock)) return "canonical-lock:FsmEvent.syncObj";
+            if (value is Type metadataType)
+                return "metadata-type:" + metadataType.Module.ModuleVersionId.ToString("D") + "/" + metadataType.FullName;
             if (unityIds.TryGetValue(value, out var unityBinding))
             {
                 // Destroyed wrappers have no closed logical rebind contract.
@@ -476,7 +480,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             observationIdentity.Refresh();
             nativeValues.BeginSample();
             if (boundaryCapture) { coverage.BeginSample(); unityCoverageLabels.Clear(); coverageRoot = ""; coverageField = ""; }
-            if (boundaryCapture) { s0Roots.Clear(); s0InvariantFailures.Clear(); s0Sample = null; }
+            if (boundaryCapture) { s0Roots.Clear(); s0InvariantFailures.Clear(); s0Sample = null; s0EventLock = null; }
             detachedFsmReferences.Clear();
             detachedFsmRoots.Clear();
             unityIds.Clear(); fsmIds.Clear(); fsmMemberIds.Clear();
@@ -651,12 +655,20 @@ namespace HollowKnightTAS.Runtime.FullRun
                         || root.Item1.StartsWith("static:PlayMaker:HutongGames.PlayMaker.FsmEvent.", StringComparison.Ordinal)))
                     {
                         const string eventPrefix = "static:PlayMaker:HutongGames.PlayMaker.FsmEvent.";
+                        if (root.Item1 == eventPrefix + "syncObj") {
+                            if (root.Item2 == null || root.Item2.GetType() != typeof(object))
+                                throw new InvalidOperationException("Original FsmEvent sync lock layout changed.");
+                            s0EventLock = root.Item2;
+                            s0Roots.Add(new CanonicalS0Observation.Root(root.Item1, root.Item2, CanonicalS0Observation.Ownership.S0));
+                        }
+                        else {
                         var registeredEventRoot = root.Item1 == "static:PlayMaker:HutongGames.PlayMaker.Fsm.EventData"
                             || root.Item1 == eventPrefix + "_eventLookup"
                             || root.Item1.StartsWith(eventPrefix, StringComparison.Ordinal)
                                 && CanonicalSystemEventBindings.Snapshot().ContainsKey(root.Item1.Substring(eventPrefix.Length));
                         s0Roots.Add(new CanonicalS0Observation.Root(root.Item1, root.Item2,
                             registeredEventRoot ? CanonicalS0Observation.Ownership.D : CanonicalS0Observation.Ownership.Unknown));
+                        }
                         if (root.Item1.EndsWith("FsmEvent._eventLookup", StringComparison.Ordinal) && root.Item2 != null
                             && fields.Read(root.Item2, "entries") is Array entries)
                         {
