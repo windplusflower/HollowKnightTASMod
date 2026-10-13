@@ -41,6 +41,12 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_SERIAL_BOUNDARY_ONLY", args.Contains("--probe-serial-boundary-only") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_BOUNDARY_INVENTORY", args.Contains("--probe-boundary-inventory") ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CANONICAL_BOUNDARY", args.Contains("--probe-canonical-boundary") ? "1" : null);
+        var phaseOneTrace = args.Contains("--probe-canonical-phase1-trace");
+        Require(!phaseOneTrace || (args.Contains("--probe-canonical-boundary") && gameplayOracle && nativeScheduler
+            && args.Contains("--probe-native-physics") && args.Contains("--probe-serial-boundary-only")
+            && !args.Contains("--checkpoint-prototype") && !args.Contains("--probe-export-video")),
+            "Phase 1 route observation requires the full canonical probe and excludes checkpoint/video operations");
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_CANONICAL_PHASE1_TRACE", phaseOneTrace ? "1" : null);
         // All canonical diagnostics capture the actual clock portion of D.
         // This enables the existing bounded native codec, never qualification.
         if (args.Contains("--probe-canonical-boundary")) Environment.SetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT", "1");
@@ -185,7 +191,9 @@ internal static partial class StudioScenarioHarness
                     && strict.Runs.All(run => !run.Authored)
                     && strict.Header.NativeProfileId == MovieProtocolV2.SelectedNativeProfileId,
                     "fresh strict native recording has exact length and selected profile identity");
-                var recordingName = MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.CanonicalParticleProfileId
+                var recordingName = MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.CanonicalBoundaryProfileId
+                    ? "serial-scenes-canonical-boundary-recording.hktaspack"
+                    : MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.CanonicalParticleProfileId
                     ? "serial-scenes-v12-particles-recording.hktaspack"
                     : MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.IsolatedOnlineProfileId
                     ? "serial-scenes-v12-isolated-recording.hktaspack"

@@ -25,6 +25,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private GameObject[] prefabs = Array.Empty<GameObject>();
         private int[] sizes = Array.Empty<int>();
         private readonly Dictionary<int, MonoBehaviour> newPoolStartOwners = new Dictionary<int, MonoBehaviour>();
+        private readonly Dictionary<int, string> retiredOwners = new Dictionary<int, string>();
+        internal string? RetiredOwner(int instance) => retiredOwners.TryGetValue(instance, out var identity) ? identity : null;
 
         internal bool OwnsNewPoolStart(int instanceId)
         {
@@ -38,6 +40,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal int Reset()
         {
             newPoolStartOwners.Clear();
+            retiredOwners.Clear();
             var pools = Resources.FindObjectsOfTypeAll<ObjectPool>().Where(pool => pool != null
                 && pool.gameObject.scene.IsValid() && pool.gameObject.scene.isLoaded).ToArray();
             if (pools.Length != 1) throw new InvalidOperationException("Canonical boundary requires one loaded global ObjectPool.");
@@ -70,6 +73,18 @@ namespace HollowKnightTAS.Runtime.FullRun
             for (var child = 0; child < pool.transform.childCount; child++)
                 if (!owned.Contains(pool.transform.GetChild(child).gameObject))
                     throw new InvalidOperationException("Canonical pool contains an unregistered direct child.");
+            // Retain only scalar identities of the exact R1 destruction set.
+            // This can diagnose deferred native callbacks after DestroyImmediate;
+            // it does not admit, cancel or replay any such callback.
+            var outgoing = new BoundaryObjectIdentity();
+            foreach (var actor in actors)
+                foreach (var node in actor.GetComponentsInChildren<Transform>(true))
+                {
+                    retiredOwners[node.gameObject.GetInstanceID()] = "R1-retired:" + outgoing.Get(node.gameObject);
+                    foreach (var component in node.GetComponents<Component>())
+                        if (component != null) retiredOwners[component.GetInstanceID()] = "R1-retired:" + outgoing.Get(component);
+                }
+            if (retiredOwners.Count > 200000) throw new InvalidOperationException("Canonical pool retirement identity budget exceeded.");
             // Reset the tables before OnDisable/OnDestroy can recycle a doomed
             // actor into them. This runs at the parked native callback, outside
             // component updates and after the source unload has completed.

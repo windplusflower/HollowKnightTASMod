@@ -193,12 +193,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             return observer;
         }
 
-        internal BoundaryDigestSnapshot CaptureBoundaryFrame(long movie, long native, Func<int, bool> ownsNewPoolStart)
+        private Func<int, string?>? boundaryRetiredOwner;
+        internal BoundaryDigestSnapshot CaptureBoundaryFrame(long movie, long native, Func<int, bool> ownsNewPoolStart, Func<int, string?>? retiredOwner = null)
         {
             if (!boundaryCapture) throw new InvalidOperationException("The observer is not bound to a canonical boundary.");
             if (native < controlledNativeOrigin) throw new InvalidOperationException("Boundary native cursor precedes its input frame origin.");
             using var validation = new LoadingEngineClockProbe.CheckpointValidation();
             boundaryMovieFrame = movie; boundaryNativeFrame = native;
+            boundaryRetiredOwner = retiredOwner;
             captureProgress = Stopwatch.StartNew(); captureStages.Clear(); captureStageStarted = 0;
             capturePhase = "canonical-boundary"; captureBoundary = "source-unloaded-target-not-started";
             var groups = CaptureState(fullInventory: true);
@@ -518,7 +520,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 schedulerDigest = nativeScheduler.Capture(fields,
                     id => objects.TryGetValue(id, out var value) ? value : null,
                     pointer => nativeBehaviours.TryGetValue(pointer, out var value) ? value : null,
-                    includeFieldDiagnostics: fullInventory && fieldDetails);
+                    includeFieldDiagnostics: fullInventory && fieldDetails, retiredObjectId: boundaryRetiredOwner);
             }
             var inventory = new List<object>();
             CaptureProgress("managed-and-fsm-fields");

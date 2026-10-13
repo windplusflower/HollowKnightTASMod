@@ -256,6 +256,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal static Tuple<int, GameManager.SceneLoadInfo, string> GetCheckpointBoundary()
         {
+            CanonicalPhaseOneTrace.RequireCheckpointAllowed(CanonicalPhaseOneTrace.Enabled);
             var self = instance;
             if (self == null || !self.observedBoundary || self.source.isLoaded || self.transition == null || self.checkpointLoadInfo == null)
                 throw new InvalidOperationException("No serial source-unloaded checkpoint boundary is active.");

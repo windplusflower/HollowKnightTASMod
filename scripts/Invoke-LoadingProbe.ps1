@@ -30,6 +30,7 @@ param(
     [switch] $IsolatedOnline,
     [switch] $CanonicalParticles,
     [switch] $CanonicalBoundary,
+    [switch] $CanonicalPhaseOneTrace,
     [switch] $BoundaryInventory,
     [switch] $OnlyTasMods,
     [switch] $ExportVideo,
@@ -48,6 +49,10 @@ if ($IsolatedOnline -and -not $VirtualAudio) { throw 'IsolatedOnline requires Vi
 if ($CanonicalParticles -and -not $IsolatedOnline) { throw 'CanonicalParticles requires IsolatedOnline.' }
 if ($CanonicalBoundary -and -not $CanonicalParticles) { throw 'CanonicalBoundary requires CanonicalParticles.' }
 if ($CanonicalBoundary) { $OnlyTasMods = $true }
+if ($CanonicalPhaseOneTrace -and (-not $CanonicalBoundary -or -not $SerialBoundaryOnly -or
+    -not $GameplayOracle -or -not $NativeScheduler -or -not $NativePhysics -or $CheckpointPrototype -or $ExportVideo)) {
+    throw 'CanonicalPhaseOneTrace requires the canonical boundary, boundary-only full oracle/native observations and cannot use checkpoints or video.'
+}
 if ($BoundaryInventory -and -not $SerialScenes) { throw 'BoundaryInventory requires SerialScenes.' }
 if ($CanonicalStartupClock -and (-not $SynchronousFetch -or -not $DisableLegacyCalibration)) { throw 'The v4 experiment requires synchronous fetch and disabled legacy calibration.' }
 if ($ModWallClock -and -not $CanonicalStartupClock) { throw 'The v5 Mod wall-clock experiment requires canonical startup clocks.' }
@@ -300,6 +305,7 @@ try {
         if ($IsolatedOnline) { $arguments += '--probe-isolated-online' }
         if ($CanonicalParticles) { $arguments += '--probe-canonical-particles' }
         if ($CanonicalBoundary) { $arguments += '--probe-canonical-boundary' }
+        if ($CanonicalPhaseOneTrace) { $arguments += '--probe-canonical-phase1-trace' }
         if ($BoundaryInventory) { $arguments += '--probe-boundary-inventory' }
         if ($ExportVideo) { $arguments += '--probe-export-video' }
         if ($CheckpointPrototype) { $arguments += '--checkpoint-prototype' }

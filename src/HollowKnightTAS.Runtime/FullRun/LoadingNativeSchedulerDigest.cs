@@ -192,7 +192,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         internal string Capture(LoadingFieldDigest fields, Func<int, string?> objectId,
-            Func<IntPtr, string?> nativeBehaviourId, bool includeFieldDiagnostics = false)
+            Func<IntPtr, string?> nativeBehaviourId, bool includeFieldDiagnostics = false, Func<int, string?>? retiredObjectId = null)
         {
             coroutines.Clear(); unsupported.Clear(); inventory.Clear(); behaviourId = nativeBehaviourId;
             capturedQueueValid = false; capturedCallbacks = Array.Empty<CallbackView>();
@@ -207,7 +207,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             var visited = new HashSet<IntPtr>();
             var root = Pointer(Read(head, 32), 8);
             var timestamp = BitConverter.ToUInt32(state, 72);
-            Walk(root, head, callbacks, visited, objectId, timestamp);
+            string? ResolveOwner(int instance)
+            {
+                var live = objectId(instance); var retired = retiredObjectId?.Invoke(instance);
+                if (live != null && retired != null) throw new InvalidOperationException("Native callback instance identity was reused after R1 destruction.");
+                return live ?? retired;
+            }
+            Walk(root, head, callbacks, visited, ResolveOwner, timestamp);
             if ((ulong)callbacks.Count != count)
                 throw new InvalidOperationException("P0 native callback tree count mismatch.");
             // Register every enumerator first, so cross-coroutine references

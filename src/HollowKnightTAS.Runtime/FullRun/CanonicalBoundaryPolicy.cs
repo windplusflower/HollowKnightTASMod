@@ -6,8 +6,8 @@ using Newtonsoft.Json;
 namespace HollowKnightTAS.Runtime.FullRun
 {
     // One policy instance owns startup and every unloaded boundary for all
-    // execution paths. A partial implementation cannot release the loader or
-    // capture a checkpoint: the remaining registry closes here explicitly.
+        // execution paths. The protected Phase 1 route trace observes the same
+        // Canon without performing Phase 2 preparation or qualifying a checkpoint.
     internal sealed class CanonicalBoundaryPolicy : IDisposable
     {
         private readonly CanonicalHeroStartupWarmup startup;
@@ -19,7 +19,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         private long? observerInputOrigin;
         private CanonicalCarryCapture? carry;
         private bool inputOriginRestored;
-        internal CanonicalBoundaryPolicy() { startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart); }
+        private readonly bool phaseOneTrace;
+        internal CanonicalBoundaryPolicy()
+        {
+            CanonicalPhaseOneTrace.RequireContext(Environment.GetEnvironmentVariable);
+            phaseOneTrace = CanonicalPhaseOneTrace.Enabled;
+            startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart);
+        }
         internal bool AdvanceStartup() => startup.Advance();
 
         internal void Apply(int ordinal, string source, string target, long movie, long native, string sessionDirectory, long movieInputNativeOrigin,
@@ -74,6 +80,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             Progress("D-gameplay-preserved-by-Canon", new { playerData = true, sceneData = true, heroState = true,
                 heroScalarsPoseBodyAndHistory = true, fullNativeStateQualified = false });
+            var canonMilliseconds = elapsed.Elapsed.TotalMilliseconds;
             if (observer == null)
             {
                 observer = LoadingGameplayOracle.CreateBoundaryObserver(sessionDirectory, movieInputNativeOrigin);
@@ -82,7 +89,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!StringComparer.Ordinal.Equals(observerSession, sessionDirectory))
                 throw new InvalidOperationException("Canonical observer cannot change its protected session binding.");
             bool OwnsCanonicalStart(int instance) => pools.OwnsNewPoolStart(instance) || visualTemplates.OwnsResetStart(instance);
-            var digest = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart);
+            var digest = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, pools.RetiredOwner);
             File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + ".json"), JsonConvert.SerializeObject(digest));
             File.WriteAllText(Path.Combine(directory, "boundary-coverage-catalog.json"), JsonConvert.SerializeObject(observer.BoundaryCoverageCatalog()));
             File.WriteAllText(Path.Combine(directory, "boundary-coverage-reader-audit.json"), JsonConvert.SerializeObject(observer.BoundaryCoverageReadAudit()));
@@ -94,6 +101,25 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("boundary-digest-captured", new { digest.FullSha256, roots = digest.Roots.Length, unsupported = digest.Unsupported.Length });
             if (digest.CanonicalWaitIssues.Length != 0)
                 throw new InvalidOperationException("Canonical scheduler registry is incomplete: " + string.Join(", ", digest.CanonicalWaitIssues));
+            if (phaseOneTrace)
+            {
+                // Keep all observed coverage gaps. This permits route discovery,
+                // never a full-state PASS, a payload application or a snapshot.
+                // Actual Canon/preservation/wait/readback failures still throw.
+                if (ordinal == 1)
+                {
+                    var repeated = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, pools.RetiredOwner);
+                    var comparison = BoundaryDigestComparison.Compare(digest, repeated);
+                    File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + "-repeat.json"), JsonConvert.SerializeObject(repeated));
+                    File.WriteAllText(Path.Combine(directory, "boundary-observer-audit.json"), JsonConvert.SerializeObject(comparison));
+                    if (!comparison.ObservedEqual) throw new InvalidOperationException("Boundary reader changed frozen observed state: " + comparison.FirstDifference);
+                }
+                Progress("phase1-route-observed-unqualified", new { canonMilliseconds, observerMilliseconds = elapsed.Elapsed.TotalMilliseconds - canonMilliseconds,
+                    diagnosticOnly = true, phase2PreparationExecuted = false, d0Passed = false, restoreQualified = false,
+                    coverageUnsupported = digest.Unsupported, pending = new[] { "R2-remaining-visual-FSM-fields", "R6-static-canonical-or-carry-fields",
+                        "BoundaryDigest-native-and-asset-coverage", "closed-D-field-registry" } });
+                return;
+            }
             var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
             inputEpoch.RequireControlOrigin();
             CanonicalCarryGraphData candidate;
@@ -163,7 +189,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // runs between these captures. The D reader/encoder also runs
                 // inside this audit, including its first reflection binding.
                 // This is not cold-replay D0.
-                var repeated = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart);
+                var repeated = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, pools.RetiredOwner);
                 var comparison = BoundaryDigestComparison.Compare(digest, repeated);
                 File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + "-repeat.json"), JsonConvert.SerializeObject(repeated));
                 File.WriteAllText(Path.Combine(directory, "boundary-observer-audit.json"), JsonConvert.SerializeObject(comparison));
