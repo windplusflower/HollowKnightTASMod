@@ -13,6 +13,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         private LoadingMaterialValueObservation? materials;
         private readonly LoadingFontValueObservation fonts = new LoadingFontValueObservation();
+        private readonly LoadingTextureValueObservation textures = new LoadingTextureValueObservation();
         internal object[] FontDetails => fonts.Details;
         internal void BeginSample() { materials?.BeginSample(); fonts.BeginSample(); }
         internal object? Capture(UnityEngine.Object asset, Action<string> omit)
@@ -75,10 +76,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (asset is Texture2D texture)
             {
-                omit(texture.isReadable ? "asset-texture-native-copy-contract" : "asset-texture-cpu-data-unreadable");
                 return new { texture.width, texture.height, texture.dimension, texture.format,
                     texture.mipmapCount, texture.isReadable, texture.filterMode, texture.anisoLevel,
-                    texture.mipMapBias, texture.wrapModeU, texture.wrapModeV, texture.wrapModeW };
+                    texture.mipMapBias, texture.wrapModeU, texture.wrapModeV, texture.wrapModeW,
+                    cpuData = textures.Capture(texture, omit) };
             }
             if (asset is RenderTexture render)
             {

@@ -71,6 +71,7 @@
              Link="FullRun\LoadingInventoryRootEncoding.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingPackedArrayDigest.cs"
              Link="FullRun\LoadingPackedArrayDigest.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingTextureDataBounds.cs" Link="FullRun\LoadingTextureDataBounds.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingRigidbodyValueBits.cs"
              Link="FullRun\LoadingRigidbodyValueBits.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingSceneRootIdentity.cs"
