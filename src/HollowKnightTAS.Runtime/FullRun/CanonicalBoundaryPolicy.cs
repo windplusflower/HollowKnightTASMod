@@ -99,6 +99,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             inputEpoch.RequireControlOrigin();
             var digest = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, RetiredOwner);
             File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + ".json"), JsonConvert.SerializeObject(digest));
+            var s0 = observer.BoundaryS0Observation();
+            File.WriteAllText(Path.Combine(directory, "s0-observation-" + ordinal + ".json"), JsonConvert.SerializeObject(s0));
             File.WriteAllText(Path.Combine(directory, "boundary-coverage-catalog.json"), JsonConvert.SerializeObject(observer.BoundaryCoverageCatalog()));
             File.WriteAllText(Path.Combine(directory, "boundary-coverage-reader-audit.json"), JsonConvert.SerializeObject(observer.BoundaryCoverageReadAudit()));
             var fieldSchema = JsonConvert.SerializeObject(new { schema = 1, diagnosticOnly = true, ordinal,
@@ -123,6 +125,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (ordinal == 1)
                 {
                     var repeated = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, RetiredOwner);
+                    var repeatedS0 = observer.BoundaryS0Observation();
+                    var s0Comparison = CanonicalS0Comparison.Compare(s0, repeatedS0);
+                    File.WriteAllText(Path.Combine(directory, "s0-observation-" + ordinal + "-repeat.json"), JsonConvert.SerializeObject(repeatedS0));
+                    File.WriteAllText(Path.Combine(directory, "s0-observer-audit.json"), JsonConvert.SerializeObject(s0Comparison));
+                    if (!s0Comparison.ObservedEqual) throw new InvalidOperationException("S0 reader changed frozen state.");
                     var comparison = BoundaryDigestComparison.Compare(digest, repeated);
                     File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + "-repeat.json"), JsonConvert.SerializeObject(repeated));
                     File.WriteAllText(Path.Combine(directory, "boundary-observer-audit.json"), JsonConvert.SerializeObject(comparison));

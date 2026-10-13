@@ -48,6 +48,8 @@
     <EmbeddedResource Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryLoadingFieldRegistry.json" LogicalName="canonical-scene-loading-fields.json" />
     <EmbeddedResource Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryFieldRegistry.json" LogicalName="canonical-main-fields.json" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCoverageCatalog.cs" Link="FullRun\CanonicalCoverageCatalog.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalS0Observation.cs" Link="FullRun\CanonicalS0Observation.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalS0FieldOwnership.cs" Link="FullRun\CanonicalS0FieldOwnership.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalInputEpoch.cs" Link="FullRun\CanonicalInputEpoch.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryReflectionBindings.cs" Link="FullRun\CanonicalCarryReflectionBindings.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalAssetOriginRegistry.cs" Link="FullRun\CanonicalAssetOriginRegistry.cs" />

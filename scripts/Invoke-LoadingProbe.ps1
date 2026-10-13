@@ -31,6 +31,8 @@ param(
     [switch] $CanonicalParticles,
     [switch] $CanonicalBoundary,
     [switch] $CanonicalPhaseOneTrace,
+    [string] $S0ObservationTarget = '',
+    [ValidateRange(1,4)][int] $S0ObservationSlot = 1,
     [switch] $BoundaryInventory,
     [switch] $OnlyTasMods,
     [switch] $ExportVideo,
@@ -42,6 +44,9 @@ param(
     [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
 )
 $ErrorActionPreference = 'Stop'
+if ($S0ObservationTarget -and (-not $CanonicalPhaseOneTrace -or $RecordInputs -or $CheckpointPrototype -or $ExportVideo)) {
+    throw 'S0 observation requires a protected Phase 1 trace without recording, checkpoints or video.'
+}
 if ($SerialScenes -and -not $ModWallClock) { throw 'SerialScenes requires the complete v5 policies and uses the distinct v6 profile.' }
 if ($SerialBoundaryOnly -and (-not $SerialScenes -or -not $GameplayOracle)) { throw 'SerialBoundaryOnly requires SerialScenes and GameplayOracle.' }
 if ($VirtualAudio -and -not $SerialScenes) { throw 'VirtualAudio requires SerialScenes.' }
@@ -306,6 +311,7 @@ try {
         if ($CanonicalParticles) { $arguments += '--probe-canonical-particles' }
         if ($CanonicalBoundary) { $arguments += '--probe-canonical-boundary' }
         if ($CanonicalPhaseOneTrace) { $arguments += '--probe-canonical-phase1-trace' }
+        if ($S0ObservationTarget) { $arguments += ('--probe-s0-target={0}' -f $S0ObservationTarget); $arguments += ('--probe-s0-slot={0}' -f $S0ObservationSlot) }
         if ($BoundaryInventory) { $arguments += '--probe-boundary-inventory' }
         if ($ExportVideo) { $arguments += '--probe-export-video' }
         if ($CheckpointPrototype) { $arguments += '--checkpoint-prototype' }
@@ -341,11 +347,12 @@ try {
                     'canonical-boundary-progress.jsonl','boundary-observer-audit.json','boundary-field-schema.json',
                     'canonical-asset-origins.json','canonical-event-binding-audit.json','canonical-event-globals.json','canonical-event-data-audit.json',
                     'canonical-input-epoch.json','canonical-input-carry-audit.json','canonical-clock-carry-audit.json',
-                    'boundary-coverage-catalog.json','boundary-coverage-reader-audit.json')
+                    'boundary-coverage-catalog.json','boundary-coverage-reader-audit.json','s0-preparation.jsonl','s0-observer-audit.json')
                 foreach ($file in (Get-ChildItem -LiteralPath $resolvedShadow -Recurse -File | Where-Object {
                     ($_.Name -in $diagnosticNames -or $_.Name -match '^loading-candidate-[0-9]+-inventory\.json$' -or
                         $_.Name -match '^boundary-(?:logical-)?digest-[0-9]+(?:-repeat)?\.json$' -or
                         $_.Name -match '^boundary-epoch-[0-9]+\.json$' -or
+                        $_.Name -match '^s0-observation-[0-9]+(?:-repeat)?\.json$' -or
                         $_.Name -match '^canonical-(?:input-)?carry-[0-9]+\.bin$')
                 })) {
                     $relative = [IO.Path]::GetRelativePath($resolvedShadow, $file.FullName)

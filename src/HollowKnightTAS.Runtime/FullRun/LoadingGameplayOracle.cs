@@ -45,6 +45,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly LoadingAssetProvenanceObservation assetProvenance = new LoadingAssetProvenanceObservation();
         private readonly List<Tuple<UnityEngine.Object, string>> assetRoots = new List<Tuple<UnityEngine.Object, string>>();
         private readonly CanonicalCoverageCatalog coverage = new CanonicalCoverageCatalog();
+        private readonly List<CanonicalS0Observation.Root> s0Roots = new List<CanonicalS0Observation.Root>();
+        private CanonicalS0ObservationSnapshot? s0Sample;
+        private readonly List<string> s0InvariantFailures = new List<string>();
         private readonly Dictionary<UnityEngine.Object, string> unityCoverageLabels = new Dictionary<UnityEngine.Object, string>(ReferenceComparer<UnityEngine.Object>.Instance);
         private readonly IReadOnlyDictionary<string, string>? coverageHeroBindings;
         private CanonicalCoverageCatalog.Snapshot? lastCoverage;
@@ -205,6 +208,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             captureProgress = Stopwatch.StartNew(); captureStages.Clear(); captureStageStarted = 0;
             capturePhase = "canonical-boundary"; captureBoundary = "source-unloaded-target-not-started";
             var groups = CaptureState(fullInventory: true);
+            s0Sample = new CanonicalS0Observation(CanonicalS0FieldOwnership.Classify, S0ExternalBinding,
+                fields.Fields, fields.Read, CanonicalS0FieldOwnership.KnownOwner).Capture(s0Roots);
+            s0Sample.InvariantFailures = s0InvariantFailures.ToArray();
             groups["movieFrame"] = movie.ToString(CultureInfo.InvariantCulture);
             groups["nativeFrame"] = native.ToString(CultureInfo.InvariantCulture);
             var observedCoverage = coverage.Capture(omissions);
@@ -227,6 +233,27 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (!boundaryCapture) throw new InvalidOperationException("Field schema is not bound to a canonical boundary.");
             return fields.Schema();
+        }
+        internal CanonicalS0ObservationSnapshot BoundaryS0Observation() => s0Sample
+            ?? throw new InvalidOperationException("No canonical S0 observation is available.");
+        private string? S0ExternalBinding(object value)
+        {
+            if (unityIds.TryGetValue(value, out var unityBinding))
+            {
+                // Destroyed wrappers have no closed logical rebind contract.
+                // In particular, a fake-null ordinal from the raw graph must
+                // never become an S0 identity that depends on preceding D.
+                if (value is UnityEngine.Object unityValue && unityCoverageLabels.TryGetValue(unityValue, out var issue)
+                    && issue.StartsWith("destroyed-unity-wrapper", StringComparison.Ordinal)) return null;
+                return "unity:" + unityBinding;
+            }
+            var owner = value as Fsm ?? (value is FsmState || value is FsmStateAction ? fields.Read(value, "fsm") as Fsm : null);
+            if (owner != null && s0Roots.Any(root => root.Domain == CanonicalS0Observation.Ownership.D && ReferenceEquals(root.Value, owner)))
+            {
+                if (value is Fsm && fsmIds.TryGetValue(owner, out var fsmBinding)) return "D-fsm:" + fsmBinding;
+                if (fsmMemberIds.TryGetValue(value, out var memberBinding)) return "D-fsm-member:" + memberBinding;
+            }
+            return null;
         }
         internal bool BoundarySchedulerRestorePrepared { get; private set; }
         internal CanonicalSchedulerCarry BoundarySchedulerCarry(CanonicalInputEpoch epoch)
@@ -264,6 +291,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             var path = root.Substring(sceneEnd + 1);
             if (!coverageHeroBindings.TryGetValue(path, out var expected) || !Equals(fields.Read(fsm, "name"), expected)) return;
             var visual = CanonicalHeroFsmBindingRegistry.IsCanonicalVisual(path, expected);
+            s0Roots.Add(new CanonicalS0Observation.Root(root, fsm, visual
+                ? CanonicalS0Observation.Ownership.S0 : CanonicalS0Observation.Ownership.D));
             coverage.BindRoot(root, visual ? CanonicalCoverageCatalog.Domain.S0 : CanonicalCoverageCatalog.Domain.D,
                 visual ? "canonical-hero-visual-FSM-registry" : "canonical-hero-FSM-carry-registry");
         }
@@ -447,6 +476,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             observationIdentity.Refresh();
             nativeValues.BeginSample();
             if (boundaryCapture) { coverage.BeginSample(); unityCoverageLabels.Clear(); coverageRoot = ""; coverageField = ""; }
+            if (boundaryCapture) { s0Roots.Clear(); s0InvariantFailures.Clear(); s0Sample = null; }
             detachedFsmReferences.Clear();
             detachedFsmRoots.Clear();
             unityIds.Clear(); fsmIds.Clear(); fsmMemberIds.Clear();
@@ -614,6 +644,29 @@ namespace HollowKnightTAS.Runtime.FullRun
                 foreach (var root in boundaryCapture ? LoadingRegisteredStaticRoots.ReadCanonical() : LoadingRegisteredStaticRoots.Read())
                 {
                     RegisterCoverageStatic(root.Item1);
+                    if (boundaryCapture && new[] { "FsmExecutionStack", "ActionData", "ReflectionUtils" }.Any(type =>
+                        root.Item1.StartsWith("static:PlayMaker:HutongGames.PlayMaker." + type + ".", StringComparison.Ordinal)))
+                        s0Roots.Add(new CanonicalS0Observation.Root(root.Item1, root.Item2, CanonicalS0FieldOwnership.StaticRoot(root.Item1)));
+                    else if (boundaryCapture && (root.Item1 == "static:PlayMaker:HutongGames.PlayMaker.Fsm.EventData"
+                        || root.Item1.StartsWith("static:PlayMaker:HutongGames.PlayMaker.FsmEvent.", StringComparison.Ordinal)))
+                    {
+                        const string eventPrefix = "static:PlayMaker:HutongGames.PlayMaker.FsmEvent.";
+                        var registeredEventRoot = root.Item1 == "static:PlayMaker:HutongGames.PlayMaker.Fsm.EventData"
+                            || root.Item1 == eventPrefix + "_eventLookup"
+                            || root.Item1.StartsWith(eventPrefix, StringComparison.Ordinal)
+                                && CanonicalSystemEventBindings.Snapshot().ContainsKey(root.Item1.Substring(eventPrefix.Length));
+                        s0Roots.Add(new CanonicalS0Observation.Root(root.Item1, root.Item2,
+                            registeredEventRoot ? CanonicalS0Observation.Ownership.D : CanonicalS0Observation.Ownership.Unknown));
+                        if (root.Item1.EndsWith("FsmEvent._eventLookup", StringComparison.Ordinal) && root.Item2 != null
+                            && fields.Read(root.Item2, "entries") is Array entries)
+                        {
+                            if (entries.Length > 10000) throw new InvalidOperationException("S0 event binding registry budget exceeded.");
+                            foreach (var entry in entries)
+                                if (entry != null && fields.Read(entry, "hashCode") is int hashCode && hashCode >= 0
+                                    && fields.Read(entry, "value") is FsmEvent cached && fields.Read(entry, "key") is string key)
+                                    s0Roots.Add(new CanonicalS0Observation.Root("R6/FsmEvent-cache/" + key, cached, CanonicalS0Observation.Ownership.D));
+                        }
+                    }
                     var detailedStatic = root.Item1.EndsWith("InControl.InputManager.ActiveDevices", StringComparison.Ordinal)
                         || root.Item1.EndsWith("Modding.ModLoader.<ModInstances>k__BackingField", StringComparison.Ordinal);
                     var digest = fields.Capture(root.Item2, root.Item1, includeFieldDiagnostics: detailedStatic);
@@ -812,10 +865,33 @@ namespace HollowKnightTAS.Runtime.FullRun
                             : component is Rigidbody2D || component is Collider2D ? "native-physics-separate"
                             : "requires-native-codec" }).ToArray();
                 var id = item.id + "/native-hierarchy";
+                // Reuse the original hierarchy reader's one native scale read.
+                // The independent field graph itself never evaluates getters.
+                var localScale = transform.localScale;
+                if (boundaryCapture)
+                {
+                    var lights = observedComponents.OfType<PlayMakerFSM>().Select(component => fields.Read(component, "fsm") as Fsm)
+                        .Where(fsm => fsm != null && s0Roots.Any(root => root.Domain == CanonicalS0Observation.Ownership.S0
+                            && ReferenceEquals(root.Value, fsm)) && Equals(fields.Read(fsm!, "name"), "HeroLight Control")).ToArray();
+                    if (lights.Length > 1) throw new InvalidOperationException("S0 HeroLight native scale owner is ambiguous.");
+                    if (lights.Length == 1)
+                    {
+                        s0Roots.Add(new CanonicalS0Observation.Root(id + "/R2.localScale", localScale, CanonicalS0Observation.Ownership.S0));
+                        var variables = fields.Read(lights[0]!, "variables");
+                        var vectors = variables == null ? null : fields.Read(variables, "vector3Variables") as Array;
+                        if (vectors == null || vectors.Length > 4096) throw new InvalidOperationException("S0 fresh Idle Scale table is absent or exceeds its bound.");
+                        var idle = vectors.Cast<object>().Where(variable => variable != null && Equals(fields.Read(variable, "name"), "Idle Scale")).ToArray();
+                        if (idle.Length != 1 || !(fields.Read(idle[0], "value") is Vector3 idleScale))
+                            throw new InvalidOperationException("S0 fresh Idle Scale field binding differs.");
+                        s0Roots.Add(new CanonicalS0Observation.Root(id + "/R2.freshIdleScale", idleScale, CanonicalS0Observation.Ownership.S0));
+                        if (Bits(localScale.x) != Bits(idleScale.x) || Bits(localScale.y) != Bits(idleScale.y) || Bits(localScale.z) != Bits(idleScale.z))
+                            s0InvariantFailures.Add(id + "/R2.localScale:differs-from-actual-fresh-Idle-Scale");
+                    }
+                }
                 var digest = fields.Capture(new { go.activeSelf, go.layer, go.tag, go.isStatic,
                     hideFlags = (int)go.hideFlags, parent = transform.parent == null ? null : UnityId(transform.parent),
                     sibling = transform.GetSiblingIndex(), transform.hasChanged, transform.localPosition, transform.localRotation,
-                    transform.localScale, rect, components }, id, expandRoot: true);
+                    localScale, rect, components }, id, expandRoot: true);
                 text.Append(id).Append(':').Append(digest.Sha256).Append('\n');
                 foreach (var omitted in digest.Unsupported) omissions.Add(omitted);
                 inventory.Add(new { id, type = "UnityEngine.GameObject/native-hierarchy", digest = digest.Sha256,

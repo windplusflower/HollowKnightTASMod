@@ -87,6 +87,8 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         public Dictionary<string, string> CheckpointCommand(IReadOnlyDictionary<string, string> fields, string environmentSha256)
         {
+            if (fields.TryGetValue("phase", out var observationPhase) && observationPhase.StartsWith("s0-", StringComparison.Ordinal))
+                return S0ObservationCommand(fields);
             CanonicalPhaseOneTrace.RequireCheckpointAllowed(CanonicalPhaseOneTrace.Enabled);
             if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") != "1")
                 throw new InvalidOperationException("Scene checkpoint development is disabled.");
@@ -265,11 +267,15 @@ namespace HollowKnightTAS.Runtime.FullRun
         { checkpointArm = null; frozenCheckpoint = null; checkpointEncoding = null; checkpointFailure = ""; checkpointCaptureId = ""; }
         private void DisposeSceneCheckpoints()
         {
+            On.GameManager.FadeSceneInWithDelay -= OnS0BootstrapFade;
+            On.HeroController.Respawn -= OnS0BootstrapRespawn;
             UnhookCheckpointPreparation();
             lock (checkpointSync) { ClearCheckpointCapture(); checkpointImport?.Dispose(); checkpointImport = null; stagedCheckpoint = null; }
         }
         internal void DiscardCheckpointTransfersOnDisconnect()
         {
+            if (s0Observation != null && s0Observation.Phase != "Failed")
+            { s0Observation.Phase = "Failed"; s0Observation.Error = "S0 observer disconnected; retire process."; clock.Fault(47); }
             lock (checkpointSync)
                 if (checkpointRestore != null && checkpointRestore.Phase != "Failed" && checkpointRestore.Phase != "Cancelled")
                 { checkpointRestore.Phase = "Cancelled"; checkpointRestore.Error = "Restore session disconnected; retire this process."; clock.Fault(47); }

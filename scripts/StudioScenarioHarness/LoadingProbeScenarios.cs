@@ -47,6 +47,9 @@ internal static partial class StudioScenarioHarness
             && !args.Contains("--checkpoint-prototype") && !args.Contains("--probe-export-video")),
             "Phase 1 route observation requires the full canonical probe and excludes checkpoint/video operations");
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CANONICAL_PHASE1_TRACE", phaseOneTrace ? "1" : null);
+        var s0TargetArgument = args.SingleOrDefault(value => value.StartsWith("--probe-s0-target=", StringComparison.Ordinal));
+        Require(s0TargetArgument == null || phaseOneTrace, "S0-only preparation requires the protected Phase 1 observer");
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_S0_OBSERVING", s0TargetArgument != null ? "1" : null);
         // All canonical diagnostics capture the actual clock portion of D.
         // This enables the existing bounded native codec, never qualification.
         if (args.Contains("--probe-canonical-boundary")) Environment.SetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT", "1");
@@ -211,8 +214,49 @@ internal static partial class StudioScenarioHarness
             else
             {
                 await vm.OpenMovieFileAsync(source);
-                await vm.FrameMenuAsync("rebuild", end);
+                if (s0TargetArgument != null) await Field<Func<Task>>(vm, "restartProtectedGame")();
+                else await vm.FrameMenuAsync("rebuild", end);
                 Require(Field<Process>(app, "startupGame").Id != oldPid, "independent cold replacement process");
+            }
+            if (s0TargetArgument != null)
+            {
+                // The protected restart parks before Runtime is bootstrapped.
+                // Arm the real protected replay, then execute only its original
+                // bootstrap PlayerLoop; StartInputAt pauses before Movie zero.
+                var zeroMovie = new MovieV2Codec().Parse(new StringReader(protectedSource.Movie), source).Document
+                    ?? throw new InvalidDataException("Invalid zero Movie source.");
+                movies.ArmReplay(zeroMovie, 0);
+                await movies.RunAsync(0, CancellationToken.None);
+                await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("S0 bootstrap fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
+                    "original R3 bootstrap parks before Movie zero", 120);
+                await Until(() => vm.SelectedSession?.Client.IsConnected == true, "S0 replacement Runtime connected", 60);
+                AtFrame(vm, boot, 0, "S0 preparation starts at actual Movie zero");
+                var request = typeof(SceneCheckpointClient).GetMethod("RequestAsync", BindingFlags.Static | BindingFlags.NonPublic)!;
+                async Task<IReadOnlyDictionary<string, string>> Call(Dictionary<string, string> fields)
+                {
+                    fields["requestId"] = Guid.NewGuid().ToString("N");
+                    return await (Task<IReadOnlyDictionary<string, string>>)request.Invoke(null,
+                        new object[] { vm.SelectedSession!.Client, fields, CancellationToken.None })!;
+                }
+                var start = await Call(new Dictionary<string, string> { ["phase"] = "s0-start",
+                    ["slot"] = Arg("--probe-s0-slot"), ["target"] = Arg("--probe-s0-target") });
+                Require(start["movieFrame"] == "0" && start["consumedSamplesBefore"] == "0" && start["consumedSamplesAfter"] == "0",
+                    "S0 preparation begins with real zero Movie and consumed sample counters");
+                boot.Refresh();
+                await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
+                await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("S0 native fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
+                    "zero Movie preparation parks at arbitrary canonical B", 240);
+                var receipt = await Call(new Dictionary<string, string> { ["phase"] = "s0-status" });
+                Require(receipt["status"] == "PausedAtB" && receipt["movieFrame"] == "0"
+                    && receipt["consumedSamplesAfter"] == receipt["consumedSamplesBefore"] && receipt["consumedSamplesAfter"] == "0"
+                    && receipt["d1Passed"] == "false" && receipt["restoreQualified"] == "false",
+                    "real zero Movie and sample counters preserved, no D applied or checkpoint qualified");
+                await CheckSerialPauseAsync(vm, boot);
+                await File.WriteAllTextAsync(Path.Combine(output, "s0-receipt.json"), JsonSerializer.Serialize(receipt));
+                await File.WriteAllTextAsync(Path.Combine(output, "target-state.json"), JsonSerializer.Serialize(await VideoRuntimeState(vm)));
+                Require(sourceHash == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(source))), "input package bytes unchanged");
+                Log("S0 OBSERVATION COMPLETE; D1/D2/D3 not qualified");
+                return;
             }
             AtFrame(vm, boot, end, "loading probe exact endpoint");
             var state = await VideoRuntimeState(vm);

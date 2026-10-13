@@ -493,6 +493,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private void OnNativeBeforeFrame(long completed)
         {
             restoreDrawing.Active = false;
+            if (RunS0ObservationFrame(completed)) return;
             if (RunCheckpointPreparationFrame(completed)) return;
             if (!inputReady || (mode != "Recording" && mode != "Replay")) return;
             try
