@@ -577,6 +577,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 loadingBoundaryProbe?.Sample(ready ? "before" : "loading", boundary);
                 LoadingSerialSceneProbe.CaptureVisualState(movieFrame);
                 loadingGameplayOracle?.Sample(ready ? "before" : "loading", boundary);
+                actualDSuffixOracle?.ObserveSuffixRandomBoundary("before", ready, boundary);
                 actualDSuffixOracle?.Sample(ready ? "before" : "loading", boundary);
                 if (ready) TraceMovieRng("before", replayMovie?.Runs[timingRunIndex].RngSeed);
                 frameInputEnabled = ready;
@@ -686,6 +687,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidDataException("Native frame completion was not sequential.");
                 expectedNativeStart = completed;
                 infoTiming.CompleteFrame(clock.StepSeconds);
+                actualDSuffixOracle?.ObserveSuffixRandomBoundary("after", frameInputEnabled, frameBoundary);
                 if (!frameInputEnabled)
                 {
                     skippedLoadFrames++;

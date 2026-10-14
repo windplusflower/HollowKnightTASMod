@@ -30,6 +30,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly long controlledNativeOrigin;
         private readonly Func<string> gameplayRng;
         private readonly MemoryStream buffer = new MemoryStream();
+        private readonly MemoryStream suffixRandomTimeline = new MemoryStream();
+        private int suffixRandomRows;
         private readonly LoadingFieldDigest fields;
         private readonly LoadingObservationIdentity observationIdentity;
         private readonly LoadingNativeValueObservation nativeValues;
@@ -410,6 +412,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 case "native-particle-pending-sync-not-observed": return ".playback.$pending-sync";
                 default: return ".$native-state";
             }
+        }
+
+        internal void ObserveSuffixRandomBoundary(string phase, bool ready, string boundary)
+        {
+            if (!suffixCapture || sealedTrace) return;
+            if (suffixRandomRows >= 256 || suffixRandomTimeline.Length > 1024*1024)
+                throw new InvalidOperationException("Actual D native suffix random observation exceeded its diagnostic bound.");
+            var bytes = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new {
+                diagnosticOnly = true, sequence = suffixRandomRows++, phase, ready, boundary,
+                movieFrame = movieFrame(), nativeFrame = nativeFrame(), gameplayRng = gameplayRng(),
+                particleManagerRandom = CaptureParticleRandomState(), completeStateCoverage = false }) + "\n");
+            suffixRandomTimeline.Write(bytes, 0, bytes.Length);
         }
 
         internal void Sample(string phase, string boundary)
@@ -979,7 +993,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return (string[])method.Invoke(null, null)!;
         }
 
-        private static uint[] CaptureParticleRandomState()
+        internal static uint[] CaptureParticleRandomState()
         {
             if (!HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalParticles(
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)) return Array.Empty<uint>();
@@ -1278,6 +1292,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     success = false;
                     detail += "; inventory export failed: " + exception.GetType().Name + ": " + exception.Message;
                 }
+                if (suffixCapture) {
+                    using (var randomOutput = new FileStream(Path.Combine(directory, "suffix-native-random.jsonl"), FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+                        suffixRandomTimeline.WriteTo(randomOutput);
+                }
                 var content = buffer.ToArray();
                 using (var digest = SHA256.Create())
                 {
@@ -1292,7 +1310,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
             }
             catch (Exception exception) { success = false; detail += "; export failed: " + exception.Message; Modding.Logger.LogError("P0 gameplay oracle export failed: " + exception.Message); }
-            finally { nativeScheduler?.Release(); nativeValues.Dispose(); fields.Dispose(); buffer.Dispose(); }
+            finally { nativeScheduler?.Release(); nativeValues.Dispose(); fields.Dispose(); buffer.Dispose(); suffixRandomTimeline.Dispose(); }
             if (suffixCapture && !success) throw new InvalidOperationException("Actual D suffix observer failed: " + detail);
         }
 
@@ -1340,7 +1358,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 nativeScheduler?.Release();
                 fields.Dispose();
-                buffer.Dispose();
+                buffer.Dispose(); suffixRandomTimeline.Dispose();
                 return;
             }
             currentTransition = null;

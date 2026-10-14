@@ -52,6 +52,9 @@ namespace HollowKnightTAS.ClockPayload
 
         public static uint[] CaptureParticleRandomState() => particles?.Capture() ?? Array.Empty<uint>();
 
+        internal static void RestoreCheckpointParticleRandomState(uint[] source)
+            => (particles ?? throw new InvalidOperationException("Actual particle manager is unavailable.")).RestoreCheckpoint(source);
+
         public static void TestSessionOnline()
         {
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_VERIFY_ONLINE") != "1") return;

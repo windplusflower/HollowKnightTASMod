@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 using HollowKnightTAS.Core.SceneCheckpoints;
+using HollowKnightTAS.Core.Movie;
 
 namespace HollowKnightTAS.ClockPayload
 {
@@ -31,6 +32,15 @@ namespace HollowKnightTAS.ClockPayload
             return new CheckpointRandomState(words, fullRunRenderInitialized, randomSynchronizationSnapshotAvailable,
                 randomSynchronizationResetCount, randomSynchronizationSceneEpoch, randomSynchronizationLastAppliedSeed,
                 deterministicClockAdvanceSequence, randomSynchronizationLastBoundary, randomSynchronizationLastScene).Encode();
+        }
+        public static void ImportCheckpointParticleRandomState(uint[] source, long expectedNativeFrame)
+        {
+            RequireCheckpointRandomBoundary();
+            if (!checkpointRandomImported || !NativeExecutionProfile.UsesCanonicalBoundary(NativeExecutionProfile.SelectedProfileId)
+                || expectedNativeFrame < 0 || HktasClockBridge_GetFullRunMode() != 0
+                || HktasClockBridge_GetCompletedPlayerLoops() != (ulong)expectedNativeFrame)
+                throw new InvalidOperationException("Particle continuation requires the imported original paused canonical D boundary.");
+            EarlyModWallClockBootstrap.RestoreCheckpointParticleRandomState(source);
         }
         public static void ImportCheckpointRandomState(byte[] bytes, long expectedNativeFrame)
         {

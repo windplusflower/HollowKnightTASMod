@@ -18,6 +18,7 @@ namespace HollowKnightTAS.ClockPayload
         private const uint RootSeed = 1212896321;
         private readonly IntPtr managerSlot;
         private readonly IntPtr manager;
+        private bool checkpointImported;
         [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ReadProcessMemory(
             IntPtr process, IntPtr address, [Out] byte[] buffer, UIntPtr size, out UIntPtr read);
@@ -88,6 +89,20 @@ namespace HollowKnightTAS.ClockPayload
             var result = new uint[4];
             Buffer.BlockCopy(Read(IntPtr.Add(manager, 192), 16), 0, result, 0, 16);
             return result;
+        }
+
+        internal void RestoreCheckpoint(uint[] source)
+        {
+            if (checkpointImported || source == null || source.Length != 4 || source.All(word => word == 0))
+                throw new InvalidOperationException("Particle random continuation requires one valid source state.");
+            Capture(); // Retain the actual target manager/slot, never a source address.
+            var beforeHeader = Read(manager, 64);
+            var bytes = new byte[16]; Buffer.BlockCopy(source, 0, bytes, 0, bytes.Length);
+            checkpointImported = true;
+            if (!WriteProcessMemory(GetCurrentProcess(), IntPtr.Add(manager, 192), bytes, (UIntPtr)bytes.Length, out var written)
+                || written.ToUInt64() != (ulong)bytes.Length || !Capture().SequenceEqual(source)
+                || !Read(manager, 64).SequenceEqual(beforeHeader))
+                throw new InvalidOperationException("Particle random continuation raw readback or original manager header differs.");
         }
 
         private static byte[] Read(IntPtr address, int length)

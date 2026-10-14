@@ -36,7 +36,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 RandomSeedScene = randomSeedSceneName, LastGameUpdateNativeFrame = lastGameUpdateNativeFrame,
                 GameUpdateDeltaBits = BitConverter.DoubleToInt64Bits(gameUpdateDeltaSeconds),
                 GameUpdateTimeBits = BitConverter.DoubleToInt64Bits(gameUpdateTimeSeconds),
-                ExecutedMovieSecondsBits = BitConverter.DoubleToInt64Bits(executedMovieSeconds), UnityRandom = rng.Codec.Encode(UnityEngine.Random.state) };
+                ExecutedMovieSecondsBits = BitConverter.DoubleToInt64Bits(executedMovieSeconds), UnityRandom = rng.Codec.Encode(UnityEngine.Random.state), ParticleManagerRandom = LoadingGameplayOracle.CaptureParticleRandomState() };
         }
         private Dictionary<string, string> ActualDExperimentCommand(IReadOnlyDictionary<string, string> fields)
         {
@@ -138,7 +138,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || session.ExecutionFiles.Count != checkpointExecutionFiles.Count || checkpointExecutionFiles.Any(p =>
                     !session.ExecutionFiles.TryGetValue(p.Key, out var value) || value != p.Value)
                 || session.MoviePrefixSha256 != Sha256Utility.ComputeHex(Encoding.UTF8.GetBytes(new MovieV2Codec().WriteCanonical(MovieV2Prefix.Take(replayMovie, source.MovieFrame))))
-                || session.UnityRandom == null || session.UnityRandom.Length != 16)
+                || session.UnityRandom == null || session.UnityRandom.Length != 16
+                || session.ParticleManagerRandom == null || session.ParticleManagerRandom.Length != 4 || session.ParticleManagerRandom.All(word => word == 0))
                 throw new InvalidDataException("Actual D source Movie, original saves, execution identity or Unity RNG differs.");
             var seconds = new[] { BitConverter.Int64BitsToDouble(session.GameUpdateDeltaBits), BitConverter.Int64BitsToDouble(session.GameUpdateTimeBits),
                 BitConverter.Int64BitsToDouble(session.ExecutedMovieSecondsBits) };
@@ -173,6 +174,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             LoadingSerialSceneProbe.ReapplyProtectedClockCanon(0, source.NativeFrame, sessionDirectory, job.Origin,
                 movieInputControlOrigin!, input, mouse, () => { if (!Admission()) throw new InvalidOperationException("Actual D clock binding lost paused admission."); });
             apply(); source.Clock.RequireReadback(clock);
+            // The source manager Rand is residual D. Keep the actual target owner,
+            // write only its four words after managed/derived construction and read back.
+            CheckpointClockMethod("ImportCheckpointParticleRandomState").Invoke(null, new object[] { session.ParticleManagerRandom, source.NativeFrame });
+            if (!LoadingGameplayOracle.CaptureParticleRandomState().SequenceEqual(session.ParticleManagerRandom))
+                throw new InvalidOperationException("Actual D particle manager Rand raw readback differs.");
             var rng = UnityRandomStateCodec_1_5_78_11833.Resolve();
             if (!rng.Ready || rng.Codec == null) throw new InvalidOperationException("Actual D Unity RNG codec changed.");
             object state = default(UnityEngine.Random.State);
@@ -197,7 +203,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             File.WriteAllText(Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "actual-d-application.json"),
                 JsonConvert.SerializeObject(new { applicationExecuted = true, source.MovieFrame, source.NativeFrame,
                     consumedSamples = input.ConsumedSamples, sourcePrefix = session.MoviePrefixSha256, sourceDBytes = source.Main.Length + source.Input.Length,
-                    rawClockReadbackEqual = true, unityRandomRawReadbackEqual = true, restoreQualified = false, completeStateCoverage = false, d2Passed = false, d3Passed = false }));
+                    rawClockReadbackEqual = true, unityRandomRawReadbackEqual = true, particleManagerRandomRawReadbackEqual = true, particleComponentStateQualified = false, restoreQualified = false, completeStateCoverage = false, d2Passed = false, d3Passed = false }));
         }
     }
 }

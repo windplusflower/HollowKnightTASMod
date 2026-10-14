@@ -29,6 +29,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public string RandomSeedScene = "";
             public long GameUpdateDeltaBits, GameUpdateTimeBits, ExecutedMovieSecondsBits;
             public byte[] UnityRandom = Array.Empty<byte>();
+            public uint[] ParticleManagerRandom = Array.Empty<uint>();
         }
         internal byte[] Encode()
         {
