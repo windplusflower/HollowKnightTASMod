@@ -249,8 +249,35 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         internal Action RequireFrozenS0Scheduler() => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).RequireFrozenCapturedQueue();
+        internal Action PrepareOwnedHudLifecycle(IReadOnlyDictionary<int, MonoBehaviour> oldOwners, Func<int, bool> ownsNewStart, out Action retireStarts)
+            => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).BeginOwnedStartLifecycle(oldOwners, ownsNewStart, out retireStarts);
+        internal void RecaptureOwnedHudScheduler(Action admission, Action requireTransition)
+        {
+            if (!boundaryCapture || nativeScheduler == null) throw new InvalidOperationException("HUD lifecycle requires its original boundary reader.");
+            admission();
+            var identities = new BoundaryObjectIdentity();
+            var owners = Resources.FindObjectsOfTypeAll<Component>().Where(value => value != null && Loaded(value.gameObject)).ToArray();
+            if (owners.Length > 100000) throw new InvalidOperationException("HUD scheduler owner inventory exceeded its bound.");
+            var pointers = typeof(UnityEngine.Object).GetField("m_CachedPtr", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var objects = new Dictionary<int, string>(); var behaviours = new Dictionary<IntPtr, string>();
+            foreach (var owner in owners) {
+                var id = identities.Get(owner); objects[owner.GetInstanceID()] = id;
+                objects[owner.gameObject.GetInstanceID()] = identities.Get(owner.gameObject);
+                var pointer = (IntPtr)pointers.GetValue(owner);
+                if (owner is MonoBehaviour && pointer != IntPtr.Zero) behaviours.Add(pointer, id);
+            }
+            // Asset callbacks are not implicitly admitted in this explicit
+            // lifecycle. All surviving original callbacks must remain bound.
+            nativeScheduler.Capture(fields, id => objects.TryGetValue(id, out var value) ? value : null,
+                pointer => behaviours.TryGetValue(pointer, out var value) ? value : null);
+            admission(); requireTransition();
+            if (nativeScheduler.Unsupported.Length != 0) throw new InvalidOperationException("HUD lifecycle introduced native scheduler coverage gaps.");
+        }
         internal Action PrepareActualScheduler(CanonicalSchedulerCarry source, Func<bool> admission)
             => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).PrepareCanonicalRestore(source,
+                HeroController.SilentInstance ?? throw new InvalidOperationException("Missing actual Hero."), admission);
+        internal Action PrepareActualSchedulerVerification(CanonicalSchedulerCarry source, Func<bool> admission)
+            => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).PrepareCanonicalVerification(source,
                 HeroController.SilentInstance ?? throw new InvalidOperationException("Missing actual Hero."), admission);
         internal CanonicalS0ObservationSnapshot RecaptureBoundaryS0()
         {

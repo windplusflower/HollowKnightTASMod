@@ -20,8 +20,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalHeroAssetTemplates assetTemplates;
         private readonly CanonicalVisualFsmTemplates visualTemplates;
         private readonly CanonicalHudJournalPolicy journal;
-        internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates, CanonicalHudJournalPolicy journal)
-        { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; this.journal = journal; }
+        private readonly Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies;
+        internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates, CanonicalHudJournalPolicy journal, Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies)
+        { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; this.journal = journal; this.restoreHudSourceDependencies = restoreHudSourceDependencies; }
         internal EventAudit[] EventBindingAudit { get; private set; } = Array.Empty<EventAudit>();
         internal CanonicalEventCarryRoots.Audit? EventGlobalsAudit { get; private set; }
         internal CanonicalEventGraphContract.Audit? EventGraphAudit { get; private set; }
@@ -220,6 +221,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         || !source.Clock.Observer.SequenceEqual(actualSourceValidation.Clock.Clock.Observer)))
                         throw new InvalidDataException("Actual D graph clock/epoch disagrees with its sealed source envelope.");
                     domainActions.Add(LoadingSerialSceneProbe.PrepareCanonicalLoadScalars(source.SceneLoad));
+                    domainActions.Add(() => restoreHudSourceDependencies(source.Scheduler, admitted));
                     var callbacks = CanonicalSceneLoadCallbacks.FromPrepared(view);
                     loadCallbacks.RequireSource(callbacks, source.SceneLoad);
                     sourceChecks.Add(() => loadCallbacks.RequireAppliedSource(callbacks));
@@ -239,7 +241,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     domainActions.Add(sceneMapping.PrepareApply(mapping, mappingPlayer));
                     sourceChecks.Add(() => sceneMapping.RequireAppliedSource(mapping, mappingPlayer));
                     domainActions.Add(journal.PrepareSourceDependencies(admitted));
-                    domainActions.Add(prepareScheduler(source.Scheduler));
+                    domainActions.Add(() => prepareScheduler(source.Scheduler)());
                 });
                 var sdk = inputCodec.PrepareOwnedGraph(sourceInput, targetInputRoots, inputExternal.ResolveTarget, view => {
                     if (continuation == null) throw new InvalidOperationException("Actual input graph has no source main continuation.");

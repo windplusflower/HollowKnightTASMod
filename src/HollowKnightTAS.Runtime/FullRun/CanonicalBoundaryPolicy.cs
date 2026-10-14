@@ -12,6 +12,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         private readonly CanonicalHeroStartupWarmup startup;
         private readonly CanonicalHudJournalPolicy journal = new CanonicalHudJournalPolicy();
+        private readonly CanonicalHudCharmPolicy charms = new CanonicalHudCharmPolicy();
         private readonly CanonicalBoundaryPoolPolicy pools = new CanonicalBoundaryPoolPolicy();
         private readonly CanonicalVisualFsmTemplates visualTemplates = new CanonicalVisualFsmTemplates();
         private readonly CanonicalHeroAssetTemplates assetTemplates = new CanonicalHeroAssetTemplates();
@@ -44,7 +45,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             carry.Capture(identities, epoch, input, mouse, observer.BoundarySchedulerCarry(epoch), observer.BoundaryHeroInvulnerabilityCarry(epoch),
                 targetDirectoryOnly: true, originalBootstrapPlayer: originalBootstrapPlayer, sourceRequiresDetachedPlayer: detached,
                 retainedTargetTitleCallback: originalTitleCallback);
-            var apply = carry.PrepareActualRestore(source, movie, admission, data => observer.PrepareActualScheduler(data, admission));
+            var apply = carry.PrepareActualRestore(source, movie, admission, data => observer.PrepareActualSchedulerVerification(data, admission));
             return () => {
                 apply();
                 var savedEpoch = carry.PreparedRestoreEpoch ?? throw new InvalidOperationException("Actual D source epoch is absent.");
@@ -52,11 +53,29 @@ namespace HollowKnightTAS.Runtime.FullRun
                 savedEpoch.RequireReadback(CanonicalInputEpochRuntime.Capture(savedEpoch.OriginNative, source.NativeFrame, savedEpoch), source.NativeFrame);
             };
         }
+        private void RestoreHudSourceDependencies(CanonicalSchedulerCarry sourceScheduler, Func<bool> admitted)
+        {
+            void Require() { if (!admitted()) throw new InvalidOperationException("HUD derivation lost paused source admission."); }
+            Require();
+            var current = observer ?? throw new InvalidOperationException("HUD derivation has no original observer.");
+            var sourceSubset = CanonicalSchedulerOwnedStartPartition.WithoutOwnedStarts(sourceScheduler, charms.SourceStartPrefix());
+            var retired = current.PrepareOwnedHudLifecycle(charms.OldOwners(), charms.OwnsNewStart, out var retireStarts);
+            LoadingSerialSceneProbe.DeriveProtectedSourceCharmDirectory(charms, retiredMeshes, retireStarts, () => {
+                current.RecaptureOwnedHudScheduler(Require, retired);
+                current.PrepareActualScheduler(sourceSubset, admitted)();
+                current.RecaptureOwnedHudScheduler(Require, () => { });
+                var born = current.PrepareOwnedHudLifecycle(charms.OldOwners(), charms.OwnsNewStart, out var noOldStarts);
+                noOldStarts();
+                charms.BuildCurrent();
+                current.RecaptureOwnedHudScheduler(Require, born);
+            }, Require);
+            Require();
+        }
         internal CanonicalBoundaryPolicy()
         {
             CanonicalPhaseOneTrace.RequireContext(Environment.GetEnvironmentVariable);
             phaseOneTrace = CanonicalPhaseOneTrace.Enabled;
-            retiredMeshes = new CanonicalRetiredMeshPolicy(id => pools.RetiredOwner(id) ?? journal.RetiringOwner(id) ?? LoadingSerialSceneProbe.RetiringSourceOwner(id));
+            retiredMeshes = new CanonicalRetiredMeshPolicy(id => pools.RetiredOwner(id) ?? journal.RetiringOwner(id) ?? charms.RetiringOwner(id) ?? LoadingSerialSceneProbe.RetiringSourceOwner(id));
             startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart);
         }
         internal bool AdvanceStartup() => startup.Advance();
@@ -104,7 +123,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 JsonConvert.SerializeObject(new { ordinal, source, target, movie, native, phase, detail,
                     elapsedMilliseconds = elapsed.ElapsedMilliseconds, completeStateCoverage = false }) + "\n");
             Progress("begin", new { movieInputNativeOrigin, controlledNativeFrame = checked(native - movieInputNativeOrigin) });
-            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates, journal); }
+            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates, journal, RestoreHudSourceDependencies); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
@@ -121,6 +140,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("R1-source-and-pool-meshes-retired", new { removedDelayedDestroyCallbacks = retiredMeshes.Flush() });
             var stopped = CanonicalBoundaryVisualPolicy.Reset(visualTemplates, out var removedTweenDestroyCallbacks);
             Progress("R2-registered-visual-stop", new { stopped, removedTweenDestroyCallbacks });
+            // Source-dependent generated HUD comes after the registered visual
+            // reset Starts on every path, including actual D re-derivation.
+            Progress("R2-original-equipped-charms-derived", charms.Reset());
+            Progress("R2-equipped-charm-meshes-retired", new { removedDelayedDestroyCallbacks = retiredMeshes.Flush(
+                owner => owner.StartsWith("canonical-equipped-charm-retirement/", StringComparison.Ordinal)) });
             Progress("R2-checkpoint-icon-idle-timer", CanonicalCheckpointIconPolicy.ResetIdleTimer());
             var identities = new BoundaryObjectIdentity();
             var carryFsmBindings = CanonicalHeroFsmBindings.Validate(identities);
@@ -153,7 +177,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (!StringComparer.Ordinal.Equals(observerSession, sessionDirectory))
                 throw new InvalidOperationException("Canonical observer cannot change its protected session binding.");
-            bool OwnsCanonicalStart(int instance) => pools.OwnsNewPoolStart(instance) || visualTemplates.OwnsResetStart(instance) || journal.OwnsNewStart(instance);
+            bool OwnsCanonicalStart(int instance) => pools.OwnsNewPoolStart(instance) || visualTemplates.OwnsResetStart(instance) || journal.OwnsNewStart(instance) || charms.OwnsNewStart(instance);
             string? RetiredOwner(int instance) => pools.RetiredOwner(instance) ?? LoadingSerialSceneProbe.RetiredSourceOwner(instance);
             var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
             inputEpoch.RequireControlOrigin();

@@ -47,13 +47,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (retired.Count > 16000) throw new InvalidOperationException("Retired mesh lifecycle inventory exceeds its bound.");
             })));
         }
-        internal int Flush()
+        internal int Flush(Func<string, bool>? admittedOwner = null)
         {
             var reader = new LoadingNativeSchedulerDigest();
             try
             {
                 var result = reader.CancelRetiredObjectDestroys(id => {
                     if (!retired.TryGetValue(id, out var record)) return null;
+                    if (admittedOwner != null && !admittedOwner(record.Item3)) return null;
                     if (record.Item2 != null) throw new InvalidOperationException("Retired mesh still has its original renderer owner.");
                     return () => {
                         if (record.Item1 != null) UnityEngine.Object.DestroyImmediate(record.Item1);

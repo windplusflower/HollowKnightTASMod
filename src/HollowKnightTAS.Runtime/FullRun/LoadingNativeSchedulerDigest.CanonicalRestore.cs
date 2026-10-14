@@ -11,6 +11,22 @@ namespace HollowKnightTAS.Runtime.FullRun
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool WriteProcessMemory(IntPtr process, IntPtr address, byte[] bytes, UIntPtr size, out UIntPtr written);
 
+        internal Action PrepareCanonicalVerification(CanonicalSchedulerCarry source, HeroController hero, Func<bool> isPaused)
+        {
+            var actual = CaptureCanonicalCarry(source.SourceNative, hero);
+            CanonicalSchedulerRestorePlan.Prepare(source, actual); // complete shape/family/alias validation
+            var frozen = RequireFrozenCapturedQueue(); var consumed = false;
+            return () => {
+                if (consumed || !isPaused()) throw new InvalidOperationException("Complete scheduler verification was already consumed or lost pause.");
+                consumed = true; frozen();
+                if (source.Timestamp != actual.Timestamp || source.Callbacks.Where((value, index) =>
+                    value.WakeTimeBits != actual.Callbacks[index].WakeTimeBits || value.Frame != actual.Callbacks[index].Frame
+                    || value.TimestampAge != actual.Callbacks[index].TimestampAge).Any())
+                    throw new InvalidOperationException("Complete scheduler source scalar readback differs after original owned birth.");
+                capturedQueueValid = false;
+            };
+        }
+
         internal Action PrepareCanonicalRestore(CanonicalSchedulerCarry source, HeroController hero, Func<bool> isPaused)
         {
             var prepared = CaptureCanonicalCarry(source.SourceNative, hero);

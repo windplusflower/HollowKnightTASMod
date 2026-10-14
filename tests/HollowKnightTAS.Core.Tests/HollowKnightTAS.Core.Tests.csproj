@@ -37,6 +37,7 @@
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSceneLoadCarry.cs" Link="FullRun\CanonicalSceneLoadCarry.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSchedulerCarry.cs" Link="FullRun\CanonicalSchedulerCarry.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSchedulerRestorePlan.cs" Link="FullRun\CanonicalSchedulerRestorePlan.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSchedulerOwnedStartPartition.cs" Link="FullRun\CanonicalSchedulerOwnedStartPartition.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSchedulerMemoryTransaction.cs" Link="FullRun\CanonicalSchedulerMemoryTransaction.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryContinuationContract.cs" Link="FullRun\CanonicalCarryContinuationContract.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalClockCarry.cs" Link="FullRun\CanonicalClockCarry.cs" />

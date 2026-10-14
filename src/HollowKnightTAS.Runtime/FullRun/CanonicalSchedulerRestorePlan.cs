@@ -30,7 +30,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (first.Owner != second.Owner || first.Call != second.Call || first.Cleanup != second.Cleanup
                     || first.Rate != second.Rate || first.Mode != second.Mode || first.Repeat != second.Repeat
                     || first.UserDataPresent != second.UserDataPresent || (first.Coroutine.Length == 0) != (second.Coroutine.Length == 0))
-                    throw Invalid("ordered callback shape differs at " + index);
+                    throw Invalid("ordered callback shape differs at " + index + "; source=" + first.Owner + "/" + first.Call
+                        + "; target=" + second.Owner + "/" + second.Call + "; sourceWake=" + first.WakeTimeBits.ToString("x16")
+                        + "; targetWake=" + second.WakeTimeBits.ToString("x16"));
                 if (first.Coroutine.Length != 0) {
                     if (aliases.TryGetValue(first.Coroutine, out var known) && known != second.Coroutine
                         || reverse.TryGetValue(second.Coroutine, out var original) && original != first.Coroutine)

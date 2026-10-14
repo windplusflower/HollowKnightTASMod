@@ -37,6 +37,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool awaitingBoundary;
         private bool observedBoundary;
         private CanonicalBoundaryMutationScope? protectedClockCanonScope;
+        private bool protectedSourceCharmDerivationConsumed;
         private readonly System.Collections.Generic.Dictionary<int, string> retiredSourceOwners = new System.Collections.Generic.Dictionary<int, string>();
         internal static string? RetiredSourceOwner(int instanceId) => instance != null
             && instance.sourceUnloaded && instance.retiredSourceOwners.TryGetValue(instanceId, out var identity) ? identity : null;
@@ -335,6 +336,27 @@ namespace HollowKnightTAS.Runtime.FullRun
             if ((target.IsValid() && target.isLoaded) || self.checkpointLoadInfo.SceneName != self.transition.TargetSceneName)
                 throw new InvalidOperationException("Checkpoint target load has already started or its entry parameters differ.");
             return Tuple.Create(self.ordinal, self.checkpointLoadInfo, self.sourceName);
+        }
+        internal static void DeriveProtectedSourceCharmDirectory(CanonicalHudCharmPolicy charms,
+            CanonicalRetiredMeshPolicy meshes, Action retireStarts, Action applySourceAndBuild, Action requireAdmission)
+        {
+            GetProtectedObservationBoundary();
+            var self = instance!;
+            if (!CanonicalActualDExperiment.Enabled || !CanonicalClockApplyExperiment.Enabled || self.protectedClockCanonScope != null
+                || self.protectedSourceCharmDerivationConsumed)
+                throw new InvalidOperationException("Source charm derivation requires its single protected actual D mutation scope.");
+            self.protectedSourceCharmDerivationConsumed = true;
+            using var scope = new CanonicalBoundaryMutationScope(requireAdmission);
+            scope.Enter(); self.protectedClockCanonScope = scope;
+            try {
+                RequireCanonicalMutationBoundary();
+                charms.Retire();
+                meshes.Flush(owner => owner.StartsWith("canonical-equipped-charm-retirement/", StringComparison.Ordinal));
+                requireAdmission(); retireStarts(); requireAdmission();
+                applySourceAndBuild(); requireAdmission();
+                GetProtectedObservationBoundary(); requireAdmission();
+            }
+            finally { self.protectedClockCanonScope = null; }
         }
         internal static void ReapplyProtectedClockCanon(long movie, long native, string sessionDirectory, long origin,
             CanonicalInputEpoch controlOrigin, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input,
