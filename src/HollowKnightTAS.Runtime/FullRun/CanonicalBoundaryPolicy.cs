@@ -148,6 +148,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("R2-equipped-charm-meshes-retired", new { removedDelayedDestroyCallbacks = retiredMeshes.Flush(
                 owner => owner.StartsWith("canonical-equipped-charm-retirement/", StringComparison.Ordinal)) });
             Progress("R2-six-owned-HUD-particles-cleared-and-armed", new { count = hudParticles.Reset() });
+            Progress("R2-original-Hero-Fall-Trail-stopped-and-cleared", CanonicalHeroFallTrailPolicy.Reset());
             Progress("R2-checkpoint-icon-idle-timer", CanonicalCheckpointIconPolicy.ResetIdleTimer());
             var identities = new BoundaryObjectIdentity();
             var carryFsmBindings = CanonicalHeroFsmBindings.Validate(identities);
