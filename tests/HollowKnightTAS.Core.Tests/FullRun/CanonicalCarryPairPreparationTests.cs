@@ -9,6 +9,30 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
 [TestClass]
 public sealed class CanonicalCarryPairPreparationTests
 {
+    [TestMethod]
+    public void Domain_writes_use_source_postconditions_without_reusing_old_value_guards()
+    {
+        var graphA = 0; var graphB = 0; var domain = 0; var postChecked = false;
+        var first = new CanonicalPreparedWritePlan(() => { }, () => graphA = 11, () => Assert.AreEqual(11, graphA));
+        var second = new CanonicalPreparedWritePlan(() => { }, () => graphB = 29, () => Assert.AreEqual(29, graphB));
+        var pair = new CanonicalCarryPairPreparation(first, second, () => Assert.AreEqual(0, domain), () => true);
+        pair.Apply(() => { Assert.AreEqual(11, graphA); Assert.AreEqual(29, graphB); domain = 73; },
+            () => { Assert.AreEqual(73, domain); postChecked = true; });
+        Assert.IsTrue(postChecked);
+        Assert.ThrowsExactly<InvalidOperationException>(() => pair.Apply());
+    }
+    [TestMethod]
+    public void Failed_source_postcondition_permanently_retires_the_combined_transaction()
+    {
+        var writes = 0;
+        var first = new CanonicalPreparedWritePlan(() => { }, () => writes++, () => { });
+        var second = new CanonicalPreparedWritePlan(() => { }, () => writes++, () => { });
+        var pair = new CanonicalCarryPairPreparation(first, second, () => { }, () => true);
+        Assert.ThrowsExactly<InvalidDataException>(() => pair.Apply(() => writes++, () => throw new InvalidDataException("Injected source raw readback failure.")));
+        Assert.AreEqual(3, writes);
+        Assert.ThrowsExactly<InvalidOperationException>(() => pair.Apply());
+        Assert.AreEqual(3, writes);
+    }
     private sealed class Owner { public int Value; public Owner? Other; }
     private static CanonicalCarryGraphCodec Codec() => new(new[] { typeof(Owner) }, "pair-v1");
     private static Dictionary<string, object> Roots(string name, Owner owner) => new() { [name] = owner };

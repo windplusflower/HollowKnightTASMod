@@ -46,8 +46,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             importObserver(Clock.Observer, NativeFrame);
             imported = true;
             fsm.Apply();
+            if (!fsm.ReadBackMatches) throw new InvalidDataException("Applied FsmTime D readback differs.");
+            RequireReadback(clock);
+        }
+        internal void RequireReadback(NativeFullRunFrameClock clock)
+        {
             var actual = CanonicalClockCarry.Capture(NativeFrame);
-            if (!fsm.ReadBackMatches || !actual.Native.SequenceEqual(Clock.Native)
+            if (!CanonicalFsmTimeCarry.Equal(FsmTime, CanonicalFsmTimeCarry.Capture()) || !actual.Native.SequenceEqual(Clock.Native)
                 || !actual.Random.SequenceEqual(Clock.Random) || !actual.Observer.SequenceEqual(Clock.Observer)
                 || !clock.IsPaused || clock.CurrentFrameIndex != NativeFrame)
                 throw new InvalidDataException("Applied clock D failed its complete raw readback.");

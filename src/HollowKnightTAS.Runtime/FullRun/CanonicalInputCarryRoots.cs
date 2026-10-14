@@ -181,7 +181,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     DeclaringType = method.DeclaringType, Name = method.MethodName, IsStatic = method.MethodIsStatic,
                     TargetBinding = method.TargetBinding, TargetType = method.TargetRuntimeType }).ToArray() }).ToArray());
             proposed.Add(CanonicalInputCallbackContract.Root, callbackData);
-            var unsupported = new List<string> {
+            var qualifications = new[] {
                 "R6/InputManager-static-clock-focus-configuration-restoration-unqualified",
                 "R6/InputManager-device-manager-native-state-and-update-order-unqualified",
                 "R6/InputProvider-fixed-slot-and-native-state-rebinding-unqualified",
@@ -189,6 +189,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 "R6/InputManager-callback-and-list-consumer-rebinding-unqualified",
                 "R6/InputDevice-GUID-and-control-slot-rebinding-unqualified",
                 "R6/InputAction-binding-axis-and-consumer-aliases-unqualified" };
+            var unsupported = new List<string>();
             if (setAudits.Any(set => set.BindingListenerPresent)) unsupported.Add("R6/InputAction-live-binding-listener-continuation-unqualified");
             foreach (var device in deviceAudits.Where(device => device.RuntimeType != CanonicalCarryGraphCodec.Identity(typeof(InputDevice))))
                 unsupported.Add("R6/InputDevice/" + device.Ordinal.ToString(CultureInfo.InvariantCulture) + "-original-type-layout-not-observed");
@@ -216,7 +217,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 FixedBindings = new ReadOnlyDictionary<string, object>(fixedBindings), FixedBindingCount = fixedBindings.Count, HeroActionSetCount = heroSets,
                 CallbackData = callbackData,
                 StatefulControlRoots = controlRoots,
-                Unsupported = unsupported.OrderBy(value => value, StringComparer.Ordinal).ToArray() };
+                Unsupported = unsupported.OrderBy(value => value, StringComparer.Ordinal).ToArray(), BlockingQualifications = qualifications };
         }
 
         private static object? RawStatic(string name) => (typeof(InputManager).GetField(name, Static)
@@ -329,6 +330,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             [Newtonsoft.Json.JsonIgnore]
             internal CanonicalInputCallbackContract.Data CallbackData { get; set; } = new CanonicalInputCallbackContract.Data();
             public string[] Unsupported { get; set; } = Array.Empty<string>();
+            public string[] BlockingQualifications { get; set; } = Array.Empty<string>();
             public bool RestoreBindingQualified => false;
         }
         internal sealed class ListAudit

@@ -181,8 +181,13 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal CanonicalPreparedWritePlan PrepareGraph(CanonicalCarryGraphData input, IReadOnlyDictionary<string, object> roots,
             Func<string, object> resolveExternal, Action<PreparedView>? preflight = null)
+            => PrepareOwnedGraph(Decode(Encode(input)), roots, resolveExternal, preflight);
+        // Caller owns a fresh decoded packet on the parked game thread. All
+        // schema/coverage/layout/reachability/alias checks still run below.
+        // This avoids a redundant JSON encode/decode of already owned data.
+        internal CanonicalPreparedWritePlan PrepareOwnedGraph(CanonicalCarryGraphData value, IReadOnlyDictionary<string, object> roots,
+            Func<string, object> resolveExternal, Action<PreparedView>? preflight = null)
         {
-            var value = Decode(Encode(input));
             // Domain checks receive the frozen input before allocation or
             // external resolution. All generic checks still run afterwards.
             importValidation?.Invoke(value);

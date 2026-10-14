@@ -38,5 +38,12 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         [TestMethod]
         public void NullableNonEnumDoesNotBroadenOriginalContract()
         { Assert.ThrowsExactly<ArgumentException>(() => CanonicalParkedBoundaryGuard.EncodeScalarValue(1f, typeof(float?))); }
+        [TestMethod]
+        public void VerifiedClockImportKeepsFrozenOwnerAndLoadFields()
+        { var owner = new object(); var guard = new CanonicalParkedBoundaryGuard(42, 2, owner, "A", "B", "bits").WithVerifiedImportedClock(100);
+          guard.Require(100, true, 2, owner, "A", "B", "bits"); Assert.ThrowsExactly<InvalidOperationException>(() => guard.Require(100, true, 2, new object(), "A", "B", "bits")); }
+        [TestMethod]
+        public void Utf16SurrogatesRemainDistinctRawLoadFields()
+        { Assert.AreNotEqual(CanonicalParkedBoundaryGuard.EncodeScalarValue("\ud800", typeof(string)), CanonicalParkedBoundaryGuard.EncodeScalarValue("\ufffd", typeof(string))); }
     }
 }

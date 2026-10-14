@@ -34,7 +34,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Install verified the complete shadow file set before any game input.
             // Bind that immutable descriptor, never a caller-supplied current hash.
             checkpointInitialSavesSha256 = SceneCheckpointBinding.HashInitialSaves(saves.Descriptor.OriginalFileSha256);
-            if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") == "1")
+            if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") == "1" || CanonicalActualDExperiment.Enabled)
                 checkpointExecutionFiles = new Dictionary<string, string>
                 {
                     ["runtime"] = Sha256Utility.ComputeHex(File.ReadAllBytes(typeof(RuntimeFullRunSession).Assembly.Location)),
@@ -87,6 +87,8 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         public Dictionary<string, string> CheckpointCommand(IReadOnlyDictionary<string, string> fields, string environmentSha256)
         {
+            if (fields.TryGetValue("phase", out var actualPhase) && actualPhase.StartsWith("d-exp-", StringComparison.Ordinal))
+                return ActualDExperimentCommand(fields);
             if (fields.TryGetValue("phase", out var observationPhase) && observationPhase.StartsWith("s0-", StringComparison.Ordinal))
                 return S0ObservationCommand(fields);
             CanonicalPhaseOneTrace.RequireCheckpointAllowed(CanonicalPhaseOneTrace.Enabled);

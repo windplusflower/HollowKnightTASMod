@@ -21,6 +21,52 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal void BeginBoundaryReset() => resetStartOwners.Clear();
 
+        internal void RebindEnteredLightClock(Action admission)
+        {
+            admission();
+            var owners = CurrentResetOwners().Where(c => c.gameObject.name == "HeroLight").ToArray();
+            if (owners.Length != 2) throw new InvalidOperationException("Clock binding requires the two original reset HeroLight owners.");
+            FieldInfo Field(Type type, string name) => type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                ?? throw new MissingFieldException(type.FullName, name);
+            var statesField = Field(typeof(Fsm), "states");
+            var nameField = Field(typeof(FsmState), "name");
+            var timeField = Field(typeof(FsmState), "<RealStartTime>k__BackingField");
+            var activeField = Field(typeof(Fsm), "activeState");
+            var previousField = Field(typeof(Fsm), "previousActiveState");
+            var selected = new List<Tuple<PlayMakerFSM, Fsm, FsmState, float>>();
+            foreach (var owner in owners)
+            {
+                var fsm = (Fsm)Raw.GetValue(owner);
+                var states = (FsmState[])statesField.GetValue(fsm);
+                var names = fsm.Name == "HeroLight Control" ? new[] { "Init", "Idle" }
+                    : fsm.Name == "color_fader" ? new[] { "Init" } : throw new InvalidOperationException("Unknown reset light FSM.");
+                foreach (var name in names)
+                {
+                    var state = states.Single(s => (string)nameField.GetValue(s) == name);
+                    if (!ReferenceEquals(activeField.GetValue(fsm), state) && !ReferenceEquals(previousField.GetValue(fsm), state))
+                        throw new InvalidOperationException("Registered clock state was not entered by the original reset: " + name);
+                    selected.Add(Tuple.Create(owner, fsm, state, (float)timeField.GetValue(state)));
+                }
+            }
+            if (selected.Count != 3 || selected.Any(s => CanonicalFsmTimeCarry.Bits(s.Item4) != CanonicalFsmTimeCarry.Bits(selected[0].Item4)))
+                throw new InvalidOperationException("Original same-frame light entry clock binding differs.");
+            var clock = CanonicalFsmTimeCarry.Capture();
+            var bits = CanonicalFsmTimeCarry.ComputeRealtimeBits(clock, Time.realtimeSinceStartup);
+            var value = BitConverter.ToSingle(BitConverter.GetBytes(bits), 0);
+            foreach (var item in selected)
+            {
+                admission();
+                if (!ReferenceEquals(Raw.GetValue(item.Item1), item.Item2)
+                    || !((FsmState[])statesField.GetValue(item.Item2)).Any(s => ReferenceEquals(s, item.Item3)))
+                    throw new InvalidOperationException("Original clock state owner changed during binding.");
+                timeField.SetValue(item.Item3, value);
+            }
+            admission();
+            if (!CanonicalFsmTimeCarry.Equal(clock, CanonicalFsmTimeCarry.Capture())
+                || selected.Any(s => CanonicalFsmTimeCarry.Bits((float)timeField.GetValue(s.Item3)) != bits))
+                throw new InvalidOperationException("Derived light clock raw readback differs.");
+        }
+
         internal IReadOnlyList<PlayMakerFSM> CurrentResetOwners()
         {
             if (resetStartOwners.Count != 3 || resetStartOwners.Any(pair => !OwnsResetStart(pair.Key)))

@@ -52,6 +52,7 @@
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalS0FieldOwnership.cs" Link="FullRun\CanonicalS0FieldOwnership.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalFsmTimeCarry.cs" Link="FullRun\CanonicalFsmTimeCarry.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalParkedBoundaryGuard.cs" Link="FullRun\CanonicalParkedBoundaryGuard.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalBoundaryMutationScope.cs" Link="FullRun\CanonicalBoundaryMutationScope.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalInputEpoch.cs" Link="FullRun\CanonicalInputEpoch.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryReflectionBindings.cs" Link="FullRun\CanonicalCarryReflectionBindings.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalAssetOriginRegistry.cs" Link="FullRun\CanonicalAssetOriginRegistry.cs" />

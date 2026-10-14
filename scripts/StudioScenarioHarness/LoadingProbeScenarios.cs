@@ -56,6 +56,11 @@ internal static partial class StudioScenarioHarness
         Require(clockSourceArgument == null || clockExperiment && s0TargetArgument != null, "clock D application requires zero-Movie preparation");
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_EXPERIMENT", clockExperiment ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_SOURCE", clockSourceArgument == null ? null : Arg("--probe-clock-apply-source"));
+        var actualDExperiment = args.Contains("--probe-actual-d-experiment");
+        Require(!actualDExperiment || clockExperiment && s0TargetArgument != null && phaseOneTrace && clockSourceArgument == null,
+            "actual D uses a bounded in-memory source packet and a fresh zero-Movie target");
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_EXPERIMENT", actualDExperiment ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_SOURCE", actualDExperiment ? "1" : null);
         // All canonical diagnostics capture the actual clock portion of D.
         // This enables the existing bounded native codec, never qualification.
         if (args.Contains("--probe-canonical-boundary")) Environment.SetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT", "1");
@@ -244,6 +249,51 @@ internal static partial class StudioScenarioHarness
                     return await (Task<IReadOnlyDictionary<string, string>>)request.Invoke(null,
                         new object[] { vm.SelectedSession!.Client, fields, CancellationToken.None })!;
                 }
+                byte[]? actualDBytes = null;
+                IReadOnlyDictionary<string, string>? actualDHeader = null;
+                if (actualDExperiment) {
+                    await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
+                    await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("actual source D fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
+                        "actual source B captures both graphs and parks without executing target load", 180);
+                    actualDHeader = await Call(new Dictionary<string, string> { ["phase"] = "d-exp-source-info" });
+                    await File.WriteAllTextAsync(Path.Combine(output, "actual-d-source-header.json"), JsonSerializer.Serialize(actualDHeader));
+                    var length = int.Parse(actualDHeader["length"], System.Globalization.CultureInfo.InvariantCulture);
+                    Require(length > 0 && length <= 32 * 1024 * 1024, "in-memory D packet obeys its fixed bound");
+                    actualDBytes = new byte[length];
+                    for (var offset = 0; offset < length; offset += 262144) {
+                        var part = await Call(new Dictionary<string, string> { ["phase"] = "d-exp-source-chunk", ["offset"] = offset.ToString() });
+                        var bytes = Convert.FromBase64String(part["data"]);
+                        Require(bytes.Length == Math.Min(262144, length - offset), "source D chunk length");
+                        Buffer.BlockCopy(bytes, 0, actualDBytes, offset, bytes.Length);
+                    }
+                    Require(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(actualDBytes)).ToLowerInvariant() == actualDHeader["sha256"],
+                        "complete in-memory source D hash");
+                    if (args.Contains("--probe-actual-d-suffix")) {
+                        var originalEnd = long.Parse(actualDHeader["movieFrame"], System.Globalization.CultureInfo.InvariantCulture) + 32;
+                        await Call(new Dictionary<string, string> { ["phase"] = "d-exp-source-resume", ["endMovie"] = originalEnd.ToString() });
+                        boot.Refresh(); await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
+                        await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("source suffix native fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
+                            "original source runs the same SceneLoad and bounded 32-Movie suffix", 120);
+                        var originalState = await VideoRuntimeState(vm);
+                        Require(originalState["movieFrame"] == originalEnd.ToString() && originalState["mismatchCount"] == "0" && originalState["error"] == "",
+                            "original source suffix has exact endpoint and no input mismatch");
+                        await File.WriteAllTextAsync(Path.Combine(output, "actual-d-original-suffix-state.json"), JsonSerializer.Serialize(originalState));
+                    }
+                    var sourcePid = Field<Process>(app, "startupGame").Id;
+                    // This source paused before its first target load, so the
+                    // normal frame-menu completion has not released its cover.
+                    // Finish the App's current presentation lease before the
+                    // next normal protected replacement takes another lease.
+                    await Field<Func<bool, Task>>(vm, "finishRestorePresentation")(true);
+                    Environment.SetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_SOURCE", null);
+                    await Field<Func<Task>>(vm, "restartProtectedGame")();
+                    Require(Field<Process>(app, "startupGame").Id != sourcePid, "actual D target is another fresh process");
+                    movies.ArmReplay(zeroMovie, 0); await movies.RunAsync(0, CancellationToken.None);
+                    await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("actual target bootstrap fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
+                        "actual target original bootstrap pauses before any Movie sample", 120);
+                    await Until(() => vm.SelectedSession?.Client.IsConnected == true, "actual D replacement Runtime connected", 60);
+                    AtFrame(vm, boot, 0, "actual D target remains Movie zero");
+                }
                 var start = await Call(new Dictionary<string, string> { ["phase"] = "s0-start",
                     ["slot"] = Arg("--probe-s0-slot"), ["target"] = Arg("--probe-s0-target") });
                 Require(start["movieFrame"] == "0" && start["consumedSamplesBefore"] == "0" && start["consumedSamplesAfter"] == "0",
@@ -259,6 +309,32 @@ internal static partial class StudioScenarioHarness
                     "real zero Movie and sample counters preserved, no D applied or checkpoint qualified");
                 await CheckSerialPauseAsync(vm, boot);
                 await File.WriteAllTextAsync(Path.Combine(output, "s0-receipt.json"), JsonSerializer.Serialize(receipt));
+                if (actualDBytes != null && actualDHeader != null) {
+                    await Call(new Dictionary<string, string> { ["phase"] = "d-exp-import-begin", ["length"] = actualDBytes.Length.ToString(), ["sha256"] = actualDHeader["sha256"] });
+                    for (var offset = 0; offset < actualDBytes.Length; offset += 262144)
+                        await Call(new Dictionary<string, string> { ["phase"] = "d-exp-import-chunk", ["offset"] = offset.ToString(),
+                            ["data"] = Convert.ToBase64String(actualDBytes, offset, Math.Min(262144, actualDBytes.Length - offset)) });
+                    await Call(new Dictionary<string, string> { ["phase"] = "d-exp-import-finish" });
+                    var result = await Call(new Dictionary<string, string> { ["phase"] = "d-exp-apply" });
+                    Require(result["status"] == "ActualDAppliedPaused" && result["movieFrame"] == actualDHeader["movieFrame"]
+                        && result["consumedSamples"] == "0" && result["restoreQualified"] == "false", "actual source D applied with raw readback and no consumed target Movie samples");
+                    boot.Refresh(); var actualStopped = boot.NativeCompletedFrames; await Task.Delay(400); boot.Refresh();
+                    Require(boot.IsWaiting && boot.NativeCompletedFrames == actualStopped && boot.FullRunFaultCode == 0,
+                        "actual complete managed D application remains parked without PlayerLoop");
+                    await File.WriteAllTextAsync(Path.Combine(output, "actual-d-receipt.json"), JsonSerializer.Serialize(new {
+                        source = actualDHeader, result, diagnosticOnly = true, snapshotsWrittenToDisk = false, restoreQualified = false }));
+                    if (args.Contains("--probe-actual-d-suffix")) {
+                        var suffixEnd = long.Parse(actualDHeader["movieFrame"], System.Globalization.CultureInfo.InvariantCulture) + 32;
+                        await Call(new Dictionary<string, string> { ["phase"] = "d-exp-resume", ["endMovie"] = suffixEnd.ToString() });
+                        boot.Refresh(); await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
+                        await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("actual D suffix native fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
+                            "original SceneLoad and bounded source Movie suffix reach a paused endpoint", 120);
+                        var suffixState = await VideoRuntimeState(vm);
+                        Require(suffixState["movieFrame"] == suffixEnd.ToString() && suffixState["mismatchCount"] == "0"
+                            && suffixState["error"] == "", "actual D suffix has its exact Movie endpoint and no input mismatch");
+                        await File.WriteAllTextAsync(Path.Combine(output, "actual-d-suffix-state.json"), JsonSerializer.Serialize(suffixState));
+                    }
+                }
                 if (clockSourceArgument != null)
                 {
                     var applied = await Call(new Dictionary<string, string> { ["phase"] = "s0-clock-apply" });
@@ -271,6 +347,16 @@ internal static partial class StudioScenarioHarness
                     Require(boot.IsWaiting && boot.NativeCompletedFrames == stopped && boot.FullRunFaultCode == 0,
                         "clock D application stays natively parked without advancing any frame");
                     await File.WriteAllTextAsync(Path.Combine(output, "clock-d-receipt.json"), JsonSerializer.Serialize(applied));
+                    if (args.Contains("--probe-clock-recanon")) {
+                        var rebound = await Call(new Dictionary<string, string> { ["phase"] = "s0-clock-recanon" });
+                        Require(rebound["status"] == "RecanonicalizedClockPaused" && rebound["movieFrame"] == "0"
+                            && rebound["consumedSamplesAfter"] == "0" && rebound["restoreQualified"] == "false",
+                            "same actual Canon rebinds S0 against imported clock without changing clock D");
+                        boot.Refresh(); stopped = boot.NativeCompletedFrames; await Task.Delay(400); boot.Refresh();
+                        Require(boot.IsWaiting && boot.NativeCompletedFrames == stopped && boot.FullRunFaultCode == 0,
+                            "rebound Canon remains at its frozen original B without PlayerLoop");
+                        await File.WriteAllTextAsync(Path.Combine(output, "clock-canon-receipt.json"), JsonSerializer.Serialize(rebound));
+                    }
                 }
                 await File.WriteAllTextAsync(Path.Combine(output, "target-state.json"), JsonSerializer.Serialize(await VideoRuntimeState(vm)));
                 Require(sourceHash == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(source))), "input package bytes unchanged");

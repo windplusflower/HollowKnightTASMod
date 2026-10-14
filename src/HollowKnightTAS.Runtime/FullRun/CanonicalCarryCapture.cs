@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using HollowKnightTAS.Core.SceneCheckpoints;
+using HollowKnightTAS.Core.Movie;
 using HutongGames.PlayMaker;
 using UnityEngine;
 
@@ -44,6 +45,15 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal int DeviceManagerCount { get; private set; }
         internal bool GraphPairPrepared { get; private set; }
         internal bool SceneLoadCallbacksPrepared { get; private set; }
+        internal string[] BlockingQualifications { get; private set; } = Array.Empty<string>();
+        private Func<CanonicalCarryGraphData, CanonicalCarryGraphData, MovieV2Document, Func<bool>, Func<CanonicalSchedulerCarry, Action>, Action>? prepareTargetRestore;
+        internal CanonicalInputEpoch? PreparedRestoreEpoch { get; private set; }
+        private bool targetRestorePrepared;
+        private CanonicalActualDExperiment? actualSourceValidation;
+        internal Action PrepareActualRestore(CanonicalCarryGraphData main, CanonicalCarryGraphData inputGraph,
+            MovieV2Document nextMovie, Func<bool> admitted, Func<CanonicalSchedulerCarry, Action> prepareScheduler)
+            => (prepareTargetRestore ?? throw new InvalidOperationException("Target D owner context has not been captured."))(
+                main, inputGraph, nextMovie, admitted, prepareScheduler);
         private static readonly BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private static readonly FieldInfo RawFsm = Required(typeof(PlayMakerFSM), "fsm");
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
@@ -65,7 +75,9 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal CanonicalCarryGraphData Capture(BoundaryObjectIdentity identities, CanonicalInputEpoch inputEpoch,
             HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse,
-            CanonicalSchedulerCarry scheduler, CheckpointHeroInvulnerability invulnerability)
+            CanonicalSchedulerCarry scheduler, CheckpointHeroInvulnerability invulnerability, bool targetDirectoryOnly = false,
+            PlayerData? originalBootstrapPlayer = null, bool sourceRequiresDetachedPlayer = false,
+            GameManager.EnterSceneEvent? retainedTargetTitleCallback = null)
         {
             InputPreparedLeaseActions = 0; InputPreparedCursor = false; InputPreparedManagerScalars = false; InputPreparedCallbacks = false;
             SceneLoadScalarsPrepared = false; MainGraphPrepared = false; GameplayPrepared = false; EventStaticSlotsGuarded = false;
@@ -96,9 +108,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             SceneLoadScalarsPrepared = true;
             var loadCallbacks = LoadingSerialSceneProbe.ReadCanonicalCallbackBindings();
             roots.Add(CanonicalSceneLoadCallbacks.Root, loadCallbacks.Data);
-            var sceneMapping = new CanonicalSceneMappingBindings();
+            var sceneMapping = new CanonicalSceneMappingBindings(retainedTargetTitleCallback);
             roots.Add(CanonicalSceneMappingCarry.Root, sceneMapping.Data);
             if (sceneMapping.HasDetachedPlayer) roots.Add(CanonicalSceneMappingCarry.DetachedPlayerRoot, sceneMapping.OwnedPlayer);
+            else if (targetDirectoryOnly && sourceRequiresDetachedPlayer) {
+                if (originalBootstrapPlayer == null || originalBootstrapPlayer.GetType() != typeof(PlayerData)
+                    || ReferenceEquals(originalBootstrapPlayer, player))
+                    throw new InvalidDataException("Source detached PlayerData requires the target's actual retained title instance.");
+                roots.Add(CanonicalSceneMappingCarry.DetachedPlayerRoot, originalBootstrapPlayer);
+            }
             SceneMappingCallbacks = sceneMapping.Data.Items.Length;
             var observer = CheckpointClockObserverState.Decode(clock.Observer);
             ClockCarryAudit = new { nativeBytes = clock.Native.Length, randomBytes = clock.Random.Length, observerBytes = clock.Observer.Length,
@@ -127,14 +145,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             var guardEventSlots = CanonicalEventStaticSlots.PrepareGuard(roots);
             var inputBindings = CanonicalCarryRootBindings.Merge(InputCarryAudit.FixedBindings, inputRoots);
             var bindings = new ExternalBindings(identities, assetTemplates, canonicalSenders, inputBindings);
-            var result = codec.Capture(roots, bindings.Bind);
+            CanonicalCarryGraphData Empty() => new CanonicalCarryGraphData { Roots = Array.Empty<CanonicalCarryGraphData.Root>(),
+                Nodes = Array.Empty<CanonicalCarryGraphData.Node>(), Externals = Array.Empty<CanonicalCarryGraphData.External>(), Unsupported = Array.Empty<string>() };
+            var result = targetDirectoryOnly ? Empty() : codec.Capture(roots, bindings.Bind);
             var mainBindings = new SortedDictionary<string, object>(InputCarryAudit.FixedBindings.ToDictionary(pair => pair.Key, pair => pair.Value), StringComparer.Ordinal);
             foreach (var pair in roots) mainBindings.Add("canonical-main-root/" + pair.Key, pair.Value);
             var inputExternal = new ExternalBindings(identities, assetTemplates, canonicalSenders, mainBindings);
-            InputGraph = inputCodec.Capture(inputRoots, inputExternal.Bind);
+            InputGraph = targetDirectoryOnly ? Empty() : inputCodec.Capture(inputRoots, inputExternal.Bind);
             var sourceEpoch = inputEpoch.Copy();
             CanonicalPreparedWritePlan? mainPlan = null, inputPlan = null;
-            if (result.Unsupported.Length == 0)
+            if (!targetDirectoryOnly && result.Unsupported.Length == 0)
                 mainPlan = codec.PrepareGraph(result, roots, bindings.ResolveCaptured, view => {
                     var source = CanonicalCarryContinuationContract.Read(view);
                     inputEpoch.RequireReadback(source.Epoch, inputEpoch.SourceNative);
@@ -157,7 +177,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Prepare against the same parked source only as a read-only
             // consumer audit. Never execute the returned application here.
             // Qualification records are appended below and remain blocking.
-            if (InputGraph.Unsupported.Length == 0)
+            if (!targetDirectoryOnly && InputGraph.Unsupported.Length == 0)
                 inputPlan = inputCodec.PrepareGraph(InputGraph, inputRoots, inputExternal.ResolveCaptured, view => {
                     InputPreparedLeaseActions = input.ValidateCanonicalSourceBindings(view, inputRoots);
                     InputPreparedCursor = input.PrepareCanonicalCursorAudit(view);
@@ -177,6 +197,72 @@ namespace HollowKnightTAS.Runtime.FullRun
             sceneMapping.Guard();
             deviceManagers.Guard();
             loadCallbacks.Guard();
+            // The closure belongs exclusively to this target process and its
+            // actual parked owners. Source packets contain data, never owners.
+            prepareTargetRestore = (sourceMain, sourceInput, nextMovie, admitted, prepareScheduler) => {
+                if (targetRestorePrepared || admitted == null || prepareScheduler == null || !admitted())
+                    throw new InvalidOperationException("Actual D preparation requires its parked target admission.");
+                targetRestorePrepared = true;
+                var domainActions = new List<Action>();
+                var sourceChecks = new List<Action>();
+                var targetMainRoots = SelectTargetRoots(sourceMain, roots, allowRetiredEventCacheEntries: true);
+                var targetInputRoots = SelectTargetRoots(sourceInput, inputRoots, allowRetiredEventCacheEntries: false);
+                CanonicalCarryContinuationContract.Prepared? continuation = null;
+                CanonicalEventCarryRoots.ValidateGraph(sourceMain);
+                var main = codec.PrepareOwnedGraph(sourceMain, targetMainRoots, bindings.ResolveTarget, view => {
+                    continuation = CanonicalCarryContinuationContract.Read(view);
+                    PreparedRestoreEpoch = continuation.Epoch.Copy();
+                    var source = continuation;
+                    if (actualSourceValidation != null && (source.Epoch.SourceNative != actualSourceValidation.NativeFrame
+                        || !source.Clock.Native.SequenceEqual(actualSourceValidation.Clock.Clock.Native)
+                        || !source.Clock.Random.SequenceEqual(actualSourceValidation.Clock.Clock.Random)
+                        || !source.Clock.Observer.SequenceEqual(actualSourceValidation.Clock.Clock.Observer)))
+                        throw new InvalidDataException("Actual D graph clock/epoch disagrees with its sealed source envelope.");
+                    domainActions.Add(LoadingSerialSceneProbe.PrepareCanonicalLoadScalars(source.SceneLoad));
+                    var callbacks = CanonicalSceneLoadCallbacks.FromPrepared(view);
+                    loadCallbacks.RequireSource(callbacks, source.SceneLoad);
+                    sourceChecks.Add(() => loadCallbacks.RequireAppliedSource(callbacks));
+                    var gameplay = CanonicalGameplayCarry.FromPrepared(view);
+                    domainActions.Add(CanonicalGameplayCarry.PrepareApply(gameplay, identities));
+                    byte[] GameplayBytes(CanonicalGameplayCarry.Data data) => codec.Encode(codec.Capture(
+                        new SortedDictionary<string, object>(StringComparer.Ordinal) { [CanonicalGameplayCarry.Root] = data }, _ => null));
+                    var gameplayBits = GameplayBytes(gameplay);
+                    sourceChecks.Add(() => {
+                        if (!gameplayBits.SequenceEqual(GameplayBytes(CanonicalGameplayCarry.Capture(identities))))
+                            throw new InvalidOperationException("Actual gameplay source raw readback differs.");
+                    });
+                    domainActions.Add(CheckpointHeroInvulnerability.FromCanonicalPrepared(view, source.Scheduler).PrepareCanonicalPulseApply(hero));
+                    var mapping = CanonicalSceneMappingCarry.FromPrepared(view);
+                    var mappingPlayer = mapping.Items.Length == 0 ? null :
+                        (PlayerData)view.Root(mapping.Items[0].UsesCurrentPlayerData ? "PlayerData" : CanonicalSceneMappingCarry.DetachedPlayerRoot);
+                    domainActions.Add(sceneMapping.PrepareApply(mapping, mappingPlayer));
+                    sourceChecks.Add(() => sceneMapping.RequireAppliedSource(mapping, mappingPlayer));
+                    domainActions.Add(prepareScheduler(source.Scheduler));
+                });
+                var sdk = inputCodec.PrepareOwnedGraph(sourceInput, targetInputRoots, inputExternal.ResolveTarget, view => {
+                    if (continuation == null) throw new InvalidOperationException("Actual input graph has no source main continuation.");
+                    input.ValidateCanonicalSourceBindings(view, targetInputRoots);
+                    var state = CanonicalInputAdapterState.FromPrepared(view);
+                    if (actualSourceValidation != null && state.MovieFrame != actualSourceValidation.MovieFrame)
+                        throw new InvalidDataException("Actual D input graph cursor disagrees with its sealed source envelope.");
+                    domainActions.Add(input.PrepareCanonicalContinuation(state, nextMovie));
+                    var managerSource = CanonicalInputManagerScalars.FromPrepared(view);
+                    CanonicalInputManagerScalars.RequireEpoch(managerSource, continuation.Epoch);
+                    domainActions.Add(CanonicalInputManagerScalars.PrepareApply(managerSource));
+                    CanonicalInputCallbackContract.RequireSame(CanonicalInputCallbackContract.FromPrepared(view), InputCarryAudit!.CallbackData);
+                    domainActions.Add(mouse.PrepareCanonicalContinuation(CanonicalMouseCarry.FromPrepared(view)));
+                    domainActions.Add(deviceManagers.PrepareApply(CanonicalDeviceManagerCarry.FromPrepared(view)));
+                });
+                var actual = new CanonicalCarryPairPreparation(main, sdk, () => {
+                    guardInputSlots(); guardEventSlots(); sceneMapping.Guard(); deviceManagers.Guard(); loadCallbacks.Guard();
+                }, admitted);
+                return () => actual.Apply(() => {
+                    foreach (var action in domainActions) {
+                        if (!admitted()) throw new InvalidOperationException("Actual D domain lost paused admission.");
+                        action();
+                    }
+                }, () => { foreach (var check in sourceChecks) check(); });
+            };
             if (mainPlan != null && inputPlan != null) {
                 var pair = new CanonicalCarryPairPreparation(mainPlan, inputPlan, () => {
                     guardInputSlots(); guardEventSlots(); sceneMapping.Guard(); deviceManagers.Guard(); loadCallbacks.Guard();
@@ -184,23 +270,48 @@ namespace HollowKnightTAS.Runtime.FullRun
                 pair.Guard(); GraphPairPrepared = true;
             }
             InputGraph.Unsupported = InputGraph.Unsupported.Concat(InputCarryAudit.Unsupported).OrderBy(value => value, StringComparer.Ordinal).ToArray();
-            InputGraph.Unsupported = InputGraph.Unsupported.Concat(new[] { "R6/InputTAS-lease-and-original-bindings-rebinding-unqualified" }).ToArray();
-            EventGraphAudit = CanonicalEventCarryRoots.ValidateGraph(result);
+            if (!targetDirectoryOnly) EventGraphAudit = CanonicalEventCarryRoots.ValidateGraph(result);
             EventBindingAudit = bindings.Events.ToArray();
             // Shared event objects use reference equality in PlayMaker. They
             // cannot be cloned as local action data or considered immutable
             // until the global table/cache and every consumer are closed.
             result.Unsupported = result.Unsupported.Concat(EventDataAudit.Unsupported)
-                .Concat(InputCarryAudit.Unsupported)
-                .Concat(new[] { "R6/FsmEvent-consumer-and-static-root-rebinding-unqualified",
+                .Concat(InputCarryAudit.Unsupported).OrderBy(value => value, StringComparer.Ordinal).ToArray();
+            BlockingQualifications = new[] { "R6/InputTAS-lease-and-original-bindings-rebinding-unqualified",
+                    "R6/FsmEvent-consumer-and-static-root-rebinding-unqualified",
                     "D/native-scheduler-timestamp-queue-and-wait-restoration-unqualified",
                     "D/HeroInvulnerability-original-iterator-and-native-wait-restoration-unqualified",
                     "D/SceneManager-entry-mapping-delegate-and-ghost-restoration-unqualified",
-                    "D/SceneLoad-continuation-references-and-native-wait-rebinding-unqualified" })
-                .OrderBy(value => value, StringComparer.Ordinal).ToArray();
+                    "D/SceneLoad-continuation-references-and-native-wait-rebinding-unqualified" }
+                .Concat(InputCarryAudit.BlockingQualifications).ToArray();
+            return result;
+        }
+        private static SortedDictionary<string, object> SelectTargetRoots(CanonicalCarryGraphData source,
+            IReadOnlyDictionary<string, object> directory, bool allowRetiredEventCacheEntries)
+        {
+            var result = new SortedDictionary<string, object>(StringComparer.Ordinal);
+            foreach (var root in source.Roots) {
+                if (!directory.TryGetValue(root.Binding, out var owner) || result.ContainsKey(root.Binding))
+                    throw new InvalidDataException("Source D root has no unique actual target owner: " + root.Binding);
+                result.Add(root.Binding, owner);
+            }
+            foreach (var extra in directory.Where(pair => !result.ContainsKey(pair.Key)))
+                if (!allowRetiredEventCacheEntries || !extra.Key.StartsWith("R6/FsmEvent-cache/", StringComparison.Ordinal)
+                    || !(extra.Value is FsmEvent))
+                    throw new InvalidDataException("Actual target has an unregistered extra D root: " + extra.Key);
+            // Extra history-only cached events are detached by writing the
+            // complete source lookup/list backing fields. Never append them to
+            // the source packet or allocate replacement source event owners.
             return result;
         }
         internal byte[] Encode(CanonicalCarryGraphData value) => codec.Encode(value);
+        internal Action PrepareActualRestore(CanonicalActualDExperiment source, MovieV2Document nextMovie,
+            Func<bool> admitted, Func<CanonicalSchedulerCarry, Action> prepareScheduler)
+        {
+            if (actualSourceValidation != null) throw new InvalidOperationException("Actual D source envelope was already admitted.");
+            actualSourceValidation = source;
+            return PrepareActualRestore(codec.Decode(source.Main), inputCodec.Decode(source.Input), nextMovie, admitted, prepareScheduler);
+        }
         internal byte[] EncodeInput() => inputCodec.Encode(InputGraph ?? throw new InvalidDataException("Input carry domain was not captured."));
 
         private sealed class ExternalBindings
@@ -208,6 +319,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly BoundaryObjectIdentity identities;
             private readonly Dictionary<Type, UnityEngine.Object[]> assets = new Dictionary<Type, UnityEngine.Object[]>();
             private readonly Dictionary<object, string> known = new Dictionary<object, string>(new References());
+            private readonly Dictionary<string, object> nativeDirectory = new Dictionary<string, object>(StringComparer.Ordinal);
             private readonly CanonicalCarryReflectionBindings metadata;
             private readonly CanonicalHeroAssetTemplates assetTemplates;
             private readonly CanonicalVisualSenderBindings canonicalSenders;
@@ -219,12 +331,42 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (matches.Length != 1) throw new InvalidDataException("Captured carry external binding is absent or ambiguous: " + binding);
                 return matches[0];
             }
+            internal object ResolveTarget(string binding)
+            {
+                var cached = known.Where(pair => pair.Value == binding).Select(pair => pair.Key).ToArray();
+                if (cached.Length > 1) throw new InvalidDataException("Target external directory is ambiguous: " + binding);
+                if (cached.Length == 1) return cached[0];
+                object value;
+                if (binding.StartsWith("HeroAssetOrigin/v1/", StringComparison.Ordinal)) value = assetTemplates.Resolve(binding);
+                else if (canonicalSenders.Snapshot().Slots.Any(slot => slot.Key == binding)) value = canonicalSenders.Resolve(binding);
+                else if (binding.StartsWith("metadata-", StringComparison.Ordinal) || binding.StartsWith("original-callback|", StringComparison.Ordinal)
+                    || binding == "runtime-comparer|string-default") value = metadata.Resolve(binding);
+                else {
+                    if (!nativeDirectory.TryGetValue(binding, out value!))
+                        throw new InvalidDataException("Target native/FSM external has no unique registered identity: " + binding);
+                }
+                if (value == null) throw new InvalidDataException("Target external is absent: " + binding);
+                known.Add(value, binding); return value;
+            }
             internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualSenderBindings canonicalSenders,
                 IReadOnlyDictionary<string, object> fixedInputBindings)
             {
                 this.identities = identities;
                 this.assetTemplates = assetTemplates;
                 this.canonicalSenders = canonicalSenders;
+                void Register(string key, object owner) {
+                    if (nativeDirectory.Count >= CanonicalCarryGraphCodec.MaximumNodes || nativeDirectory.ContainsKey(key))
+                        throw new InvalidDataException("Target native owner directory is ambiguous or oversized: " + key);
+                    nativeDirectory.Add(key, owner);
+                }
+                foreach (var go in identities.Objects) {
+                    Register(identities.Get(go), go);
+                    foreach (var component in go.GetComponents<Component>()) {
+                        if (component == null) continue;
+                        Register(identities.Get(component), component);
+                        if (component is PlayMakerFSM fsm) Register("FSM/" + identities.Get(fsm), RawFsm.GetValue(fsm));
+                    }
+                }
                 foreach (var pair in fixedInputBindings) {
                     // Multiple named roots can alias the same live object.
                     // Select the first canonical name; the root graph retains

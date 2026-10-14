@@ -64,6 +64,17 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         internal object[] Inventory => inventory.ToArray();
+        internal Action RequireFrozenCapturedQueue()
+        {
+            if (!capturedQueueValid) throw new InvalidOperationException("Original scheduler has no complete frozen observation.");
+            void Require() {
+                if (!capturedManagerBytes.SequenceEqual(Read(capturedManager, 80))
+                    || capturedCallbacks.Any(c => !c.NodeBytes.SequenceEqual(Read(c.NodeAddress, 96)))
+                    || coroutines.Any(c => !c.Value.NativeBytes.SequenceEqual(Read(c.Key, 136))))
+                    throw new InvalidOperationException("Original scheduler queue/coroutine bytes changed during S0 clock binding.");
+            }
+            Require(); return Require;
+        }
         internal string[] Unsupported => unsupported.ToArray();
         internal object[] FieldDiagnostics => fieldDiagnostics;
         internal uint CaptureManagerTimestamp()

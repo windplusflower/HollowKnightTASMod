@@ -54,14 +54,18 @@ namespace HollowKnightTAS.Runtime.FullRun
             Guard();
         }
         internal void Guard()
+            => RequireRetainedOwners(sourceBefore);
+        private void RequireRetainedOwners(string expectedSource)
         {
             if (!ReferenceEquals(ownerField.GetValue(closure), manager) || !ReferenceEquals(infoField.GetValue(closure), info)
-                || !Equals(sourceField.GetValue(closure), sourceBefore) || slots.Where((slot, index) => !ReferenceEquals(slot.GetValue(load), callbacks[index])).Any())
+                || !Equals(sourceField.GetValue(closure), expectedSource) || slots.Where((slot, index) => !ReferenceEquals(slot.GetValue(load), callbacks[index])).Any())
                 throw new InvalidOperationException("Original scene loader callback slots or shared closure fields changed.");
             var current = CanonicalSceneLoadDiagnosticRegistry.Read(load);
             if (current.Length != diagnostics.Length || current.Where((item, index) => !ReferenceEquals(item, diagnostics[index])).Any())
                 throw new InvalidOperationException("Scene loader diagnostic listener registrations changed.");
         }
+        internal void RequireAppliedSource(CanonicalSceneLoadCallbacks.Data source)
+            => RequireRetainedOwners(CanonicalSceneLoadCallbacks.Copy(source).SourceScene);
         internal void RequireSource(CanonicalSceneLoadCallbacks.Data source, CanonicalSceneLoadCarry.Data continuation)
         {
             var saved = CanonicalSceneLoadCallbacks.Copy(source);

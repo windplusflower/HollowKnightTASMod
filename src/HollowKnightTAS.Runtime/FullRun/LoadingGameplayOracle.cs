@@ -230,6 +230,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                 nativeScheduler.CanonicalWaitIssues(HeroController.SilentInstance, ownsNewPoolStart));
         }
 
+        internal Action RequireFrozenS0Scheduler() => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).RequireFrozenCapturedQueue();
+        internal Action PrepareActualScheduler(CanonicalSchedulerCarry source, Func<bool> admission)
+            => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).PrepareCanonicalRestore(source,
+                HeroController.SilentInstance ?? throw new InvalidOperationException("Missing actual Hero."), admission);
+        internal CanonicalS0ObservationSnapshot RecaptureBoundaryS0()
+        {
+            var sample = new CanonicalS0Observation(CanonicalS0FieldOwnership.Classify, S0ExternalBinding,
+                fields.Fields, fields.Read, CanonicalS0FieldOwnership.KnownOwner).Capture(s0Roots);
+            sample.InvariantFailures = s0InvariantFailures.ToArray();
+            return sample;
+        }
         internal object BoundaryFieldSchema()
         {
             if (!boundaryCapture) throw new InvalidOperationException("Field schema is not bound to a canonical boundary.");

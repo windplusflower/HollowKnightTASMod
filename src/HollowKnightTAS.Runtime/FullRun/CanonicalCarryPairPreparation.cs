@@ -33,8 +33,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (!applicationAdmitted()) throw new InvalidOperationException("Canonical carry application is not qualified at the paused boundary.");
         }
-        internal void Apply()
+        internal void Apply() => Apply(() => { }, () => { });
+        internal void Apply(Action applyDomains, Action verifySourceDomains)
         {
+            if (applyDomains == null || verifySourceDomains == null) throw new ArgumentNullException();
             if (state != State.Prepared) throw new InvalidOperationException("Canonical carry pair was already consumed or faulted.");
             state = State.Applying;
             try {
@@ -42,6 +44,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 main.Apply();
                 RequireAdmission(); sharedOwnerGuard(); input.Apply();
                 RequireAdmission(); sharedOwnerGuard(); main.VerifyReadback(); input.VerifyReadback();
+                // Preparation guards freeze target values. After actual domain
+                // writes those values are intentionally different: validate
+                // source values and retained target owners instead.
+                RequireAdmission(); applyDomains(); RequireAdmission();
+                main.VerifyReadback(); input.VerifyReadback(); verifySourceDomains(); RequireAdmission();
                 state = State.Complete;
             } catch { state = State.Faulted; throw; }
         }

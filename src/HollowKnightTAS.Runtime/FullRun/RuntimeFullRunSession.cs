@@ -493,6 +493,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private void OnNativeBeforeFrame(long completed)
         {
             restoreDrawing.Active = false;
+            if (mode == "DSourcePaused") { Fail("Actual D source executed another PlayerLoop; retire this process."); return; }
             if (RunS0ObservationFrame(completed)) return;
             if (RunCheckpointPreparationFrame(completed)) return;
             if (!inputReady || (mode != "Recording" && mode != "Replay")) return;
@@ -508,6 +509,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (LoadingSerialSceneProbe.ObserveNativeBoundary(movieFrame, completed, sessionDirectory, movieInputNativeOrigin, movieInputControlOrigin, input, mouse))
                 {
                     loadingGameplayOracle?.Sample("candidate", "serial-source-unloaded");
+                    if (CanonicalActualDExperiment.CaptureSource && LoadingSerialSceneProbe.ExperimentalSource != null)
+                    {
+                        LoadingSerialSceneProbe.SealExperimentalSource(CaptureActualSessionCarry(completed));
+                        input.SetNativeFrameActive(false); mode = "DSourcePaused"; clock.RequestPause(); return;
+                    }
                     CaptureSceneCheckpointAtBoundary(completed);
                 }
                 var sceneHandle = UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;

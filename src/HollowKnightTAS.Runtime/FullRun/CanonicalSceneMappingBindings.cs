@@ -27,7 +27,22 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static FieldInfo Required(Type type, string name) => type.GetField(name, Instance)
             ?? throw new InvalidDataException("Scene entry mapping original field is absent: " + type.FullName + "/" + name);
 
-        internal CanonicalSceneMappingBindings()
+        internal static GameManager.EnterSceneEvent? RetainOriginalTitleCallback()
+        {
+            var callback = Slot.GetValue(GameManager.instance) as GameManager.EnterSceneEvent;
+            var chain = callback?.GetInvocationList() ?? Array.Empty<Delegate>();
+            if (chain.Length > 1) throw new InvalidDataException("Title callback retention has multiple owners.");
+            if (chain.Length == 0) return null;
+            var item = chain[0]; var target = item.Target;
+            if (item.Method.MetadataToken != CanonicalSceneMappingCarry.HandlerToken
+                || item.Method.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid
+                || target?.GetType() != Closure || !ReferenceEquals(ClosureSelf.GetValue(target), item)
+                || !(ClosureOwner.GetValue(target) is global::SceneManager owner) || owner == null
+                || owner.gameObject.scene.name != "Menu_Title")
+                throw new InvalidDataException("Retained callback is not the actual original live title SceneManager.");
+            return callback;
+        }
+        internal CanonicalSceneMappingBindings(GameManager.EnterSceneEvent? retainedTitleCallback = null)
         {
             manager = GameManager.instance ?? throw new InvalidDataException("Scene entry mapping GameManager is absent.");
             currentPlayer = PlayerData.instance ?? throw new InvalidDataException("Scene entry mapping current PlayerData is absent.");
@@ -37,7 +52,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || GhostPlayer.FieldType != typeof(PlayerData) || MapZoneField.FieldType != typeof(MapZone) || ManualField.FieldType != typeof(bool))
                 throw new InvalidDataException("Scene entry mapping original field types differ.");
             originalSlot = Slot.GetValue(manager);
-            var chain = originalSlot == null ? Array.Empty<Delegate>() : ((GameManager.EnterSceneEvent)originalSlot).GetInvocationList();
+            var selected = retainedTitleCallback ?? originalSlot as GameManager.EnterSceneEvent;
+            var chain = selected?.GetInvocationList() ?? Array.Empty<Delegate>();
             if (chain.Length > 1) throw new InvalidDataException("Multiple scene entry mapping callbacks are not registered.");
             callbacks = new GameManager.EnterSceneEvent[chain.Length]; ghosts = new global::SceneManager[chain.Length];
             beforeZones = new int[chain.Length]; beforeManual = new bool[chain.Length];
@@ -108,6 +124,23 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Slot.SetValue(manager, expected);
                 if (!ReferenceEquals(Slot.GetValue(manager), expected)) throw new InvalidOperationException("Scene entry mapping original callback slot readback differs.");
             };
+        }
+        internal void RequireAppliedSource(CanonicalSceneMappingCarry.Data source, PlayerData? ownedPlayer)
+        {
+            var saved = CanonicalSceneMappingCarry.Copy(source);
+            if (saved.Items.Length > callbacks.Length || !ReferenceEquals(GameManager.instance, manager)
+                || !ReferenceEquals(PlayerData.instance, currentPlayer)
+                || !ReferenceEquals(Slot.GetValue(manager), saved.Items.Length == 0 ? null : callbacks[0]))
+                throw new InvalidOperationException("Applied mapping original owners or source slot differ.");
+            for (var index = 0; index < saved.Items.Length; index++) {
+                var target = callbacks[index].Target; var ghost = ghosts[index];
+                if (!ReferenceEquals(ClosureOwner.GetValue(target), ghost) || !ReferenceEquals(ClosureSelf.GetValue(target), callbacks[index])
+                    || ghost != null || ghost!.GetInstanceID() != 0 || !ReferenceEquals(GhostManager.GetValue(ghost), manager)
+                    || !ReferenceEquals(GhostPlayer.GetValue(ghost), ownedPlayer)
+                    || (int)(MapZone)MapZoneField.GetValue(ghost) != saved.Items[index].MapZone
+                    || (bool)ManualField.GetValue(ghost) != saved.Items[index].ManualMapTrigger)
+                    throw new InvalidOperationException("Applied mapping source values or original ghost aliases differ.");
+            }
         }
     }
 }

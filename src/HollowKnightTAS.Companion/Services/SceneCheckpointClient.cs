@@ -159,7 +159,15 @@ namespace HollowKnightTAS.Companion.Services
             try
             {
                 await runtime.SendCommandAsync(IpcMessageTypes.SceneCheckpoint, fields, token);
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token); timeout.CancelAfter(TimeSpan.FromSeconds(2));
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                // This protected command executes Canon in the parked native
+                // observation queue (already bounded to ten seconds). Keep its
+                // reply bound aligned; the four-minute job/270s host stay fixed.
+                var clockCanon = fields.TryGetValue("phase", out var phase) && phase == "s0-clock-recanon"
+                    && Environment.GetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_EXPERIMENT") == "1";
+                var actualD = fields.TryGetValue("phase", out var actualPhase) && actualPhase == "d-exp-apply"
+                    && Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_EXPERIMENT") == "1";
+                timeout.CancelAfter(TimeSpan.FromSeconds(clockCanon || actualD ? 10 : 2));
                 return await completion.Task.WaitAsync(timeout.Token);
             }
             finally { runtime.EnvelopeReceived -= Received; }

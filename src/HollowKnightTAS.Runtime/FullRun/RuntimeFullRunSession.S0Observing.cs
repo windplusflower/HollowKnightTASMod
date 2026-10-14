@@ -24,9 +24,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal bool FadeFinished;
             internal bool ClockApplicationStarted;
             internal bool ClockApplicationCompleted;
+            internal CanonicalClockApplyExperiment? AppliedClock;
             internal CanonicalParkedBoundaryGuard? Parked;
+            internal readonly PlayerData OriginalBootstrapPlayer;
+            internal readonly GameManager.EnterSceneEvent? OriginalTitleMappingCallback;
             internal S0ObservationJob(string target, long movie, long origin, int samples, long native)
-            { Target = target; Movie = movie; Origin = origin; Samples = samples; LastNative = native; }
+            { Target = target; Movie = movie; Origin = origin; Samples = samples; LastNative = native;
+                OriginalBootstrapPlayer = PlayerData.instance ?? throw new InvalidOperationException("Original title PlayerData is absent before real save loading.");
+                OriginalTitleMappingCallback = CanonicalActualDExperiment.Enabled ? CanonicalSceneMappingBindings.RetainOriginalTitleCallback() : null; }
         }
 
         private Dictionary<string, string> S0ObservationCommand(IReadOnlyDictionary<string, string> fields)
@@ -78,6 +83,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                             (bytes, cursor) => CheckpointClockMethod("ImportCheckpointRandomState").Invoke(null, new object[] { bytes, cursor }),
                             (bytes, cursor) => CheckpointClockMethod("ImportCheckpointClockObserver").Invoke(null, new object[] { bytes, cursor }));
                         job.ClockApplicationCompleted = true;
+                        job.AppliedClock = source;
+                        job.Parked = job.Parked!.WithVerifiedImportedClock(source.NativeFrame);
+                        job.Parked.Require(clock.CurrentFrameIndex, clock.IsPaused, boundary.Item1, boundary.Item2,
+                            boundary.Item3, boundary.Item2.SceneName, S0LoadInfoFields(boundary.Item2));
                         job.Phase = "ClockAppliedPaused";
                         File.WriteAllText(Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "clock-d-application.json"),
                             JsonConvert.SerializeObject(new { schema = 1, applicationExecuted = true, rawReadbackEqual = true,
@@ -85,6 +94,43 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 movieFrame, consumedSamples = input.ConsumedSamples, nativePaused = clock.IsPaused,
                                 otherDomainsApplied = false, d1Passed = false, d2Passed = false, d3Passed = false,
                                 restoreQualified = false, completeStateCoverage = false }));
+                    }
+                    catch (Exception error) { FailS0Observation(job, error); throw; }
+                }
+                else if (phase == "s0-clock-recanon")
+                {
+                    var job = s0Observation ?? throw new InvalidOperationException("No applied clock target.");
+                    try {
+                        if (fields.Count != 2 || job.Phase != "ClockAppliedPaused" || !job.ClockApplicationCompleted || job.AppliedClock == null)
+                            throw new InvalidOperationException("Clock Canon requires the single completed actual D application.");
+                        AssertS0NoMovieConsumption(job);
+                        var boundary = LoadingSerialSceneProbe.GetProtectedObservationBoundary();
+                        job.Parked!.Require(frame, clock.IsPaused, boundary.Item1, boundary.Item2, boundary.Item3,
+                            boundary.Item2.SceneName, S0LoadInfoFields(boundary.Item2));
+                        job.AppliedClock.RequireReadback(clock);
+                        job.Phase = "RecanonicalizingClock";
+                        void RequireAdmission() {
+                            if (job.Phase != "RecanonicalizingClock" || !job.ClockApplicationCompleted || !clock.IsPaused || clock.IsFinished)
+                                throw new InvalidOperationException("Clock Canon lost its completed parked D admission.");
+                            AssertS0NoMovieConsumption(job);
+                            var current = LoadingSerialSceneProbe.GetProtectedObservationBoundary();
+                            job.Parked.Require(clock.CurrentFrameIndex, clock.IsPaused, current.Item1, current.Item2, current.Item3,
+                                current.Item2.SceneName, S0LoadInfoFields(current.Item2));
+                            job.AppliedClock.RequireReadback(clock);
+                        }
+                        try {
+                            LoadingSerialSceneProbe.ReapplyProtectedClockCanon(movieFrame, frame, sessionDirectory,
+                                movieInputNativeOrigin!.Value, movieInputControlOrigin!, input, mouse, RequireAdmission);
+                        }
+                        finally {
+                            var after = CanonicalClockApplyExperiment.Capture(clock.CurrentFrameIndex);
+                            File.WriteAllText(Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "clock-d-canon-readback.json"),
+                                JsonConvert.SerializeObject(new { source = job.AppliedClock, after, diagnosticOnly = true, completeStateCoverage = false, restoreQualified = false }));
+                        }
+                        job.AppliedClock.RequireReadback(clock);
+                        job.Parked.Require(clock.CurrentFrameIndex, clock.IsPaused, boundary.Item1, boundary.Item2, boundary.Item3,
+                            boundary.Item2.SceneName, S0LoadInfoFields(boundary.Item2));
+                        AssertS0NoMovieConsumption(job); job.Phase = "RecanonicalizedClockPaused";
                     }
                     catch (Exception error) { FailS0Observation(job, error); throw; }
                 }
@@ -119,7 +165,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (mode != "S0Observing") return mode == "Failed";
             try
             {
-                if (job.Phase == "PausedAtB" || job.Phase == "ClockAppliedPaused") CanonicalParkedBoundaryGuard.RejectPlayerLoopAdvance();
+                if (job.Phase != "LoadingInitialSave" && job.Phase != "AwaitingArbitraryB") CanonicalParkedBoundaryGuard.RejectPlayerLoopAdvance();
                 AssertS0NoMovieConsumption(job);
                 if (job.Elapsed.ElapsedMilliseconds > 240000) throw new TimeoutException("S0 preparation exceeded four minutes.");
                 if (native < job.LastNative || native > job.LastNative + 1) throw new InvalidDataException("S0 native cursor was not sequential.");

@@ -21,6 +21,36 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool inputOriginRestored;
         private readonly bool phaseOneTrace;
         private readonly CanonicalRetiredMeshPolicy retiredMeshes;
+        internal byte[]? ExperimentalSource { get; private set; }
+        internal void SealSourceSession(CanonicalActualDExperiment.SessionCarry session)
+        {
+            var source = CanonicalActualDExperiment.Decode(ExperimentalSource ?? throw new InvalidOperationException("Missing actual D source."));
+            if (source.Session != null) throw new InvalidOperationException("Actual D source was already sealed.");
+            source.Session = session; ExperimentalSource = source.Encode();
+        }
+        internal Action PrepareActualTargetD(CanonicalActualDExperiment source, HollowKnightTAS.Core.Movie.MovieV2Document movie,
+            long targetNative, long origin, CanonicalInputEpoch controlOrigin,
+            HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse,
+            Func<bool> admission, Action<CanonicalInputEpoch> restoreEpoch, PlayerData originalBootstrapPlayer,
+            GameManager.EnterSceneEvent? originalTitleCallback)
+        {
+            if (!CanonicalActualDExperiment.Enabled || observer == null || carry == null || !admission())
+                throw new InvalidOperationException("Actual D target has no completed original Canon.");
+            var epoch = CanonicalInputEpochRuntime.Capture(origin, targetNative, controlOrigin);
+            var identities = new BoundaryObjectIdentity();
+            var sourceGraph = CanonicalCarryFieldRegistry.Create().Decode(source.Main);
+            var detached = Array.Exists(sourceGraph.Roots, root => root.Binding == CanonicalSceneMappingCarry.DetachedPlayerRoot);
+            carry.Capture(identities, epoch, input, mouse, observer.BoundarySchedulerCarry(epoch), observer.BoundaryHeroInvulnerabilityCarry(epoch),
+                targetDirectoryOnly: true, originalBootstrapPlayer: originalBootstrapPlayer, sourceRequiresDetachedPlayer: detached,
+                retainedTargetTitleCallback: originalTitleCallback);
+            var apply = carry.PrepareActualRestore(source, movie, admission, data => observer.PrepareActualScheduler(data, admission));
+            return () => {
+                apply();
+                var savedEpoch = carry.PreparedRestoreEpoch ?? throw new InvalidOperationException("Actual D source epoch is absent.");
+                restoreEpoch(savedEpoch);
+                savedEpoch.RequireReadback(CanonicalInputEpochRuntime.Capture(savedEpoch.OriginNative, source.NativeFrame, savedEpoch), source.NativeFrame);
+            };
+        }
         internal CanonicalBoundaryPolicy()
         {
             CanonicalPhaseOneTrace.RequireContext(Environment.GetEnvironmentVariable);
@@ -29,9 +59,31 @@ namespace HollowKnightTAS.Runtime.FullRun
             startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart);
         }
         internal bool AdvanceStartup() => startup.Advance();
+        internal void RebindProtectedClock(int ordinal, Action admission)
+        {
+            if (!phaseOneTrace || !CanonicalClockApplyExperiment.Enabled || observer == null)
+                throw new InvalidOperationException("Clock binding requires its actual observed Canon.");
+            admission();
+            var frozenQueue = observer.RequireFrozenS0Scheduler();
+            var before = observer.RecaptureBoundaryS0();
+            visualTemplates.RebindEnteredLightClock(admission);
+            frozenQueue(); admission();
+            var after = observer.RecaptureBoundaryS0();
+            var comparison = CanonicalS0Comparison.Compare(before, after);
+            var directory = Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "clock-rebound");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "s0-clock-binding-before.json"), JsonConvert.SerializeObject(before));
+            File.WriteAllText(Path.Combine(directory, "s0-observation-" + ordinal + ".json"), JsonConvert.SerializeObject(after));
+            File.WriteAllText(Path.Combine(directory, "s0-clock-binding-audit.json"), JsonConvert.SerializeObject(new {
+                comparison, originalQueueBytesUnchanged = true, derivedFromImportedClock = true, restoreQualified = false }));
+            if (!comparison.ObservedS0Equal || comparison.ClockDependencyDifferences.Length > 3
+                || after.Unclassified.Length != 0 || after.Unread.Length != 0 || after.InvariantFailures.Length != 0)
+                throw new InvalidOperationException("Clock binding changed another registered S0 field or its contract.");
+        }
 
         internal void Apply(int ordinal, string source, string target, long movie, long native, string sessionDirectory, long movieInputNativeOrigin,
-            CanonicalInputEpoch inputControlOrigin, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse)
+            CanonicalInputEpoch inputControlOrigin, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse,
+            string? evidenceStage = null)
         {
             if (movieInputNativeOrigin < 0 || native < movieInputNativeOrigin || observerInputOrigin.HasValue && observerInputOrigin.Value != movieInputNativeOrigin)
                 throw new InvalidOperationException("Canonical boundary input frame origin is absent, changed or ahead of the native cursor.");
@@ -41,6 +93,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             var elapsed = Stopwatch.StartNew();
             var directory = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")
                 ?? throw new InvalidOperationException("Canonical boundary diagnostic directory is absent.");
+            if (evidenceStage != null) {
+                if (evidenceStage != "clock-rebound" || !phaseOneTrace || !CanonicalClockApplyExperiment.Enabled)
+                    throw new InvalidOperationException("Unknown protected Canon evidence stage.");
+                directory = Path.Combine(directory, evidenceStage); Directory.CreateDirectory(directory);
+            }
             void Progress(string phase, object detail) => File.AppendAllText(Path.Combine(directory, "canonical-boundary-progress.jsonl"),
                 JsonConvert.SerializeObject(new { ordinal, source, target, movie, native, phase, detail,
                     elapsedMilliseconds = elapsed.ElapsedMilliseconds, completeStateCoverage = false }) + "\n");
@@ -122,6 +179,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 JsonConvert.SerializeObject(CanonicalBoundaryEpochObservation.Project(digest, inputEpoch)));
             if (phaseOneTrace)
             {
+                if (CanonicalActualDExperiment.CaptureSource && ordinal == 1)
+                {
+                    var data = carry.Capture(identities, inputEpoch, input, mouse,
+                        observer.BoundarySchedulerCarry(inputEpoch), observer.BoundaryHeroInvulnerabilityCarry(inputEpoch));
+                    if (data.Unsupported.Length != 0 || carry.InputGraph!.Unsupported.Length != 0)
+                        throw new InvalidOperationException("Actual D source has unread or unsupported managed data: "
+                            + string.Join(", ", data.Unsupported));
+                    ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, MovieFrame = movie, NativeFrame = native,
+                        Main = carry.Encode(data), Input = carry.EncodeInput(), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
+                    Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, restoreQualified = false,
+                        blockingQualifications = carry.BlockingQualifications });
+                }
                 // Keep all observed coverage gaps. This permits route discovery,
                 // never a full-state PASS, a payload application or a snapshot.
                 // Actual Canon/preservation/wait/readback failures still throw.
@@ -203,7 +272,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 graphPairPrepared = carry.GraphPairPrepared, graphPairApplicationExecuted = false,
                 sceneLoadCallbacksPrepared = carry.SceneLoadCallbacksPrepared, sceneLoadCallbacksApplicationExecuted = false,
                 inputRoots = carry.InputGraph!.Roots.Length, inputNodes = carry.InputGraph.Nodes.Length,
-                inputUnsupported = carry.InputGraph.Unsupported, inputBytes = inputBytes.Length });
+                inputUnsupported = carry.InputGraph.Unsupported, inputBytes = inputBytes.Length,
+                blockingQualifications = carry.BlockingQualifications });
             if (ordinal == 1)
             {
                 // Audit that the full reader and retained reflection caches do

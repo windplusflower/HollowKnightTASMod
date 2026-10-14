@@ -36,6 +36,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool sourceUnloaded;
         private bool awaitingBoundary;
         private bool observedBoundary;
+        private CanonicalBoundaryMutationScope? protectedClockCanonScope;
         private readonly System.Collections.Generic.Dictionary<int, string> retiredSourceOwners = new System.Collections.Generic.Dictionary<int, string>();
         internal static string? RetiredSourceOwner(int instanceId) => instance != null
             && instance.sourceUnloaded && instance.retiredSourceOwners.TryGetValue(instanceId, out var identity) ? identity : null;
@@ -44,11 +45,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static void RequireCanonicalMutationBoundary()
         {
             var self = instance;
-            if (self == null || self.canonical == null || !self.awaitingBoundary || self.observedBoundary || !self.sourceUnloaded
+            if (self == null || self.canonical == null || !self.awaitingBoundary
+                || self.observedBoundary && self.protectedClockCanonScope == null || !self.sourceUnloaded
                 || self.source.isLoaded || self.transition == null)
                 throw new InvalidOperationException("Canonical cleanup is outside the parked unloaded boundary.");
             var target = USceneManager.GetSceneByName(self.transition.TargetSceneName);
             if (target.IsValid() && target.isLoaded) throw new InvalidOperationException("Canonical cleanup target is already loaded.");
+            self.protectedClockCanonScope?.Require();
         }
         private int ordinal;
         private int rows;
@@ -280,6 +283,36 @@ namespace HollowKnightTAS.Runtime.FullRun
             var policy = instance!.canonical ?? throw new InvalidOperationException("Canonical input restore policy is absent.");
             policy.RestoreInputOrigin(source);
         }
+        internal static byte[]? ExperimentalSource => instance?.canonical?.ExperimentalSource;
+        internal static void RestoreExperimentalInputOrigin(CanonicalInputEpoch source)
+        {
+            if (!CanonicalActualDExperiment.Enabled) throw new InvalidOperationException("Actual D origin restore is disabled.");
+            GetProtectedObservationBoundary();
+            (instance?.canonical ?? throw new InvalidOperationException("Missing original Canon.")).RestoreInputOrigin(source);
+        }
+        internal static void SealExperimentalSource(CanonicalActualDExperiment.SessionCarry session)
+            => (instance?.canonical ?? throw new InvalidOperationException("Missing original Canon.")).SealSourceSession(session);
+        internal static Action FreezeExperimentalOwnerAdmission()
+        {
+            var self = instance ?? throw new InvalidOperationException("Missing parked serial loader.");
+            var load = self.transition; var info = self.checkpointLoadInfo; var routine = self.checkpointTransitionRoutine;
+            var ordinal = self.ordinal;
+            void Require() {
+                if (!CanonicalActualDExperiment.Enabled || !ReferenceEquals(instance, self) || !self.awaitingBoundary
+                    || !self.observedBoundary || !self.sourceUnloaded || self.source.isLoaded
+                    || !ReferenceEquals(self.transition, load) || !ReferenceEquals(self.checkpointLoadInfo, info)
+                    || !ReferenceEquals(self.checkpointTransitionRoutine, routine) || self.ordinal != ordinal)
+                    throw new InvalidOperationException("Actual D parked loader owners or original unloaded source changed.");
+            }
+            Require(); return Require;
+        }
+        internal static Action PrepareExperimentalTarget(CanonicalActualDExperiment source, HollowKnightTAS.Core.Movie.MovieV2Document movie,
+            long targetNative, long origin, CanonicalInputEpoch controlOrigin,
+            HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse,
+            Func<bool> admission, Action<CanonicalInputEpoch> restoreEpoch, PlayerData originalBootstrapPlayer,
+            GameManager.EnterSceneEvent? originalTitleCallback)
+            => (instance?.canonical ?? throw new InvalidOperationException("Missing original Canon.")).PrepareActualTargetD(
+                source, movie, targetNative, origin, controlOrigin, input, mouse, admission, restoreEpoch, originalBootstrapPlayer, originalTitleCallback);
 
         internal static Tuple<int, GameManager.SceneLoadInfo, string> GetCheckpointBoundary()
         {
@@ -302,6 +335,23 @@ namespace HollowKnightTAS.Runtime.FullRun
             if ((target.IsValid() && target.isLoaded) || self.checkpointLoadInfo.SceneName != self.transition.TargetSceneName)
                 throw new InvalidOperationException("Checkpoint target load has already started or its entry parameters differ.");
             return Tuple.Create(self.ordinal, self.checkpointLoadInfo, self.sourceName);
+        }
+        internal static void ReapplyProtectedClockCanon(long movie, long native, string sessionDirectory, long origin,
+            CanonicalInputEpoch controlOrigin, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input,
+            HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse, Action requireAdmission)
+        {
+            var boundary = GetProtectedObservationBoundary();
+            if (!CanonicalClockApplyExperiment.Enabled) throw new InvalidOperationException("Clock D experiment is disabled.");
+            var self = instance!;
+            if (requireAdmission == null || self.protectedClockCanonScope != null) throw new InvalidOperationException("Clock Canon scope is absent or reentrant.");
+            using var scope = new CanonicalBoundaryMutationScope(requireAdmission);
+            scope.Enter(); self.protectedClockCanonScope = scope;
+            try {
+                RequireCanonicalMutationBoundary();
+                (self.canonical ?? throw new InvalidOperationException("Original Canon is absent.")).RebindProtectedClock(boundary.Item1, requireAdmission);
+                GetProtectedObservationBoundary(); requireAdmission();
+            }
+            finally { self.protectedClockCanonScope = null; }
         }
 
         private void Inventory(string phase, long? movie = null, long? native = null)

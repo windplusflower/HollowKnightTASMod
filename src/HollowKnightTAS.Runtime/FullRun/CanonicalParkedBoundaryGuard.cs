@@ -23,6 +23,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Original parked B cursor, owner or load fields changed.");
         }
         internal static void RejectPlayerLoopAdvance() => throw new InvalidOperationException("Parked S0 B cannot execute another PlayerLoop; retire this process.");
+        internal CanonicalParkedBoundaryGuard WithVerifiedImportedClock(long importedNative)
+            => new CanonicalParkedBoundaryGuard(importedNative, ordinal, owner, source, target, fields);
         internal static string EncodeScalarValue(object? value, Type type)
         {
             var underlying = Nullable.GetUnderlyingType(type);

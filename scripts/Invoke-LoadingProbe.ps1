@@ -35,6 +35,9 @@ param(
     [ValidateRange(1,4)][int] $S0ObservationSlot = 1,
     [switch] $ClockCarryExperiment,
     [string] $ClockApplySource = '',
+    [switch] $RecanonicalizeAppliedClock,
+    [switch] $ActualDExperiment,
+    [switch] $ActualDSuffix,
     [switch] $BoundaryInventory,
     [switch] $OnlyTasMods,
     [switch] $ExportVideo,
@@ -46,8 +49,11 @@ param(
     [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
 )
 $ErrorActionPreference = 'Stop'
+if ($ActualDExperiment -and (-not $CanonicalPhaseOneTrace -or -not $ClockCarryExperiment -or -not $S0ObservationTarget -or $ClockApplySource -or $RecordInputs)) { throw 'Actual D requires the protected in-memory source-to-zero-Movie scenario.' }
+if ($ActualDSuffix -and -not $ActualDExperiment) { throw 'Actual suffix requires the in-memory D transaction.' }
 if ($ClockCarryExperiment -and (-not $CanonicalPhaseOneTrace -or (-not $RecordInputs -and -not $S0ObservationTarget))) { throw 'Clock experiment requires a protected source recording or zero-Movie target.' }
 if ($ClockApplySource -and (-not $ClockCarryExperiment -or -not $S0ObservationTarget -or -not (Test-Path -LiteralPath $ClockApplySource -PathType Leaf))) { throw 'Clock D application requires the bounded source and protected zero-Movie target.' }
+if ($RecanonicalizeAppliedClock -and -not $ClockApplySource) { throw 'Clock Canon requires actual clock D application.' }
 if ($S0ObservationTarget -and (-not $CanonicalPhaseOneTrace -or $RecordInputs -or $CheckpointPrototype -or $ExportVideo)) {
     throw 'S0 observation requires a protected Phase 1 trace without recording, checkpoints or video.'
 }
@@ -318,6 +324,9 @@ try {
         if ($S0ObservationTarget) { $arguments += ('--probe-s0-target={0}' -f $S0ObservationTarget); $arguments += ('--probe-s0-slot={0}' -f $S0ObservationSlot) }
         if ($ClockCarryExperiment) { $arguments += '--probe-clock-carry-experiment' }
         if ($ClockApplySource) { $arguments += ('--probe-clock-apply-source={0}' -f [IO.Path]::GetFullPath($ClockApplySource)) }
+        if ($RecanonicalizeAppliedClock) { $arguments += '--probe-clock-recanon' }
+        if ($ActualDExperiment) { $arguments += '--probe-actual-d-experiment' }
+        if ($ActualDSuffix) { $arguments += '--probe-actual-d-suffix' }
         if ($BoundaryInventory) { $arguments += '--probe-boundary-inventory' }
         if ($ExportVideo) { $arguments += '--probe-export-video' }
         if ($CheckpointPrototype) { $arguments += '--checkpoint-prototype' }

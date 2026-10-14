@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory=$true)][string] $Recording,
     [Parameter(Mandatory=$true)][string[]] $ZeroMovieRuns,
-    [Parameter(Mandatory=$true)][string] $Output
+    [Parameter(Mandatory=$true)][string] $Output,
+    [switch] $ClockRebound
 )
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -32,7 +33,13 @@ foreach ($run in $ZeroMovieRuns) {
         $receipt.consumedSamplesAfter -ne '0' -or $receipt.d1Passed -ne 'false' -or $receipt.restoreQualified -ne 'false') {
         throw 'Zero Movie preparation did not reach its guarded canonical B.'
     }
-    $candidate = Read-S0 (Join-Path $run ("s0-observation-{0}.json" -f $receipt.boundaries))
+    if ($ClockRebound) {
+        $rebound = Get-Content -LiteralPath (Join-Path $run 'clock-canon-receipt.json') -Raw | ConvertFrom-Json
+        if ($rebound.status -ne 'RecanonicalizedClockPaused' -or $rebound.movieFrame -ne '0' -or $rebound.consumedSamplesAfter -ne '0' -or
+            $rebound.restoreQualified -ne 'false' -or $rebound.boundaries -ne $receipt.boundaries) { throw 'No guarded clock-rebound Canon receipt.' }
+    }
+    $sampleRoot = if ($ClockRebound) { Join-Path $run 'clock-rebound' } else { $run }
+    $candidate = Read-S0 (Join-Path $sampleRoot ("s0-observation-{0}.json" -f $receipt.boundaries))
     for ($i=0; $i -lt 3; $i++) {
         $comparison = $compare.Invoke($null, [object[]]@($sources[$i], $candidate))
         $rows += [pscustomobject][ordered]@{ run=$run; sourceOrdinal=$i+1; observedS0Equal=$comparison.ObservedS0Equal;
@@ -45,6 +52,7 @@ foreach ($run in $ZeroMovieRuns) {
     }
 }
 $report = [ordered]@{ schema='hktas-canonical-s0-comparison-v2'; diagnosticOnly=$true;
+    observationStage=$(if ($ClockRebound) { 'clock-rebound' } else { 'zero-Movie-canonical-B' });
     d1Passed=$false; d2Passed=$false; d3Passed=$false; restoreQualified=$false; completeStateCoverage=$false; rows=$rows }
 $report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $Output -Encoding utf8
 $rows | Select-Object run,sourceOrdinal,observedS0Equal,firstDifference | ConvertTo-Json -Compress
