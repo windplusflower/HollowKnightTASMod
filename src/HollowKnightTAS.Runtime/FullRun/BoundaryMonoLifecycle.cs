@@ -22,5 +22,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Boundary MonoBehaviour lifecycle layout differs.");
             return bytes;
         }
+        // Diagnostic only: the inactive title HUD can still have a pending
+        // native Awake byte. Do not inherit the started-Hero invariant or
+        // qualify this unknown UI lifecycle field as canonical.
+        internal static byte[] ObserveUnstartedUi(MonoBehaviour component)
+        {
+            LoadingEngineClockProbe.RequirePinnedEngine();
+            var pointer = (IntPtr)Pointer.GetValue(component)!; var bytes = new byte[5];
+            if (pointer == IntPtr.Zero || !ReadProcessMemory(GetCurrentProcess(), IntPtr.Add(pointer, 292), bytes,
+                new UIntPtr(5), out var read) || read.ToUInt64() != 5 || bytes.Any(value => value > 1))
+                throw new InvalidOperationException("Unqualified UI native lifecycle observation layout differs.");
+            return bytes;
+        }
     }
 }

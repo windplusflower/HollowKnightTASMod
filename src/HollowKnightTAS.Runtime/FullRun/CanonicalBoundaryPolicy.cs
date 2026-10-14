@@ -11,6 +11,8 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal sealed class CanonicalBoundaryPolicy : IDisposable
     {
         private readonly CanonicalHeroStartupWarmup startup;
+        private readonly CanonicalHudStartupWarmup hudStartup = new CanonicalHudStartupWarmup();
+        private readonly CanonicalHudParticlePolicy hudParticles = new CanonicalHudParticlePolicy();
         private readonly CanonicalHudJournalPolicy journal = new CanonicalHudJournalPolicy();
         private readonly CanonicalHudCharmPolicy charms = new CanonicalHudCharmPolicy();
         private readonly CanonicalBoundaryPoolPolicy pools = new CanonicalBoundaryPoolPolicy();
@@ -63,7 +65,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             LoadingSerialSceneProbe.DeriveProtectedSourceCharmDirectory(charms, retiredMeshes, retireStarts, () => {
                 current.RecaptureOwnedHudScheduler(Require, retired);
                 current.PrepareActualScheduler(sourceSubset, admitted)();
-                current.RecaptureOwnedHudScheduler(Require, () => { });
+                current.RecaptureHudSchedulerAfterScalarWrite(Require);
                 var born = current.PrepareOwnedHudLifecycle(charms.OldOwners(), charms.OwnsNewStart, out var noOldStarts);
                 noOldStarts();
                 charms.BuildCurrent();
@@ -78,7 +80,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             retiredMeshes = new CanonicalRetiredMeshPolicy(id => pools.RetiredOwner(id) ?? journal.RetiringOwner(id) ?? charms.RetiringOwner(id) ?? LoadingSerialSceneProbe.RetiringSourceOwner(id));
             startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart);
         }
-        internal bool AdvanceStartup() => startup.Advance();
+        internal bool AdvanceStartup() => startup.Advance() && hudStartup.Advance();
         internal void RebindProtectedClock(int ordinal, Action admission)
         {
             if (!phaseOneTrace || !CanonicalClockApplyExperiment.Enabled || observer == null)
@@ -145,6 +147,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("R2-original-equipped-charms-derived", charms.Reset());
             Progress("R2-equipped-charm-meshes-retired", new { removedDelayedDestroyCallbacks = retiredMeshes.Flush(
                 owner => owner.StartsWith("canonical-equipped-charm-retirement/", StringComparison.Ordinal)) });
+            Progress("R2-six-owned-HUD-particles-cleared-and-armed", new { count = hudParticles.Reset() });
             Progress("R2-checkpoint-icon-idle-timer", CanonicalCheckpointIconPolicy.ResetIdleTimer());
             var identities = new BoundaryObjectIdentity();
             var carryFsmBindings = CanonicalHeroFsmBindings.Validate(identities);
@@ -333,6 +336,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             observerInputOrigin = source.OriginNative;
             observer = LoadingGameplayOracle.CreateBoundaryObserver(observerSession, source.OriginNative!.Value);
         }
-        public void Dispose() { journal.Dispose(); observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
+        public void Dispose() { hudParticles.Dispose(); journal.Dispose(); observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
     }
 }

@@ -151,11 +151,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Actual D TAS cursor or raw timing fields differ.");
             var ownerAdmission = LoadingSerialSceneProbe.FreezeExperimentalOwnerAdmission();
             var applicationBudget = System.Diagnostics.Stopwatch.StartNew();
+            var applicationStage = "prepare-target";
             var imported = false; var expectedOrigin = movieInputNativeOrigin;
             bool Admission() {
                 ownerAdmission();
                 if (applicationBudget.ElapsedMilliseconds >= 9000)
-                    throw new TimeoutException("Actual D transaction exceeded its original bounded command budget; retire process.");
+                    throw new TimeoutException("Actual D transaction exceeded its original bounded command budget at " + applicationStage + "; retire process.");
                 return job.Phase == "ApplyingActualD" && clock.IsPaused && !clock.IsFinished && movieFrame == 0
                     && input.ConsumedSamples == 0 && movieInputNativeOrigin == expectedOrigin
                     && clock.CurrentFrameIndex == (imported ? source.NativeFrame : targetNative);
@@ -167,12 +168,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                     movieInputNativeOrigin = epoch.OriginNative; movieInputControlOrigin = epoch.Copy(); expectedOrigin = epoch.OriginNative;
                 }, job.OriginalBootstrapPlayer, job.OriginalTitleMappingCallback);
             if (!Admission()) throw new InvalidOperationException("Actual D preparation lost its write admission.");
+            applicationStage = "import-clock";
             source.Clock.Apply(clock, targetNative,
                 (bytes, cursor) => CheckpointClockMethod("ImportCheckpointRandomState").Invoke(null, new object[] { bytes, cursor }),
                 (bytes, cursor) => CheckpointClockMethod("ImportCheckpointClockObserver").Invoke(null, new object[] { bytes, cursor }));
             imported = true; job.AppliedClock = source.Clock; job.Parked = job.Parked!.WithVerifiedImportedClock(source.NativeFrame);
+            applicationStage = "clock-binding";
             LoadingSerialSceneProbe.ReapplyProtectedClockCanon(0, source.NativeFrame, sessionDirectory, job.Origin,
                 movieInputControlOrigin!, input, mouse, () => { if (!Admission()) throw new InvalidOperationException("Actual D clock binding lost paused admission."); });
+            applicationStage = "apply-D";
             apply(); source.Clock.RequireReadback(clock);
             // The source manager Rand is residual D. Keep the actual target owner,
             // write only its four words after managed/derived construction and read back.

@@ -1,0 +1,64 @@
+using System;
+using System.Linq;
+using System.Reflection;
+using HutongGames.PlayMaker;
+using UnityEngine;
+
+namespace HollowKnightTAS.Runtime.FullRun
+{
+    // Original HUD initialization is allowed to derive current PD. No state,
+    // Start, iterator or gameplay action is invoked manually or suppressed.
+    internal sealed class CanonicalHudStartupWarmup
+    {
+        private static readonly FieldInfo Raw = typeof(PlayMakerFSM).GetField("fsm", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        private GameObject? hud;
+        private HUDCamera? camera;
+        private Transform? charms;
+        private PlayMakerFSM[]? fsms;
+        private bool complete;
+        private int firstFrame;
+
+        internal bool Advance()
+        {
+            if (complete) return true;
+            if (hud == null)
+            {
+                var cameras = typeof(GameCameras).GetField("_instance", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null) as GameCameras
+                    ?? throw new InvalidOperationException("HUD startup has no original GameCameras.");
+                hud = cameras.hudCamera.gameObject;
+                camera = hud.GetComponent<HUDCamera>() ?? throw new InvalidOperationException("Original HUDCamera lifecycle owner is absent.");
+                charms = hud.transform.Find("Inventory/Charms") ?? throw new InvalidOperationException("HUD startup Charms owner is absent.");
+                var vignette = hud.GetComponentsInChildren<Transform>(true).Where(node => node.name == "Low Health Vignette").ToArray();
+                if (vignette.Length != 1) throw new InvalidOperationException("HUD startup vignette owner is ambiguous.");
+                var next = charms.Find("Equipped Charms/Next Dot") ?? throw new InvalidOperationException("HUD startup Next Dot is absent.");
+                fsms = new[] { vignette[0].GetComponents<PlayMakerFSM>().Single(fsm => ((Fsm)Raw.GetValue(fsm)).Name == "Vignette Control"),
+                    next.GetComponents<PlayMakerFSM>().Single(fsm => ((Fsm)Raw.GetValue(fsm)).Name == "Up and Down"),
+                    next.GetComponents<PlayMakerFSM>().Single(fsm => ((Fsm)Raw.GetValue(fsm)).Name == "charm_unequip_shift"),
+                    charms.GetComponents<PlayMakerFSM>().Single(fsm => ((Fsm)Raw.GetValue(fsm)).Name == "Initial Activation") };
+                firstFrame = Time.frameCount;
+                if (!camera.enabled || !cameras.gameObject.activeInHierarchy)
+                    throw new InvalidOperationException("Original HUD startup camera/ancestor is disabled.");
+                // Already active target initialization is never toggled/restarted.
+                if (!hud.activeSelf) hud.SetActive(true);
+                if (!hud.activeInHierarchy) throw new InvalidOperationException("Original HUD startup ancestor is inactive.");
+                Modding.Logger.Log("[HKTAS] Waiting for original HUD initialization and original MoveMenuToHUDCamera Invoke.");
+                return false;
+            }
+            if (Time.frameCount - firstFrame > 120) throw new InvalidOperationException("Original HUD startup exceeded 120 native frames.");
+            if (!hud.activeInHierarchy || camera == null || !camera.enabled)
+                throw new InvalidOperationException("Original HUD startup camera was disabled before completion.");
+            if (camera.IsInvoking("MoveMenuToHUDCamera") || charms!.gameObject.activeSelf
+                || fsms!.Any(fsm => !((Fsm)Raw.GetValue(fsm)).Started)) return false;
+            foreach (var fsm in fsms!) {
+                var flags = BoundaryMonoLifecycle.Read(fsm);
+                if (flags[0] != 1 || flags[1] != 1) return false;
+            }
+            var activation = (Fsm)Raw.GetValue(fsms!.Last());
+            if (activation.ActiveStateName != "State 2")
+                throw new InvalidOperationException("Original Charms initialization did not complete its native Wait/disable state.");
+            complete = true;
+            Modding.Logger.Log("[HKTAS] Original HUD initialization completed; original PD derivation preserved and Invoke finished naturally.");
+            return true;
+        }
+    }
+}

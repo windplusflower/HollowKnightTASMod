@@ -32,6 +32,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly MemoryStream buffer = new MemoryStream();
         private readonly MemoryStream suffixRandomTimeline = new MemoryStream();
         private int suffixRandomRows;
+        private LoadingSuffixTweenCausality? suffixTweenCausality;
+        private LoadingSuffixParticleCausality? suffixParticleCausality;
         private readonly LoadingFieldDigest fields;
         private readonly LoadingObservationIdentity observationIdentity;
         private readonly LoadingNativeValueObservation nativeValues;
@@ -43,6 +45,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly bool boundaryCapture;
         private readonly bool suffixCapture;
         private BoundaryObjectIdentity? canonicalIdentities;
+        private Dictionary<int, string>? hudSchedulerObjects;
+        private Dictionary<IntPtr, string>? hudSchedulerBehaviours;
+        private Tuple<Component, IntPtr>[]? hudSchedulerOwners;
+        private bool hudSchedulerOwnerReuseAvailable;
         private long boundaryMovieFrame, boundaryNativeFrame;
         private readonly Dictionary<int, string> gameObjectPaths = new Dictionary<int, string>();
         private readonly LoadingUnityAssetIdentity assetIdentities = new LoadingUnityAssetIdentity();
@@ -266,12 +272,36 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var pointer = (IntPtr)pointers.GetValue(owner);
                 if (owner is MonoBehaviour && pointer != IntPtr.Zero) behaviours.Add(pointer, id);
             }
+            hudSchedulerObjects = objects; hudSchedulerBehaviours = behaviours;
+            hudSchedulerOwners = owners.Select(owner => Tuple.Create(owner, (IntPtr)pointers.GetValue(owner))).ToArray();
+            hudSchedulerOwnerReuseAvailable = true;
             // Asset callbacks are not implicitly admitted in this explicit
             // lifecycle. All surviving original callbacks must remain bound.
             nativeScheduler.Capture(fields, id => objects.TryGetValue(id, out var value) ? value : null,
                 pointer => behaviours.TryGetValue(pointer, out var value) ? value : null);
             admission(); requireTransition();
             if (nativeScheduler.Unsupported.Length != 0) throw new InvalidOperationException("HUD lifecycle introduced native scheduler coverage gaps.");
+        }
+        // Only between the registered scheduler scalar write and subsequent
+        // object birth: no managed/native owner lifecycle occurs in this slice.
+        // Reuse identities, never a captured queue, prepared guard or readback.
+        internal void RecaptureHudSchedulerAfterScalarWrite(Action admission)
+        {
+            if (!boundaryCapture || nativeScheduler == null || !hudSchedulerOwnerReuseAvailable
+                || hudSchedulerObjects == null || hudSchedulerBehaviours == null || hudSchedulerOwners == null)
+                throw new InvalidOperationException("HUD scalar readback has no unused actual owner directory.");
+            hudSchedulerOwnerReuseAvailable = false;
+            admission();
+            var pointers = typeof(UnityEngine.Object).GetField("m_CachedPtr", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            foreach (var owner in hudSchedulerOwners) {
+                if (owner.Item1 == null || !Loaded(owner.Item1.gameObject) || (IntPtr)pointers.GetValue(owner.Item1) != owner.Item2)
+                    throw new InvalidOperationException("HUD scalar write changed an actual native owner identity.");
+            }
+            nativeScheduler.Capture(fields, id => hudSchedulerObjects.TryGetValue(id, out var value) ? value : null,
+                pointer => hudSchedulerBehaviours.TryGetValue(pointer, out var value) ? value : null);
+            admission();
+            if (nativeScheduler.Unsupported.Length != 0)
+                throw new InvalidOperationException("HUD scalar fresh native readback has a coverage gap.");
         }
         internal Action PrepareActualScheduler(CanonicalSchedulerCarry source, Func<bool> admission)
             => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).PrepareCanonicalRestore(source,
@@ -443,14 +473,64 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal void ObserveSuffixRandomBoundary(string phase, bool ready, string boundary)
         {
+            try { ObserveSuffixRandomBoundaryCore(phase, ready, boundary); }
+            catch (Exception error) {
+                try {
+                    Directory.CreateDirectory(directory);
+                    File.WriteAllText(Path.Combine(directory, "suffix-lifecycle-reader-fault.json"), JsonConvert.SerializeObject(new {
+                        diagnosticOnly = true, phase, movieFrame = movieFrame(), nativeFrame = nativeFrame(),
+                        error = error.GetType().FullName + ": " + error.Message, completeStateCoverage = false }));
+                } catch { } // the original observer failure still faults the native gate
+                throw;
+            }
+        }
+        private void ObserveSuffixRandomBoundaryCore(string phase, bool ready, string boundary)
+        {
             if (!suffixCapture || sealedTrace) return;
+            suffixTweenCausality ??= new LoadingSuffixTweenCausality(() => new {
+                movieFrame = movieFrame(), nativeFrame = nativeFrame(), gameplayRng = gameplayRng(),
+                particleManagerRandom = CaptureParticleRandomState() }, UnityId);
+            suffixTweenCausality.RequireHealthy();
+            var beforeRng = gameplayRng(); var beforeParticle = CaptureParticleRandomState();
+            suffixParticleCausality ??= new LoadingSuffixParticleCausality(UnityId);
+            suffixParticleCausality.Observe(phase, movieFrame(), nativeFrame());
+            var widgets = CaptureSuffixWidgetLifecycle();
+            if (beforeRng != gameplayRng() || !beforeParticle.SequenceEqual(CaptureParticleRandomState()))
+                throw new InvalidOperationException("Suffix lifecycle reader changed RNG state during its independent read.");
             if (suffixRandomRows >= 256 || suffixRandomTimeline.Length > 1024*1024)
                 throw new InvalidOperationException("Actual D native suffix random observation exceeded its diagnostic bound.");
             var bytes = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new {
                 diagnosticOnly = true, sequence = suffixRandomRows++, phase, ready, boundary,
                 movieFrame = movieFrame(), nativeFrame = nativeFrame(), gameplayRng = gameplayRng(),
-                particleManagerRandom = CaptureParticleRandomState(), completeStateCoverage = false }) + "\n");
+                particleManagerRandom = CaptureParticleRandomState(), widgets, completeStateCoverage = false }) + "\n");
             suffixRandomTimeline.Write(bytes, 0, bytes.Length);
+        }
+        private object CaptureSuffixWidgetLifecycle()
+        {
+            var cameras = typeof(GameCameras).GetField("_instance", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null) as GameCameras
+                ?? throw new InvalidOperationException("Suffix widget original camera owner is absent.");
+            var rawField = typeof(PlayMakerFSM).GetField("fsm", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            return new[] { "Low Health Vignette", "Inventory/Charms/Equipped Charms/Next Dot" }.Select(path => {
+                var node = cameras.hudCamera.transform.Find(path);
+                if (node == null && path == "Low Health Vignette") {
+                    var children = cameras.hudCamera.GetComponentsInChildren<Transform>(true);
+                    if (children.Length > 10000) throw new InvalidOperationException("Original HUD widget directory exceeded its bound.");
+                    var matches = children.Where(value => value.name == "Low Health Vignette").ToArray();
+                    if (matches.Length > 1) throw new InvalidOperationException("Exact Low Health Vignette owner is ambiguous inside original HUD.");
+                    node = matches.SingleOrDefault();
+                }
+                var parents = new List<object>();
+                for (var current = node; current != null; current = current.parent) {
+                    if (parents.Count >= 16) throw new InvalidOperationException("Suffix widget parent chain exceeded its bound.");
+                    parents.Add(new { owner = UnityId(current.gameObject), activeSelf = current.gameObject.activeSelf, active = current.gameObject.activeInHierarchy });
+                }
+                return new { path, found = node != null, parents, fsms = (node == null ? Array.Empty<PlayMakerFSM>() : node.GetComponents<PlayMakerFSM>()).Select(owner => {
+                    var raw = rawField.GetValue(owner) as Fsm;
+                    var active = raw == null ? null : typeof(Fsm).GetField("activeState", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(raw) as FsmState;
+                    return new { owner = UnityId(owner), owner.enabled, lifecycle = BoundaryMonoLifecycle.ObserveUnstartedUi(owner),
+                        uiLifecycleQualified = false, name = raw?.Name, started = raw?.Started, state = active?.Name };
+                }).ToArray() };
+            }).ToArray();
         }
 
         internal void Sample(string phase, string boundary)
@@ -1320,6 +1400,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     detail += "; inventory export failed: " + exception.GetType().Name + ": " + exception.Message;
                 }
                 if (suffixCapture) {
+                    suffixTweenCausality?.Export(directory);
+                    suffixParticleCausality?.Export(directory);
                     using (var randomOutput = new FileStream(Path.Combine(directory, "suffix-native-random.jsonl"), FileMode.CreateNew, FileAccess.Write, FileShare.Read))
                         suffixRandomTimeline.WriteTo(randomOutput);
                 }
@@ -1337,7 +1419,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
             }
             catch (Exception exception) { success = false; detail += "; export failed: " + exception.Message; Modding.Logger.LogError("P0 gameplay oracle export failed: " + exception.Message); }
-            finally { nativeScheduler?.Release(); nativeValues.Dispose(); fields.Dispose(); buffer.Dispose(); suffixRandomTimeline.Dispose(); }
+            finally { suffixTweenCausality?.Dispose(); suffixParticleCausality?.Dispose(); nativeScheduler?.Release(); nativeValues.Dispose(); fields.Dispose(); buffer.Dispose(); suffixRandomTimeline.Dispose(); }
             if (suffixCapture && !success) throw new InvalidOperationException("Actual D suffix observer failed: " + detail);
         }
 
