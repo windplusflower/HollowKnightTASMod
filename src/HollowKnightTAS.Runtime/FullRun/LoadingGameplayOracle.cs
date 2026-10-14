@@ -71,6 +71,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly BoundaryAssetArrayRegistry assetArrays = new BoundaryAssetArrayRegistry();
         private readonly SortedSet<string> omissions = new SortedSet<string>(StringComparer.Ordinal);
         private readonly SortedSet<string> detachedFsmReferences = new SortedSet<string>(StringComparer.Ordinal);
+        private readonly List<object> detachedFsmMetadata = new List<object>();
         private readonly List<Tuple<object, string>> detachedFsmRoots = new List<Tuple<object, string>>();
         private int rows;
         private Stopwatch? captureProgress;
@@ -323,6 +324,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal CanonicalS0ObservationSnapshot BoundaryS0Observation() => s0Sample
             ?? throw new InvalidOperationException("No canonical S0 observation is available.");
+        internal object BoundaryDetachedFsmDiagnostic() => new {
+            diagnosticOnly = true, nativeFrame = boundaryNativeFrame,
+            references = detachedFsmReferences.ToArray(), metadata = detachedFsmMetadata.ToArray(),
+            completeStateCoverage = false };
         private string? S0ExternalBinding(object value)
         {
             if (ReferenceEquals(value, s0EventLock)) return "canonical-lock:FsmEvent.syncObj";
@@ -632,6 +637,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (boundaryCapture) { coverage.BeginSample(); unityCoverageLabels.Clear(); coverageRoot = ""; coverageField = ""; }
             if (boundaryCapture) { s0Roots.Clear(); s0InvariantFailures.Clear(); s0Sample = null; s0EventLock = null; }
             detachedFsmReferences.Clear();
+            detachedFsmMetadata.Clear();
             detachedFsmRoots.Clear();
             unityIds.Clear(); fsmIds.Clear(); fsmMemberIds.Clear();
             sceneObjectOwners.Clear();
@@ -1176,6 +1182,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (fsmIds.TryGetValue(fsm, out var existing)) return existing;
             var id = "detached-fsm[" + detachedFsmRoots.Count + "]";
             fsmIds.Add(fsm, id);
+            var owner = fields.Read(fsm, "owner") as MonoBehaviour;
+            var hasOwner = !ReferenceEquals(owner, null);
+            var instanceField = typeof(UnityEngine.Object).GetField("m_InstanceID", BindingFlags.Instance | BindingFlags.NonPublic);
+            var cachedInstance = hasOwner && instanceField != null ? (int)instanceField.GetValue(owner)! : 0;
+            detachedFsmMetadata.Add(new { id, name = fields.Read(fsm, "name"),
+                ownerReference = hasOwner ? UnityId(owner!) : null, ownerNativeLive = owner != null,
+                retiredSourceOwner = cachedInstance != 0 ? LoadingSerialSceneProbe.RetiringSourceOwner(cachedInstance) : null,
+                cachedInstanceAvailable = cachedInstance != 0 });
             QueueDetachedFsm(fsm, id);
             if (fields.Read(fsm, "states") is Array states)
                 for (var stateIndex = 0; stateIndex < states.Length; stateIndex++)
@@ -1342,7 +1356,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var encoded = new LoadingInventoryRootEncoding(lastInventory);
             var content = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new {
-                format = LoadingInventoryRootEncoding.Format, names = encoded.Names, types = encoded.Types, roots = encoded.Roots }));
+                format = LoadingInventoryRootEncoding.Format, names = encoded.Names, types = encoded.Types, roots = encoded.Roots,
+                detachedFsmReferences, detachedFsmMetadata }));
             if (content.Length > 16 * 1024 * 1024)
                 throw new InvalidOperationException("Actual D suffix inventory exceeds the original 16 MiB diagnostic bound.");
             using (var compressed = new MemoryStream()) {

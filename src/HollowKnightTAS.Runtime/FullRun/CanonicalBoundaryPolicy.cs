@@ -42,7 +42,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Actual D target has no completed original Canon.");
             var epoch = CanonicalInputEpochRuntime.Capture(origin, targetNative, controlOrigin);
             var identities = new BoundaryObjectIdentity();
-            var sourceGraph = CanonicalCarryFieldRegistry.Create().Decode(source.Main);
+            var sourceGraph = carry.DecodeActualMainForOwnerContext(source);
             var detached = Array.Exists(sourceGraph.Roots, root => root.Binding == CanonicalSceneMappingCarry.DetachedPlayerRoot);
             carry.Capture(identities, epoch, input, mouse, observer.BoundarySchedulerCarry(epoch), observer.BoundaryHeroInvulnerabilityCarry(epoch),
                 targetDirectoryOnly: true, originalBootstrapPlayer: originalBootstrapPlayer, sourceRequiresDetachedPlayer: detached,
@@ -200,6 +200,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Boundary field schema exceeds 16 MiB.");
             File.WriteAllText(Path.Combine(directory, "boundary-field-schema.json"), fieldSchema);
             Progress("boundary-digest-captured", new { digest.FullSha256, roots = digest.Roots.Length, unsupported = digest.Unsupported.Length });
+            File.WriteAllText(Path.Combine(directory, "boundary-detached-fsm-" + ordinal + ".json"),
+                JsonConvert.SerializeObject(observer.BoundaryDetachedFsmDiagnostic()));
             if (digest.CanonicalWaitIssues.Length != 0)
                 throw new InvalidOperationException("Canonical scheduler registry is incomplete: " + string.Join(", ", digest.CanonicalWaitIssues));
             // Retain all raw data. A separate, explicitly D0-only projection

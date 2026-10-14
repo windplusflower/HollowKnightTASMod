@@ -52,6 +52,18 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal CanonicalInputEpoch? PreparedRestoreEpoch { get; private set; }
         private bool targetRestorePrepared;
         private CanonicalActualDExperiment? actualSourceValidation;
+        private CanonicalActualDExperiment? decodedActualEnvelope;
+        private CanonicalCarryGraphData? decodedActualMain;
+        private string? decodedActualMainHash;
+        internal CanonicalCarryGraphData DecodeActualMainForOwnerContext(CanonicalActualDExperiment source)
+        {
+            if (decodedActualEnvelope != null || actualSourceValidation != null)
+                throw new InvalidOperationException("Actual source main graph was already decoded/admitted.");
+            decodedActualEnvelope = source;
+            decodedActualMainHash = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(source.Main);
+            decodedActualMain = codec.Decode(source.Main);
+            return decodedActualMain;
+        }
         internal Action PrepareActualRestore(CanonicalCarryGraphData main, CanonicalCarryGraphData inputGraph,
             MovieV2Document nextMovie, Func<bool> admitted, Func<CanonicalSchedulerCarry, Action> prepareScheduler)
             => (prepareTargetRestore ?? throw new InvalidOperationException("Target D owner context has not been captured."))(
@@ -313,8 +325,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<bool> admitted, Func<CanonicalSchedulerCarry, Action> prepareScheduler)
         {
             if (actualSourceValidation != null) throw new InvalidOperationException("Actual D source envelope was already admitted.");
+            if (!ReferenceEquals(decodedActualEnvelope, source) || decodedActualMain == null
+                || decodedActualMainHash != HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(source.Main))
+                throw new InvalidOperationException("Actual source main envelope changed after its owner-context decode.");
             actualSourceValidation = source;
-            return PrepareActualRestore(codec.Decode(source.Main), inputCodec.Decode(source.Input), nextMovie, admitted, prepareScheduler);
+            var main = decodedActualMain;
+            decodedActualMain = null; // Single consumption; never reuse after fault.
+            return PrepareActualRestore(main, inputCodec.Decode(source.Input), nextMovie, admitted, prepareScheduler);
         }
         internal byte[] EncodeInput() => inputCodec.Encode(InputGraph ?? throw new InvalidDataException("Input carry domain was not captured."));
 
