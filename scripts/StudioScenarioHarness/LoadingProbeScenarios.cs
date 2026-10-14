@@ -11,6 +11,7 @@ using System.Windows.Media.Imaging;
 using HollowKnightTAS.Companion.Services;
 using HollowKnightTAS.Companion.ViewModels;
 using HollowKnightTAS.Core.Automation;
+using HollowKnightTAS.Diagnostics;
 using HollowKnightTAS.Core.Movie;
 using HollowKnightTAS.Companion.Automation;
 
@@ -57,10 +58,15 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_EXPERIMENT", clockExperiment ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_SOURCE", clockSourceArgument == null ? null : Arg("--probe-clock-apply-source"));
         var actualDExperiment = args.Contains("--probe-actual-d-experiment");
+        var actualDStageArgument = args.SingleOrDefault(value => value.StartsWith("--probe-actual-d-stage=", StringComparison.Ordinal));
+        var actualDStage = actualDStageArgument == null ? "" : Arg("--probe-actual-d-stage");
+        var actualDRelayArgument = args.SingleOrDefault(value => value.StartsWith("--probe-actual-d-relay=", StringComparison.Ordinal));
+        Require(actualDStage == "" && actualDRelayArgument == null || actualDExperiment && args.Contains("--probe-actual-d-suffix")
+            && (actualDStage == "source" || actualDStage == "target") && actualDRelayArgument != null, "actual D stages require a single bounded memory relay and suffix observation");
         Require(!actualDExperiment || clockExperiment && s0TargetArgument != null && phaseOneTrace && clockSourceArgument == null,
             "actual D uses a bounded in-memory source packet and a fresh zero-Movie target");
         Environment.SetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_EXPERIMENT", actualDExperiment ? "1" : null);
-        Environment.SetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_SOURCE", actualDExperiment ? "1" : null);
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_SOURCE", actualDExperiment && actualDStage != "target" ? "1" : null);
         // All canonical diagnostics capture the actual clock portion of D.
         // This enables the existing bounded native codec, never qualification.
         if (args.Contains("--probe-canonical-boundary")) Environment.SetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT", "1");
@@ -251,7 +257,7 @@ internal static partial class StudioScenarioHarness
                 }
                 byte[]? actualDBytes = null;
                 IReadOnlyDictionary<string, string>? actualDHeader = null;
-                if (actualDExperiment) {
+                if (actualDExperiment && actualDStage != "target") {
                     await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
                     await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("actual source D fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
                         "actual source B captures both graphs and parks without executing target load", 180);
@@ -279,6 +285,16 @@ internal static partial class StudioScenarioHarness
                             "original source suffix has exact endpoint and no input mismatch");
                         await File.WriteAllTextAsync(Path.Combine(output, "actual-d-original-suffix-state.json"), JsonSerializer.Serialize(originalState));
                     }
+                    if (actualDStage == "source") {
+                        var packet = new ActualDRelayPacket { Data = actualDBytes, Sha256 = actualDHeader["sha256"],
+                            MovieFrame = long.Parse(actualDHeader["movieFrame"], System.Globalization.CultureInfo.InvariantCulture),
+                            NativeFrame = long.Parse(actualDHeader["nativeFrame"], System.Globalization.CultureInfo.InvariantCulture) };
+                        await ActualDMemoryRelay.ExchangeClient(Arg("--probe-actual-d-relay"), false, packet);
+                        await Field<Func<bool, Task>>(vm, "finishRestorePresentation")(true);
+                        Require(sourceHash == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(source))), "source stage input package bytes unchanged");
+                        Log("ACTUAL D SOURCE STAGE COMPLETE; packet transferred only through current-user memory IPC; no qualification");
+                        return;
+                    }
                     var sourcePid = Field<Process>(app, "startupGame").Id;
                     // This source paused before its first target load, so the
                     // normal frame-menu completion has not released its cover.
@@ -293,6 +309,14 @@ internal static partial class StudioScenarioHarness
                         "actual target original bootstrap pauses before any Movie sample", 120);
                     await Until(() => vm.SelectedSession?.Client.IsConnected == true, "actual D replacement Runtime connected", 60);
                     AtFrame(vm, boot, 0, "actual D target remains Movie zero");
+                }
+                if (actualDStage == "target") {
+                    var packet = await ActualDMemoryRelay.ExchangeClient(Arg("--probe-actual-d-relay"), true, null!);
+                    actualDBytes = packet.Data;
+                    actualDHeader = new Dictionary<string, string> { ["length"] = packet.Data.Length.ToString(), ["sha256"] = packet.Sha256,
+                        ["movieFrame"] = packet.MovieFrame.ToString(), ["nativeFrame"] = packet.NativeFrame.ToString() };
+                    await File.WriteAllTextAsync(Path.Combine(output, "actual-d-source-header.json"), JsonSerializer.Serialize(actualDHeader));
+                    Require(actualDBytes.Length > 0 && actualDBytes.Length <= 32*1024*1024, "target stage receives bounded source D only through memory IPC");
                 }
                 var start = await Call(new Dictionary<string, string> { ["phase"] = "s0-start",
                     ["slot"] = Arg("--probe-s0-slot"), ["target"] = Arg("--probe-s0-target") });

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -110,6 +110,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private long skippedLoadFrames;
         private LoadingBoundaryProbe? loadingBoundaryProbe;
         private LoadingGameplayOracle? loadingGameplayOracle;
+        private LoadingGameplayOracle? actualDSuffixOracle;
         private long expectedNativeStart = -1;
         private long? movieInputNativeOrigin;
         private CanonicalInputEpoch? movieInputControlOrigin;
@@ -576,6 +577,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 loadingBoundaryProbe?.Sample(ready ? "before" : "loading", boundary);
                 LoadingSerialSceneProbe.CaptureVisualState(movieFrame);
                 loadingGameplayOracle?.Sample(ready ? "before" : "loading", boundary);
+                actualDSuffixOracle?.Sample(ready ? "before" : "loading", boundary);
                 if (ready) TraceMovieRng("before", replayMovie?.Runs[timingRunIndex].RngSeed);
                 frameInputEnabled = ready;
                 // Resume drawing before the target so temporal presentation can
@@ -700,10 +702,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 RecordCheckpointInputConsumption(movieFrame);
                 loadingBoundaryProbe?.Sample("after", frameBoundary);
                 loadingGameplayOracle?.Sample("after", frameBoundary);
+                actualDSuffixOracle?.Sample("after", frameBoundary);
                 if (mode == "Recording") journal!.CompleteFrame(movieFrame, activeFrameRate);
                 movieFrame++;
                 loadingBoundaryProbe?.Completed();
                 loadingGameplayOracle?.Completed();
+                actualDSuffixOracle?.Completed();
                 clock.ReportMovieFrameCompleted();
                 if (movieFrame == pauseAtMovieFrame)
                 {
@@ -987,6 +991,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             replayStateTrace?.Dispose();
             loadingBoundaryProbe?.Dispose();
             loadingGameplayOracle?.Dispose();
+            actualDSuffixOracle?.Dispose();
             restoreDrawing.Dispose();
             videoCapture?.Dispose();
             observationQueue.Dispose();

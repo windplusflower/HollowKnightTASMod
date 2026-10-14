@@ -1,10 +1,32 @@
 """Compare P0 state diagnostics exactly; this never grants full-state qualification."""
 import argparse
+import base64
+import zlib
 import collections
 import hashlib
 import json
 from pathlib import Path
+from loading_inventory import decode_roots
 from loading_trace_windows import expected_gameplay_samples, validate_sample_scope
+
+
+def decode_suffix_inventory(value):
+    if not isinstance(value, dict) or value.get("encoding") != "gzip-base64-utf8-json-v1":
+        raise ValueError("unknown suffix inventory encoding")
+    if type(value.get("bytes")) is not int or not 0 < value["bytes"] <= 16*1024*1024:
+        raise ValueError("suffix inventory byte budget exceeded")
+    compressed = base64.b64decode(value["gzipBase64"], validate=True)
+    decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    content = decoder.decompress(compressed, 16*1024*1024 + 1)
+    if len(content) != value["bytes"] or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+        raise ValueError("suffix inventory length or compressed stream differs")
+    if hashlib.sha256(content).hexdigest() != value["sha256"]:
+        raise ValueError("suffix inventory digest differs")
+    inventory = json.loads(content)
+    if inventory.get("format") != "sorted-utf16-prefix-root-names-v1":
+        raise ValueError("unknown suffix inventory root identity format")
+    inventory["roots"] = decode_roots(dict(rootIdentityEncoding=inventory["format"], rootIdentities=inventory["names"], rootTypes=inventory["types"], roots=inventory["roots"]))
+    return inventory
 
 
 def read_trace(path):
@@ -29,6 +51,9 @@ def read_trace(path):
     if any(row.get("kind") != "sample" or row.get("phase") not in
            ("before", "after", "loading", "event", "candidate") for row in rows):
         raise ValueError(f"{path}: unknown sample")
+    if header.get("samplingScope") == "actual-d-suffix-all-loaded-three-after-v1":
+        for row in rows:
+            row["inventory"] = decode_suffix_inventory(row.get("inventory"))
     validate_sample_scope(header, rows)
     if header.get("samplingScope") == "serial-candidate-boundaries-only-diagnostic":
         if not rows or any(row["phase"] != "candidate" for row in rows):
@@ -53,18 +78,23 @@ def compare(paths):
         header_differences = sorted(key for key in header.keys() | other_header.keys()
                                     if header.get(key) != other_header.get(key))
         order_equal = [sample_key(row) for row in base] == [sample_key(row) for row in other]
+        if header.get("samplingScope") == "actual-d-suffix-all-loaded-three-after-v1":
+            order_equal = order_equal and [row["nativeFrame"] for row in base] == [row["nativeFrame"] for row in other]
         first_by_field = {}
         mismatch_count = 0
         if not header_differences and order_equal:
             for left, right in zip(base, other):
                 changed = sorted(key for key in left["state"].keys() | right["state"].keys()
                                  if left["state"].get(key) != right["state"].get(key))
+                if header.get("samplingScope") == "actual-d-suffix-all-loaded-three-after-v1" and left["inventory"] != right["inventory"]:
+                    changed.append("rootInventory")
                 mismatch_count += bool(changed)
                 for key in changed:
                     first_by_field.setdefault(key, {
                         "movieFrame": left["movieFrame"], "phase": left["phase"],
                         "boundary": left["boundary"], "sequence": left["sequence"],
-                        "expected": left["state"].get(key), "actual": right["state"].get(key)})
+                        "expected": left["state"].get(key) if key != "rootInventory" else "see exact sample inventory",
+                        "actual": right["state"].get(key) if key != "rootInventory" else "see exact sample inventory"})
         comparisons.append({"path": str(path), "headerDifferences": header_differences,
                             "sampleOrderEqual": order_equal, "comparedSamples": len(base) if order_equal else 0,
                             "mismatchedSamples": mismatch_count if order_equal else None,

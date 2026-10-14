@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -38,6 +39,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Dictionary<string, int> sceneObjectOwners = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly LoadingSceneRootIdentity sceneRoots = new LoadingSceneRootIdentity();
         private readonly bool boundaryCapture;
+        private readonly bool suffixCapture;
         private BoundaryObjectIdentity? canonicalIdentities;
         private long boundaryMovieFrame, boundaryNativeFrame;
         private readonly Dictionary<int, string> gameObjectPaths = new Dictionary<int, string>();
@@ -92,22 +94,22 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool transitionSourceUnloaded, candidateCaptured;
 
         private LoadingGameplayOracle(string directory, long first, long end,
-            Func<long> movieFrame, Func<long> nativeFrame, Func<string> gameplayRng, bool boundaryCapture = false, long? inputNativeOrigin = null)
+            Func<long> movieFrame, Func<long> nativeFrame, Func<string> gameplayRng, bool boundaryCapture = false, long? inputNativeOrigin = null, bool suffixCapture = false, string? identitySessionDirectory = null)
         {
-            this.boundaryCapture = boundaryCapture;
+            this.boundaryCapture = boundaryCapture; this.suffixCapture = suffixCapture;
             if (boundaryCapture) { canonicalIdentities = new BoundaryObjectIdentity(); coverageHeroBindings = CanonicalHeroFsmBindingRegistry.Snapshot(); }
             this.directory = directory; this.first = first; this.end = end;
             samplingWindows = LoadingOracleSamplingWindows.Parse(
-                boundaryCapture ? null : Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_WINDOWS"), first, end);
+                boundaryCapture || suffixCapture ? null : Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_WINDOWS"), first, end);
             this.movieFrame = movieFrame; this.nativeFrame = nativeFrame; this.gameplayRng = gameplayRng;
             controlledNativeOrigin = inputNativeOrigin ?? nativeFrame();
             if (controlledNativeOrigin < 0) throw new InvalidOperationException("Input native frame origin is invalid.");
             fieldDetails = Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_FIELD_DETAILS") == "1";
             nativePhysicsOnly = !boundaryCapture && Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_ONLY") == "1";
-            serialBoundaryOnly = boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_SERIAL_BOUNDARY_ONLY") == "1";
+            serialBoundaryOnly = boundaryCapture || (!suffixCapture && Environment.GetEnvironmentVariable("HKTAS_LOADING_SERIAL_BOUNDARY_ONLY") == "1");
             if (serialBoundaryOnly && samplingWindows.ExplicitWindows)
                 throw new InvalidOperationException("Candidate-only diagnostics cannot declare gameplay sampling windows.");
-            observationIdentity = new LoadingObservationIdentity(directory);
+            observationIdentity = new LoadingObservationIdentity(identitySessionDirectory ?? directory);
             nativeValues = new LoadingNativeValueObservation(Reference);
             rigidbodies = new LoadingRigidbodyObservation();
             fields = new LoadingFieldDigest(Reference, type => type == typeof(MonoBehaviour)
@@ -158,7 +160,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 nativePhysicsEntryDiagnostics = Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_DETAILS") == "1",
                 diagnosticInventoryEncoding = LoadingInventoryRootEncoding.Format,
                 nativePhysicsInventorySampling = "full-boundaries-and-window-endpoints; all-value-and-order-digests-every-sample-v1",
-                samplingScope = serialBoundaryOnly ? "serial-candidate-boundaries-only-diagnostic"
+                samplingScope = suffixCapture ? "actual-d-suffix-all-loaded-three-after-v1" : serialBoundaryOnly ? "serial-candidate-boundaries-only-diagnostic"
                     : samplingWindows.ExplicitWindows ? "bounded-transition-windows-v1" : "bounded-window",
                 gameplayWindows = samplingWindows.ExplicitWindows ? samplingWindows.Snapshot() : null,
                 managedFieldGraph = "ordered-component-fsm-root-shared-references-v1; scheduler-and-SceneLoad-scopes-independent",
@@ -167,6 +169,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     "arbitrary-mod-statics", "ambiguous-asset-identities", "ambiguous-scene-object-identities", "dormant-roots-between-window-endpoints-willactivate-loadfinish",
                     "TAS-controller-internals-require-separate-cursor-input-codecs",
                     "native-Unity-components-and-mutable-assets", "external-Steam-event-queue-and-account-state" } });
+            if (suffixCapture) return; // The suffix observer adds no game callback or coroutine.
             GameManager.SceneTransitionBegan += TransitionBegan;
             USceneManager.sceneLoaded += SceneLoaded;
             USceneManager.sceneUnloaded += SceneUnloaded;
@@ -177,6 +180,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<long> nativeFrame, Func<string> gameplayRng)
         {
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_GAMEPLAY_ORACLE") != "1") return null;
+            // Actual D retains the independent full canonical boundary reader and
+            // creates its separate suffix reader at resume; avoid duplicate B scans.
+            if (CanonicalActualDExperiment.Enabled) return null;
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_CLOCK_ROUNDTRIP") == "1")
                 throw new InvalidOperationException("The read-only gameplay oracle cannot run with clock-write diagnostics.");
             if (!long.TryParse(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_FIRST"), out var first)
@@ -195,6 +201,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 () => observer?.boundaryMovieFrame ?? 0, () => observer?.boundaryNativeFrame ?? 0,
                 () => rng.CaptureCurrent().Sha256, boundaryCapture: true, inputNativeOrigin: inputNativeOrigin);
             return observer;
+        }
+
+        internal static LoadingGameplayOracle CreateActualDSuffix(string directory, string sessionDirectory, long first, long end,
+            long inputNativeOrigin, Func<long> movieFrame, Func<long> nativeFrame, Func<string> gameplayRng)
+        {
+            if (first < 0 || end != first + 3)
+                throw new InvalidOperationException("Actual D suffix observation requires its bounded original window.");
+            Directory.CreateDirectory(directory);
+            return new LoadingGameplayOracle(directory, first, end, movieFrame, nativeFrame, gameplayRng,
+                inputNativeOrigin: inputNativeOrigin, suffixCapture: true, identitySessionDirectory: sessionDirectory);
         }
 
         private Func<int, string?>? boundaryRetiredOwner;
@@ -398,7 +414,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal void Sample(string phase, string boundary)
         {
-            if (sealedTrace || !samplingWindows.Contains(movieFrame())) return;
+            if (sealedTrace || !samplingWindows.Contains(movieFrame()) || (suffixCapture && phase != "after")) return;
             if (serialBoundaryOnly && phase != "candidate") return;
             try
             {
@@ -412,7 +428,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var candidate = serialCandidate || (nativePhysics != null && !candidateCaptured && currentTransition != null
                     && phase == "loading" && boundary == "SceneTransition" && transitionSourceUnloaded
                     && USceneManager.GetActiveScene().name == transitionTarget);
-                var fullInventory = (phase == "event" && (boundary == "will-activate" || boundary == "load-finish"))
+                var fullInventory = suffixCapture || (phase == "event" && (boundary == "will-activate" || boundary == "load-finish"))
                     || samplingWindows.IsEndpoint(movieFrame(), phase) || candidate;
                 var state = CaptureState(fullInventory);
                 lastSampleMovieFrame = movieFrame();
@@ -455,6 +471,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Write(new { kind = "sample", sequence = rows++, phase, boundary,
                     movieFrame = movieFrame(), nativeFrame = nativeFrame(),
                     scene = USceneManager.GetActiveScene().name, state,
+                    suffixOffset = suffixCapture ? (long?)(movieFrame() - first) : null,
+                    inventory = suffixCapture ? EncodeSuffixInventory() : null,
                     nativePhysics = fullInventory ? nativePhysics?.Inventory : null,
                     nativePhysicsEntries = nativePhysics?.DiagnosticEntries,
                     captureMilliseconds = captureElapsed.ElapsedMilliseconds,
@@ -464,13 +482,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                     captureMilliseconds = captureElapsed.ElapsedMilliseconds, stages = captureStages.ToArray() };
                 CaptureProgress("sample-complete");
             }
-            catch (Exception exception) { Seal(false, exception.GetType().Name + ": " + exception.Message); }
+            catch (Exception exception) { Seal(false, exception.GetType().Name + ": " + exception.Message); if (suffixCapture) throw; }
         }
 
         internal void Completed()
         {
             if (sealedTrace || movieFrame() != end) return;
-            var complete = serialBoundaryOnly || gameplaySamples == 2 * samplingWindows.GameplayFrames;
+            var complete = serialBoundaryOnly || gameplaySamples == (suffixCapture ? 1 : 2) * samplingWindows.GameplayFrames;
             Seal(complete, complete ? "window-complete" : "missing-gameplay-samples");
         }
 
@@ -1199,6 +1217,20 @@ namespace HollowKnightTAS.Runtime.FullRun
             return result;
         }
 
+        private object EncodeSuffixInventory()
+        {
+            var encoded = new LoadingInventoryRootEncoding(lastInventory);
+            var content = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new {
+                format = LoadingInventoryRootEncoding.Format, names = encoded.Names, types = encoded.Types, roots = encoded.Roots }));
+            if (content.Length > 16 * 1024 * 1024)
+                throw new InvalidOperationException("Actual D suffix inventory exceeds the original 16 MiB diagnostic bound.");
+            using (var compressed = new MemoryStream()) {
+                using (var gzip = new GZipStream(compressed, CompressionMode.Compress, true)) gzip.Write(content, 0, content.Length);
+                return new { encoding = "gzip-base64-utf8-json-v1", bytes = content.Length,
+                    sha256 = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(content), gzipBase64 = Convert.ToBase64String(compressed.ToArray()) };
+            }
+        }
+
         private void Write(object value)
         {
             var bytes = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(value) + "\n");
@@ -1259,8 +1291,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     }
                 }
             }
-            catch (Exception exception) { Modding.Logger.LogError("P0 gameplay oracle export failed: " + exception.Message); }
+            catch (Exception exception) { success = false; detail += "; export failed: " + exception.Message; Modding.Logger.LogError("P0 gameplay oracle export failed: " + exception.Message); }
             finally { nativeScheduler?.Release(); nativeValues.Dispose(); fields.Dispose(); buffer.Dispose(); }
+            if (suffixCapture && !success) throw new InvalidOperationException("Actual D suffix observer failed: " + detail);
         }
 
         private static string Bits(float value) => "f32:" + BitConverter.ToInt32(BitConverter.GetBytes(value), 0).ToString("x8");

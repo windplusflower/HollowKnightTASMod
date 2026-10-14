@@ -38,6 +38,8 @@ param(
     [switch] $RecanonicalizeAppliedClock,
     [switch] $ActualDExperiment,
     [switch] $ActualDSuffix,
+    [ValidateSet('','Source','Target')][string] $ActualDStage = '',
+    [hashtable] $ActualDRelayState,
     [switch] $BoundaryInventory,
     [switch] $OnlyTasMods,
     [switch] $ExportVideo,
@@ -49,6 +51,14 @@ param(
     [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
 )
 $ErrorActionPreference = 'Stop'
+if ($ActualDStage -and (-not $ActualDExperiment -or -not $ActualDSuffix -or $Runs -ne 1 -or $null -eq $ActualDRelayState)) { throw 'Actual D stages require one protected suffix run and caller-owned in-memory relay state.' }
+if ($ActualDStage -eq 'Source' -and $ActualDRelayState.ContainsKey('Packet')) { throw 'Source relay state must be fresh.' }
+if ($ActualDStage -eq 'Target' -and -not $ActualDRelayState.ContainsKey('Packet')) { throw 'Target requires its one source packet in memory.' }
+$relayPipe = $null
+$relaySuccess = $false
+if ($ActualDStage -and -not ('HollowKnightTAS.Diagnostics.ActualDMemoryRelay' -as [type])) {
+    Add-Type -Path (Join-Path $PSScriptRoot 'StudioScenarioHarness/ActualDMemoryRelay.cs')
+}
 if ($ActualDExperiment -and (-not $CanonicalPhaseOneTrace -or -not $ClockCarryExperiment -or -not $S0ObservationTarget -or $ClockApplySource -or $RecordInputs)) { throw 'Actual D requires the protected in-memory source-to-zero-Movie scenario.' }
 if ($ActualDSuffix -and -not $ActualDExperiment) { throw 'Actual suffix requires the in-memory D transaction.' }
 if ($ClockCarryExperiment -and (-not $CanonicalPhaseOneTrace -or (-not $RecordInputs -and -not $S0ObservationTarget))) { throw 'Clock experiment requires a protected source recording or zero-Movie target.' }
@@ -327,6 +337,11 @@ try {
         if ($RecanonicalizeAppliedClock) { $arguments += '--probe-clock-recanon' }
         if ($ActualDExperiment) { $arguments += '--probe-actual-d-experiment' }
         if ($ActualDSuffix) { $arguments += '--probe-actual-d-suffix' }
+        if ($ActualDStage) {
+            $relayName = 'HKTAS-ActualD-' + [Guid]::NewGuid().ToString('N')
+            $relayPipe = [HollowKnightTAS.Diagnostics.ActualDMemoryRelay]::CreateServer($relayName)
+            $arguments += @(('--probe-actual-d-stage=' + $ActualDStage.ToLowerInvariant()), ('--probe-actual-d-relay=' + $relayName))
+        }
         if ($BoundaryInventory) { $arguments += '--probe-boundary-inventory' }
         if ($ExportVideo) { $arguments += '--probe-export-video' }
         if ($CheckpointPrototype) { $arguments += '--checkpoint-prototype' }
@@ -335,11 +350,21 @@ try {
         if ($EndpointHoldSeconds -gt 0) { $arguments += ('--probe-hold-seconds={0}' -f $EndpointHoldSeconds) }
         if ($DisableLegacyCalibration) { $arguments += '--probe-disable-legacy-calibration' }
         if ($RandomCalls) { $arguments += @('--probe-random-calls', "--probe-call-first=$CallFirst", "--probe-call-end=$CallEnd") }
+        $hostLifetime = [Diagnostics.Stopwatch]::StartNew()
         $hostProcess = Start-Process -FilePath (Join-Path $companion 'StudioScenarioHarness.exe') -ArgumentList $arguments `
             -WorkingDirectory $companion -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $destination 'stdout.log') -RedirectStandardError (Join-Path $destination 'stderr.log')
         [ordered]@{ run=$run; pid=$hostProcess.Id; status='running' } | ConvertTo-Json -Compress | Write-Output
-        if (-not $hostProcess.WaitForExit(270000)) { $hostProcess.Kill(); throw 'Probe host timed out.' }
+        if ($ActualDStage) {
+            $relayPacket = $null
+            if ($ActualDStage -eq 'Target') { $relayPacket = $ActualDRelayState.Packet; $ActualDRelayState.Remove('Packet') }
+            $relayTask = [HollowKnightTAS.Diagnostics.ActualDMemoryRelay]::ExchangeServer($relayPipe, $ActualDStage -eq 'Source', $relayPacket, [Math]::Max(1, 270000 - [int]$hostLifetime.ElapsedMilliseconds), $hostProcess)
+            $relayPacket = $relayTask.GetAwaiter().GetResult()
+            $relayPipe.Dispose(); $relayPipe = $null
+            if ($ActualDStage -eq 'Source') { $ActualDRelayState.Packet = $relayPacket }
+            $relayPacket = $null; $relayTask = $null
+        }
+        if (-not $hostProcess.WaitForExit([Math]::Max(1, 270000 - [int]$hostLifetime.ElapsedMilliseconds))) { $hostProcess.Kill(); throw 'Probe host timed out.' }
         $hostProcess.Refresh()
         foreach ($logName in @('Player.log','ModLog.txt')) {
             $logSource = Join-Path $saveRoot $logName
@@ -379,10 +404,13 @@ try {
         }
         if ($hostProcess.ExitCode -ne 0) { throw "Probe run $run failed with exit $($hostProcess.ExitCode)." }
         if ((Read-SaveAudit) -ne $before) { throw 'Original save audit mismatch.' }
+        $relaySuccess = $true
         [ordered]@{ run=$run; status='trace-collected'; phaseP0Passed=$false } | ConvertTo-Json -Compress | Write-Output
     }
 }
 finally {
+    if ($relayPipe) { $relayPipe.Dispose() }
+    if ($ActualDStage -and -not $relaySuccess) { $ActualDRelayState.Remove('Packet') }
     if ($hostProcess -and -not $hostProcess.HasExited) { $hostProcess.Kill(); $hostProcess.WaitForExit() }
     # This runner admitted no existing game; only terminate a child carrying our probe environment
     # through its owned host if App shutdown has not already completed. Do not kill unrelated PIDs.

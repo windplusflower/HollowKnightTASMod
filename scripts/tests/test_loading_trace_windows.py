@@ -1,4 +1,6 @@
 import hashlib
+import base64
+import gzip
 import importlib.util
 import json
 from pathlib import Path
@@ -43,6 +45,51 @@ class LoadingTraceWindowsTests(unittest.TestCase):
         self.assertEqual(40, len(pairs))
         self.assertEqual([(1418, "before"), (1418, "after")], pairs[:2])
         self.assertEqual((2918, "after"), pairs[-1])
+
+    def test_actual_d_short_window_requires_three_after_full_inventory_points(self):
+        header = dict(kind="header", schema="hktas-loading-oracle-v1", first=1421, end=1424,
+                      samplingScope="actual-d-suffix-all-loaded-three-after-v1", gameplayWindows=None)
+        self.assertEqual([(1421, "after"), (1422, "after"), (1423, "after")], expected_gameplay_samples(header))
+        rows = [dict(movieFrame=frame, phase=phase, suffixOffset=i, nativeFrame=2600+i, inventory={"roots": [{"id": "root", "digest": "exact"}]}, state={"inventoryScope": "all-loaded"})
+                for i, (frame, phase) in enumerate(expected_gameplay_samples(header))]
+        validate_sample_scope(header, rows)
+        with self.assertRaisesRegex(ValueError, "full inventory"):
+            validate_sample_scope(header, [dict(rows[0], state={"inventoryScope": "active-only"})])
+        with self.assertRaisesRegex(ValueError, "exactly three"):
+            expected_gameplay_samples(dict(header, end=1425))
+
+    def test_actual_d_comparison_rejects_missing_duplicate_and_native_cursor_change(self):
+        header = dict(kind="header", schema="hktas-loading-oracle-v1", first=1421, end=1424,
+                      coverage="all-loaded", samplingScope="actual-d-suffix-all-loaded-three-after-v1")
+        def write(directory, name, mutate=None):
+            inventory_bytes = json.dumps(dict(format="sorted-utf16-prefix-root-names-v1", names=[{"prefix": 0, "suffix": "root"}], types=[], roots=[{"id": 0, "digest": "exact"}])).encode()
+            inventory = dict(encoding="gzip-base64-utf8-json-v1", bytes=len(inventory_bytes), sha256=hashlib.sha256(inventory_bytes).hexdigest(), gzipBase64=base64.b64encode(gzip.compress(inventory_bytes)).decode())
+            rows = [dict(kind="sample", sequence=i, movieFrame=frame, nativeFrame=2600+i, suffixOffset=i, inventory=inventory,
+                         phase=phase, boundary="GameplayInput", scene="room", state={"inventoryScope": "all-loaded", "rng": "exact"})
+                    for i, (frame, phase) in enumerate(expected_gameplay_samples(header))]
+            if mutate: mutate(rows)
+            for i, row in enumerate(rows): row["sequence"] = i
+            body = b"".join((json.dumps(x)+"\n").encode() for x in [header, *rows])
+            footer = dict(kind="footer", success=True, first=1421, end=1424, rows=len(rows), sha256=hashlib.sha256(body).hexdigest())
+            path = Path(directory)/name
+            path.write_bytes(body+(json.dumps(footer)+"\n").encode())
+            return path
+        with tempfile.TemporaryDirectory() as directory:
+            original = write(directory, "original")
+            for mutate in (lambda rows: rows.pop(1), lambda rows: rows.insert(1, dict(rows[0]))):
+                with self.assertRaises(ValueError):
+                    state.read_trace(write(directory, "bad", mutate))
+            changed = write(directory, "changed", lambda rows: rows[1].update(nativeFrame=2609))
+            self.assertFalse(state.compare([original, changed])["comparisonPassed"])
+
+    def test_suffix_inventory_rejects_corrupt_stream_hash_and_over_budget(self):
+        content = json.dumps(dict(format="sorted-utf16-prefix-root-names-v1", names=[], types=[], roots=[])).encode()
+        value = dict(encoding="gzip-base64-utf8-json-v1", bytes=len(content), sha256=hashlib.sha256(content).hexdigest(), gzipBase64=base64.b64encode(gzip.compress(content)).decode())
+        self.assertEqual([], state.decode_suffix_inventory(value)["roots"])
+        for changed in (dict(value, sha256="0"*64), dict(value, bytes=16*1024*1024+1), dict(value, bytes=len(content)-1)):
+            with self.assertRaises(ValueError): state.decode_suffix_inventory(changed)
+        with self.assertRaises(ValueError):
+            state.decode_suffix_inventory(dict(value, gzipBase64=base64.b64encode(gzip.compress(content)+b"extra").decode()))
 
     def test_invalid_window_headers_are_rejected(self):
         for declared in (None, [], [{"first": 1399, "end": 1401}], [{"first": 3999, "end": 4001}],

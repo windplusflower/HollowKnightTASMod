@@ -57,7 +57,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (phase == "d-exp-source-resume") {
                         if (fields.Count != 3 || !long.TryParse(Get("endMovie"), out var end) || end <= movieFrame
                             || end > Math.Min(replayLength, movieFrame + 64)) throw new InvalidDataException("Source suffix endpoint is not bounded.");
-                        source.Clock.RequireReadback(clock); SetPauseTarget(end, frame); mode = "Replay";
+                        source.Clock.RequireReadback(clock); StartActualDSuffixOracle("source", end); SetPauseTarget(end, frame); mode = "Replay";
                         reply["status"] = "ResumingOriginalSourceSuffix"; return reply;
                     }
                     if (phase == "d-exp-source-info") {
@@ -82,7 +82,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                             throw new InvalidOperationException("Actual D suffix requires the single applied paused boundary and a bounded future endpoint.");
                         actualDSource.Clock.RequireReadback(clock);
                         LoadingSerialSceneProbe.GetProtectedObservationBoundary();
-                        SetPauseTarget(end, frame);
+                        StartActualDSuffixOracle("target", end); SetPauseTarget(end, frame);
                         On.GameManager.FadeSceneInWithDelay -= OnS0BootstrapFade;
                         On.HeroController.Respawn -= OnS0BootstrapRespawn;
                         s0Observation = null; mode = "Replay"; job.Phase = "ResumingActualDSuffix";
@@ -119,6 +119,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                     return reply;
                 } catch (Exception error) { FailS0Observation(job, error); throw; }
             });
+        }
+        private void StartActualDSuffixOracle(string role, long end)
+        {
+            if (actualDSuffixOracle != null || !movieInputNativeOrigin.HasValue)
+                throw new InvalidOperationException("Actual D suffix observer requires the original input origin and single admission.");
+            var rng = UnityRandomStateCodec_1_5_78_11833.Resolve().Codec
+                ?? throw new InvalidOperationException("Actual D suffix RNG observer is unavailable.");
+            actualDSuffixOracle = LoadingGameplayOracle.CreateActualDSuffix(
+                Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "actual-d-" + role + "-suffix-oracle"),
+                sessionDirectory, movieFrame, Math.Min(end, movieFrame + 3), movieInputNativeOrigin.Value, () => movieFrame, () => clock.CurrentFrameIndex,
+                () => rng.CaptureCurrent().Sha256);
         }
         private void ApplyActualD(S0ObservationJob job, CanonicalActualDExperiment source, long targetNative)
         {
