@@ -19,8 +19,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalCarryGraphCodec inputCodec = CanonicalCarryFieldRegistry.Create(inputDomain: true);
         private readonly CanonicalHeroAssetTemplates assetTemplates;
         private readonly CanonicalVisualFsmTemplates visualTemplates;
-        internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates)
-        { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; }
+        private readonly CanonicalHudJournalPolicy journal;
+        internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates, CanonicalHudJournalPolicy journal)
+        { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; this.journal = journal; }
         internal EventAudit[] EventBindingAudit { get; private set; } = Array.Empty<EventAudit>();
         internal CanonicalEventCarryRoots.Audit? EventGlobalsAudit { get; private set; }
         internal CanonicalEventGraphContract.Audit? EventGraphAudit { get; private set; }
@@ -237,6 +238,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         (PlayerData)view.Root(mapping.Items[0].UsesCurrentPlayerData ? "PlayerData" : CanonicalSceneMappingCarry.DetachedPlayerRoot);
                     domainActions.Add(sceneMapping.PrepareApply(mapping, mappingPlayer));
                     sourceChecks.Add(() => sceneMapping.RequireAppliedSource(mapping, mappingPlayer));
+                    domainActions.Add(journal.PrepareSourceDependencies(admitted));
                     domainActions.Add(prepareScheduler(source.Scheduler));
                 });
                 var sdk = inputCodec.PrepareOwnedGraph(sourceInput, targetInputRoots, inputExternal.ResolveTarget, view => {

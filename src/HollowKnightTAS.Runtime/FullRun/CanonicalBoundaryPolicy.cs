@@ -11,6 +11,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal sealed class CanonicalBoundaryPolicy : IDisposable
     {
         private readonly CanonicalHeroStartupWarmup startup;
+        private readonly CanonicalHudJournalPolicy journal = new CanonicalHudJournalPolicy();
         private readonly CanonicalBoundaryPoolPolicy pools = new CanonicalBoundaryPoolPolicy();
         private readonly CanonicalVisualFsmTemplates visualTemplates = new CanonicalVisualFsmTemplates();
         private readonly CanonicalHeroAssetTemplates assetTemplates = new CanonicalHeroAssetTemplates();
@@ -55,7 +56,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             CanonicalPhaseOneTrace.RequireContext(Environment.GetEnvironmentVariable);
             phaseOneTrace = CanonicalPhaseOneTrace.Enabled;
-            retiredMeshes = new CanonicalRetiredMeshPolicy(id => pools.RetiredOwner(id) ?? LoadingSerialSceneProbe.RetiringSourceOwner(id));
+            retiredMeshes = new CanonicalRetiredMeshPolicy(id => pools.RetiredOwner(id) ?? journal.RetiringOwner(id) ?? LoadingSerialSceneProbe.RetiringSourceOwner(id));
             startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart);
         }
         internal bool AdvanceStartup() => startup.Advance();
@@ -67,6 +68,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var frozenQueue = observer.RequireFrozenS0Scheduler();
             var before = observer.RecaptureBoundaryS0();
             visualTemplates.RebindEnteredLightClock(admission);
+            journal.RebindEnteredClock(admission);
             frozenQueue(); admission();
             var after = observer.RecaptureBoundaryS0();
             var comparison = CanonicalS0Comparison.Compare(before, after);
@@ -102,7 +104,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 JsonConvert.SerializeObject(new { ordinal, source, target, movie, native, phase, detail,
                     elapsedMilliseconds = elapsed.ElapsedMilliseconds, completeStateCoverage = false }) + "\n");
             Progress("begin", new { movieInputNativeOrigin, controlledNativeFrame = checked(native - movieInputNativeOrigin) });
-            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates); }
+            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates, journal); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
@@ -115,6 +117,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             var destroyed = pools.Reset();
             Progress("R1-pools-rebuilt", new { destroyed });
+            Progress("R1-original-journal-directory-rebuilt", journal.Reset());
             Progress("R1-source-and-pool-meshes-retired", new { removedDelayedDestroyCallbacks = retiredMeshes.Flush() });
             var stopped = CanonicalBoundaryVisualPolicy.Reset(visualTemplates, out var removedTweenDestroyCallbacks);
             Progress("R2-registered-visual-stop", new { stopped, removedTweenDestroyCallbacks });
@@ -150,7 +153,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (!StringComparer.Ordinal.Equals(observerSession, sessionDirectory))
                 throw new InvalidOperationException("Canonical observer cannot change its protected session binding.");
-            bool OwnsCanonicalStart(int instance) => pools.OwnsNewPoolStart(instance) || visualTemplates.OwnsResetStart(instance);
+            bool OwnsCanonicalStart(int instance) => pools.OwnsNewPoolStart(instance) || visualTemplates.OwnsResetStart(instance) || journal.OwnsNewStart(instance);
             string? RetiredOwner(int instance) => pools.RetiredOwner(instance) ?? LoadingSerialSceneProbe.RetiredSourceOwner(instance);
             var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
             inputEpoch.RequireControlOrigin();
@@ -306,6 +309,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             observerInputOrigin = source.OriginNative;
             observer = LoadingGameplayOracle.CreateBoundaryObserver(observerSession, source.OriginNative!.Value);
         }
-        public void Dispose() { observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
+        public void Dispose() { journal.Dispose(); observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
     }
 }
