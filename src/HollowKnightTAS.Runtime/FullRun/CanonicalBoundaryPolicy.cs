@@ -221,7 +221,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                             + string.Join(", ", data.Unsupported));
                     ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, MovieFrame = movie, NativeFrame = native,
                         Main = carry.Encode(data), Input = carry.EncodeInput(), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
-                    Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, restoreQualified = false,
+                    Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,
                         blockingQualifications = carry.BlockingQualifications });
                 }
                 // Keep all observed coverage gaps. This permits route discovery,

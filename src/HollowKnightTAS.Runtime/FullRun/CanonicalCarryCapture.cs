@@ -55,6 +55,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private CanonicalActualDExperiment? decodedActualEnvelope;
         private CanonicalCarryGraphData? decodedActualMain;
         private string? decodedActualMainHash;
+        internal object? HeroAnimationCallbackAudit { get; private set; }
         internal CanonicalCarryGraphData DecodeActualMainForOwnerContext(CanonicalActualDExperiment source)
         {
             if (decodedActualEnvelope != null || actualSourceValidation != null)
@@ -111,6 +112,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (hero.cState == null) throw new InvalidDataException("Carry Hero state root is absent.");
             roots.Add("D/HeroControllerStates", hero.cState);
             roots.Add(CanonicalGameplayCarry.Root, CanonicalGameplayCarry.Capture(identities));
+            var heroAnimationCallbacks = targetDirectoryOnly ? new CanonicalHeroAnimationCallbacks.Data()
+                : CanonicalHeroAnimationCallbacks.Capture(identities);
+            roots.Add(CanonicalHeroAnimationCallbacks.Root, heroAnimationCallbacks);
+            HeroAnimationCallbackAudit = new { diagnosticOnly = true, sourceCaptured = !targetDirectoryOnly,
+                completeCount = heroAnimationCallbacks.Complete.Length, eventCount = heroAnimationCallbacks.Event.Length,
+                completeStateCoverage = false };
             inputEpoch.Validate(inputEpoch.SourceNative);
             roots.Add("D/InputEpoch", inputEpoch.Copy());
             var clock = CanonicalClockCarry.Capture(inputEpoch.SourceNative);
@@ -177,6 +184,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     loadCallbacks.RequireSource(CanonicalSceneLoadCallbacks.FromPrepared(view), source.SceneLoad);
                     SceneLoadCallbacksPrepared = true;
                     CanonicalGameplayCarry.PrepareApply(CanonicalGameplayCarry.FromPrepared(view), identities);
+                    CanonicalHeroAnimationCallbacks.PrepareApply(CanonicalHeroAnimationCallbacks.FromPrepared(view), identities, () => true);
                     GameplayPrepared = true;
                     CheckpointHeroInvulnerability.FromCanonicalPrepared(view, source.Scheduler).PrepareCanonicalPulseApply(hero);
                     InvulnerabilityPrepared = true;
@@ -239,6 +247,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                     sourceChecks.Add(() => loadCallbacks.RequireAppliedSource(callbacks));
                     var gameplay = CanonicalGameplayCarry.FromPrepared(view);
                     domainActions.Add(CanonicalGameplayCarry.PrepareApply(gameplay, identities));
+                    var heroCallbacks = CanonicalHeroAnimationCallbacks.FromPrepared(view);
+                    domainActions.Add(CanonicalHeroAnimationCallbacks.PrepareApply(heroCallbacks, identities, admitted));
+                    byte[] CallbackBytes(CanonicalHeroAnimationCallbacks.Data data) => codec.Encode(codec.Capture(
+                        new SortedDictionary<string, object>(StringComparer.Ordinal) { [CanonicalHeroAnimationCallbacks.Root] = data }, _ => null));
+                    var callbackBits = CallbackBytes(heroCallbacks);
+                    sourceChecks.Add(() => {
+                        if (!callbackBits.SequenceEqual(CallbackBytes(CanonicalHeroAnimationCallbacks.Capture(identities))))
+                            throw new InvalidOperationException("Hero callback complete ordered method/actual target alias readback differs.");
+                    });
                     byte[] GameplayBytes(CanonicalGameplayCarry.Data data) => codec.Encode(codec.Capture(
                         new SortedDictionary<string, object>(StringComparer.Ordinal) { [CanonicalGameplayCarry.Root] = data }, _ => null));
                     var gameplayBits = GameplayBytes(gameplay);
