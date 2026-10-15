@@ -115,8 +115,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             var heroAnimationCallbacks = targetDirectoryOnly ? new CanonicalHeroAnimationCallbacks.Data()
                 : CanonicalHeroAnimationCallbacks.Capture(identities);
             roots.Add(CanonicalHeroAnimationCallbacks.Root, heroAnimationCallbacks);
+            var heroTriggerCallbacks = targetDirectoryOnly ? new CanonicalHeroTriggerCallbacks.Data()
+                : CanonicalHeroTriggerCallbacks.Capture(identities);
+            roots.Add(CanonicalHeroTriggerCallbacks.Root, heroTriggerCallbacks);
             HeroAnimationCallbackAudit = new { diagnosticOnly = true, sourceCaptured = !targetDirectoryOnly,
                 completeCount = heroAnimationCallbacks.Complete.Length, eventCount = heroAnimationCallbacks.Event.Length,
+                triggerSlotCount = heroTriggerCallbacks.Slots.Length, triggerInvocationCount = heroTriggerCallbacks.Slots.Sum(slot => slot.Items.Length),
                 completeStateCoverage = false };
             inputEpoch.Validate(inputEpoch.SourceNative);
             roots.Add("D/InputEpoch", inputEpoch.Copy());
@@ -184,7 +188,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     loadCallbacks.RequireSource(CanonicalSceneLoadCallbacks.FromPrepared(view), source.SceneLoad);
                     SceneLoadCallbacksPrepared = true;
                     CanonicalGameplayCarry.PrepareApply(CanonicalGameplayCarry.FromPrepared(view), identities);
-                    CanonicalHeroAnimationCallbacks.PrepareApply(CanonicalHeroAnimationCallbacks.FromPrepared(view), identities, () => true);
+                    CanonicalHeroAnimationCallbacks.PrepareApply(CanonicalHeroAnimationCallbacks.FromPrepared(view), identities, () => true, view);
+                    CanonicalHeroTriggerCallbacks.PrepareApply(CanonicalHeroTriggerCallbacks.FromPrepared(view), identities, () => true, view);
                     GameplayPrepared = true;
                     CheckpointHeroInvulnerability.FromCanonicalPrepared(view, source.Scheduler).PrepareCanonicalPulseApply(hero);
                     InvulnerabilityPrepared = true;
@@ -248,7 +253,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var gameplay = CanonicalGameplayCarry.FromPrepared(view);
                     domainActions.Add(CanonicalGameplayCarry.PrepareApply(gameplay, identities));
                     var heroCallbacks = CanonicalHeroAnimationCallbacks.FromPrepared(view);
-                    domainActions.Add(CanonicalHeroAnimationCallbacks.PrepareApply(heroCallbacks, identities, admitted));
+                    domainActions.Add(CanonicalHeroAnimationCallbacks.PrepareApply(heroCallbacks, identities, admitted, view));
+                    var triggerCallbacks = CanonicalHeroTriggerCallbacks.FromPrepared(view);
+                    domainActions.Add(CanonicalHeroTriggerCallbacks.PrepareApply(triggerCallbacks, identities, admitted, view));
+                    byte[] TriggerBytes(CanonicalHeroTriggerCallbacks.Data data) => codec.Encode(codec.Capture(
+                        new SortedDictionary<string, object>(StringComparer.Ordinal) { [CanonicalHeroTriggerCallbacks.Root] = data }, _ => null));
+                    var triggerBits = TriggerBytes(triggerCallbacks);
+                    sourceChecks.Add(() => {
+                        if (!triggerBits.SequenceEqual(TriggerBytes(CanonicalHeroTriggerCallbacks.Capture(identities))))
+                            throw new InvalidOperationException("Actual Hero trigger source invocation/alias readback differs.");
+                    });
                     byte[] CallbackBytes(CanonicalHeroAnimationCallbacks.Data data) => codec.Encode(codec.Capture(
                         new SortedDictionary<string, object>(StringComparer.Ordinal) { [CanonicalHeroAnimationCallbacks.Root] = data }, _ => null));
                     var callbackBits = CallbackBytes(heroCallbacks);

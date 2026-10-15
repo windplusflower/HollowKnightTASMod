@@ -71,7 +71,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             return new Data { Complete = (Item[])view.Field(root, typeof(Data), nameof(Data.Complete))!,
                 Event = (Item[])view.Field(root, typeof(Data), nameof(Data.Event))! };
         }
-        internal static Action PrepareApply(Data source, BoundaryObjectIdentity identities, Func<bool> admitted)
+        internal static Action PrepareApply(Data source, BoundaryObjectIdentity identities, Func<bool> admitted,
+            CanonicalCarryGraphCodec.PreparedView view)
         {
             Method(true); Method(false); // Fixed original contract also guards two empty source slots.
             var animator = Animator();
@@ -89,7 +90,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                         || item.Method != method.Name || item.Alias < 0 || item.Alias > 511 || !fsms.TryGetValue(item.Fsm, out var owner))
                         throw new InvalidDataException("Source Hero callback method or owner differs.");
                     var fsm = (Fsm)Raw.GetValue(owner);
-                    var states = States(fsm);
+                    if (!ReferenceEquals(view.Root("HeroFSM/" + item.Fsm), fsm))
+                        throw new InvalidDataException("Prepared Hero animation FSM alias differs.");
+                    var states = (FsmState[])view.Field(fsm, typeof(Fsm), "states")!;
                     if (item.State < 0 || item.State >= states.Length || states[item.State].Name != item.StateName
                         || item.Action < 0 || item.Action >= Actions(states[item.State]).Length
                         || !(Actions(states[item.State])[item.Action] is Tk2dPlayAnimationWithEvents target))
@@ -103,7 +106,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     // Main graph installation must not leave this callback
                     // attached to a superseded pre-import action instance.
                     actionGuards.Add(() => owner != null && ReferenceEquals(Raw.GetValue(owner), fsm)
-                        && item.State < States(fsm).Length && item.Action < Actions(States(fsm)[item.State]).Length
+                        && ReferenceEquals(States(fsm), states) && item.State < States(fsm).Length && item.Action < Actions(States(fsm)[item.State]).Length
                         && ReferenceEquals(Actions(States(fsm)[item.State])[item.Action], target));
                     var type = complete ? typeof(Action<tk2dSpriteAnimator, tk2dSpriteAnimationClip>)
                         : typeof(Action<tk2dSpriteAnimator, tk2dSpriteAnimationClip, int>);

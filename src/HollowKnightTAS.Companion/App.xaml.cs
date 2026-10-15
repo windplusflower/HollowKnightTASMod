@@ -326,10 +326,12 @@ namespace HollowKnightTAS.Companion
 
         protected override void OnExit(ExitEventArgs e)
         {
+            System.Diagnostics.Trace.WriteLine("Studio exit cleanup: begin");
             shutdown.Cancel();
             restorePresentation.Dispose();
             automaticStartup?.Dispose();
             startupBootTimer?.Stop();
+            System.Diagnostics.Trace.WriteLine("Studio exit cleanup: owned game begin");
             // Close the exact process owned by this Studio before releasing its gate.
             // A paused Unity process cannot reliably service WM_CLOSE.
             if (startupGame != null)
@@ -346,6 +348,7 @@ namespace HollowKnightTAS.Companion
             }
             startupBoot?.Dispose();
             startupGame?.Dispose();
+            System.Diagnostics.Trace.WriteLine("Studio exit cleanup: owned game complete");
             if (controlServer != null)
             {
                 controlServer.ExitRequested -=
@@ -357,11 +360,15 @@ namespace HollowKnightTAS.Companion
                     OnColdRestoreActivityChanged;
             }
             controlServer?.Dispose();
+            System.Diagnostics.Trace.WriteLine("Studio exit cleanup: control server complete");
             automationBroker?.Dispose();
+            System.Diagnostics.Trace.WriteLine("Studio exit cleanup: automation broker complete");
             coldRestoreSupervisor?.Dispose();
+            System.Diagnostics.Trace.WriteLine("Studio exit cleanup: cold restore complete");
             sessions?.Dispose();
             singleInstance?.Dispose();
             shutdown.Dispose();
+            System.Diagnostics.Trace.WriteLine("Studio exit cleanup: sessions complete; preserve logs begin");
             DiagnosticLogExporter.PreserveGameLogs();
             System.Diagnostics.Trace.WriteLine("Studio exit " + e.ApplicationExitCode);
             AppDomain.CurrentDomain.UnhandledException -= OnUnhandledException;

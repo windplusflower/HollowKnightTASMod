@@ -94,11 +94,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             types.AddRange(CanonicalDeviceManagerCarry.DataTypes);
             types.AddRange(CanonicalSceneLoadCallbacks.DataTypes);
             types.AddRange(CanonicalHeroAnimationCallbacks.DataTypes);
+            types.AddRange(CanonicalHeroTriggerCallbacks.DataTypes);
             using var hash = SHA256.Create();
             return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v2:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
                 hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + loadingText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
                     + "\n" + CanonicalGameplayCarry.SchemaIdentity + "\n" + CanonicalClockCarry.SchemaIdentity
                     + "\n" + CanonicalHeroAnimationCallbacks.SchemaIdentity
+                    + "\n" + CanonicalHeroTriggerCallbacks.SchemaIdentity
+                    + "\n" + string.Join(";", CanonicalHeroTriggerCallbacks.DataTypes.Where(type => !type.IsArray)
+                        .SelectMany(type => CanonicalCarryGraphCodec.Fields(type)).Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName))
                     + "\n" + string.Join(";", CanonicalHeroAnimationCallbacks.DataTypes.Where(type => !type.IsArray)
                         .SelectMany(type => CanonicalCarryGraphCodec.Fields(type)).Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName))
                     + "\n" + HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter.CanonicalSourceSchema

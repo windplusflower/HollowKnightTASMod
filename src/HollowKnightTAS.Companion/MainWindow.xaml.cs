@@ -69,8 +69,11 @@ namespace HollowKnightTAS.Companion
                 globalHotkeys?.Configure(false, vm.ConfiguredPause, vm.ConfiguredAdvance, vm.ConfiguredPlay);
                 try
                 {
+                    System.Diagnostics.Trace.WriteLine("Studio closing: cancel video begin");
                     await vm.CancelVideoExportAndWaitAsync();
+                    System.Diagnostics.Trace.WriteLine("Studio closing: save branch begin");
                     await vm.SaveCurrentBranchAsync(closing: true);
+                    System.Diagnostics.Trace.WriteLine("Studio closing: save branch complete");
                     closeSaved = true;
                     await Dispatcher.InvokeAsync(Close);
                 }
