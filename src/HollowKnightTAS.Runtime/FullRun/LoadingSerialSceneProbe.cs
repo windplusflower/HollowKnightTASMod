@@ -128,7 +128,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // is also called by the original loader; the second call sees no pending work.
                 yield return ScenePreloader.FinishPendingOperations();
                 while (!load.IsFetchAllowed || !load.IsActivationAllowed) yield return null;
-                while (canonical != null && !canonical.AdvanceStartup()) yield return null;
+                while (!AdvanceCanonicalStartup()) yield return null;
                 source = USceneManager.GetActiveScene();
                 sourceName = source.name;
                 if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") == "1")
@@ -526,6 +526,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (++rows > 256) throw new InvalidOperationException("Serial scene diagnostic budget exceeded.");
             File.AppendAllText(report, JsonConvert.SerializeObject(new { phase, ordinal,
                 engineFrame = Time.frameCount, data }) + "\n");
+        }
+
+        private bool AdvanceCanonicalStartup()
+        {
+            try { return canonical == null || canonical.AdvanceStartup(); }
+            catch (Exception error) { throw Fail("Canonical startup rejected: " + error.GetType().Name + ": " + error.Message); }
         }
 
         private InvalidOperationException Fail(string message)

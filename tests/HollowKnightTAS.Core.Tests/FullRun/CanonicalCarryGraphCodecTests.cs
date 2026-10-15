@@ -18,6 +18,69 @@ public sealed class CanonicalCarryGraphCodecTests
     private static object NoBinding(string key) => throw new InvalidDataException("Unexpected external: " + key);
 
     [TestMethod]
+    public void Later_domain_retains_actual_imported_node_alias_including_root_and_cycles()
+    {
+        var codec = Codec(); var source = new Owner { Current = new Value { Number = 29 } };
+        source.Next = source;
+        var ids = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
+        var first = codec.Capture(Roots(("main", source)), NoExternal, (value, id) => ids.Add(value, id));
+        var later = codec.Capture(Roots(("later", new Owner { Current = source.Current, Next = source })),
+            value => ids.TryGetValue(value, out var id) ? "main-node/" + id : null);
+        var target = new Owner(); CanonicalCarryGraphCodec.PreparedView? imported = null;
+        var main = codec.PrepareGraph(first, Roots(("main", target)), NoBinding, view => imported = view);
+        Assert.IsNull(target.Current); main.Apply(); main.VerifyReadback();
+        var child = target.Current; var next = new Owner();
+        var tail = codec.PrepareGraph(later, Roots(("later", next)), key => imported!.Node(int.Parse(key.Substring("main-node/".Length))));
+        tail.Apply(); tail.VerifyReadback(); main.VerifyReadback();
+        Assert.AreSame(target, next.Next); Assert.AreSame(target, target.Next);
+        Assert.AreSame(child, next.Current); Assert.AreEqual(29, next.Current!.Number);
+        Assert.ThrowsExactly<InvalidDataException>(() => imported!.Node(0));
+        Assert.ThrowsExactly<InvalidDataException>(() => imported!.Node(first.Nodes.Length + 1));
+    }
+
+    [TestMethod]
+    public void Deferred_producer_rebinds_every_original_field_and_array_slot_without_replacing_managed_nodes()
+    {
+        var codec = new CanonicalCarryGraphCodec(new[] { typeof(ExternalOwner), typeof(object[]) }, "late-owner-v1");
+        var old = new Value(); var born = new Value(); var sourceNative = new Value();
+        var graph = codec.Capture(Roots(("owner", new ExternalOwner { Item = sourceNative, Items = new object[] { sourceNative, sourceNative } })),
+            value => ReferenceEquals(value, sourceNative) ? "geo-owner" : null);
+        var target = new ExternalOwner(); CanonicalCarryGraphCodec.ExternalRebinding? deferred = null;
+        var plan = codec.PrepareOwnedGraph(graph, Roots(("owner", target)), _ => old,
+            exposeExternalRebinding: value => deferred = value);
+        Assert.ThrowsExactly<InvalidOperationException>(() => deferred!.Prepare(Roots(("geo-owner", born))));
+        plan.Apply(); var array = target.Items;
+        var late = deferred!.Prepare(Roots(("geo-owner", born)));
+        Assert.AreSame(old, target.Item); late.Apply(); plan.VerifyReadback(); late.VerifyReadback();
+        Assert.AreSame(array, target.Items); Assert.AreSame(born, target.Item);
+        Assert.IsTrue(target.Items.All(item => ReferenceEquals(item, born)));
+        Assert.ThrowsExactly<InvalidOperationException>(() => deferred.Prepare(Roots(("geo-owner", new Value()))));
+    }
+
+    [TestMethod]
+    public void Deferred_producer_rejects_unknown_binding_alias_collapse_and_changed_detached_array_slot()
+    {
+        foreach (var fault in new[] { "unknown", "collapse", "changed" }) {
+            var codec = new CanonicalCarryGraphCodec(new[] { typeof(ExternalOwner), typeof(object[]) }, "late-owner-v1");
+            var one = new Value(); var two = new Value(); var oldOne = new Value(); var oldTwo = new Value();
+            var graph = codec.Capture(Roots(("owner", new ExternalOwner { Item = one, Items = new object[] { one, two } })),
+                value => ReferenceEquals(value, one) ? "one" : ReferenceEquals(value, two) ? "two" : null);
+            var target = new ExternalOwner(); CanonicalCarryGraphCodec.ExternalRebinding? deferred = null;
+            var plan = codec.PrepareOwnedGraph(graph, Roots(("owner", target)), key => key == "one" ? oldOne : oldTwo,
+                exposeExternalRebinding: value => deferred = value);
+            plan.Apply();
+            if (fault == "unknown") Assert.ThrowsExactly<InvalidDataException>(() => deferred!.Prepare(Roots(("unknown", new Value()))));
+            else if (fault == "collapse") Assert.ThrowsExactly<InvalidDataException>(() => deferred!.Prepare(Roots(("one", oldTwo))));
+            else {
+                var late = deferred!.Prepare(Roots(("one", new Value()))); target.Items[0] = new Value();
+                Assert.ThrowsExactly<InvalidOperationException>(() => late.Apply()); Assert.AreSame(oldOne, target.Item);
+                Assert.ThrowsExactly<InvalidOperationException>(() => late.Apply());
+            }
+        }
+    }
+    private sealed class ExternalOwner { public object? Item; public object[] Items = Array.Empty<object>(); }
+
+    [TestMethod]
     public void Array_roots_are_rejected_symmetrically_by_capture_and_import_before_any_live_write()
     {
         var codec = new CanonicalCarryGraphCodec(new[] { typeof(ArrayOwner), typeof(int[]) }, "bound-array-v1");

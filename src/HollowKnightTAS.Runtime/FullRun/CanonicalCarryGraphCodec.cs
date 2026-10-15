@@ -60,7 +60,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             || type.IsEnum || (type.IsPrimitive && type != typeof(IntPtr) && type != typeof(UIntPtr));
 
         internal CanonicalCarryGraphData Capture(IReadOnlyDictionary<string, object> roots,
-            Func<object, string?> externalBinding)
+            Func<object, string?> externalBinding, Action<object, int>? capturedNode = null)
         {
             var nodes = new List<CanonicalCarryGraphData.Node>();
             var pending = new Queue<Tuple<object, int, int>>();
@@ -77,6 +77,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     + ";nodes=" + nodes.Count + ";depth=" + depth + ";type=" + Identity(value.GetType()));
                 var id = nodes.Count + 1;
                 seen.Add(value, id);
+                capturedNode?.Invoke(value, id);
                 nodes.Add(new CanonicalCarryGraphData.Node { Id = id, Type = Identity(value.GetType()) });
                 pending.Enqueue(Tuple.Create(value, id, depth));
                 return id;
@@ -186,7 +187,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         // schema/coverage/layout/reachability/alias checks still run below.
         // This avoids a redundant JSON encode/decode of already owned data.
         internal CanonicalPreparedWritePlan PrepareOwnedGraph(CanonicalCarryGraphData value, IReadOnlyDictionary<string, object> roots,
-            Func<string, object> resolveExternal, Action<PreparedView>? preflight = null)
+            Func<string, object> resolveExternal, Action<PreparedView>? preflight = null,
+            Action<ExternalRebinding>? exposeExternalRebinding = null)
         {
             // Domain checks receive the frozen input before allocation or
             // external resolution. All generic checks still run afterwards.
@@ -290,6 +292,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             // their parent copies the boxed struct into a field or array.
             var status = new byte[objects.Length]; var writes = new List<Action>();
             var beforeChecks = new List<Action>(); var afterChecks = new List<Action>();
+            var externalSlots = new List<Tuple<int, Func<object?>, Action<object>>>();
+            var copiedExternal = new HashSet<int>();
             var rootOwners = roots.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
             void CheckSlot(object? expectedValue, object? currentValue, Type declared, string name)
             {
@@ -318,7 +322,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     // Capture and import both prohibit arrays as live roots.
                     // Every array here is detached until its owning field is
                     // applied; preparation cannot mutate an existing array.
-                    for (var i = 0; i < node.Items!.Length; i++) array.SetValue(Prepared(node.Items[i], element), i);
+                    for (var i = 0; i < node.Items!.Length; i++) {
+                        array.SetValue(Prepared(node.Items[i], element), i);
+                        if (node.Items[i].Kind == "external") {
+                            var at = i;
+                            externalSlots.Add(Tuple.Create(node.Items[i].Reference - 1,
+                                (Func<object?>)(() => array.GetValue(at)), (Action<object>)(next => array.SetValue(next, at))));
+                        }
+                    }
                 }
                 else
                 {
@@ -327,12 +338,20 @@ namespace HollowKnightTAS.Runtime.FullRun
                     for (var i = 0; i < layout.Fields.Length; i++)
                     {
                         var field = layout.Fields[i]; var fieldValue = Prepared(node.Fields![i].Value, field.FieldType);
+                        var externalIndex = node.Fields[i].Value.Kind == "external" ? node.Fields[i].Value.Reference - 1 : -1;
+                        if (externalIndex >= 0) {
+                            if (nodeTypes[index].IsValueType) copiedExternal.Add(externalIndex);
+                            var at = i;
+                            externalSlots.Add(Tuple.Create(externalIndex, (Func<object?>)(() => field.GetValue(owner)),
+                                (Action<object>)(next => { field.SetValue(owner, next); if (preparedFields != null) preparedFields[index][at] = next; })));
+                        }
                         if (preparedFields != null) preparedFields[index][i] = fieldValue;
                         if (boundNodes.Contains(index + 1)) {
                             var previous = field.GetValue(owner);
                             beforeChecks.Add(() => CheckSlot(previous, field.GetValue(owner), field.FieldType, FieldIdentity(field)));
                             writes.Add(() => field.SetValue(owner, fieldValue));
-                            afterChecks.Add(() => CheckSlot(fieldValue, field.GetValue(owner), field.FieldType, FieldIdentity(field)));
+                            afterChecks.Add(() => CheckSlot(externalIndex >= 0 ? external[externalIndex] : fieldValue,
+                                field.GetValue(owner), field.FieldType, FieldIdentity(field)));
                         }
                         else field.SetValue(owner, fieldValue);
                     }
@@ -354,8 +373,65 @@ namespace HollowKnightTAS.Runtime.FullRun
                 foreach (var check in beforeChecks) check();
             }
             Guard();
-            return new CanonicalPreparedWritePlan(Guard, () => { foreach (var write in writes) write(); },
+            var plan = new CanonicalPreparedWritePlan(Guard, () => { foreach (var write in writes) write(); },
                 () => { foreach (var check in afterChecks) check(); }, rootOwners.Values.ToArray());
+            exposeExternalRebinding?.Invoke(new ExternalRebinding(value.Externals, external, externalSlots, copiedExternal,
+                rootOwners.Values.ToArray(), plan));
+            return plan;
+        }
+
+        // Only the exact external slots already validated by this source graph
+        // may move to a newly produced owner. No roots or managed nodes change.
+        // Preparation is available only after the original graph applied and
+        // passed its full readback. Any failed application remains terminal.
+        internal sealed class ExternalRebinding
+        {
+            private readonly CanonicalCarryGraphData.External[] source;
+            private readonly object[] external;
+            private readonly List<Tuple<int, Func<object?>, Action<object>>> slots;
+            private readonly CanonicalPreparedWritePlan parent;
+            private readonly HashSet<int> copiedExternal;
+            private readonly object[] rootOwners;
+            private bool consumed;
+            internal ExternalRebinding(CanonicalCarryGraphData.External[] source, object[] external,
+                List<Tuple<int, Func<object?>, Action<object>>> slots, HashSet<int> copiedExternal,
+                object[] rootOwners, CanonicalPreparedWritePlan parent)
+            { this.source = source; this.external = external; this.slots = slots; this.parent = parent;
+                this.copiedExternal = copiedExternal; this.rootOwners = rootOwners; }
+            internal CanonicalPreparedWritePlan Prepare(IReadOnlyDictionary<string, object> replacements)
+            {
+                if (consumed || replacements.Count == 0) throw new InvalidOperationException("Deferred external phase is absent or consumed.");
+                parent.VerifyReadback(); consumed = true;
+                var proposed = (object[])external.Clone(); var selected = new HashSet<int>();
+                foreach (var pair in replacements) {
+                    var index = Array.FindIndex(source, item => item.Binding == pair.Key);
+                    if (index < 0 || pair.Value == null || Identity(pair.Value.GetType()) != source[index].Type
+                        || ReferenceEquals(pair.Value, external[index]) || rootOwners.Any(owner => ReferenceEquals(owner, pair.Value)))
+                        throw new InvalidDataException("Deferred external replacement has no distinct exact source binding: " + pair.Key);
+                    if (copiedExternal.Contains(index))
+                        throw new InvalidDataException("Deferred external inside a copied value node needs an explicit owner binding.");
+                    proposed[index] = pair.Value; selected.Add(index);
+                }
+                if (proposed.Distinct(new References()).Count() != proposed.Length)
+                    throw new InvalidDataException("Deferred external replacement collapses a source alias.");
+                var changed = slots.Where(slot => selected.Contains(slot.Item1)).ToArray();
+                if (selected.Any(index => !changed.Any(slot => slot.Item1 == index)))
+                    throw new InvalidDataException("Deferred external replacement has no reachable field slot.");
+                void Guard() {
+                    parent.VerifyReadback();
+                    foreach (var slot in changed) if (!ReferenceEquals(slot.Item2(), external[slot.Item1]))
+                        throw new InvalidOperationException("Deferred external source slot changed before application.");
+                }
+                void Verify() {
+                    foreach (var slot in changed) if (!ReferenceEquals(slot.Item2(), proposed[slot.Item1]))
+                        throw new InvalidOperationException("Deferred external source slot readback differs.");
+                    parent.VerifyReadback();
+                }
+                return new CanonicalPreparedWritePlan(Guard, () => {
+                    foreach (var slot in changed) slot.Item3(proposed[slot.Item1]);
+                    foreach (var index in selected) external[index] = proposed[index];
+                }, Verify);
+            }
         }
 
         // Declared reference slots retain identity; value slots compare every
@@ -381,15 +457,22 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly Dictionary<object, int> nodes = new Dictionary<object, int>(new References());
             private readonly object?[][] values;
             private readonly FieldInfo[][] declarations;
+            private readonly object[] objects;
             internal PreparedView(IReadOnlyDictionary<string, object> roots, object[] objects,
                 object?[][] values, FieldInfo[][] declarations)
             {
                 this.roots = roots.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
                 this.values = values; this.declarations = declarations;
+                this.objects = objects;
                 for (var index = 0; index < objects.Length; index++) nodes.Add(objects[index], index);
             }
             internal object Root(string name) => roots.TryGetValue(name, out var root) ? root
                 : throw new InvalidDataException("Prepared carry root is absent: " + name);
+            // A later domain may share an actual object allocated by this graph.
+            // The caller must consume it only after this plan's Apply/readback;
+            // this exposes identities, never bypasses the plan's owner guards.
+            internal object Node(int id) => id > 0 && id <= objects.Length ? objects[id - 1]
+                : throw new InvalidDataException("Prepared carry node identity is outside its source graph.");
             internal object? Field(object owner, Type declaringType, string name)
             {
                 if (!nodes.TryGetValue(owner, out var node) || values[node] == null)
