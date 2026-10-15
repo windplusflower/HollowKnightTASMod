@@ -125,6 +125,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 JsonConvert.SerializeObject(new { ordinal, source, target, movie, native, phase, detail,
                     elapsedMilliseconds = elapsed.ElapsedMilliseconds, completeStateCoverage = false }) + "\n");
             Progress("begin", new { movieInputNativeOrigin, controlledNativeFrame = checked(native - movieInputNativeOrigin) });
+            Progress("original-Geo-lifecycle-before-Canon", LoadingGeoLifecycleObservation.Capture());
             try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates, journal, RestoreHudSourceDependencies); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });

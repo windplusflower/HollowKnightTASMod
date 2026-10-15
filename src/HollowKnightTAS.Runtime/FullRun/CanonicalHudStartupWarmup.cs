@@ -36,6 +36,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     next.GetComponents<PlayMakerFSM>().Single(fsm => ((Fsm)Raw.GetValue(fsm)).Name == "charm_unequip_shift"),
                     charms.GetComponents<PlayMakerFSM>().Single(fsm => ((Fsm)Raw.GetValue(fsm)).Name == "Initial Activation") };
                 firstFrame = Time.frameCount;
+                Modding.Logger.Log("[HKTAS] Original Geo before HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingGeoLifecycleObservation.Capture()));
                 if (!camera.enabled || !cameras.gameObject.activeInHierarchy)
                     throw new InvalidOperationException("Original HUD startup camera/ancestor is disabled.");
                 // Already active target initialization is never toggled/restarted.
@@ -57,6 +58,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (activation.ActiveStateName != "State 2")
                 throw new InvalidOperationException("Original Charms initialization did not complete its native Wait/disable state.");
             complete = true;
+            Modding.Logger.Log("[HKTAS] Original Geo after HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingGeoLifecycleObservation.Capture()));
             Modding.Logger.Log("[HKTAS] Original HUD initialization completed; original PD derivation preserved and Invoke finished naturally.");
             return true;
         }

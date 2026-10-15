@@ -1357,7 +1357,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var encoded = new LoadingInventoryRootEncoding(lastInventory);
             var content = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new {
                 format = LoadingInventoryRootEncoding.Format, names = encoded.Names, types = encoded.Types, roots = encoded.Roots,
-                detachedFsmReferences, detachedFsmMetadata }));
+                detachedFsmReferences, detachedFsmMetadata, originalGeoLifecycle = LoadingGeoLifecycleObservation.Capture() }));
             if (content.Length > 16 * 1024 * 1024)
                 throw new InvalidOperationException("Actual D suffix inventory exceeds the original 16 MiB diagnostic bound.");
             using (var compressed = new MemoryStream()) {
