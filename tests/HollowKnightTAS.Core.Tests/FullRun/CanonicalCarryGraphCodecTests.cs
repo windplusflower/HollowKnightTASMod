@@ -31,6 +31,31 @@ public sealed class CanonicalCarryGraphCodecTests
     }
 
     [TestMethod]
+    public void Read_only_final_window_checks_main_once_before_first_freeze_and_source_write()
+    {
+        var x = LifecyclePlan(); var trace = new List<string>(); var eventSlot = 0; var mainReads = 0;
+        x.phase.BeginOriginalLifecycle(() => trace.Add("begin"));
+        x.target.Counter = 5; // Original selected-owner lifecycle, before final read-only window.
+        eventSlot = 17; // Explicit original EventData source replay ends before this window.
+        trace.Add("incoming-read"); Assert.AreEqual(5, x.target.Counter);
+        trace.Add("native-read"); Assert.AreEqual(2, x.other.Counter);
+        x.phase.PrepareWritesAfterOriginalLifecycle(() => {
+            mainReads++; trace.Add("main-sdk-read");
+            Assert.AreEqual(17, eventSlot); Assert.AreEqual(5, x.target.Counter); Assert.AreEqual(2, x.other.Counter);
+        });
+        trace.Add("first-freeze-complete"); Assert.AreEqual(5, x.target.Counter); Assert.IsNull(x.target.Current);
+        x.plan.Apply(); trace.Add("source-write-readback"); Assert.AreEqual(70, x.target.Counter);
+        x.plan.VerifyReadback(); trace.Add("independent-after");
+        Assert.AreEqual(1, mainReads);
+        CollectionAssert.AreEqual(new[] { "begin", "incoming-read", "native-read", "main-sdk-read", "first-freeze-complete",
+            "source-write-readback", "independent-after" }, trace);
+        var failed = LifecyclePlan(); failed.phase.BeginOriginalLifecycle(() => { });
+        Assert.ThrowsExactly<InvalidDataException>(() => failed.phase.PrepareWritesAfterOriginalLifecycle(() => throw new InvalidDataException("main source differs")));
+        Assert.AreEqual(1, failed.target.Counter); Assert.AreEqual(2, failed.other.Counter); Assert.IsNull(failed.target.Current);
+        Assert.ThrowsExactly<InvalidOperationException>(failed.plan.Apply);
+    }
+
+    [TestMethod]
     public void Lifecycle_completed_plan_readback_rejects_later_failed_phase_reentry()
     {
         var x = LifecyclePlan(); x.phase.BeginOriginalLifecycle(() => { });
@@ -147,6 +172,11 @@ public sealed class CanonicalCarryGraphCodecTests
         Console.WriteLine("codec-sized apply ms=" + timer.Elapsed.TotalMilliseconds);
         timer.Restart(); for (var i = 0; i < 12; i++) plan.VerifyReadback();
         Console.WriteLine("codec-sized twelve-independent-readbacks ms=" + timer.Elapsed.TotalMilliseconds);
+        timer.Restart(); for (var i = 0; i < 32; i++) { plan.VerifyReadback(); plan.VerifyReadback(); plan.VerifyReadback(); }
+        var threeReads = timer.Elapsed.TotalMilliseconds;
+        timer.Restart(); for (var i = 0; i < 32; i++) plan.VerifyReadback();
+        Console.WriteLine("codec-sized readonly final window (.NET8 only): iterations=32;oldMainReads=96;newMainReads=32;oldMs="
+            + threeReads + ";newMs=" + timer.Elapsed.TotalMilliseconds);
         var first = (Owner)target["root/0"];
         foreach (Owner owner in target.Values) { Assert.AreSame(first.Current, owner.Current); Assert.AreSame(owner, owner.Next); }
         first.Counter++;

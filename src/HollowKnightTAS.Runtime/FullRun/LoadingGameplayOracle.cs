@@ -266,10 +266,43 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal LoadingGeoIncomingReferences FreezeGeoIncoming() => geoIncoming.Freeze();
         internal Action PrepareOwnedHudLifecycle(IReadOnlyDictionary<int, MonoBehaviour> oldOwners, Func<int, bool> ownsNewStart, out Action retireStarts)
             => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).BeginOwnedStartLifecycle(oldOwners, ownsNewStart, out retireStarts);
+        // The original owned-lifecycle recapture already assigned these exact
+        // owner names. No native owner lifecycle or PlayerLoop intervenes before
+        // the controlled queue write. Reuse only this one frozen directory.
+        internal (string Prefix, IReadOnlyDictionary<int, string> Names, Action Guard) PrepareProducedGeoSchedulerNames(
+            GeoCounter root, IReadOnlyDictionary<int, MonoBehaviour> produced)
+        {
+            var objects = hudSchedulerObjects; var behaviours = hudSchedulerBehaviours; var frozen = hudSchedulerOwners;
+            if (objects == null || behaviours == null || frozen == null || !hudSchedulerOwnerReuseAvailable
+                || !objects.TryGetValue(root.gameObject.GetInstanceID(), out var prefix))
+                throw new InvalidOperationException("Produced Geo has no unused frozen scheduler owner directory.");
+            var pointer = typeof(UnityEngine.Object).GetField("m_CachedPtr", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var selected = produced.ToDictionary(pair => pair.Key, pair => frozen.Single(item => ReferenceEquals(item.Item1, pair.Value)));
+            var names = produced.ToDictionary(pair => pair.Key, pair => objects[pair.Key]);
+            void Guard() {
+                if (!hudSchedulerOwnerReuseAvailable || !ReferenceEquals(objects, hudSchedulerObjects)
+                    || !ReferenceEquals(behaviours, hudSchedulerBehaviours) || !ReferenceEquals(frozen, hudSchedulerOwners)
+                    || !objects.TryGetValue(root.gameObject.GetInstanceID(), out var currentPrefix) || currentPrefix != prefix)
+                    throw new InvalidOperationException("Produced Geo scheduler directory was consumed or replaced.");
+                foreach (var pair in produced) {
+                    var owner = pair.Value; var saved = selected[pair.Key];
+                    if (owner is null || owner == null) throw new InvalidOperationException("Produced Geo frozen owner was destroyed.");
+                    var currentPointer = (IntPtr)pointer.GetValue(owner);
+                    var name = CanonicalGeoSourceQueueContract.ResolveFrozenOwner(saved.Item1, saved.Item2, names[pair.Key],
+                        owner, currentPointer, Loaded(owner.gameObject));
+                    if (owner.GetInstanceID() != pair.Key || !objects.TryGetValue(pair.Key, out var currentName) || currentName != name
+                        || !behaviours.TryGetValue(currentPointer, out var nativeName) || nativeName != name)
+                        throw new InvalidOperationException("Produced Geo native pointer and logical owner aliases differ.");
+                }
+            }
+            Guard();
+            return (prefix, names, Guard);
+        }
         internal Action RestoreAbsentProducedGeoStarts(CanonicalSchedulerCarry source, IReadOnlyDictionary<int, MonoBehaviour> produced,
-            string prefix, Action admission, Action requireSourceNative)
+            string prefix, IReadOnlyDictionary<int, string> names, Action requireDirectory, Action admission, Action requireSourceNative)
             => (nativeScheduler ?? throw new InvalidOperationException("Missing original Geo scheduler observation.")).RestoreAbsentProducedGeoStarts(
-                source, produced, prefix, HeroController.SilentInstance ?? throw new InvalidOperationException("Missing Geo source Hero."), admission, requireSourceNative);
+                source, produced, prefix, names, requireDirectory,
+                HeroController.SilentInstance ?? throw new InvalidOperationException("Missing Geo source Hero."), admission, requireSourceNative);
         internal void RecaptureOwnedHudScheduler(Action admission, Action requireTransition)
         {
             if (!boundaryCapture || nativeScheduler == null) throw new InvalidOperationException("HUD lifecycle requires its original boundary reader.");

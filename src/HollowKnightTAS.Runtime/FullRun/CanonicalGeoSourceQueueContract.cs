@@ -15,6 +15,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal byte[] Lifecycle = Array.Empty<byte>();
             internal bool Active;
         }
+        internal static string ResolveFrozenOwner(object frozenOwner, IntPtr frozenPointer, string frozenIdentity,
+            object actualOwner, IntPtr actualPointer, bool loaded)
+        {
+            if (frozenOwner == null || actualOwner == null || !loaded || frozenPointer == IntPtr.Zero || actualPointer != frozenPointer || !ReferenceEquals(frozenOwner, actualOwner)
+                || string.IsNullOrEmpty(frozenIdentity)) throw Invalid("frozen native owner identity changed");
+            return frozenIdentity;
+        }
         internal static int[] Select(CanonicalSchedulerCarry source, CanonicalSchedulerCarry actual,
             string prefix, IReadOnlyDictionary<string, OwnerState> owners)
         {

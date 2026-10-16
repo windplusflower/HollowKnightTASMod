@@ -10,10 +10,11 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal sealed partial class LoadingNativeSchedulerDigest
     {
         internal Action RestoreAbsentProducedGeoStarts(CanonicalSchedulerCarry source,
-            IReadOnlyDictionary<int, MonoBehaviour> produced, string prefix, HeroController hero,
+            IReadOnlyDictionary<int, MonoBehaviour> produced, string prefix, IReadOnlyDictionary<int, string> names,
+            Action requireDirectory, HeroController hero,
             Action admission, Action requireSourceNative)
         {
-            admission(); requireSourceNative(); RequireFrozenCapturedQueue()();
+            admission(); requireDirectory(); requireSourceNative(); RequireFrozenCapturedQueue()();
             if (produced.Count != 11 || produced.Any(pair => pair.Value == null || pair.Value.GetInstanceID() != pair.Key))
                 throw new InvalidOperationException("Source Geo Start cleanup has no exact original produced owner directory.");
             var manager = capturedManager; var callbacks = capturedCallbacks;
@@ -35,8 +36,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 RequireCode(0x8ab340, "40534883ec4083792002488bd9750b488b41284889442450eb1d488b51184883faff0f8479010000488d4c2450e80e0e0100488b4424504885c00f8461010000488b83f00000004885c0740a807840000f854b010000c6832801000001488b83f80000004885c0743b48837858007434f30f1015648cdf00488d0dc11200008b53080f57c0c7442430070000004533c948c744242800000000f30f11442420e8acd0d7ff488bcbe814fcffff80bb24010000007559488bcbe8830b00004c8b4424504d85c00f84d6000000488d54245848c74424580000000033c9ff15e7601701488b4424584885c00f84b200000048837810000f84a7000000488b03488bcbff90d000000084c00f8493000000488b83f80000004885c074144883784000740dba08000000488bcbe8020c0000488b83f80000004885c074554883783800744eba07000000488bcbe8e20b00004c8b4424504d85c07449488d54245848c74424580000000033c9ff155a601701488b4424584885c0742948837810007422488b03488bcbff90d000000084c07412488bcbe8b9fcffff33d2488bcbe8ff5800004883c4405bc3");
                 RequireCode(0x8ac680, "4883ec2880b92801000000742d80b925010000007524c6812501000001488b91f80000004885d27411488b52584885d274084533c0e896270000b8010000004883c428c3");
                 RequireCode(0x6285e0, "4056574154415541574883ec20488b41308bfa4d8be14d8be8488bf1488b1048");
-                var identities = new BoundaryObjectIdentity();
-                var states = produced.Values.ToDictionary(owner => identities.Get(owner), owner =>
+                requireDirectory();
+                var states = produced.Values.ToDictionary(owner => names[owner.GetInstanceID()], owner =>
                     new CanonicalGeoSourceQueueContract.OwnerState { Lifecycle = BoundaryMonoLifecycle.ObserveUnstartedUi(owner), Active = owner.gameObject.activeInHierarchy }, StringComparer.Ordinal);
                 var actual = CaptureCanonicalCarry(source.SourceNative, hero);
                 var selectedOrders = CanonicalGeoSourceQueueContract.Select(source, actual, prefix, states);
@@ -53,7 +54,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var cancel = (CancelDelayedPair)Marshal.GetDelegateForFunctionPointer(IntPtr.Add(engine, 0x6285e0), typeof(CancelDelayedPair));
                 capturedQueueValid = false;
                 foreach (var item in selected) {
-                    admission(); LoadingSerialSceneProbe.RequireCanonicalMutationBoundary();
+                    admission(); requireDirectory(); LoadingSerialSceneProbe.RequireCanonicalMutationBoundary();
                     if (Thread.CurrentThread.ManagedThreadId != thread || GetModuleHandle("UnityPlayer.dll") != engine)
                         throw new InvalidOperationException("Source Geo Start original cancellation changed thread or module.");
                     var owner = produced[item.OwnerInstanceId]; var flags = BoundaryMonoLifecycle.ObserveUnstartedUi(owner);
@@ -70,7 +71,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidOperationException("Source Geo original Start cancellation altered a non-owned native queue/coroutine payload or order.");
             }
             capturedQueueValid = false;
-            admission(); requireSourceNative();
+            // Only a complete fresh native queue read follows before the final
+            // source-native check below: no write, callback or PlayerLoop.
+            admission();
             var consumed = false;
             return () => {
                 if (consumed || Thread.CurrentThread.ManagedThreadId != thread || !capturedQueueValid

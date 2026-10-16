@@ -96,8 +96,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             var consumed = false;
             return () => {
                 if (consumed || !admitted()) throw new InvalidOperationException("Post-main Geo graph was consumed or lost paused admission.");
-                consumed = true; requireMainApplied();
+                consumed = true;
                 var sourceData = saved ?? throw new InvalidOperationException("Geo source snapshot is absent.");
+                // RequireNative is field/raw-byte observation only. No graph
+                // allocation, publication, event or native lifecycle occurs
+                // before the complete finalAdmission check below.
                 RequireNative();
                 lifecycle!.PrepareWritesAfterOriginalLifecycle(() => {
                     if (!admitted()) throw new InvalidOperationException("Geo final lifecycle admission lost pause.");

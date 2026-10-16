@@ -176,7 +176,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             EventDataAudit = CanonicalEventDataCarry.Add(roots, canonicalSenders.Bind);
             var guardEventSlots = CanonicalEventStaticSlots.PrepareGuard(roots);
             var inputBindings = CanonicalCarryRootBindings.Merge(InputCarryAudit.FixedBindings, inputRoots);
-            var bindings = new ExternalBindings(identities, assetTemplates, canonicalSenders, inputBindings);
+            var captureEpoch = new object();
+            var bindings = new ExternalBindings(identities, assetTemplates, canonicalSenders, inputBindings, captureEpoch);
             CanonicalCarryGraphData Empty() => new CanonicalCarryGraphData { Roots = Array.Empty<CanonicalCarryGraphData.Root>(),
                 Nodes = Array.Empty<CanonicalCarryGraphData.Node>(), Externals = Array.Empty<CanonicalCarryGraphData.External>(), Unsupported = Array.Empty<string>() };
             var mainNodes = new Dictionary<object, int>(new References());
@@ -185,7 +186,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 CanonicalGeoColdTemplate.Directory(GameCameras.instance.geoCounter.gameObject), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             var mainBindings = new SortedDictionary<string, object>(InputCarryAudit.FixedBindings.ToDictionary(pair => pair.Key, pair => pair.Value), StringComparer.Ordinal);
             foreach (var pair in roots) mainBindings.Add("canonical-main-root/" + pair.Key, pair.Value);
-            var inputExternal = new ExternalBindings(identities, assetTemplates, canonicalSenders, mainBindings);
+            var inputExternal = new ExternalBindings(identities, assetTemplates, canonicalSenders, mainBindings, captureEpoch, bindings.ownerDirectory);
             InputGraph = targetDirectoryOnly ? Empty() : inputCodec.Capture(inputRoots, inputExternal.Bind);
             var sourceEpoch = inputEpoch.Copy();
             CanonicalPreparedWritePlan? mainPlan = null, inputPlan = null;
@@ -242,6 +243,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 targetRestorePrepared = true;
                 var domainActions = new List<Action>();
                 var sourceChecks = new List<Action>();
+                var prepareTimer = System.Diagnostics.Stopwatch.StartNew();
                 var targetMainRoots = SelectTargetRoots(sourceMain, roots, allowRetiredEventCacheEntries: true);
                 var targetInputRoots = SelectTargetRoots(sourceInput, inputRoots, allowRetiredEventCacheEntries: false);
                 CanonicalCarryContinuationContract.Prepared? continuation = null;
@@ -299,6 +301,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     sourceChecks.Add(() => sceneMapping.RequireAppliedSource(mapping, mappingPlayer));
                     domainActions.Add(journal.PrepareSourceDependencies(admitted));
                 }, rebind => mainRebinding = rebind);
+                var mainPreparedMilliseconds = prepareTimer.ElapsedMilliseconds;
+                Modding.Logger.Log("[HKTAS] Actual D main graph preparation timing: elapsedMilliseconds=" + mainPreparedMilliseconds);
                 ActualTargetStage = "prepare-input";
                 var sdk = inputCodec.PrepareOwnedGraph(sourceInput, targetInputRoots, inputExternal.ResolveTarget, view => {
                     if (continuation == null) throw new InvalidOperationException("Actual input graph has no source main continuation.");
@@ -314,6 +318,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     domainActions.Add(mouse.PrepareCanonicalContinuation(CanonicalMouseCarry.FromPrepared(view)));
                     domainActions.Add(deviceManagers.PrepareApply(CanonicalDeviceManagerCarry.FromPrepared(view)));
                 }, rebind => sdkRebinding = rebind);
+                Modding.Logger.Log("[HKTAS] Actual D input graph preparation timing: elapsedMilliseconds=" + (prepareTimer.ElapsedMilliseconds - mainPreparedMilliseconds));
                 domainActions.Add(() => {
                     ActualTargetStage = "geo-source-producer";
                     var envelope = actualSourceValidation ?? throw new InvalidOperationException("Post-main Geo has no sealed source envelope.");
@@ -351,7 +356,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     }, verifyIncoming => {
                         ActualTargetStage = "geo-reapply-source-event-data";
                         (reapplyEventData ?? throw new InvalidOperationException("Source EventData replay was not prepared."))();
-                        RequireMain();
+                        // This same-thread protected interval performs only
+                        // incoming/native observations. Its one complete main
+                        // and SDK check is finalAdmission immediately before
+                        // the first Geo write-before snapshot, not repeated here.
                         verifyIncoming();
                         ActualTargetStage = "geo-apply-source-graph";
                         (applyGeo ?? throw new InvalidOperationException("Source Geo final plan was not prepared."))();
@@ -432,7 +440,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly BoundaryObjectIdentity identities;
             private readonly Dictionary<Type, UnityEngine.Object[]> assets = new Dictionary<Type, UnityEngine.Object[]>();
             private readonly Dictionary<object, string> known = new Dictionary<object, string>(new References());
-            private readonly Dictionary<string, object> nativeDirectory = new Dictionary<string, object>(StringComparer.Ordinal);
+            internal readonly CanonicalCaptureOwnerDirectory ownerDirectory;
+            private readonly IReadOnlyDictionary<string, object> nativeDirectory;
             private readonly CanonicalCarryReflectionBindings metadata;
             private readonly CanonicalHeroAssetTemplates assetTemplates;
             private readonly CanonicalVisualSenderBindings canonicalSenders;
@@ -489,24 +498,34 @@ namespace HollowKnightTAS.Runtime.FullRun
                     + string.Join(";", schemas) + ";allUniqueOriginalAssets=true;completeStateCoverage=false");
             }
             internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualSenderBindings canonicalSenders,
-                IReadOnlyDictionary<string, object> fixedInputBindings)
+                IReadOnlyDictionary<string, object> fixedInputBindings, object captureEpoch, CanonicalCaptureOwnerDirectory? sharedDirectory = null)
             {
                 this.identities = identities;
                 this.assetTemplates = assetTemplates;
                 this.canonicalSenders = canonicalSenders;
+                IReadOnlyDictionary<string, object> CaptureNativeDirectory() {
+                var elapsed = System.Diagnostics.Stopwatch.StartNew();
+                var directory = new Dictionary<string, object>(StringComparer.Ordinal);
                 void Register(string key, object owner) {
-                    if (nativeDirectory.Count >= CanonicalCarryGraphCodec.MaximumNodes || nativeDirectory.ContainsKey(key))
+                    if (directory.Count >= CanonicalCarryGraphCodec.MaximumNodes || directory.ContainsKey(key))
                         throw new InvalidDataException("Target native owner directory is ambiguous or oversized: " + key);
-                    nativeDirectory.Add(key, owner);
+                    directory.Add(key, owner);
                 }
                 foreach (var go in identities.Objects) {
                     Register(identities.Get(go), go);
                     foreach (var component in go.GetComponents<Component>()) {
                         if (component == null) continue;
-                        Register(identities.Get(component), component);
-                        if (component is PlayMakerFSM fsm) Register("FSM/" + identities.Get(fsm), RawFsm.GetValue(fsm));
+                        var identity = identities.Get(component);
+                        Register(identity, component);
+                        if (component is PlayMakerFSM fsm) Register("FSM/" + identity, RawFsm.GetValue(fsm));
                     }
                 }
+                Modding.Logger.Log("[HKTAS] Carry external native directory captured: entries=" + directory.Count
+                    + ";elapsedMilliseconds=" + elapsed.ElapsedMilliseconds + ";sameCaptureInventories=1;sharedMainInput=true");
+                return directory;
+                }
+                ownerDirectory = sharedDirectory ?? new CanonicalCaptureOwnerDirectory(identities, captureEpoch, CaptureNativeDirectory);
+                nativeDirectory = ownerDirectory.Require(identities, captureEpoch);
                 foreach (var pair in fixedInputBindings) {
                     // Multiple named roots can alias the same live object.
                     // Select the first canonical name; the root graph retains

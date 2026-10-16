@@ -18,6 +18,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal const int MaximumNodes = 100000, MaximumValues = 1000000;
         private readonly Dictionary<string, Layout> layouts = new Dictionary<string, Layout>(StringComparer.Ordinal);
         private readonly Dictionary<string, Type> types = new Dictionary<string, Type>(StringComparer.Ordinal);
+        private readonly Dictionary<Type, string> typeIdentities = new Dictionary<Type, string>();
         private readonly string schema;
         private readonly Dictionary<Type, int> leafSizes = new Dictionary<Type, int>();
         private readonly Func<object, string?>? portability;
@@ -34,7 +35,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             this.importValidation = importValidation;
             foreach (var type in new[] { typeof(bool), typeof(byte), typeof(sbyte), typeof(char), typeof(short), typeof(ushort),
                 typeof(int), typeof(uint), typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(string), typeof(decimal) })
-                types.Add(Identity(type), type);
+            { var id = Identity(type); types.Add(id, type); typeIdentities.Add(type, id); }
             foreach (var type in registered.Distinct())
             {
                 if (type.ContainsGenericParameters || type.IsPointer || type.IsByRef || type == typeof(IntPtr) || type == typeof(UIntPtr)
@@ -44,12 +45,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidDataException("Carry allocation type is not managed data: " + type.FullName);
                 var id = Identity(type);
                 types[id] = type;
+                typeIdentities[type] = id;
                 if (!IsScalar(type) && !type.IsArray)
                     layouts.Add(id, new Layout(type, Fields(type)));
             }
         }
 
         internal static string Identity(Type type) => type.Assembly.GetName().Name + ":" + type.FullName;
+        private string TypeIdentity(Type type) => typeIdentities.TryGetValue(type, out var id) ? id : Identity(type);
         internal static FieldInfo[] Fields(Type type) => Hierarchy(type).SelectMany(t => t.GetFields(
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
             .OrderBy(f => f.DeclaringType!.FullName, StringComparer.Ordinal).ThenBy(f => f.Name, StringComparer.Ordinal).ToArray();
@@ -78,7 +81,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var id = nodes.Count + 1;
                 seen.Add(value, id);
                 capturedNode?.Invoke(value, id);
-                nodes.Add(new CanonicalCarryGraphData.Node { Id = id, Type = Identity(value.GetType()) });
+                nodes.Add(new CanonicalCarryGraphData.Node { Id = id, Type = TypeIdentity(value.GetType()) });
                 pending.Enqueue(Tuple.Create(value, id, depth));
                 return id;
             }
@@ -87,7 +90,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (++count > MaximumValues || depth > 128) throw new InvalidDataException("Carry field graph exceeds its bound at " + path
                     + ";values=" + count + ";depth=" + depth);
                 if (value == null) return new CanonicalCarryGraphData.Value { Kind = "null" };
-                var type = value.GetType(); var id = Identity(type);
+                var type = value.GetType(); var id = TypeIdentity(type);
                 var issue = portability?.Invoke(value);
                 if (issue != null) { unsupported.Add(path + ":" + issue); return Unsupported(id, issue); }
                 if (type.IsValueType && !declared.IsValueType && IsScalar(type) && types.ContainsKey(id))
@@ -139,7 +142,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (string.IsNullOrEmpty(pair.Key) || pair.Value == null || pair.Value.GetType().IsValueType)
                     throw new InvalidDataException("Carry root must bind an existing managed reference.");
-                var id = Identity(pair.Value.GetType());
+                var id = TypeIdentity(pair.Value.GetType());
                 if (!layouts.ContainsKey(id)) throw new InvalidDataException("Carry root type is unregistered: " + id);
                 if (portability?.Invoke(pair.Value) is string rootIssue) unsupported.Add(pair.Key + ":" + rootIssue);
                 return new CanonicalCarryGraphData.Root { Binding = pair.Key, Node = AddNode(pair.Value, 0, pair.Key) };
@@ -161,8 +164,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 else
                 {
                     node.Kind = "object"; var layout = layouts[node.Type];
-                    node.Fields = layout.Fields.Select(field => new CanonicalCarryGraphData.Field {
-                        Name = FieldIdentity(field), Value = Visit(field.GetValue(owner), field.FieldType, path + "/" + FieldIdentity(field), entry.Item3 + 1) }).ToArray();
+                    node.Fields = new CanonicalCarryGraphData.Field[layout.Fields.Length];
+                    for (var index = 0; index < layout.Fields.Length; index++) {
+                        var field = layout.Fields[index]; var identity = layout.FieldIdentities[index];
+                        node.Fields[index] = new CanonicalCarryGraphData.Field { Name = identity,
+                            Value = Visit(field.GetValue(owner), field.FieldType, path + "/" + identity, entry.Item3 + 1) };
+                    }
                 }
             }
             return new CanonicalCarryGraphData { Schema = schema, Roots = rootData, Nodes = nodes.ToArray(),
@@ -254,7 +261,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (saved == null || string.IsNullOrEmpty(saved.Binding) || !externalKeys.Add(saved.Binding))
                     throw new InvalidDataException("Carry external identity is invalid or duplicated.");
                 var owner = resolveExternal(saved.Binding);
-                if (owner == null || owner.GetType().IsValueType || Identity(owner.GetType()) != saved.Type
+                if (owner == null || owner.GetType().IsValueType || TypeIdentity(owner.GetType()) != saved.Type
                     || !externalObjects.Add(owner) || boundObjects.ContainsKey(owner))
                     throw new InvalidDataException("Carry external type or alias binding differs: " + saved.Binding);
                 external[i] = owner;
@@ -500,7 +507,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (depth > 128 || expected.GetType() != current.GetType()) return false;
             var type = Nullable.GetUnderlyingType(declared) ?? declared;
             if (IsScalar(type)) return EncodeScalar(expected, type) == EncodeScalar(current, type);
-            if (!layouts.TryGetValue(Identity(type), out var layout)) throw new InvalidDataException("Carry stale-check value layout is absent.");
+            if (!layouts.TryGetValue(TypeIdentity(type), out var layout)) throw new InvalidDataException("Carry stale-check value layout is absent.");
             return layout.Fields.All(field => SameRawSlot(field.GetValue(expected), field.GetValue(current), field.FieldType, depth + 1));
         }
 
@@ -554,7 +561,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private int LeafSize(Type type)
         {
             if (type.IsPrimitive && type != typeof(IntPtr) && type != typeof(UIntPtr) || type.IsEnum || type == typeof(decimal)) return 1;
-            if (!type.IsValueType || !layouts.TryGetValue(Identity(type), out var layout)) return 0;
+            if (!type.IsValueType || !layouts.TryGetValue(TypeIdentity(type), out var layout)) return 0;
             if (leafSizes.TryGetValue(type, out var cached)) return cached;
             var total = 1;
             foreach (var field in layout.Fields)
@@ -572,7 +579,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             void Append(object owner, Type current)
             {
                 if (IsScalar(current)) { parts.Add(EncodeScalar(owner, current)); return; }
-                foreach (var field in layouts[Identity(current)].Fields) Append(field.GetValue(owner)!, field.FieldType);
+                foreach (var field in layouts[TypeIdentity(current)].Fields) Append(field.GetValue(owner)!, field.FieldType);
             }
             Append(value, type); return string.Join("|", parts);
         }
@@ -589,7 +596,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 #pragma warning disable SYSLIB0050
                 var result = FormatterServices.GetUninitializedObject(current);
 #pragma warning restore SYSLIB0050
-                foreach (var field in layouts[Identity(current)].Fields) field.SetValue(result, Read(field.FieldType));
+                foreach (var field in layouts[TypeIdentity(current)].Fields) field.SetValue(result, Read(field.FieldType));
                 return result;
             }
             var value = Read(type);

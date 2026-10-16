@@ -15,6 +15,18 @@ public sealed class CanonicalGeoSourceQueueContractTests
     private static Dictionary<string, CanonicalGeoSourceQueueContract.OwnerState> Owners() => new() {
         [Geo] = new() { Lifecycle = new byte[] { 0, 0, 1, 0, 0 } } };
     [TestMethod]
+    public void Frozen_directory_reuse_retains_the_exact_name_object_and_strong_native_owner_witness()
+    {
+        var owner = new object(); var name = new string("world/Geo:PlayMakerFSM[0]".ToCharArray());
+        Assert.AreSame(name, CanonicalGeoSourceQueueContract.ResolveFrozenOwner(owner, new IntPtr(17), name, owner, new IntPtr(17), true));
+        Assert.ThrowsExactly<InvalidDataException>(() => CanonicalGeoSourceQueueContract.ResolveFrozenOwner(owner, new IntPtr(17), name, new object(), new IntPtr(17), true));
+        Assert.ThrowsExactly<InvalidDataException>(() => CanonicalGeoSourceQueueContract.ResolveFrozenOwner(owner, new IntPtr(17), name, owner, new IntPtr(18), true));
+        Assert.ThrowsExactly<InvalidDataException>(() => CanonicalGeoSourceQueueContract.ResolveFrozenOwner(owner, new IntPtr(17), name, owner, new IntPtr(17), false));
+        Assert.ThrowsExactly<InvalidDataException>(() => CanonicalGeoSourceQueueContract.ResolveFrozenOwner(null!, new IntPtr(17), name, null!, new IntPtr(17), true));
+        Assert.ThrowsExactly<InvalidDataException>(() => CanonicalGeoSourceQueueContract.ResolveFrozenOwner(owner, IntPtr.Zero, name, owner, IntPtr.Zero, true));
+        Assert.ThrowsExactly<InvalidDataException>(() => CanonicalGeoSourceQueueContract.ResolveFrozenOwner(owner, new IntPtr(17), "", owner, new IntPtr(17), true));
+    }
+    [TestMethod]
     public void Only_exact_source_absent_inactive_produced_start_is_selected_without_changing_other_nodes()
     {
         var first = Start("world/Other:A[0]", 0); var last = Start("world/Other:B[0]", 1);

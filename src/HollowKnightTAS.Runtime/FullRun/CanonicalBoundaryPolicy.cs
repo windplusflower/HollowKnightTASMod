@@ -50,15 +50,26 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (!CanonicalActualDExperiment.Enabled || observer == null || carry == null || !admission())
                 throw new InvalidOperationException("Actual D target has no completed original Canon.");
+            var prepareTimer = Stopwatch.StartNew();
+            long prepareMark = 0;
+            void PreparedPhase(string phase) {
+                var now = prepareTimer.ElapsedMilliseconds;
+                Modding.Logger.Log("[HKTAS] Actual D target preparation timing: phase=" + phase + ";elapsedMilliseconds=" + (now - prepareMark));
+                prepareMark = now;
+            }
             pendingGeoIncoming = observer.FreezeGeoIncoming();
             var epoch = CanonicalInputEpochRuntime.Capture(origin, targetNative, controlOrigin);
             var identities = new BoundaryObjectIdentity();
+            PreparedPhase("frozen-owner-context");
             var sourceGraph = carry.DecodeActualMainForOwnerContext(source);
+            PreparedPhase("decode-source-main");
             var detached = Array.Exists(sourceGraph.Roots, root => root.Binding == CanonicalSceneMappingCarry.DetachedPlayerRoot);
             carry.Capture(identities, epoch, input, mouse, observer.BoundarySchedulerCarry(epoch), observer.BoundaryHeroInvulnerabilityCarry(epoch),
                 targetDirectoryOnly: true, originalBootstrapPlayer: originalBootstrapPlayer, sourceRequiresDetachedPlayer: detached,
                 retainedTargetTitleCallback: originalTitleCallback);
+            PreparedPhase("target-owner-bindings");
             var apply = carry.PrepareActualRestore(source, movie, admission, data => observer.PrepareActualSchedulerVerification(data, admission));
+            PreparedPhase("prepare-main-and-input");
             return () => {
                 apply();
                 var savedEpoch = carry.PreparedRestoreEpoch ?? throw new InvalidOperationException("Actual D source epoch is absent.");
@@ -128,8 +139,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             Stage("geo-original-source-empty-start-queue");
             var producedOwners = created.GetComponentsInChildren<MonoBehaviour>(true).ToDictionary(owner => owner.GetInstanceID());
             if (producedOwners.Keys.Any(owners.ContainsKey)) throw new InvalidOperationException("Geo producer reused an old lifecycle owner.");
+            var ownerNames = current.PrepareProducedGeoSchedulerNames(created, producedOwners);
             var queueRestored = current.RestoreAbsentProducedGeoStarts(sourceScheduler, producedOwners,
-                new BoundaryObjectIdentity().Get(created.gameObject), Require, requireGeoNative);
+                ownerNames.Prefix, ownerNames.Names, ownerNames.Guard, Require, requireGeoNative);
             current.RecaptureHudSchedulerAfterQueueWrite(Require, queueRestored);
             // Original OnAfterDeserialize/InitData legitimately populated the
             // registered metadata caches after main D. Return these Canon-owned
@@ -157,12 +169,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!phaseOneTrace || !CanonicalClockApplyExperiment.Enabled || observer == null)
                 throw new InvalidOperationException("Clock binding requires its actual observed Canon.");
             admission();
+            var elapsed = Stopwatch.StartNew();
             var frozenQueue = observer.RequireFrozenS0Scheduler();
             var before = observer.RecaptureBoundaryS0();
+            var beforeMilliseconds = elapsed.ElapsedMilliseconds;
             visualTemplates.RebindEnteredLightClock(admission);
             journal.RebindEnteredClock(admission);
             frozenQueue(); admission();
             var after = observer.RecaptureBoundaryS0();
+            var afterMilliseconds = elapsed.ElapsedMilliseconds;
             var comparison = CanonicalS0Comparison.Compare(before, after);
             var directory = Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "clock-rebound");
             Directory.CreateDirectory(directory);
@@ -170,6 +185,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             File.WriteAllText(Path.Combine(directory, "s0-observation-" + ordinal + ".json"), JsonConvert.SerializeObject(after));
             File.WriteAllText(Path.Combine(directory, "s0-clock-binding-audit.json"), JsonConvert.SerializeObject(new {
                 comparison, originalQueueBytesUnchanged = true, derivedFromImportedClock = true, restoreQualified = false }));
+            Modding.Logger.Log("[HKTAS] Actual D clock binding timing: beforeReadMilliseconds=" + beforeMilliseconds
+                + ";bindingAndAfterReadMilliseconds=" + (afterMilliseconds - beforeMilliseconds)
+                + ";comparisonAndEvidenceMilliseconds=" + (elapsed.ElapsedMilliseconds - afterMilliseconds));
             if (!comparison.ObservedS0Equal || comparison.ClockDependencyDifferences.Length > 3
                 || after.Unclassified.Length != 0 || after.Unread.Length != 0 || after.InvariantFailures.Length != 0)
                 throw new InvalidOperationException("Clock binding changed another registered S0 field or its contract.");
