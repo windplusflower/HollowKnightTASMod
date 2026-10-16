@@ -18,6 +18,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool complete;
         private int firstFrame;
         private readonly CanonicalGeoColdTemplate geoTemplate = new CanonicalGeoColdTemplate();
+        private CanonicalMapTextStartup? mapText;
         internal CanonicalGeoColdTemplate GeoTemplate => geoTemplate;
 
         internal bool Advance()
@@ -43,17 +44,23 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Modding.Logger.Log("[HKTAS] Original Map before HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingMapLifecycleObservation.Capture()));
                 if (!camera.enabled || !cameras.gameObject.activeInHierarchy)
                     throw new InvalidOperationException("Original HUD startup camera/ancestor is disabled.");
+                mapText = new CanonicalMapTextStartup(hud.transform);
                 // Already active target initialization is never toggled/restarted.
                 if (!hud.activeSelf) hud.SetActive(true);
                 if (!hud.activeInHierarchy) throw new InvalidOperationException("Original HUD startup ancestor is inactive.");
                 Modding.Logger.Log("[HKTAS] Waiting for original HUD initialization and original MoveMenuToHUDCamera Invoke.");
                 return false;
             }
-            if (Time.frameCount - firstFrame > 120) throw new InvalidOperationException("Original HUD startup exceeded 120 native frames.");
+            mapText!.ThrowIfFailed();
+            if (Time.frameCount - firstFrame > 120) {
+                if (!mapText!.Complete) mapText.RejectIncomplete();
+                throw new InvalidOperationException("Original HUD startup exceeded 120 native frames.");
+            }
             if (!hud.activeInHierarchy || camera == null || !camera.enabled)
                 throw new InvalidOperationException("Original HUD startup camera was disabled before completion.");
             if (camera.IsInvoking("MoveMenuToHUDCamera") || charms!.gameObject.activeSelf
                 || fsms!.Any(fsm => !((Fsm)Raw.GetValue(fsm)).Started)) return false;
+            if (!mapText!.Complete) return false;
             foreach (var fsm in fsms!) {
                 var flags = BoundaryMonoLifecycle.Read(fsm);
                 if (flags[0] != 1 || flags[1] != 1) return false;
@@ -67,6 +74,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             Modding.Logger.Log("[HKTAS] Original HUD initialization completed; original PD derivation preserved and Invoke finished naturally.");
             return true;
         }
-        public void Dispose() => geoTemplate.Dispose();
+        public void Dispose() { mapText?.Dispose(); geoTemplate.Dispose(); }
     }
 }
