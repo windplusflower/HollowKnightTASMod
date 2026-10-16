@@ -181,8 +181,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             var comparison = CanonicalS0Comparison.Compare(before, after);
             var directory = Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "clock-rebound");
             Directory.CreateDirectory(directory);
-            File.WriteAllText(Path.Combine(directory, "s0-clock-binding-before.json"), JsonConvert.SerializeObject(before));
-            File.WriteAllText(Path.Combine(directory, "s0-observation-" + ordinal + ".json"), JsonConvert.SerializeObject(after));
+            CanonicalJsonEvidence.Write(Path.Combine(directory, "s0-clock-binding-before.json"), before);
+            CanonicalJsonEvidence.Write(Path.Combine(directory, "s0-observation-" + ordinal + ".json"), after);
             File.WriteAllText(Path.Combine(directory, "s0-clock-binding-audit.json"), JsonConvert.SerializeObject(new {
                 comparison, originalQueueBytesUnchanged = true, derivedFromImportedClock = true, restoreQualified = false }));
             Modding.Logger.Log("[HKTAS] Actual D clock binding timing: beforeReadMilliseconds=" + beforeMilliseconds
@@ -215,6 +215,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     elapsedMilliseconds = elapsed.ElapsedMilliseconds, completeStateCoverage = false }) + "\n");
             Progress("begin", new { movieInputNativeOrigin, controlledNativeFrame = checked(native - movieInputNativeOrigin) });
             Progress("original-Geo-lifecycle-before-Canon", LoadingGeoLifecycleObservation.Capture());
+            Progress("original-Map-lifecycle-before-Canon", LoadingMapLifecycleObservation.Capture());
             try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates, journal, RestoreHudSourceDependencies, RestoreGeoSourceDependencies); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });

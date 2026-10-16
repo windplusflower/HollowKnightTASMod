@@ -40,6 +40,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 firstFrame = Time.frameCount;
                 geoTemplate.Capture(cameras.geoCounter);
                 Modding.Logger.Log("[HKTAS] Original Geo before HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingGeoLifecycleObservation.Capture()));
+                Modding.Logger.Log("[HKTAS] Original Map before HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingMapLifecycleObservation.Capture()));
                 if (!camera.enabled || !cameras.gameObject.activeInHierarchy)
                     throw new InvalidOperationException("Original HUD startup camera/ancestor is disabled.");
                 // Already active target initialization is never toggled/restarted.
@@ -62,6 +63,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Original Charms initialization did not complete its native Wait/disable state.");
             complete = true;
             Modding.Logger.Log("[HKTAS] Original Geo after HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingGeoLifecycleObservation.Capture()));
+            Modding.Logger.Log("[HKTAS] Original Map after HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingMapLifecycleObservation.Capture()));
             Modding.Logger.Log("[HKTAS] Original HUD initialization completed; original PD derivation preserved and Invoke finished naturally.");
             return true;
         }
