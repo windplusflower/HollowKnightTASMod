@@ -19,8 +19,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private string actualDImportHash = "";
         private CanonicalActualDExperiment? actualDSource;
         private bool actualDApplicationStarted;
-        private byte[]? actualDExportBytes;
-        private CanonicalActualDExperiment? actualDExportSource;
+        private CanonicalSealedSource<CanonicalActualDExperiment>? actualDExport;
         private CanonicalActualDExperiment.SessionCarry CaptureActualSessionCarry(long native)
         {
             if (randomSeedHandshakePending || replayMovie == null || checkpointExecutionFiles == null)
@@ -48,10 +47,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 string Get(string key) => fields.TryGetValue(key, out var value) ? value : throw new InvalidDataException("Missing actual D field: " + key);
                 var reply = new Dictionary<string, string> { ["requestId"] = requestId, ["restoreQualified"] = "false" };
                 if (phase == "d-exp-source-info" || phase == "d-exp-source-chunk" || phase == "d-exp-source-resume") {
+                    try {
                     var bytes = LoadingSerialSceneProbe.ExperimentalSource ?? throw new InvalidOperationException("No sealed in-memory source D.");
-                    if (actualDExportSource == null) { actualDExportSource = CanonicalActualDExperiment.Decode(bytes); actualDExportBytes = bytes; }
-                    if (!ReferenceEquals(actualDExportBytes, bytes)) throw new InvalidOperationException("Sealed source D changed during export.");
-                    var source = actualDExportSource;
+                    var exportElapsed = System.Diagnostics.Stopwatch.StartNew();
+                    CanonicalActualDExperiment source;
+                    try { source = (actualDExport ?? throw new InvalidOperationException("Source D has no sealed export envelope.")).Require(bytes); }
+                    catch { actualDExport = null; throw; }
                     if (mode != "DSourcePaused" || !clock.IsPaused || clock.IsFinished || frame != source.NativeFrame || source.Session == null)
                         throw new InvalidOperationException("Source D is not sealed at its original paused boundary.");
                     if (phase == "d-exp-source-resume") {
@@ -64,12 +65,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (fields.Count != 2) throw new InvalidDataException("Invalid source-info fields.");
                         reply["length"] = bytes.Length.ToString(CultureInfo.InvariantCulture); reply["sha256"] = Sha256Utility.ComputeHex(bytes);
                         reply["movieFrame"] = source.MovieFrame.ToString(CultureInfo.InvariantCulture); reply["nativeFrame"] = source.NativeFrame.ToString(CultureInfo.InvariantCulture);
+                        Modding.Logger.Log("[HKTAS] Actual D sealed source header prepared: elapsedMilliseconds=" + exportElapsed.ElapsedMilliseconds
+                            + ";sameBytesHashAndMetadataEqual=true;packetWrittenToDisk=false");
                     } else {
                         if (fields.Count != 3 || !int.TryParse(Get("offset"), out var offset) || offset < 0
                             || offset >= bytes.Length || offset % CanonicalActualDExperiment.ChunkBytes != 0) throw new InvalidDataException("Invalid source chunk offset.");
                         reply["data"] = Convert.ToBase64String(bytes, offset, Math.Min(CanonicalActualDExperiment.ChunkBytes, bytes.Length - offset));
                     }
                     return reply;
+                    } catch { actualDExport = null; throw; }
                 }
                 var job = s0Observation ?? throw new InvalidOperationException("No zero-Movie target for actual D.");
                 try {
@@ -152,11 +156,20 @@ namespace HollowKnightTAS.Runtime.FullRun
             var ownerAdmission = LoadingSerialSceneProbe.FreezeExperimentalOwnerAdmission();
             var applicationBudget = System.Diagnostics.Stopwatch.StartNew();
             var applicationStage = "prepare-target";
+            var applicationMilestones = new List<string>();
+            string? lastApplicationStage = null;
             var imported = false; var expectedOrigin = movieInputNativeOrigin;
             bool Admission() {
                 ownerAdmission();
+                var observedStage = applicationStage + "/" + LoadingSerialSceneProbe.ExperimentalTargetStage;
+                if (observedStage != lastApplicationStage && applicationMilestones.Count < 64) {
+                    applicationMilestones.Add(observedStage + "@" + applicationBudget.ElapsedMilliseconds);
+                    lastApplicationStage = observedStage;
+                }
                 if (applicationBudget.ElapsedMilliseconds >= 9000)
-                    throw new TimeoutException("Actual D transaction exceeded its original bounded command budget at " + applicationStage + "; retire process.");
+                    throw new TimeoutException("Actual D transaction exceeded its original bounded command budget at " + applicationStage
+                        + "/" + LoadingSerialSceneProbe.ExperimentalTargetStage + ";elapsedMilliseconds=" + applicationBudget.ElapsedMilliseconds
+                        + ";milestones=" + string.Join(",", applicationMilestones) + "; retire process.");
                 return job.Phase == "ApplyingActualD" && clock.IsPaused && !clock.IsFinished && movieFrame == 0
                     && input.ConsumedSamples == 0 && movieInputNativeOrigin == expectedOrigin
                     && clock.CurrentFrameIndex == (imported ? source.NativeFrame : targetNative);
@@ -206,7 +219,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             job.Phase = "ActualDAppliedPaused";
             File.WriteAllText(Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "actual-d-application.json"),
                 JsonConvert.SerializeObject(new { applicationExecuted = true, source.MovieFrame, source.NativeFrame,
-                    consumedSamples = input.ConsumedSamples, sourcePrefix = session.MoviePrefixSha256, sourceDBytes = source.Main.Length + source.Input.Length,
+                    consumedSamples = input.ConsumedSamples, sourcePrefix = session.MoviePrefixSha256, sourceDBytes = source.Main.Length + source.Input.Length + source.Geo.Length,
+                    applicationMilestones,
                     rawClockReadbackEqual = true, unityRandomRawReadbackEqual = true, particleManagerRandomRawReadbackEqual = true, particleComponentStateQualified = false, restoreQualified = false, completeStateCoverage = false, d2Passed = false, d3Passed = false }));
         }
     }

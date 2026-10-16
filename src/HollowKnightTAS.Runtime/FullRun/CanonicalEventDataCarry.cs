@@ -32,6 +32,40 @@ namespace HollowKnightTAS.Runtime.FullRun
             Field(typeof(FsmEventData), "TextureData", typeof(UnityEngine.Texture), Instance),
             Field(typeof(FsmEventData), "ObjectData", typeof(UnityEngine.Object), Instance) };
 
+        internal static Action PrepareSourceReapply(CanonicalCarryGraphCodec.PreparedView source, Func<bool> admitted)
+        {
+            var owner = source.Root(RootName);
+            var fields = CanonicalCarryGraphCodec.Fields(typeof(FsmEventData));
+            if (owner.GetType() != typeof(FsmEventData) || !fields.Select(field => field.Name).SequenceEqual(new[] {
+                "BoolData", "ColorData", "FloatData", "GameObjectData", "IntData", "MaterialData", "ObjectData", "QuaternionData", "RectData",
+                "SentByAction", "SentByFsm", "SentByGameObject", "SentByState", "StringData", "TextureData", "Vector2Data", "Vector3Data" })
+                || fields.Any(field => field.DeclaringType != typeof(FsmEventData) || field.IsInitOnly || field.IsStatic))
+                throw new InvalidDataException("Complete original EventData source replay ABI differs.");
+            // PreparedView.Field reads codec's independent source slot array,
+            // never fields of the live root. Freeze after controlled external
+            // rebinding, before original Geo retirement/activation can send.
+            var values = fields.Select(field => source.Field(owner, field.DeclaringType!, field.Name)).ToArray();
+            for (var i = 0; i < fields.Length; i++)
+                if (values[i] == null ? fields[i].FieldType.IsValueType : !fields[i].FieldType.IsInstanceOfType(values[i]))
+                    throw new InvalidDataException("EventData prepared source field type differs: " + fields[i].Name);
+            void RequireOwner() {
+                if (!ReferenceEquals(EventDataSlot.GetValue(null), owner))
+                    throw new InvalidOperationException("EventData original static slot/owner changed during Geo derivation.");
+            }
+            RequireOwner(); var consumed = false;
+            return () => {
+                if (consumed || !admitted()) throw new InvalidOperationException("EventData source replay was consumed or lost pause.");
+                consumed = true; RequireOwner();
+                using var transaction = CanonicalFieldWriteTransaction.Begin(fields.Select(field => new CanonicalFieldWriteTransaction.Target(owner, field)));
+                for (var i = 0; i < fields.Length; i++) fields[i].SetValue(owner, values[i]);
+                for (var i = 0; i < fields.Length; i++)
+                    if (!CanonicalFieldWriteTransaction.SameRawValue(fields[i].FieldType, values[i], fields[i].GetValue(owner)))
+                        throw new InvalidOperationException("Complete EventData source field readback differs: " + fields[i].Name);
+                RequireOwner(); if (!admitted()) throw new InvalidOperationException("EventData source replay lost its final pause.");
+                transaction.Commit();
+            };
+        }
+
         internal static Audit Add(IDictionary<string, object> roots, Func<object, string?>? canonicalBindings = null)
         {
             if (roots == null) throw new ArgumentNullException(nameof(roots));

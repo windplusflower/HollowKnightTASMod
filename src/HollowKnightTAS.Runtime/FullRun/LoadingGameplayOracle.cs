@@ -71,6 +71,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly BoundaryAssetArrayRegistry assetArrays = new BoundaryAssetArrayRegistry();
         private readonly SortedSet<string> omissions = new SortedSet<string>(StringComparer.Ordinal);
         private readonly SortedSet<string> detachedFsmReferences = new SortedSet<string>(StringComparer.Ordinal);
+        private readonly LoadingGeoIncomingReferences geoIncoming = new LoadingGeoIncomingReferences();
+        private readonly LoadingGeoIncomingReferences frozenGeoIncoming = new LoadingGeoIncomingReferences();
+        private bool frozenGeoSample;
         private readonly List<object> detachedFsmMetadata = new List<object>();
         private readonly List<Tuple<object, string>> detachedFsmRoots = new List<Tuple<object, string>>();
         private int rows;
@@ -127,7 +130,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     packedArrayElement: LoadingPackedUnityArrays.Enabled ? LoadingPackedUnityArrays.Registered : (Func<Type, bool>?)null,
                     // The registered native pointers, roots, GUIDs and integer
                     // epochs do not bind any Single/Double instance field.
-                    directFloatingField: _ => true);
+                    directFloatingField: _ => true,
+                    slotObservation: (owner, field, index, value, path) => {
+                        geoIncoming.ObserveSlot(owner, field, index, value, path, fields!.DiagnosticRoot);
+                        if (frozenGeoSample) frozenGeoIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
+                    }, observeSlotValue: value => geoIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value));
             if (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1")
                 nativeScheduler = new LoadingNativeSchedulerDigest();
             if (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
@@ -256,8 +263,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         internal Action RequireFrozenS0Scheduler() => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).RequireFrozenCapturedQueue();
+        internal LoadingGeoIncomingReferences FreezeGeoIncoming() => geoIncoming.Freeze();
         internal Action PrepareOwnedHudLifecycle(IReadOnlyDictionary<int, MonoBehaviour> oldOwners, Func<int, bool> ownsNewStart, out Action retireStarts)
             => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).BeginOwnedStartLifecycle(oldOwners, ownsNewStart, out retireStarts);
+        internal Action RestoreAbsentProducedGeoStarts(CanonicalSchedulerCarry source, IReadOnlyDictionary<int, MonoBehaviour> produced,
+            string prefix, Action admission, Action requireSourceNative)
+            => (nativeScheduler ?? throw new InvalidOperationException("Missing original Geo scheduler observation.")).RestoreAbsentProducedGeoStarts(
+                source, produced, prefix, HeroController.SilentInstance ?? throw new InvalidOperationException("Missing Geo source Hero."), admission, requireSourceNative);
         internal void RecaptureOwnedHudScheduler(Action admission, Action requireTransition)
         {
             if (!boundaryCapture || nativeScheduler == null) throw new InvalidOperationException("HUD lifecycle requires its original boundary reader.");
@@ -286,7 +298,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         // Only between the registered scheduler scalar write and subsequent
         // object birth: no managed/native owner lifecycle occurs in this slice.
         // Reuse identities, never a captured queue, prepared guard or readback.
-        internal void RecaptureHudSchedulerAfterScalarWrite(Action admission)
+        internal void RecaptureHudSchedulerAfterScalarWrite(Action admission) => RecaptureHudSchedulerAfterNonOwningWrite(admission);
+        // Original pending-Start cancellation changes only scheduler nodes.
+        // The preceding owned lifecycle already froze these real Unity owners;
+        // every loaded/native pointer is checked and the complete queue is new.
+        internal void RecaptureHudSchedulerAfterQueueWrite(Action admission, Action requireQueueReadback)
+        {
+            RecaptureHudSchedulerAfterNonOwningWrite(admission);
+            requireQueueReadback();
+        }
+        private void RecaptureHudSchedulerAfterNonOwningWrite(Action admission)
         {
             if (!boundaryCapture || nativeScheduler == null || !hudSchedulerOwnerReuseAvailable
                 || hudSchedulerObjects == null || hudSchedulerBehaviours == null || hudSchedulerOwners == null)
@@ -648,6 +669,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             assetArrays.Clear();
             assetValues.BeginSample();
             textCacheDetails.Clear();
+            geoIncoming.BeginSample(UnityId);
+            var frozenGeo = CanonicalGeoColdTemplate.FrozenCounter;
+            frozenGeoSample = frozenGeo != null;
+            if (frozenGeoSample) frozenGeoIncoming.BeginSample(UnityId, frozenGeo);
             var allBehaviours = Resources.FindObjectsOfTypeAll<MonoBehaviour>()
                 .Where(component => component != null && Loaded(component.gameObject)
                     && component.GetType().Assembly != typeof(LoadingGameplayOracle).Assembly)
@@ -900,6 +925,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             };
             CaptureProgress("asset-values");
             result["assetValues"] = nativePhysicsOnly || !fullInventory ? "not-observed" : CaptureAssetValues(inventory);
+            if (frozenGeoSample) frozenGeoIncoming.RequireNoExternalConsumers();
             CaptureProgress("final-digests");
             result["assetBindings"] = Hash(JsonConvert.SerializeObject(assetIdentities.Snapshot()));
             result["unsupported"] = Hash(string.Join("\n", omissions));
@@ -1145,11 +1171,15 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private string? ReferenceCore(object value)
         {
+            if (fields.Capturing && geoIncoming.Owns(value)) geoIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
+            if (fields.Capturing && frozenGeoSample && frozenGeoIncoming.Owns(value)) frozenGeoIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (boundaryCapture && assetArrays.Reference(value) is string arrayId)
                 return "asset-array:" + arrayId + ":shared:" + fields.BindSharedReference(value).ToString(CultureInfo.InvariantCulture);
             if (value is ParticleSystem.MinMaxGradient gradient) return GradientIdentity(gradient);
             if (value is Coroutine coroutine && nativeScheduler != null) return nativeScheduler.Reference(coroutine, fields);
-            if (value is UnityEngine.Object unity) return UnityId(unity);
+            if (value is UnityEngine.Object unity) {
+                return UnityId(unity);
+            }
             if (fsmMemberIds.TryGetValue(value, out var memberId)) return "fsm-member:" + memberId;
             if (value is FsmState || value is FsmStateAction)
             {
@@ -1357,7 +1387,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var encoded = new LoadingInventoryRootEncoding(lastInventory);
             var content = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new {
                 format = LoadingInventoryRootEncoding.Format, names = encoded.Names, types = encoded.Types, roots = encoded.Roots,
-                detachedFsmReferences, detachedFsmMetadata, originalGeoLifecycle = LoadingGeoLifecycleObservation.Capture() }));
+                detachedFsmReferences, detachedFsmMetadata, originalGeoLifecycle = LoadingGeoLifecycleObservation.Capture(), geoIncomingReferences = geoIncoming.Snapshot() }));
             if (content.Length > 16 * 1024 * 1024)
                 throw new InvalidOperationException("Actual D suffix inventory exceeds the original 16 MiB diagnostic bound.");
             using (var compressed = new MemoryStream()) {

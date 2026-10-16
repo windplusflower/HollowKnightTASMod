@@ -1,6 +1,9 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Collections.Generic;
+using System.Linq;
+using UnityEngine;
 using Newtonsoft.Json;
 
 namespace HollowKnightTAS.Runtime.FullRun
@@ -25,12 +28,19 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool inputOriginRestored;
         private readonly bool phaseOneTrace;
         private readonly CanonicalRetiredMeshPolicy retiredMeshes;
+        private LoadingGeoIncomingReferences? pendingGeoIncoming;
+        private readonly Dictionary<int, string> retiringGeo = new Dictionary<int, string>();
+        internal string ActualTargetStage => carry?.ActualTargetStage ?? "no-carry";
         internal byte[]? ExperimentalSource { get; private set; }
-        internal void SealSourceSession(CanonicalActualDExperiment.SessionCarry session)
+        internal CanonicalSealedSource<CanonicalActualDExperiment> SealSourceSession(CanonicalActualDExperiment.SessionCarry session)
         {
             var source = CanonicalActualDExperiment.Decode(ExperimentalSource ?? throw new InvalidOperationException("Missing actual D source."));
             if (source.Session != null) throw new InvalidOperationException("Actual D source was already sealed.");
-            source.Session = session; ExperimentalSource = source.Encode();
+            source.Session = session;
+            var sealedSource = new CanonicalSealedSource<CanonicalActualDExperiment>(source, value => value.Encode(), value =>
+                JsonConvert.SerializeObject(new { value.Schema, value.Ordinal, value.MovieFrame, value.NativeFrame, value.Clock, value.Session }));
+            ExperimentalSource = sealedSource.Bytes;
+            return sealedSource;
         }
         internal Action PrepareActualTargetD(CanonicalActualDExperiment source, HollowKnightTAS.Core.Movie.MovieV2Document movie,
             long targetNative, long origin, CanonicalInputEpoch controlOrigin,
@@ -40,6 +50,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (!CanonicalActualDExperiment.Enabled || observer == null || carry == null || !admission())
                 throw new InvalidOperationException("Actual D target has no completed original Canon.");
+            pendingGeoIncoming = observer.FreezeGeoIncoming();
             var epoch = CanonicalInputEpochRuntime.Capture(origin, targetNative, controlOrigin);
             var identities = new BoundaryObjectIdentity();
             var sourceGraph = carry.DecodeActualMainForOwnerContext(source);
@@ -73,11 +84,71 @@ namespace HollowKnightTAS.Runtime.FullRun
             }, Require);
             Require();
         }
+        private void RestoreGeoSourceDependencies(CanonicalSchedulerCarry sourceScheduler, Func<bool> admitted,
+            Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>> rebindGraphs,
+            Action<Action> applyGeoSource, Action beginOriginalLifecycle, Action requireGeoNative)
+        {
+            void Require() { if (!admitted()) throw new InvalidOperationException("Geo producer lost its original paused admission."); }
+            LoadingSerialSceneProbe.DeriveProtectedSourceGeoDirectory(() => {
+            Require();
+            var current = observer ?? throw new InvalidOperationException("Geo producer has no original observer.");
+            var incoming = pendingGeoIncoming ?? throw new InvalidOperationException("Geo producer has no frozen full incoming reader.");
+            pendingGeoIncoming = null;
+            var old = GameCameras.instance.geoCounter;
+            void Stage(string phase) { carry!.ActualTargetStage = phase; Require(); }
+            Stage("geo-old-owner-directory");
+            var oldDirectory = CanonicalGeoColdTemplate.ManagedDirectory(old);
+            var owners = old.GetComponentsInChildren<MonoBehaviour>(true).ToDictionary(owner => owner.GetInstanceID());
+            GeoCounter? created = null;
+            bool OwnsNew(int id) => created != null && created.GetComponentsInChildren<MonoBehaviour>(true).Any(owner => owner.GetInstanceID() == id);
+            Stage("geo-owned-lifecycle-admission");
+            var transition = current.PrepareOwnedHudLifecycle(owners, OwnsNew, out var retireStarts);
+            Stage("geo-original-inactive-producer");
+            created = hudStartup.GeoTemplate.ProduceInactive();
+            Stage("geo-new-owner-directory");
+            var newDirectory = rebindGraphs(oldDirectory, CanonicalGeoColdTemplate.ManagedDirectory(created));
+            Stage("geo-incoming-source-aliases");
+            var incomingPlan = incoming.Prepare(newDirectory);
+            incomingPlan.Apply();
+            retiringGeo.Clear();
+            foreach (var pair in CanonicalGeoColdTemplate.Directory(old.gameObject))
+                if (pair.Value is Component component) retiringGeo.Add(component.GetInstanceID(), "canonical-geo-retirement/" + pair.Key);
+            Stage("geo-original-old-owner-retirement");
+            beginOriginalLifecycle();
+            UnityEngine.Object.DestroyImmediate(old.gameObject);
+            retireStarts();
+            retiredMeshes.Flush(identity => identity.StartsWith("canonical-geo-retirement/", StringComparison.Ordinal));
+            Stage("geo-original-produced-activation");
+            hudStartup.GeoTemplate.ActivateProduced(created);
+            Stage("geo-independent-scheduler-readback");
+            current.RecaptureOwnedHudScheduler(Require, transition);
+            if (!ReferenceEquals(GameCameras.instance.geoCounter, created) || !ReferenceEquals(HeroController.SilentInstance.geoCounter, created))
+                throw new InvalidOperationException("Geo producer real camera/Hero entry alias differs after original lifecycle.");
+            applyGeoSource(incomingPlan.VerifyReadback);
+            Stage("geo-original-source-empty-start-queue");
+            var producedOwners = created.GetComponentsInChildren<MonoBehaviour>(true).ToDictionary(owner => owner.GetInstanceID());
+            if (producedOwners.Keys.Any(owners.ContainsKey)) throw new InvalidOperationException("Geo producer reused an old lifecycle owner.");
+            var queueRestored = current.RestoreAbsentProducedGeoStarts(sourceScheduler, producedOwners,
+                new BoundaryObjectIdentity().Get(created.gameObject), Require, requireGeoNative);
+            current.RecaptureHudSchedulerAfterQueueWrite(Require, queueRestored);
+            // Original OnAfterDeserialize/InitData legitimately populated the
+            // registered metadata caches after main D. Return these Canon-owned
+            // containers to the same verified empty form used by every Canon.
+            Stage("geo-canonical-action-metadata");
+            var metadata = CanonicalBoundaryStaticPolicy.ResetActionMetadata();
+            incomingPlan.VerifyReadback();
+            Require();
+            Modding.Logger.Log("[HKTAS] Geo post-main source installation readback passed: finalPreparedIncomingAliases=true;"
+                + "originalLifecycleSchedulerRetirement=true;metadataRecomputedEqual=" + metadata.RecomputedEqual
+                + ";metadataAssembliesEqual=" + metadata.LoadedAssembliesEqual + ";completeStateCoverage=false");
+            }, Require);
+        }
         internal CanonicalBoundaryPolicy()
         {
             CanonicalPhaseOneTrace.RequireContext(Environment.GetEnvironmentVariable);
             phaseOneTrace = CanonicalPhaseOneTrace.Enabled;
-            retiredMeshes = new CanonicalRetiredMeshPolicy(id => pools.RetiredOwner(id) ?? journal.RetiringOwner(id) ?? charms.RetiringOwner(id) ?? LoadingSerialSceneProbe.RetiringSourceOwner(id));
+            retiredMeshes = new CanonicalRetiredMeshPolicy(id => pools.RetiredOwner(id) ?? journal.RetiringOwner(id) ?? charms.RetiringOwner(id)
+                ?? (retiringGeo.TryGetValue(id, out var geoOwner) ? geoOwner : null) ?? LoadingSerialSceneProbe.RetiringSourceOwner(id));
             startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart);
         }
         internal bool AdvanceStartup() => startup.Advance() && hudStartup.Advance();
@@ -126,7 +197,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     elapsedMilliseconds = elapsed.ElapsedMilliseconds, completeStateCoverage = false }) + "\n");
             Progress("begin", new { movieInputNativeOrigin, controlledNativeFrame = checked(native - movieInputNativeOrigin) });
             Progress("original-Geo-lifecycle-before-Canon", LoadingGeoLifecycleObservation.Capture());
-            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates, journal, RestoreHudSourceDependencies); }
+            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates, journal, RestoreHudSourceDependencies, RestoreGeoSourceDependencies); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
@@ -221,7 +292,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidOperationException("Actual D source has unread or unsupported managed data: "
                             + string.Join(", ", data.Unsupported));
                     ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, MovieFrame = movie, NativeFrame = native,
-                        Main = carry.Encode(data), Input = carry.EncodeInput(), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
+                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
                     Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,
                         blockingQualifications = carry.BlockingQualifications });
                 }
@@ -340,6 +411,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             observerInputOrigin = source.OriginNative;
             observer = LoadingGameplayOracle.CreateBoundaryObserver(observerSession, source.OriginNative!.Value);
         }
-        public void Dispose() { hudParticles.Dispose(); journal.Dispose(); observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
+        public void Dispose() { hudStartup.Dispose(); hudParticles.Dispose(); journal.Dispose(); observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
     }
 }

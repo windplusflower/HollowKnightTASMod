@@ -8,6 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalGeoSourceQueueContract.cs" Link="FullRun/CanonicalGeoSourceQueueContract.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalSealedSource.cs" Link="FullRun/CanonicalSealedSource.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CinematicPlaybackClock.cs" Link="FullRun\CinematicPlaybackClock.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\Manifest\VerificationPreflight.cs" Link="Manifest\VerificationPreflight.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\FrameObservationQueue.cs" Link="FullRun\FrameObservationQueue.cs" />
@@ -16,6 +18,7 @@
     <Reference Include="Newtonsoft.Json"><HintPath>$(HKManagedDir)\Newtonsoft.Json.dll</HintPath></Reference>
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CheckpointDataCodec.cs" Link="FullRun\CheckpointDataCodec.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryGraphCodec.cs" Link="FullRun\CanonicalCarryGraphCodec.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalAssetBindingKey.cs" Link="FullRun\CanonicalAssetBindingKey.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalPreparedWritePlan.cs" Link="FullRun\CanonicalPreparedWritePlan.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalPhaseOneTrace.cs" Link="FullRun\CanonicalPhaseOneTrace.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalPolygonCapacity.cs" Link="FullRun\CanonicalPolygonCapacity.cs" />

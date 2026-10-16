@@ -188,7 +188,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         // This avoids a redundant JSON encode/decode of already owned data.
         internal CanonicalPreparedWritePlan PrepareOwnedGraph(CanonicalCarryGraphData value, IReadOnlyDictionary<string, object> roots,
             Func<string, object> resolveExternal, Action<PreparedView>? preflight = null,
-            Action<ExternalRebinding>? exposeExternalRebinding = null)
+            Action<ExternalRebinding>? exposeExternalRebinding = null,
+            IReadOnlyCollection<string>? lifecycleWriteRoots = null, Action<PreparedLifecycleWrites>? exposeLifecycleWrites = null)
         {
             // Domain checks receive the frozen input before allocation or
             // external resolution. All generic checks still run afterwards.
@@ -208,10 +209,20 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || (IsScalar(type) ? node.Text == null || node.Items != null || node.Fields != null || !type.IsValueType
                         : type.IsArray ? node.Items == null || node.Items.Length > MaximumNodes || node.Fields != null || node.Text != null
                         : node.Items != null || node.Text != null || node.Fields == null || !layouts.ContainsKey(node.Type)
-                        || !node.Fields.Select(f => f.Name).SequenceEqual(layouts[node.Type].Fields.Select(FieldIdentity))))
+                        || !node.Fields.Select(f => f.Name).SequenceEqual(layouts[node.Type].FieldIdentities)))
                     throw new InvalidDataException("Carry node type or field layout differs: " + (i + 1));
                 nodeTypes[i] = type;
             }
+            if ((lifecycleWriteRoots == null) != (exposeLifecycleWrites == null))
+                throw new InvalidDataException("Lifecycle roots and controller must be paired.");
+            var lifecycleNames = lifecycleWriteRoots == null ? new HashSet<string>(StringComparer.Ordinal)
+                : new HashSet<string>(lifecycleWriteRoots, StringComparer.Ordinal);
+            if (lifecycleWriteRoots != null && (lifecycleNames.Count == 0 || lifecycleNames.Count != lifecycleWriteRoots.Count
+                || lifecycleNames.Any(name => name == null || !roots.ContainsKey(name))))
+                throw new InvalidDataException("Lifecycle root selection is empty, duplicated or unknown.");
+            var lifecycleNodes = new HashSet<int>(value.Roots.Where(root => lifecycleNames.Contains(root.Binding)).Select(root => root.Node));
+            if (value.Roots.Any(root => lifecycleNodes.Contains(root.Node) && !lifecycleNames.Contains(root.Binding)))
+                throw new InvalidDataException("Lifecycle root selection omits an owner alias.");
             var boundNodes = new HashSet<int>(); var boundObjects = new Dictionary<object, int>(new References());
             foreach (var root in value.Roots)
             {
@@ -291,6 +302,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Fill detached nodes first. Value-type nodes must be filled before
             // their parent copies the boxed struct into a field or array.
             var status = new byte[objects.Length]; var writes = new List<Action>();
+            var lifecycleInitial = new List<Action>(); var lifecycleFreeze = new List<Action>();
             var beforeChecks = new List<Action>(); var afterChecks = new List<Action>();
             var externalSlots = new List<Tuple<int, Func<object?>, Action<object>>>();
             var copiedExternal = new HashSet<int>();
@@ -348,10 +360,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (preparedFields != null) preparedFields[index][i] = fieldValue;
                         if (boundNodes.Contains(index + 1)) {
                             var previous = field.GetValue(owner);
-                            beforeChecks.Add(() => CheckSlot(previous, field.GetValue(owner), field.FieldType, FieldIdentity(field)));
+                            var fieldIdentity = layout.FieldIdentities[i];
+                            Action InitialCheck = () => CheckSlot(previous, field.GetValue(owner), field.FieldType, fieldIdentity + "/initial");
+                            if (lifecycleNodes.Contains(index + 1)) {
+                                lifecycleInitial.Add(InitialCheck);
+                                lifecycleFreeze.Add(() => {
+                                    var before = field.GetValue(owner);
+                                    beforeChecks.Add(() => CheckSlot(before, field.GetValue(owner), field.FieldType, fieldIdentity + "/post-lifecycle"));
+                                });
+                            } else beforeChecks.Add(InitialCheck);
                             writes.Add(() => field.SetValue(owner, fieldValue));
                             afterChecks.Add(() => CheckSlot(externalIndex >= 0 ? external[externalIndex] : fieldValue,
-                                field.GetValue(owner), field.FieldType, FieldIdentity(field)));
+                                field.GetValue(owner), field.FieldType, fieldIdentity));
                         }
                         else field.SetValue(owner, fieldValue);
                     }
@@ -364,20 +384,57 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var root in value.Roots) { visitedNodes.Add(root.Node); Fill(root.Node - 1, 0); }
             if (visitedNodes.Count != objects.Length || visitedExternal.Count != external.Length)
                 throw new InvalidDataException("Carry graph contains unreachable nodes or bindings.");
-            if (preflight != null) preflight(new PreparedView(roots, objects, preparedFields!, nodeTypes.Select(type =>
-                layouts.TryGetValue(Identity(type), out var layout) ? layout.Fields : Array.Empty<FieldInfo>()).ToArray()));
-            void Guard()
+            if (preflight != null) preflight(new PreparedView(roots, objects, preparedFields!, value.Nodes.Select(node =>
+                layouts.TryGetValue(node.Type, out var layout) ? layout.Fields : Array.Empty<FieldInfo>()).ToArray()));
+            void GuardOwnersAndFields()
             {
                 if (roots.Count != rootOwners.Count || rootOwners.Any(pair => !roots.TryGetValue(pair.Key, out var current)
                     || !ReferenceEquals(pair.Value, current))) throw new InvalidOperationException("Carry prepared root owners changed.");
                 foreach (var check in beforeChecks) check();
             }
-            Guard();
+            GuardOwnersAndFields();
+            foreach (var check in lifecycleInitial) check();
+            PreparedLifecycleWrites? lifecycle = lifecycleWriteRoots == null ? null
+                : new PreparedLifecycleWrites(GuardOwnersAndFields, () => { foreach (var check in lifecycleInitial) check(); },
+                    () => { foreach (var freeze in lifecycleFreeze) freeze(); });
+            void Guard() {
+                if (lifecycle == null) { GuardOwnersAndFields(); return; }
+                lifecycle.GuardReady(GuardOwnersAndFields);
+            }
             var plan = new CanonicalPreparedWritePlan(Guard, () => { foreach (var write in writes) write(); },
-                () => { foreach (var check in afterChecks) check(); }, rootOwners.Values.ToArray());
+                () => {
+                    void Verify() { foreach (var check in afterChecks) check(); }
+                    if (lifecycle == null) Verify(); else lifecycle.GuardReady(Verify);
+                }, rootOwners.Values.ToArray());
+            if (lifecycle != null) exposeLifecycleWrites!(lifecycle);
             exposeExternalRebinding?.Invoke(new ExternalRebinding(value.Externals, external, externalSlots, copiedExternal,
                 rootOwners.Values.ToArray(), plan));
             return plan;
+        }
+
+        // A single explicit original-lifecycle window. Failed admission or use
+        // permanently poisons the controller; no failed field guard is rearmed.
+        internal sealed class PreparedLifecycleWrites
+        {
+            private readonly Action guard, initial, freeze;
+            private int state, thread;
+            internal PreparedLifecycleWrites(Action guard, Action initial, Action freeze)
+            { this.guard = guard; this.initial = initial; this.freeze = freeze; }
+            private void Run(int expected, Action action, int next) {
+                try {
+                    if (state != expected || (thread != 0 && thread != System.Threading.Thread.CurrentThread.ManagedThreadId))
+                        throw new InvalidOperationException("Lifecycle write phase is consumed, faulted or on another thread.");
+                    action(); state = next;
+                } catch { state = -1; throw; }
+            }
+            internal void BeginOriginalLifecycle(Action admission) => Run(0, () => {
+                thread = System.Threading.Thread.CurrentThread.ManagedThreadId;
+                admission(); guard(); initial();
+            }, 1);
+            internal void PrepareWritesAfterOriginalLifecycle(Action admission) => Run(1, () => {
+                admission(); guard(); freeze();
+            }, 2);
+            internal void GuardReady(Action check) => Run(2, check, 2);
         }
 
         // Only the exact external slots already validated by this source graph
@@ -567,9 +624,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private sealed class Layout
         {
-            internal Layout(Type type, FieldInfo[] fields) { Type = type; Fields = fields; }
+            internal Layout(Type type, FieldInfo[] fields) { Type = type; Fields = fields; FieldIdentities = fields.Select(FieldIdentity).ToArray(); }
             internal Type Type { get; }
             internal FieldInfo[] Fields { get; }
+            internal string[] FieldIdentities { get; }
         }
         private sealed class References : IEqualityComparer<object>
         {

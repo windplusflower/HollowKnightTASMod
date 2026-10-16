@@ -38,6 +38,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool observedBoundary;
         private CanonicalBoundaryMutationScope? protectedClockCanonScope;
         private bool protectedSourceCharmDerivationConsumed;
+        private bool protectedSourceGeoDerivationConsumed;
         private readonly System.Collections.Generic.Dictionary<int, string> retiredSourceOwners = new System.Collections.Generic.Dictionary<int, string>();
         internal static string? RetiredSourceOwner(int instanceId) => instance != null
             && instance.sourceUnloaded && instance.retiredSourceOwners.TryGetValue(instanceId, out var identity) ? identity : null;
@@ -291,7 +292,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             GetProtectedObservationBoundary();
             (instance?.canonical ?? throw new InvalidOperationException("Missing original Canon.")).RestoreInputOrigin(source);
         }
-        internal static void SealExperimentalSource(CanonicalActualDExperiment.SessionCarry session)
+        internal static CanonicalSealedSource<CanonicalActualDExperiment> SealExperimentalSource(CanonicalActualDExperiment.SessionCarry session)
             => (instance?.canonical ?? throw new InvalidOperationException("Missing original Canon.")).SealSourceSession(session);
         internal static Action FreezeExperimentalOwnerAdmission()
         {
@@ -307,6 +308,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             Require(); return Require;
         }
+        internal static string ExperimentalTargetStage => instance?.canonical?.ActualTargetStage ?? "no-canon";
         internal static Action PrepareExperimentalTarget(CanonicalActualDExperiment source, HollowKnightTAS.Core.Movie.MovieV2Document movie,
             long targetNative, long origin, CanonicalInputEpoch controlOrigin,
             HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse,
@@ -354,6 +356,23 @@ namespace HollowKnightTAS.Runtime.FullRun
                 meshes.Flush(owner => owner.StartsWith("canonical-equipped-charm-retirement/", StringComparison.Ordinal));
                 requireAdmission(); retireStarts(); requireAdmission();
                 applySourceAndBuild(); requireAdmission();
+                GetProtectedObservationBoundary(); requireAdmission();
+            }
+            finally { self.protectedClockCanonScope = null; }
+        }
+        internal static void DeriveProtectedSourceGeoDirectory(Action deriveAndApplySource, Action requireAdmission)
+        {
+            GetProtectedObservationBoundary();
+            var self = instance!;
+            if (!CanonicalActualDExperiment.Enabled || !CanonicalClockApplyExperiment.Enabled || self.protectedClockCanonScope != null
+                || self.protectedSourceGeoDerivationConsumed)
+                throw new InvalidOperationException("Source Geo derivation requires its single protected actual D mutation scope.");
+            self.protectedSourceGeoDerivationConsumed = true;
+            using var scope = new CanonicalBoundaryMutationScope(requireAdmission);
+            scope.Enter(); self.protectedClockCanonScope = scope;
+            try {
+                RequireCanonicalMutationBoundary();
+                deriveAndApplySource(); requireAdmission();
                 GetProtectedObservationBoundary(); requireAdmission();
             }
             finally { self.protectedClockCanonScope = null; }

@@ -13,6 +13,128 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         private static LoadingFieldDigest NewDigest() => new LoadingFieldDigest(value => null, type => false);
 
         [TestMethod]
+        public void OwnedSlotPathFilterKeepsActualAliasesOrderHashAndBudgetRejection()
+        {
+            var owned = new Node(); owned.A = owned; owned.B = owned;
+            var root = Enumerable.Range(0, 1000).Select(index => (object)new PathCell {
+                Alias = index % 97 == 0 ? owned : null, Number = index, Text = "full-value-" + index,
+                Extra = new object[] { index, index % 83 == 0 ? owned : new Node() } }).ToArray();
+            bool Owns(object? value) => ReferenceEquals(value, owned);
+            var expected = new List<(object Owner, string? Field, int Index, object? Value, string Path)>();
+            var actual = new List<(object Owner, string? Field, int Index, object? Value, string Path)>();
+            LoadingFieldDigest Reader(bool filtered, List<(object, string?, int, object?, string)> slots)
+                => new LoadingFieldDigest(_ => null, _ => false,
+                    slotObservation: (owner, field, index, value, path) => { if (Owns(value)) slots.Add((owner, field?.Name, index, value, path)); },
+                    observeSlotValue: filtered ? Owns : null);
+            using var full = Reader(false, expected); using var lazy = Reader(true, actual);
+            var expectedDigest = full.Capture(root, "same-root", true); var actualDigest = lazy.Capture(root, "same-root", true);
+            Assert.AreEqual(expectedDigest.Sha256, actualDigest.Sha256); Assert.AreEqual(expectedDigest.Nodes, actualDigest.Nodes);
+            CollectionAssert.AreEqual(expected.ToArray(), actual.ToArray());
+            foreach (var rejected in new object[] { new object[50000], new string('x', 2097152) }) {
+                var first = Assert.ThrowsExactly<InvalidOperationException>(() => full.Capture(rejected, "same-limit", true));
+                var second = Assert.ThrowsExactly<InvalidOperationException>(() => lazy.Capture(rejected, "same-limit", true));
+                Assert.AreEqual(first.Message, second.Message);
+            }
+            (long Ticks, long Bytes) Measure(LoadingFieldDigest reader, List<(object, string?, int, object?, string)> slots) {
+                slots.Clear(); var allocated = GC.GetAllocatedBytesForCurrentThread(); var clock = System.Diagnostics.Stopwatch.StartNew();
+                for (var i = 0; i < 30; i++) reader.Capture(root, "equivalent-root", true);
+                clock.Stop(); return (clock.ElapsedTicks, GC.GetAllocatedBytesForCurrentThread() - allocated);
+            }
+            var eager = Measure(full, expected); var filtered = Measure(lazy, actual);
+            Console.WriteLine($"Equivalent full-hash 30x1000-owner slot workload: eagerTicks={eager.Ticks}; filteredTicks={filtered.Ticks}; eagerAllocated={eager.Bytes}; filteredAllocated={filtered.Bytes}");
+            Assert.IsTrue(filtered.Bytes < eager.Bytes);
+        }
+
+        private sealed class PathCell { internal Node? Alias; internal int Number; internal string Text = ""; internal object? Extra; }
+
+        [TestMethod]
+        public void ReferenceOnlyReadKeepsEveryObservedSlotReferenceAliasAndOrder()
+        {
+            var cycle = new Node(); cycle.A = cycle; cycle.B = cycle;
+            var listener = new GameplayListener(7);
+            var root = new object[] { cycle, cycle, new EventOwner(listener.First),
+                new Dictionary<string, object> { ["alias"] = cycle, ["listener"] = listener },
+                new Value<float>(BitConverter.Int32BitsToSingle(unchecked((int)0x7fc00123))), new IntPtr(123) };
+            var fullSlots = new List<(object Owner, string? Field, int Index, object? Value, string Path)>();
+            var onlySlots = new List<(object Owner, string? Field, int Index, object? Value, string Path)>();
+            var fullRefs = new List<object>(); var onlyRefs = new List<object>();
+            LoadingFieldDigest Reader(List<(object, string?, int, object?, string)> slots, List<object> refs)
+                => new LoadingFieldDigest(value => { refs.Add(value); return value is GameplayListener ? "actual-listener" : null; }, _ => false,
+                    slotObservation: (owner, field, index, value, path) => slots.Add((owner, field?.Name, index, value, path)));
+            using var full = Reader(fullSlots, fullRefs); using var only = Reader(onlySlots, onlyRefs);
+            full.BeginSharedGraph(); only.BeginSharedGraph();
+            try {
+                foreach (var name in new[] { "root", "same-shared-root" }) {
+                    var expected = full.Capture(root, name, expandRoot: true);
+                    var actual = only.CaptureReferences(root, name, expandRoot: true);
+                    Assert.AreEqual(expected.Nodes, actual.Nodes);
+                    CollectionAssert.AreEqual(expected.Unsupported.ToArray(), actual.Unsupported.ToArray());
+                }
+            } finally { full.EndSharedGraph(); only.EndSharedGraph(); }
+            Assert.AreEqual(fullSlots.Count, onlySlots.Count);
+            for (var i = 0; i < fullSlots.Count; i++) {
+                var expected = fullSlots[i]; var actual = onlySlots[i];
+                Assert.AreEqual(expected.Field, actual.Field); Assert.AreEqual(expected.Index, actual.Index); Assert.AreEqual(expected.Path, actual.Path);
+                if (!expected.Owner.GetType().IsValueType) Assert.AreSame(expected.Owner, actual.Owner);
+                else Assert.AreEqual(expected.Owner, actual.Owner);
+                if (expected.Value == null || expected.Value.GetType().IsValueType) Assert.AreEqual(expected.Value, actual.Value);
+                else Assert.AreSame(expected.Value, actual.Value);
+            }
+            Assert.AreEqual(fullRefs.Count, onlyRefs.Count);
+            for (var i = 0; i < fullRefs.Count; i++) Assert.AreSame(fullRefs[i], onlyRefs[i]);
+            Assert.AreEqual(full.Capture(root, "normal").Sha256, only.Capture(root, "normal").Sha256);
+        }
+
+        [TestMethod]
+        public void ReferenceOnlyReadKeepsExactDepthNodeAndCharacterBudgetRejection()
+        {
+            var chain = new Node(); var tail = chain;
+            for (var i = 0; i < 45; i++) { tail.A = new Node(); tail = tail.A; }
+            foreach (var root in new object[] { chain, new object[50000], new object[50001], new string('x', 2 * 1024 * 1024) }) {
+                using var full = NewDigest(); using var only = NewDigest();
+                var expected = Assert.ThrowsExactly<InvalidOperationException>(() => full.Capture(root, "budget", true));
+                var actual = Assert.ThrowsExactly<InvalidOperationException>(() => only.CaptureReferences(root, "budget", true));
+                Assert.AreEqual(expected.Message, actual.Message);
+            }
+            using var digest = NewDigest();
+            foreach (var length in new[] { 0, 9, 10, 99, 100, 1999900, 2097000 }) {
+                var value = new string('x', length);
+                Assert.AreEqual(digest.Capture(value, "near-budget").Nodes, digest.CaptureReferences(value, "near-budget").Nodes);
+            }
+            var low = 2097000; var high = 2 * 1024 * 1024;
+            while (high - low > 1) {
+                var middle = (low + high) / 2;
+                try { digest.Capture(new string('x', middle), "exact-edge"); low = middle; }
+                catch (InvalidOperationException) { high = middle; }
+            }
+            Assert.AreEqual(digest.Capture(new string('x', low), "exact-edge").Nodes,
+                digest.CaptureReferences(new string('x', low), "exact-edge").Nodes);
+            var fullEdge = Assert.ThrowsExactly<InvalidOperationException>(() => digest.Capture(new string('x', high), "exact-edge"));
+            var referenceEdge = Assert.ThrowsExactly<InvalidOperationException>(() => digest.CaptureReferences(new string('x', high), "exact-edge"));
+            Assert.AreEqual(fullEdge.Message, referenceEdge.Message);
+        }
+
+        [TestMethod]
+        public void ReferenceOnlyEquivalentRootWorkloadReportsTimeAndAllocationSavings()
+        {
+            var shared = new Node(); shared.A = shared; shared.B = shared;
+            var root = new object[] { shared, shared, new string('x', 24000), new string('y', 12000), new Value<double>(-0.0),
+                new Dictionary<string, object> { ["first"] = shared, ["text"] = new string('z', 18000) } };
+            using var full = NewDigest(); using var only = NewDigest();
+            full.Capture(root, "warm"); only.CaptureReferences(root, "warm");
+            (long Ticks, long Bytes) Measure(bool references) {
+                var before = GC.GetAllocatedBytesForCurrentThread(); var timer = System.Diagnostics.Stopwatch.StartNew();
+                for (var i = 0; i < 400; i++) {
+                    if (references) only.CaptureReferences(root, "equivalent"); else full.Capture(root, "equivalent");
+                }
+                timer.Stop(); return (timer.ElapsedTicks, GC.GetAllocatedBytesForCurrentThread() - before);
+            }
+            var hashed = Measure(false); var slots = Measure(true);
+            Console.WriteLine($"Equivalent 400-root workload: hashTicks={hashed.Ticks}; referenceTicks={slots.Ticks}; hashAllocated={hashed.Bytes}; referenceAllocated={slots.Bytes}");
+            Assert.IsTrue(slots.Bytes < hashed.Bytes / 2, "The reference-only reader still allocated the unused token/hash buffers.");
+        }
+
+        [TestMethod]
         public void DynamicHookMethodsAreReportedAsUnsupportedWithoutExecutingThem()
         {
             var method = new System.Reflection.Emit.DynamicMethod("hook", typeof(void), Type.EmptyTypes);

@@ -19,6 +19,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal IReadOnlyList<string> Unsupported { get; }
         internal object[] FieldDigests { get; }
     }
+    internal sealed class LoadingReferenceReadResult
+    {
+        internal LoadingReferenceReadResult(int nodes, int characters, string[] unsupported)
+        { Nodes = nodes; Characters = characters; Unsupported = unsupported; }
+        internal int Nodes { get; }
+        internal int Characters { get; }
+        internal IReadOnlyList<string> Unsupported { get; }
+    }
 
     // A diagnostic digest, not a serializer. Never evaluate arbitrary
     // properties, ToString, collection enumerators or a static constructor.
@@ -32,6 +40,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Func<Type, bool> nativeBase;
         private readonly Func<object, FieldInfo, object?, string?>? fieldIdentity;
         private readonly Func<Delegate, bool>? observerCallback;
+        private readonly Action<object, FieldInfo?, int, object?, string>? slotObservation;
+        private readonly Func<object?, bool>? observeSlotValue;
+        internal bool Capturing { get; private set; }
         private readonly Dictionary<Type, FieldInfo[]> fieldCache = new Dictionary<Type, FieldInfo[]>();
         private readonly Dictionary<Type, TypeShape> typeShapes = new Dictionary<Type, TypeShape>();
         private readonly Dictionary<FieldInfo, string> fieldTokens = new Dictionary<FieldInfo, string>();
@@ -47,6 +58,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly SortedSet<string> unsupported = new SortedSet<string>(StringComparer.Ordinal);
         private readonly StringBuilder text = new StringBuilder();
         private int nodes;
+        private bool referenceOnly;
+        private int referenceCharacters;
         private string rootPath = "";
         private readonly List<string> pathSegments = new List<string>();
         private string CurrentPath => rootPath + string.Concat(pathSegments);
@@ -56,11 +69,15 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal LoadingFieldDigest(Func<object, string?> reference, Func<Type, bool> nativeBase,
             Func<object, FieldInfo, object?, string?>? fieldIdentity = null,
             Func<Delegate, bool>? observerCallback = null, bool? compiledFieldReaders = null,
-            Func<Type, bool>? packedArrayElement = null, Func<FieldInfo, bool>? directFloatingField = null)
+            Func<Type, bool>? packedArrayElement = null, Func<FieldInfo, bool>? directFloatingField = null,
+            Action<object, FieldInfo?, int, object?, string>? slotObservation = null,
+            Func<object?, bool>? observeSlotValue = null)
         {
             this.reference = reference; this.nativeBase = nativeBase;
             this.fieldIdentity = fieldIdentity; this.observerCallback = observerCallback;
             this.directFloatingField = directFloatingField;
+            this.slotObservation = slotObservation;
+            this.observeSlotValue = observeSlotValue;
             fieldReader = new LoadingFieldReader(compiledFieldReaders
                 ?? Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_REFLECTION_FIELDS") != "1");
             if (packedArrayElement != null) packedArrays = new LoadingPackedArrayDigest(packedArrayElement, Fields, typeIdentity.Bind);
@@ -72,8 +89,21 @@ namespace HollowKnightTAS.Runtime.FullRun
             Reset();
             rootPath = root;
             this.includeFieldDiagnostics = includeFieldDiagnostics;
-            Append(value, 0, expandRoot);
-            return Finish();
+            Capturing = true;
+            try { Append(value, 0, expandRoot); return Finish(); }
+            finally { Capturing = false; }
+        }
+        // Same field/array/alias walker and the same logical budgets. A caller
+        // collecting only strong reference slots does not consume token bytes
+        // or their SHA, so avoid allocating and hashing that unused encoding.
+        internal LoadingReferenceReadResult CaptureReferences(object? value, string root, bool expandRoot = false)
+        {
+            Reset(); rootPath = root; referenceOnly = true; Capturing = true;
+            try {
+                Append(value, 0, expandRoot);
+                return new LoadingReferenceReadResult(nodes, referenceCharacters, unsupported.ToArray());
+            }
+            finally { visited.Clear(); referenceOnly = false; Capturing = false; }
         }
 
         internal LoadingFieldDigestResult CaptureFields(object owner, string root, params string[] names)
@@ -81,6 +111,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Extra field diagnostics must not change ownership/IDs in the main graph.
             var graph = sharedGraph;
             sharedGraph = null;
+            Capturing = true;
             try
             {
             Reset();
@@ -95,7 +126,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             return Finish();
             }
-            finally { sharedGraph = graph; }
+            finally { sharedGraph = graph; Capturing = false; }
         }
 
         internal void BeginSharedGraph()
@@ -159,7 +190,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         private void Reset()
-        { nodes = 0; text.Clear(); visited.Clear(); unsupported.Clear(); fieldDiagnostics.Clear(); pathSegments.Clear(); rootPath = ""; includeFieldDiagnostics = false; }
+        { nodes = 0; referenceCharacters = 0; text.Clear(); visited.Clear(); unsupported.Clear(); fieldDiagnostics.Clear(); pathSegments.Clear(); rootPath = ""; includeFieldDiagnostics = false; }
 
         private LoadingFieldDigestResult Finish()
         {
@@ -176,8 +207,14 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private void Token(string value)
         {
-            if (text.Length + value.Length + 24 > MaximumCharacters)
+            if ((referenceOnly ? referenceCharacters : text.Length) + value.Length + 24 > MaximumCharacters)
                 throw new InvalidOperationException("P0 field digest character budget exceeded at " + CurrentPath);
+            if (referenceOnly) {
+                var digits = 1;
+                for (var length = value.Length; length >= 10; length /= 10) digits++;
+                referenceCharacters += digits + value.Length + 2;
+                return;
+            }
             text.Append(value.Length).Append(':').Append(value).Append(';');
         }
 
@@ -267,7 +304,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Token(packedArrays!.Capture(array, layout));
                     return;
                 }
-                for (var i = 0; i < array.Length; i++) AppendAt(array.GetValue(i), IndexPath(i), depth + 1);
+                for (var i = 0; i < array.Length; i++) {
+                    var element = array.GetValue(i);
+                    if (slotObservation != null && (observeSlotValue?.Invoke(element) ?? true))
+                        slotObservation(array, null, i, element, CurrentPath + IndexPath(i));
+                    AppendAt(element, IndexPath(i), depth + 1);
+                }
                 return;
             }
             if (value is Delegate callback)
@@ -307,6 +349,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 && fieldReader.AppendFloating(field, owner, this, depth)))
             {
                 var value = fieldReader.Read(field, owner);
+                if (slotObservation != null && (observeSlotValue?.Invoke(value) ?? true))
+                    slotObservation(owner, field, -1, value, CurrentPath);
                 var identity = fieldIdentity?.Invoke(owner, field, value);
                 if (identity != null) Token(identity);
                 else Append(value, depth, false);

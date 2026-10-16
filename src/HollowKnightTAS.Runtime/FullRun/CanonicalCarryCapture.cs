@@ -21,8 +21,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalVisualFsmTemplates visualTemplates;
         private readonly CanonicalHudJournalPolicy journal;
         private readonly Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies;
-        internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates, CanonicalHudJournalPolicy journal, Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies)
-        { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; this.journal = journal; this.restoreHudSourceDependencies = restoreHudSourceDependencies; }
+        private readonly Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreGeoSourceDependencies;
+        private readonly CanonicalGeoSourceDomain geoDomain = new CanonicalGeoSourceDomain();
+        internal byte[] GeoGraph { get; private set; } = Array.Empty<byte>();
+        internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates, CanonicalHudJournalPolicy journal,
+            Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies,
+            Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreGeoSourceDependencies)
+        { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; this.journal = journal;
+            this.restoreHudSourceDependencies = restoreHudSourceDependencies; this.restoreGeoSourceDependencies = restoreGeoSourceDependencies; }
         internal EventAudit[] EventBindingAudit { get; private set; } = Array.Empty<EventAudit>();
         internal CanonicalEventCarryRoots.Audit? EventGlobalsAudit { get; private set; }
         internal CanonicalEventGraphContract.Audit? EventGraphAudit { get; private set; }
@@ -50,6 +56,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal string[] BlockingQualifications { get; private set; } = Array.Empty<string>();
         private Func<CanonicalCarryGraphData, CanonicalCarryGraphData, MovieV2Document, Func<bool>, Func<CanonicalSchedulerCarry, Action>, Action>? prepareTargetRestore;
         internal CanonicalInputEpoch? PreparedRestoreEpoch { get; private set; }
+        internal string ActualTargetStage { get; set; } = "not-prepared";
         private bool targetRestorePrepared;
         private CanonicalActualDExperiment? actualSourceValidation;
         private CanonicalActualDExperiment? decodedActualEnvelope;
@@ -172,7 +179,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             var bindings = new ExternalBindings(identities, assetTemplates, canonicalSenders, inputBindings);
             CanonicalCarryGraphData Empty() => new CanonicalCarryGraphData { Roots = Array.Empty<CanonicalCarryGraphData.Root>(),
                 Nodes = Array.Empty<CanonicalCarryGraphData.Node>(), Externals = Array.Empty<CanonicalCarryGraphData.External>(), Unsupported = Array.Empty<string>() };
-            var result = targetDirectoryOnly ? Empty() : codec.Capture(roots, bindings.Bind);
+            var mainNodes = new Dictionary<object, int>(new References());
+            var result = targetDirectoryOnly ? Empty() : codec.Capture(roots, bindings.Bind, (owner, id) => mainNodes.Add(owner, id));
+            GeoGraph = targetDirectoryOnly ? Array.Empty<byte>() : geoDomain.Capture(GameCameras.instance.geoCounter,
+                CanonicalGeoColdTemplate.Directory(GameCameras.instance.geoCounter.gameObject), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             var mainBindings = new SortedDictionary<string, object>(InputCarryAudit.FixedBindings.ToDictionary(pair => pair.Key, pair => pair.Value), StringComparer.Ordinal);
             foreach (var pair in roots) mainBindings.Add("canonical-main-root/" + pair.Key, pair.Value);
             var inputExternal = new ExternalBindings(identities, assetTemplates, canonicalSenders, mainBindings);
@@ -235,8 +245,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var targetMainRoots = SelectTargetRoots(sourceMain, roots, allowRetiredEventCacheEntries: true);
                 var targetInputRoots = SelectTargetRoots(sourceInput, inputRoots, allowRetiredEventCacheEntries: false);
                 CanonicalCarryContinuationContract.Prepared? continuation = null;
+                CanonicalCarryGraphCodec.PreparedView? mainView = null;
+                CanonicalCarryGraphCodec.ExternalRebinding? mainRebinding = null, sdkRebinding = null;
                 CanonicalEventCarryRoots.ValidateGraph(sourceMain);
+                ActualTargetStage = "prepare-main";
                 var main = codec.PrepareOwnedGraph(sourceMain, targetMainRoots, bindings.ResolveTarget, view => {
+                    mainView = view;
                     continuation = CanonicalCarryContinuationContract.Read(view);
                     PreparedRestoreEpoch = continuation.Epoch.Copy();
                     var source = continuation;
@@ -284,8 +298,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     domainActions.Add(sceneMapping.PrepareApply(mapping, mappingPlayer));
                     sourceChecks.Add(() => sceneMapping.RequireAppliedSource(mapping, mappingPlayer));
                     domainActions.Add(journal.PrepareSourceDependencies(admitted));
-                    domainActions.Add(() => prepareScheduler(source.Scheduler)());
-                });
+                }, rebind => mainRebinding = rebind);
+                ActualTargetStage = "prepare-input";
                 var sdk = inputCodec.PrepareOwnedGraph(sourceInput, targetInputRoots, inputExternal.ResolveTarget, view => {
                     if (continuation == null) throw new InvalidOperationException("Actual input graph has no source main continuation.");
                     input.ValidateCanonicalSourceBindings(view, targetInputRoots);
@@ -299,16 +313,63 @@ namespace HollowKnightTAS.Runtime.FullRun
                     CanonicalInputCallbackContract.RequireSame(CanonicalInputCallbackContract.FromPrepared(view), InputCarryAudit!.CallbackData);
                     domainActions.Add(mouse.PrepareCanonicalContinuation(CanonicalMouseCarry.FromPrepared(view)));
                     domainActions.Add(deviceManagers.PrepareApply(CanonicalDeviceManagerCarry.FromPrepared(view)));
+                }, rebind => sdkRebinding = rebind);
+                domainActions.Add(() => {
+                    ActualTargetStage = "geo-source-producer";
+                    var envelope = actualSourceValidation ?? throw new InvalidOperationException("Post-main Geo has no sealed source envelope.");
+                    void RequireMain() { main.VerifyReadback(); sdk.VerifyReadback(); }
+                    Action? applyGeo = null;
+                    Action? beginGeoLifecycle = null;
+                    Action? requireGeoNative = null;
+                    Action? reapplyEventData = null;
+                    restoreGeoSourceDependencies(continuation!.Scheduler, admitted, (oldDirectory, producedDirectory) => {
+                        var counter = producedDirectory.Values.OfType<GeoCounter>().Single();
+                        ActualTargetStage = "geo-prepare-source-graph";
+                        IReadOnlyDictionary<string, object>? newDirectory = null;
+                        applyGeo = geoDomain.Prepare(envelope.Geo, counter, CanonicalGeoColdTemplate.Directory(counter.gameObject),
+                            mainView!, RequireMain, bindings.ResolveTarget, admitted, directory => newDirectory = directory, out var beginLifecycle, out var verifyNative);
+                        beginGeoLifecycle = beginLifecycle; requireGeoNative = verifyNative;
+                        if (newDirectory == null) throw new InvalidOperationException("Source Geo has no prepared final alias directory.");
+                        Dictionary<string, object> Replacements(CanonicalCarryGraphData graph, Func<string, object> resolve) {
+                            var replacements = new Dictionary<string, object>(StringComparer.Ordinal);
+                            foreach (var external in graph.Externals) {
+                                var current = resolve(external.Binding);
+                                var matches = oldDirectory.Where(pair => ReferenceEquals(pair.Value, current)).ToArray();
+                                if (matches.Length > 1) throw new InvalidDataException("Geo external owner directory contains duplicate identities.");
+                                if (matches.Length == 1) replacements.Add(external.Binding, newDirectory[matches[0].Key]);
+                            }
+                            return replacements;
+                        }
+                        var mainChanges = Replacements(sourceMain, bindings.ResolveTarget);
+                        var sdkChanges = Replacements(sourceInput, inputExternal.ResolveTarget);
+                        ActualTargetStage = "geo-main-input-external-rebind";
+                        if (mainChanges.Count != 0) mainRebinding!.Prepare(mainChanges).Apply();
+                        if (sdkChanges.Count != 0) sdkRebinding!.Prepare(sdkChanges).Apply();
+                        RequireMain();
+                        reapplyEventData = CanonicalEventDataCarry.PrepareSourceReapply(mainView!, admitted);
+                        return newDirectory;
+                    }, verifyIncoming => {
+                        ActualTargetStage = "geo-reapply-source-event-data";
+                        (reapplyEventData ?? throw new InvalidOperationException("Source EventData replay was not prepared."))();
+                        RequireMain();
+                        verifyIncoming();
+                        ActualTargetStage = "geo-apply-source-graph";
+                        (applyGeo ?? throw new InvalidOperationException("Source Geo final plan was not prepared."))();
+                    }, () => (beginGeoLifecycle ?? throw new InvalidOperationException("Geo lifecycle controller is absent."))(),
+                        () => (requireGeoNative ?? throw new InvalidOperationException("Geo native source witness is absent."))());
                 });
+                domainActions.Add(() => prepareScheduler(continuation!.Scheduler)());
                 var actual = new CanonicalCarryPairPreparation(main, sdk, () => {
                     guardInputSlots(); guardEventSlots(); sceneMapping.Guard(); deviceManagers.Guard(); loadCallbacks.Guard();
                 }, admitted);
                 return () => actual.Apply(() => {
-                    foreach (var action in domainActions) {
+                    for (var index = 0; index < domainActions.Count; index++) {
+                        ActualTargetStage = "domain/" + index;
                         if (!admitted()) throw new InvalidOperationException("Actual D domain lost paused admission.");
-                        action();
+                        domainActions[index]();
                     }
-                }, () => { foreach (var check in sourceChecks) check(); });
+                }, () => { ActualTargetStage = "verify-source-domains"; foreach (var check in sourceChecks) check(); },
+                    stage => ActualTargetStage = stage);
             };
             if (mainPlan != null && inputPlan != null) {
                 var pair = new CanonicalCarryPairPreparation(mainPlan, inputPlan, () => {
@@ -390,6 +451,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (cached.Length == 1) return cached[0];
                 object value;
                 if (binding.StartsWith("HeroAssetOrigin/v1/", StringComparison.Ordinal)) value = assetTemplates.Resolve(binding);
+                else if (binding.StartsWith("asset:", StringComparison.Ordinal)) {
+                    // Source Bind admits an asset only when its exact concrete
+                    // type/name identifies one loaded original. Use that same
+                    // contract for every original asset; a scene object with
+                    // the same name fails the complete asset-key readback.
+                    var asset = CanonicalAssetBindingKey.Resolve(binding, AppDomain.CurrentDomain.GetAssemblies(),
+                        type => typeof(UnityEngine.Object).IsAssignableFrom(type));
+                    var candidates = AssetCandidates(asset.Item1).Where(owner => owner.name == asset.Item2).ToArray();
+                    value = CanonicalAssetBindingKey.UniqueOriginal(candidates, binding, owner => identities.Get(owner));
+                }
                 else if (canonicalSenders.Snapshot().Slots.Any(slot => slot.Key == binding)) value = canonicalSenders.Resolve(binding);
                 else if (binding.StartsWith("metadata-", StringComparison.Ordinal) || binding.StartsWith("original-callback|", StringComparison.Ordinal)
                     || binding == "runtime-comparer|string-default") value = metadata.Resolve(binding);
@@ -399,6 +470,23 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 if (value == null) throw new InvalidDataException("Target external is absent: " + binding);
                 known.Add(value, binding); return value;
+            }
+            internal void AuditGeoAssets(CanonicalCarryGraphData graph)
+            {
+                var schemas = new SortedSet<string>(StringComparer.Ordinal); var count = 0;
+                foreach (var external in graph.Externals.Where(item => item.Binding.StartsWith("asset:", StringComparison.Ordinal))) {
+                    var parsed = CanonicalAssetBindingKey.Resolve(external.Binding, AppDomain.CurrentDomain.GetAssemblies(),
+                        type => typeof(UnityEngine.Object).IsAssignableFrom(type));
+                    var actual = ResolveCaptured(external.Binding);
+                    var candidates = AssetCandidates(parsed.Item1).Where(owner => owner.name == parsed.Item2).ToArray();
+                    var unique = CanonicalAssetBindingKey.UniqueOriginal(candidates, external.Binding, owner => identities.Get(owner));
+                    if (CanonicalCarryGraphCodec.Identity(parsed.Item1) != external.Type || actual.GetType() != parsed.Item1
+                        || !ReferenceEquals(unique, actual))
+                        throw new InvalidDataException("Source Geo original asset type, assembly, identity or unique candidate differs.");
+                    schemas.Add(external.Type + "/" + parsed.Item1.Module.ModuleVersionId.ToString("D")); count++;
+                }
+                Modding.Logger.Log("[HKTAS] Geo source asset external audit: count=" + count + ";typeSchemas="
+                    + string.Join(";", schemas) + ";allUniqueOriginalAssets=true;completeStateCoverage=false");
             }
             internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualSenderBindings canonicalSenders,
                 IReadOnlyDictionary<string, object> fixedInputBindings)
@@ -472,12 +560,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         var originalOrigin = assetTemplates.Bind(native);
                         if (originalOrigin != null) { known.Add(value, originalOrigin); return originalOrigin; }
                         var type = native.GetType();
-                        if (!assets.TryGetValue(type, out var candidates))
-                        {
-                            candidates = Resources.FindObjectsOfTypeAll(type).Where(owner => owner != null && owner.GetType() == type).ToArray();
-                            if (candidates.Length > 100000) throw new InvalidDataException("asset-binding-candidate-budget");
-                            assets.Add(type, candidates);
-                        }
+                        var candidates = AssetCandidates(type);
                         var same = candidates.Where(owner => owner.name == native.name).ToArray();
                         if (same.Length != 1 || same[0].GetInstanceID() != native.GetInstanceID())
                             throw new InvalidDataException("ambiguous-asset-binding:" + key);
@@ -512,6 +595,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var reflective = metadata.Bind(value);
                 if (reflective != null) { known.Add(value, reflective); return reflective; }
                 return null;
+            }
+            private UnityEngine.Object[] AssetCandidates(Type type)
+            {
+                if (!assets.TryGetValue(type, out var candidates)) {
+                    candidates = Resources.FindObjectsOfTypeAll(type).Where(owner => owner != null && owner.GetType() == type).ToArray();
+                    if (candidates.Length > 100000) throw new InvalidDataException("asset-binding-candidate-budget");
+                    assets.Add(type, candidates);
+                }
+                return candidates;
             }
         }
         internal sealed class EventAudit

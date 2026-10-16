@@ -17,6 +17,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private const string EventResource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryEventFieldRegistry.json";
         private const string InputResource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryInputFieldRegistry.json";
         private const string LoadingResource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryLoadingFieldRegistry.json";
+        private const string GeoResource = "HollowKnightTAS.Runtime.FullRun.CanonicalCarryGeoFieldRegistry.json";
         private static readonly string[] NativeValues = { "UnityEngine.Vector2", "UnityEngine.Vector3", "UnityEngine.Vector4",
             "UnityEngine.Quaternion", "UnityEngine.Color", "UnityEngine.Color32", "UnityEngine.Rect", "UnityEngine.Bounds",
             "UnityEngine.LayerMask", "UnityEngine.Matrix4x4", "UnityEngine.RaycastHit" };
@@ -26,8 +27,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             .Select(name => typeof(FsmEvent).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new InvalidDataException("Pinned FsmEvent field binding is absent: " + name)).ToArray();
 
-        internal static CanonicalCarryGraphCodec Create(bool inputDomain = false)
+        internal static CanonicalCarryGraphCodec Create(bool inputDomain = false, bool geoDomain = false)
         {
+            if (inputDomain && geoDomain) throw new InvalidDataException("Carry domains must be distinct.");
             string ReadResource(string name)
             {
                 using var stream = typeof(CanonicalCarryFieldRegistry).Assembly.GetManifestResourceStream(name)
@@ -39,6 +41,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             var text = ReadResource(Resource); var eventText = ReadResource(EventResource); var inputText = ReadResource(InputResource);
             var loadingText = ReadResource(LoadingResource); var loadingRegistry = JObject.Parse(loadingText);
+            var geoText = ReadResource(GeoResource); var geoRegistry = JObject.Parse(geoText);
             var registry = JObject.Parse(text);
             var eventRegistry = JObject.Parse(eventText);
             var inputRegistry = JObject.Parse(inputText);
@@ -48,11 +51,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || (int?)loadingRegistry["version"] != 1 || (bool?)loadingRegistry["diagnosticOnly"] != true || !(loadingRegistry["types"] is JArray loadingEntries)
                 || (string?)loadingRegistry["moduleMvid"] != typeof(GameManager).Module.ModuleVersionId.ToString("D"))
                 throw new InvalidDataException("Unsupported frozen carry field registry.");
+            if ((int?)geoRegistry["version"] != 1 || (bool?)geoRegistry["diagnosticOnly"] != true
+                || !(geoRegistry["types"] is JArray geoEntries) || geoEntries.Count != 2
+                || !geoEntries.Select(entry => (string?)entry["name"]).SequenceEqual(new[] {
+                    "HutongGames.PlayMaker.Actions.ObjectJitter", "HutongGames.PlayMaker.Actions.ObjectJitterLocal" })
+                || (string?)geoRegistry["moduleMvid"] != typeof(GameManager).Module.ModuleVersionId.ToString("D"))
+                throw new InvalidDataException("Unsupported frozen original Geo action registry.");
             var assemblies = new[] { typeof(object).Assembly, typeof(Fsm).Assembly, typeof(HeroController).Assembly,
                 typeof(Vector3).Assembly, typeof(UnityEngine.UI.Image).Assembly, typeof(AudioClip).Assembly,
                 typeof(RaycastHit).Assembly, typeof(Rigidbody2D).Assembly }.Distinct().ToArray();
             var types = new List<Type>(); var names = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var entry in entries.Concat(eventEntries).Concat(inputEntries).Concat(loadingEntries))
+            foreach (var entry in entries.Concat(eventEntries).Concat(inputEntries).Concat(loadingEntries).Concat(geoEntries))
             {
                 var name = (string?)entry["name"] ?? throw new InvalidDataException("Frozen carry type name is absent.");
                 if (!names.Add(name)) throw new InvalidDataException("Frozen carry type name is duplicated.");
@@ -95,12 +104,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             types.AddRange(CanonicalSceneLoadCallbacks.DataTypes);
             types.AddRange(CanonicalHeroAnimationCallbacks.DataTypes);
             types.AddRange(CanonicalHeroTriggerCallbacks.DataTypes);
+            types.AddRange(CanonicalGeoCarry.DataTypes);
             using var hash = SHA256.Create();
-            return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v2:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
-                hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + loadingText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
+            return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v2:" : geoDomain ? "canonical-geo-fields-v1:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
+                hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + loadingText + "\n" + geoText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
                     + "\n" + CanonicalGameplayCarry.SchemaIdentity + "\n" + CanonicalClockCarry.SchemaIdentity
                     + "\n" + CanonicalHeroAnimationCallbacks.SchemaIdentity
-                    + "\n" + CanonicalHeroTriggerCallbacks.SchemaIdentity
+                    + "\n" + CanonicalHeroTriggerCallbacks.SchemaIdentity + "\n" + CanonicalGeoCarry.SchemaIdentity
+                    + "\n" + string.Join(";", CanonicalGeoCarry.DataTypes.Where(type => !type.IsArray).SelectMany(type => CanonicalCarryGraphCodec.Fields(type))
+                        .Select(field => field.Name + "=" + field.FieldType.FullName))
                     + "\n" + string.Join(";", CanonicalHeroTriggerCallbacks.DataTypes.Where(type => !type.IsArray)
                         .SelectMany(type => CanonicalCarryGraphCodec.Fields(type)).Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName))
                     + "\n" + string.Join(";", CanonicalHeroAnimationCallbacks.DataTypes.Where(type => !type.IsArray)
@@ -138,7 +150,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                         .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType))))))
                 .Replace("-", "").ToLowerInvariant(), PortableValue, AllocatedValue,
                 graph => {
-                    if (!inputDomain) CanonicalEventCarryRoots.ValidateGraph(graph);
+                    if (geoDomain) {
+                        if (graph.Roots == null || graph.Roots.Length != 7 || graph.Roots.Count(root => root.Binding == CanonicalGeoCarry.Root) != 1
+                            || graph.Roots.Any(root => root.Binding != CanonicalGeoCarry.Root && !root.Binding.StartsWith("Geo/Fsm/", StringComparison.Ordinal)))
+                            throw new InvalidDataException("Geo carry domain contains an unknown or missing original root.");
+                    }
+                    else if (!inputDomain) CanonicalEventCarryRoots.ValidateGraph(graph);
                     else if (graph.Roots == null || graph.Roots.Length == 0 || graph.Roots.Any(root =>
                         root.Binding == null || !root.Binding.StartsWith("R6/Input", StringComparison.Ordinal)))
                         throw new InvalidDataException("Input carry domain contains foreign roots.");

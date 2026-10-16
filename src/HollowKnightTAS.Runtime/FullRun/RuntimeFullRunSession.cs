@@ -512,7 +512,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     loadingGameplayOracle?.Sample("candidate", "serial-source-unloaded");
                     if (CanonicalActualDExperiment.CaptureSource && LoadingSerialSceneProbe.ExperimentalSource != null)
                     {
-                        LoadingSerialSceneProbe.SealExperimentalSource(CaptureActualSessionCarry(completed));
+                        var sealElapsed = System.Diagnostics.Stopwatch.StartNew();
+                        actualDExport = LoadingSerialSceneProbe.SealExperimentalSource(CaptureActualSessionCarry(completed));
+                        Modding.Logger.Log("[HKTAS] Actual D source sealing completed: elapsedMilliseconds=" + sealElapsed.ElapsedMilliseconds
+                            + ";sameEncodedEnvelopeExport=true;packetWrittenToDisk=false");
                         input.SetNativeFrameActive(false); mode = "DSourcePaused"; clock.RequestPause(); return;
                     }
                     CaptureSceneCheckpointAtBoundary(completed);

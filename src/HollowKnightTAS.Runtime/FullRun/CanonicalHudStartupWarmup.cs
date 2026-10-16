@@ -8,7 +8,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 {
     // Original HUD initialization is allowed to derive current PD. No state,
     // Start, iterator or gameplay action is invoked manually or suppressed.
-    internal sealed class CanonicalHudStartupWarmup
+    internal sealed class CanonicalHudStartupWarmup : IDisposable
     {
         private static readonly FieldInfo Raw = typeof(PlayMakerFSM).GetField("fsm", BindingFlags.Instance | BindingFlags.NonPublic)!;
         private GameObject? hud;
@@ -17,6 +17,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private PlayMakerFSM[]? fsms;
         private bool complete;
         private int firstFrame;
+        private readonly CanonicalGeoColdTemplate geoTemplate = new CanonicalGeoColdTemplate();
+        internal CanonicalGeoColdTemplate GeoTemplate => geoTemplate;
 
         internal bool Advance()
         {
@@ -36,6 +38,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     next.GetComponents<PlayMakerFSM>().Single(fsm => ((Fsm)Raw.GetValue(fsm)).Name == "charm_unequip_shift"),
                     charms.GetComponents<PlayMakerFSM>().Single(fsm => ((Fsm)Raw.GetValue(fsm)).Name == "Initial Activation") };
                 firstFrame = Time.frameCount;
+                geoTemplate.Capture(cameras.geoCounter);
                 Modding.Logger.Log("[HKTAS] Original Geo before HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingGeoLifecycleObservation.Capture()));
                 if (!camera.enabled || !cameras.gameObject.activeInHierarchy)
                     throw new InvalidOperationException("Original HUD startup camera/ancestor is disabled.");
@@ -62,5 +65,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             Modding.Logger.Log("[HKTAS] Original HUD initialization completed; original PD derivation preserved and Invoke finished naturally.");
             return true;
         }
+        public void Dispose() => geoTemplate.Dispose();
     }
 }

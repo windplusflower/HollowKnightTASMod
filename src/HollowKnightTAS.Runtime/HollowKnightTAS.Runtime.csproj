@@ -16,6 +16,7 @@
     <EmbeddedResource Include="FullRun\CanonicalCarryEventFieldRegistry.json" />
     <EmbeddedResource Include="FullRun\CanonicalCarryInputFieldRegistry.json" />
     <EmbeddedResource Include="FullRun\CanonicalCarryLoadingFieldRegistry.json" />
+    <EmbeddedResource Include="FullRun\CanonicalCarryGeoFieldRegistry.json" />
     <EmbeddedResource Include="FullRun\CanonicalInputProfileFieldRegistry.json" />
     <ProjectReference Include="..\HollowKnightTAS.Core\HollowKnightTAS.Core.csproj">
       <Private>true</Private>

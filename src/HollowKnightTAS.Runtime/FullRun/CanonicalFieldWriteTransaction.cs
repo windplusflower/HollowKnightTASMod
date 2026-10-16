@@ -94,6 +94,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new AggregateException("Canonical field rollback did not restore every field.", failures);
         }
 
+        internal static bool SameRawValue(Type type, object? expected, object? actual)
+        {
+            var readsLeft = MaximumValueFieldReads;
+            return SameStoredValue(type, expected, actual, 0, ref readsLeft);
+        }
         private static bool SameStoredValue(Type type, object? expected, object? actual, int depth, ref int readsLeft)
         {
             if (ReferenceEquals(expected, actual)) return true;

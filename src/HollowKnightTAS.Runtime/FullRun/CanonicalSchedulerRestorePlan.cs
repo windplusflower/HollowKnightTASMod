@@ -22,7 +22,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             source.Validate(); prepared.Validate();
             if (source.Callbacks.Length != prepared.Callbacks.Length || source.Coroutines.Length != prepared.Coroutines.Length)
-                throw Invalid("registered queue membership differs");
+                throw Invalid("registered queue membership differs;sourceCallbacks=" + source.Callbacks.Length + ";actualCallbacks=" + prepared.Callbacks.Length
+                    + ";sourceCoroutines=" + source.Coroutines.Length + ";actualCoroutines=" + prepared.Coroutines.Length
+                    + ";sourceOnly=" + string.Join("|", source.Callbacks.Select(item => item.Owner + "/" + item.Call)
+                        .Except(prepared.Callbacks.Select(item => item.Owner + "/" + item.Call), StringComparer.Ordinal).Take(8))
+                    + ";actualOnly=" + string.Join("|", prepared.Callbacks.Select(item => item.Owner + "/" + item.Call)
+                        .Except(source.Callbacks.Select(item => item.Owner + "/" + item.Call), StringComparer.Ordinal).Take(8)));
             var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
             var reverse = new Dictionary<string, string>(StringComparer.Ordinal);
             for (var index = 0; index < source.Callbacks.Length; index++) {

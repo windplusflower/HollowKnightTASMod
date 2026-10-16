@@ -13,9 +13,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal const int MaximumBytes = 32 * 1024 * 1024, ChunkBytes = 262144;
         internal static bool Enabled => Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_EXPERIMENT") == "1";
         internal static bool CaptureSource => Enabled && Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_SOURCE") == "1";
-        public int Schema = 1, Ordinal;
+        public int Schema = 2, Ordinal;
         public long MovieFrame, NativeFrame;
-        public byte[] Main = Array.Empty<byte>(), Input = Array.Empty<byte>();
+        public byte[] Main = Array.Empty<byte>(), Input = Array.Empty<byte>(), Geo = Array.Empty<byte>();
         public CanonicalClockApplyExperiment Clock = new CanonicalClockApplyExperiment();
         public SessionCarry? Session;
         internal sealed class SessionCarry
@@ -47,9 +47,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private void Validate()
         {
-            if (!Enabled || Schema != 1 || Ordinal != 1 || MovieFrame < 0 || NativeFrame < 0
-                || Main == null || Input == null || Main.Length == 0 || Input.Length == 0
-                || (long)Main.Length + Input.Length > MaximumBytes || Clock == null || Clock.NativeFrame != NativeFrame)
+            if (!Enabled || Schema != 2 || Ordinal != 1 || MovieFrame < 0 || NativeFrame < 0
+                || Main == null || Input == null || Geo == null || Main.Length == 0 || Input.Length == 0 || Geo.Length == 0
+                || (long)Main.Length + Input.Length + Geo.Length > MaximumBytes || Clock == null || Clock.NativeFrame != NativeFrame)
                 throw new InvalidDataException("Actual D source schema, epoch or graph bounds differ.");
             Clock.Clock.Validate(NativeFrame); CanonicalFsmTimeCarry.Validate(Clock.FsmTime);
         }

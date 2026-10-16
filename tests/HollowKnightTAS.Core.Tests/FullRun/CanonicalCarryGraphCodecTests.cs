@@ -17,6 +17,142 @@ public sealed class CanonicalCarryGraphCodecTests
     private static string? NoExternal(object value) => null;
     private static object NoBinding(string key) => throw new InvalidDataException("Unexpected external: " + key);
 
+    private static (CanonicalPreparedWritePlan plan, CanonicalCarryGraphCodec.PreparedLifecycleWrites phase,
+        Owner target, Owner other, Dictionary<string, object> roots, CanonicalCarryGraphCodec.PreparedView view) LifecyclePlan()
+    {
+        var codec = Codec(); var target = new Owner { Counter = 1 }; var other = new Owner { Counter = 2 };
+        var roots = Roots(("owner", target), ("other", other));
+        var graph = codec.Capture(Roots(("owner", new Owner { Counter = 70, Current = new Value { Number = 8 } }),
+            ("other", new Owner { Counter = 80 })), NoExternal);
+        CanonicalCarryGraphCodec.PreparedLifecycleWrites? phase = null; CanonicalCarryGraphCodec.PreparedView? view = null;
+        var plan = codec.PrepareOwnedGraph(graph, roots, NoBinding, value => view = value,
+            lifecycleWriteRoots: new[] { "owner" }, exposeLifecycleWrites: value => phase = value);
+        return (plan, phase!, target, other, roots, view!);
+    }
+
+    [TestMethod]
+    public void Lifecycle_completed_plan_readback_rejects_later_failed_phase_reentry()
+    {
+        var x = LifecyclePlan(); x.phase.BeginOriginalLifecycle(() => { });
+        x.phase.PrepareWritesAfterOriginalLifecycle(() => { }); x.plan.Apply(); x.plan.VerifyReadback();
+        Assert.ThrowsExactly<InvalidOperationException>(() => x.phase.BeginOriginalLifecycle(() => { }));
+        Assert.ThrowsExactly<InvalidOperationException>(x.plan.VerifyReadback);
+        var y = LifecyclePlan(); y.phase.BeginOriginalLifecycle(() => { });
+        y.phase.PrepareWritesAfterOriginalLifecycle(() => { }); y.plan.Apply();
+        Assert.ThrowsExactly<InvalidOperationException>(() => y.phase.PrepareWritesAfterOriginalLifecycle(() => { }));
+        Assert.ThrowsExactly<InvalidOperationException>(y.plan.VerifyReadback);
+    }
+
+    [TestMethod]
+    public void Lifecycle_preserves_source_members_and_freezes_all_actual_slots_only_after_original_window()
+    {
+        var x = LifecyclePlan(); var sourceMember = x.view.Field(x.target, typeof(Owner), nameof(Owner.Current));
+        x.phase.BeginOriginalLifecycle(() => { }); x.target.Counter = 5; x.target.Current = new Value();
+        x.phase.PrepareWritesAfterOriginalLifecycle(() => { }); x.plan.Apply(); x.plan.VerifyReadback();
+        Assert.AreEqual(70, x.target.Counter); Assert.AreEqual(80, x.other.Counter);
+        Assert.AreSame(sourceMember, x.target.Current);
+        Assert.ThrowsExactly<InvalidOperationException>(x.plan.Apply);
+        Assert.ThrowsExactly<InvalidOperationException>(() => x.phase.PrepareWritesAfterOriginalLifecycle(() => { }));
+    }
+
+    [TestMethod]
+    public void Lifecycle_rejects_pre_window_and_post_prepare_mutation_without_rearming()
+    {
+        var x = LifecyclePlan(); x.target.Counter++;
+        Assert.ThrowsExactly<InvalidOperationException>(() => x.phase.BeginOriginalLifecycle(() => { }));
+        x.target.Counter--;
+        Assert.ThrowsExactly<InvalidOperationException>(() => x.phase.BeginOriginalLifecycle(() => { }));
+        var y = LifecyclePlan(); y.phase.BeginOriginalLifecycle(() => { });
+        y.phase.PrepareWritesAfterOriginalLifecycle(() => { }); y.target.Counter++;
+        Assert.ThrowsExactly<InvalidOperationException>(y.plan.Apply);
+        y.target.Counter--; Assert.ThrowsExactly<InvalidOperationException>(y.plan.Apply);
+    }
+
+    [TestMethod]
+    public void Lifecycle_rejects_early_use_other_roots_owner_changes_and_failed_admission_permanently()
+    {
+        var early = LifecyclePlan(); Assert.ThrowsExactly<InvalidOperationException>(early.plan.Guard);
+        Assert.ThrowsExactly<InvalidOperationException>(() => early.phase.BeginOriginalLifecycle(() => { }));
+        var x = LifecyclePlan(); x.phase.BeginOriginalLifecycle(() => { }); x.other.Counter++;
+        Assert.ThrowsExactly<InvalidOperationException>(() => x.phase.PrepareWritesAfterOriginalLifecycle(() => { }));
+        x.other.Counter--; Assert.ThrowsExactly<InvalidOperationException>(() => x.phase.PrepareWritesAfterOriginalLifecycle(() => { }));
+        var y = LifecyclePlan(); y.phase.BeginOriginalLifecycle(() => { }); y.roots["owner"] = new Owner();
+        Assert.ThrowsExactly<InvalidOperationException>(() => y.phase.PrepareWritesAfterOriginalLifecycle(() => { }));
+        var z = LifecyclePlan();
+        Assert.ThrowsExactly<InvalidDataException>(() => z.phase.BeginOriginalLifecycle(() => throw new InvalidDataException()));
+        Assert.ThrowsExactly<InvalidOperationException>(() => z.phase.BeginOriginalLifecycle(() => { }));
+        var q = LifecyclePlan(); q.phase.BeginOriginalLifecycle(() => { });
+        Assert.ThrowsExactly<InvalidDataException>(() => q.phase.PrepareWritesAfterOriginalLifecycle(() => throw new InvalidDataException()));
+        Assert.ThrowsExactly<InvalidOperationException>(() => q.phase.PrepareWritesAfterOriginalLifecycle(() => { }));
+    }
+
+    [TestMethod]
+    public void Lifecycle_rejects_cross_thread_use_and_incomplete_root_alias_selection()
+    {
+        var x = LifecyclePlan(); x.phase.BeginOriginalLifecycle(() => { });
+        Exception? error = null;
+        var thread = new System.Threading.Thread(() => { try { x.phase.PrepareWritesAfterOriginalLifecycle(() => { }); } catch (Exception e) { error = e; } });
+        thread.Start(); thread.Join(); Assert.IsInstanceOfType<InvalidOperationException>(error);
+        Assert.ThrowsExactly<InvalidOperationException>(() => x.phase.PrepareWritesAfterOriginalLifecycle(() => { }));
+        var codec = Codec(); var source = new Owner(); var target = new Owner();
+        var graph = codec.Capture(Roots(("a", source), ("b", source)), NoExternal);
+        foreach (var names in new[] { Array.Empty<string>(), new[] { "a" }, new[] { "missing" }, new[] { "a", "a" } })
+            Assert.ThrowsExactly<InvalidDataException>(() => codec.PrepareOwnedGraph(graph, Roots(("a", target), ("b", target)), NoBinding,
+                lifecycleWriteRoots: names, exposeLifecycleWrites: _ => { }));
+    }
+
+    [TestMethod]
+    public void Prepared_source_slots_survive_live_imported_root_scalar_sender_and_struct_mutation()
+    {
+        var codec = Codec(); var target = new Owner();
+        var graph = codec.Capture(Roots(("owner", new Owner { Counter = 73, Current = new Value { Number = 9 },
+            Vector = new Pair { X = BitConverter.Int32BitsToSingle(unchecked((int)0x80000000)), Y = 17 } })), NoExternal);
+        CanonicalCarryGraphCodec.PreparedView? view = null;
+        var plan = codec.PrepareOwnedGraph(graph, Roots(("owner", target)), NoBinding, value => view = value);
+        plan.Apply(); Assert.AreSame(target, view!.Root("owner")); var importedSender = target.Current;
+        target.Counter = -3; target.Current = new Value(); target.Vector = new Pair { X = 0, Y = -8 };
+        Assert.AreEqual(73, view.Field(target, typeof(Owner), nameof(Owner.Counter)));
+        Assert.AreSame(importedSender, view.Field(target, typeof(Owner), nameof(Owner.Current)));
+        var frozen = (Pair)view.Field(target, typeof(Owner), nameof(Owner.Vector))!;
+        Assert.AreEqual(unchecked((int)0x80000000), BitConverter.SingleToInt32Bits(frozen.X)); Assert.AreEqual(17f, frozen.Y);
+        Assert.ThrowsExactly<InvalidOperationException>(plan.VerifyReadback);
+    }
+
+    [TestMethod]
+    [TestCategory("OfflineCodecTiming")]
+    public void Production_sized_graph_retains_shared_aliases_and_reports_transaction_phase_costs()
+    {
+        var codec = Codec();
+        var source = new Dictionary<string, object>(StringComparer.Ordinal);
+        var target = new Dictionary<string, object>(StringComparer.Ordinal);
+        var shared = new Value { Number = 137 };
+        for (var i = 0; i < 650; i++) {
+            var owner = new Owner { Counter = i, Current = shared,
+                Values = Enumerable.Range(0, 150).Select(n => new Value { Number = n }).ToArray() };
+            owner.Next = owner;
+            source.Add("root/" + i, owner); target.Add("root/" + i, new Owner());
+        }
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var graph = codec.Capture(source, NoExternal);
+        Console.WriteLine("codec-sized capture nodes=" + graph.Nodes.Length + ";ms=" + timer.Elapsed.TotalMilliseconds);
+        timer.Restart(); var bytes = codec.Encode(graph);
+        Console.WriteLine("codec-sized encode bytes=" + bytes.Length + ";ms=" + timer.Elapsed.TotalMilliseconds);
+        timer.Restart(); var decoded = codec.Decode(bytes);
+        Console.WriteLine("codec-sized decode ms=" + timer.Elapsed.TotalMilliseconds);
+        timer.Restart(); var plan = codec.PrepareOwnedGraph(decoded, target, NoBinding);
+        Console.WriteLine("codec-sized prepare ms=" + timer.Elapsed.TotalMilliseconds);
+        timer.Restart(); plan.Guard();
+        Console.WriteLine("codec-sized guard ms=" + timer.Elapsed.TotalMilliseconds);
+        timer.Restart(); plan.Apply();
+        Console.WriteLine("codec-sized apply ms=" + timer.Elapsed.TotalMilliseconds);
+        timer.Restart(); for (var i = 0; i < 12; i++) plan.VerifyReadback();
+        Console.WriteLine("codec-sized twelve-independent-readbacks ms=" + timer.Elapsed.TotalMilliseconds);
+        var first = (Owner)target["root/0"];
+        foreach (Owner owner in target.Values) { Assert.AreSame(first.Current, owner.Current); Assert.AreSame(owner, owner.Next); }
+        first.Counter++;
+        Assert.ThrowsExactly<InvalidOperationException>(() => plan.VerifyReadback());
+    }
+
     [TestMethod]
     public void Later_domain_retains_actual_imported_node_alias_including_root_and_cycles()
     {
@@ -46,8 +182,9 @@ public sealed class CanonicalCarryGraphCodecTests
         var graph = codec.Capture(Roots(("owner", new ExternalOwner { Item = sourceNative, Items = new object[] { sourceNative, sourceNative } })),
             value => ReferenceEquals(value, sourceNative) ? "geo-owner" : null);
         var target = new ExternalOwner(); CanonicalCarryGraphCodec.ExternalRebinding? deferred = null;
+        CanonicalCarryGraphCodec.PreparedView? prepared = null;
         var plan = codec.PrepareOwnedGraph(graph, Roots(("owner", target)), _ => old,
-            exposeExternalRebinding: value => deferred = value);
+            view => prepared = view, exposeExternalRebinding: value => deferred = value);
         Assert.ThrowsExactly<InvalidOperationException>(() => deferred!.Prepare(Roots(("geo-owner", born))));
         plan.Apply(); var array = target.Items;
         var late = deferred!.Prepare(Roots(("geo-owner", born)));
@@ -55,6 +192,9 @@ public sealed class CanonicalCarryGraphCodecTests
         Assert.AreSame(array, target.Items); Assert.AreSame(born, target.Item);
         Assert.IsTrue(target.Items.All(item => ReferenceEquals(item, born)));
         Assert.ThrowsExactly<InvalidOperationException>(() => deferred.Prepare(Roots(("geo-owner", new Value()))));
+        target.Item = old;
+        Assert.AreSame(born, prepared!.Field(target, typeof(ExternalOwner), nameof(ExternalOwner.Item)));
+        Assert.ThrowsExactly<InvalidOperationException>(plan.VerifyReadback);
     }
 
     [TestMethod]
