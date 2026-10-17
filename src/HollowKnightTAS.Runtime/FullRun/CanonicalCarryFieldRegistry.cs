@@ -27,9 +27,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             .Select(name => typeof(FsmEvent).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new InvalidDataException("Pinned FsmEvent field binding is absent: " + name)).ToArray();
 
-        internal static CanonicalCarryGraphCodec Create(bool inputDomain = false, bool geoDomain = false)
+        internal static CanonicalCarryGraphCodec Create(bool inputDomain = false, bool geoDomain = false, bool mapDomain = false)
         {
-            if (inputDomain && geoDomain) throw new InvalidDataException("Carry domains must be distinct.");
+            if ((inputDomain ? 1 : 0) + (geoDomain ? 1 : 0) + (mapDomain ? 1 : 0) > 1) throw new InvalidDataException("Carry domains must be distinct.");
             string ReadResource(string name)
             {
                 using var stream = typeof(CanonicalCarryFieldRegistry).Assembly.GetManifestResourceStream(name)
@@ -105,11 +105,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             types.AddRange(CanonicalHeroAnimationCallbacks.DataTypes);
             types.AddRange(CanonicalHeroTriggerCallbacks.DataTypes);
             types.AddRange(CanonicalGeoCarry.DataTypes);
+            types.AddRange(CanonicalMapSourceDomain.DataTypes);
             using var hash = SHA256.Create();
-            return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v2:" : geoDomain ? "canonical-geo-fields-v1:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
+            return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v2:" : geoDomain ? "canonical-geo-fields-v1:" : mapDomain ? "canonical-map-fields-v1:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
                 hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + loadingText + "\n" + geoText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
                     + "\n" + CanonicalGameplayCarry.SchemaIdentity + "\n" + CanonicalClockCarry.SchemaIdentity
                     + "\n" + CanonicalHeroAnimationCallbacks.SchemaIdentity
+                    + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalMapSourceDomain.Data)).Select(field => field.Name + "=" + field.FieldType.FullName))
                     + "\n" + CanonicalHeroTriggerCallbacks.SchemaIdentity + "\n" + CanonicalGeoCarry.SchemaIdentity
                     + "\n" + string.Join(";", CanonicalGeoCarry.DataTypes.Where(type => !type.IsArray).SelectMany(type => CanonicalCarryGraphCodec.Fields(type))
                         .Select(field => field.Name + "=" + field.FieldType.FullName))
@@ -150,7 +152,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                         .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType))))))
                 .Replace("-", "").ToLowerInvariant(), PortableValue, AllocatedValue,
                 graph => {
-                    if (geoDomain) {
+                    if (mapDomain) {
+                        if (graph.Roots == null || graph.Roots.Length != 61 || graph.Roots.Count(root => root.Binding == CanonicalMapSourceDomain.Root) != 1
+                            || graph.Roots.Any(root => root.Binding != CanonicalMapSourceDomain.Root && !root.Binding.StartsWith("Map/Fsm/", StringComparison.Ordinal)))
+                            throw new InvalidDataException("Map carry domain contains an unknown or missing original root.");
+                    }
+                    else if (geoDomain) {
                         if (graph.Roots == null || graph.Roots.Length != 7 || graph.Roots.Count(root => root.Binding == CanonicalGeoCarry.Root) != 1
                             || graph.Roots.Any(root => root.Binding != CanonicalGeoCarry.Root && !root.Binding.StartsWith("Geo/Fsm/", StringComparison.Ordinal)))
                             throw new InvalidDataException("Geo carry domain contains an unknown or missing original root.");

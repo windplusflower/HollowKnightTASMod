@@ -225,7 +225,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             job.Phase = "ActualDAppliedPaused";
             File.WriteAllText(Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "actual-d-application.json"),
                 JsonConvert.SerializeObject(new { applicationExecuted = true, source.MovieFrame, source.NativeFrame,
-                    consumedSamples = input.ConsumedSamples, sourcePrefix = session.MoviePrefixSha256, sourceDBytes = source.Main.Length + source.Input.Length + source.Geo.Length,
+                    consumedSamples = input.ConsumedSamples, sourcePrefix = session.MoviePrefixSha256, sourceDBytes = source.Main.Length + source.Input.Length + source.Geo.Length + source.Map.Length,
                     applicationMilestones,
                     rawClockReadbackEqual = true, unityRandomRawReadbackEqual = true, particleManagerRandomRawReadbackEqual = true, particleComponentStateQualified = false, restoreQualified = false, completeStateCoverage = false, d2Passed = false, d3Passed = false }));
         }

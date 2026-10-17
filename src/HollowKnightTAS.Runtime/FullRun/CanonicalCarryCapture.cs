@@ -23,6 +23,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies;
         private readonly Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreGeoSourceDependencies;
         private readonly CanonicalGeoSourceDomain geoDomain = new CanonicalGeoSourceDomain();
+        private readonly CanonicalMapSourceDomain mapDomain = new CanonicalMapSourceDomain();
+        internal byte[] MapGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] GeoGraph { get; private set; } = Array.Empty<byte>();
         internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates, CanonicalHudJournalPolicy journal,
             Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies,
@@ -184,6 +186,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var result = targetDirectoryOnly ? Empty() : codec.Capture(roots, bindings.Bind, (owner, id) => mainNodes.Add(owner, id));
             GeoGraph = targetDirectoryOnly ? Array.Empty<byte>() : geoDomain.Capture(GameCameras.instance.geoCounter,
                 CanonicalGeoColdTemplate.Directory(GameCameras.instance.geoCounter.gameObject), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
+            MapGraph = targetDirectoryOnly ? Array.Empty<byte>() : mapDomain.Capture(mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             var mainBindings = new SortedDictionary<string, object>(InputCarryAudit.FixedBindings.ToDictionary(pair => pair.Key, pair => pair.Value), StringComparer.Ordinal);
             foreach (var pair in roots) mainBindings.Add("canonical-main-root/" + pair.Key, pair.Value);
             var inputExternal = new ExternalBindings(identities, assetTemplates, canonicalSenders, mainBindings, captureEpoch, bindings.ownerDirectory);
@@ -366,6 +369,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                     }, () => (beginGeoLifecycle ?? throw new InvalidOperationException("Geo lifecycle controller is absent."))(),
                         () => (requireGeoNative ?? throw new InvalidOperationException("Geo native source witness is absent."))());
                 });
+                domainActions.Add(() => {
+                    ActualTargetStage = "map-source-graph-activation";
+                    var envelope = actualSourceValidation ?? throw new InvalidOperationException("Map requires the sealed source envelope.");
+                    mapDomain.Prepare(envelope.Map, mainView!, () => { main.VerifyReadback(); sdk.VerifyReadback(); }, bindings.ResolveTarget, admitted, out var verifyMap)();
+                    sourceChecks.Add(verifyMap);
+                });
                 domainActions.Add(() => prepareScheduler(continuation!.Scheduler)());
                 var actual = new CanonicalCarryPairPreparation(main, sdk, () => {
                     guardInputSlots(); guardEventSlots(); sceneMapping.Guard(); deviceManagers.Guard(); loadCallbacks.Guard();
@@ -440,6 +449,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly BoundaryObjectIdentity identities;
             private readonly Dictionary<Type, UnityEngine.Object[]> assets = new Dictionary<Type, UnityEngine.Object[]>();
             private readonly Dictionary<object, string> known = new Dictionary<object, string>(new References());
+            // Exactly the same relation as known, indexed in the reverse
+            // direction. Multiple distinct owners keep the original ambiguity
+            // rejection; no binding or source/native readback is omitted.
+            private readonly Dictionary<string, object> reverseKnown = new Dictionary<string, object>(StringComparer.Ordinal);
+            private readonly HashSet<string> ambiguousKnown = new HashSet<string>(StringComparer.Ordinal);
+            private void Remember(object owner, string binding)
+            {
+                known.Add(owner, binding);
+                if (reverseKnown.ContainsKey(binding)) ambiguousKnown.Add(binding);
+                else reverseKnown.Add(binding, owner);
+            }
             internal readonly CanonicalCaptureOwnerDirectory ownerDirectory;
             private readonly IReadOnlyDictionary<string, object> nativeDirectory;
             private readonly CanonicalCarryReflectionBindings metadata;
@@ -449,15 +469,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal bool HasEvents { get; private set; }
             internal object ResolveCaptured(string binding)
             {
-                var matches = known.Where(pair => pair.Value == binding).Select(pair => pair.Key).ToArray();
-                if (matches.Length != 1) throw new InvalidDataException("Captured carry external binding is absent or ambiguous: " + binding);
-                return matches[0];
+                if (ambiguousKnown.Contains(binding) || !reverseKnown.TryGetValue(binding, out var owner))
+                    throw new InvalidDataException("Captured carry external binding is absent or ambiguous: " + binding);
+                return owner;
             }
             internal object ResolveTarget(string binding)
             {
-                var cached = known.Where(pair => pair.Value == binding).Select(pair => pair.Key).ToArray();
-                if (cached.Length > 1) throw new InvalidDataException("Target external directory is ambiguous: " + binding);
-                if (cached.Length == 1) return cached[0];
+                if (ambiguousKnown.Contains(binding)) throw new InvalidDataException("Target external directory is ambiguous: " + binding);
+                if (reverseKnown.TryGetValue(binding, out var cached)) return cached;
                 object value;
                 if (binding.StartsWith("HeroAssetOrigin/v1/", StringComparison.Ordinal)) value = assetTemplates.Resolve(binding);
                 else if (binding.StartsWith("asset:", StringComparison.Ordinal)) {
@@ -478,7 +497,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidDataException("Target native/FSM external has no unique registered identity: " + binding);
                 }
                 if (value == null) throw new InvalidDataException("Target external is absent: " + binding);
-                known.Add(value, binding); return value;
+                Remember(value, binding); return value;
             }
             internal void AuditGeoAssets(CanonicalCarryGraphData graph)
             {
@@ -530,7 +549,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     // Multiple named roots can alias the same live object.
                     // Select the first canonical name; the root graph retains
                     // every original alias rather than allocating another copy.
-                    if (!known.ContainsKey(pair.Value)) known.Add(pair.Value, pair.Key);
+                    if (!known.ContainsKey(pair.Value)) Remember(pair.Value, pair.Key);
                 }
                 var action = typeof(CheckCanDreamWarpInScene);
                 var checks = Required(action, "sceneCheckFunctions").GetValue(actionInstance()) as Dictionary<string, Func<bool>>
@@ -569,7 +588,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (known.TryGetValue(value, out var bound)) return bound;
                 var canonicalSlot = canonicalSenders.Bind(value);
-                if (canonicalSlot != null) { known.Add(value, canonicalSlot); return canonicalSlot; }
+                if (canonicalSlot != null) { Remember(value, canonicalSlot); return canonicalSlot; }
                 if (value is UnityEngine.Object native)
                 {
                     if (native == null) throw new InvalidDataException("destroyed-Unity-wrapper-needs-rebinding");
@@ -577,14 +596,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (key.StartsWith("asset:", StringComparison.Ordinal))
                     {
                         var originalOrigin = assetTemplates.Bind(native);
-                        if (originalOrigin != null) { known.Add(value, originalOrigin); return originalOrigin; }
+                        if (originalOrigin != null) { Remember(value, originalOrigin); return originalOrigin; }
                         var type = native.GetType();
                         var candidates = AssetCandidates(type);
                         var same = candidates.Where(owner => owner.name == native.name).ToArray();
                         if (same.Length != 1 || same[0].GetInstanceID() != native.GetInstanceID())
                             throw new InvalidDataException("ambiguous-asset-binding:" + key);
                     }
-                    known.Add(value, key); return key;
+                    Remember(value, key); return key;
                 }
                 if (value is Fsm fsm)
                 {
@@ -592,7 +611,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (owner == null || !ReferenceEquals(RawFsm.GetValue(owner), fsm))
                         throw new InvalidDataException("foreign-FSM-needs-explicit-owner-binding");
                     var key = "FSM/" + identities.Get(owner);
-                    known.Add(value, key); return key;
+                    Remember(value, key); return key;
                 }
                 if (value is FsmEvent fsmEvent)
                 {
@@ -609,10 +628,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (cached == null || !ReferenceEquals(cached, fsmEvent))
                         throw new InvalidDataException("unregistered-global-FSM-event");
                     var key = "FsmEvent/" + name;
-                    known.Add(value, key); return key;
+                    Remember(value, key); return key;
                 }
                 var reflective = metadata.Bind(value);
-                if (reflective != null) { known.Add(value, reflective); return reflective; }
+                if (reflective != null) { Remember(value, reflective); return reflective; }
                 return null;
             }
             private UnityEngine.Object[] AssetCandidates(Type type)
