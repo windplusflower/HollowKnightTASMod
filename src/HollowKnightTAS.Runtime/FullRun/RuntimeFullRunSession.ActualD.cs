@@ -51,8 +51,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var bytes = LoadingSerialSceneProbe.ExperimentalSource ?? throw new InvalidOperationException("No sealed in-memory source D.");
                     var exportElapsed = System.Diagnostics.Stopwatch.StartNew();
                     CanonicalActualDExperiment source;
-                    try { source = (actualDExport ?? throw new InvalidOperationException("Source D has no sealed export envelope.")).Require(bytes); }
-                    catch { actualDExport = null; throw; }
+                    byte[]? exportedChunk = null;
+                    try {
+                        var export = actualDExport ?? throw new InvalidOperationException("Source D has no sealed export envelope.");
+                        if (phase == "d-exp-source-chunk") {
+                            if (fields.Count != 3 || !int.TryParse(Get("offset"), out var chunkOffset))
+                                throw new InvalidDataException("Invalid source chunk offset.");
+                            source = export.ReadChunk(bytes, chunkOffset, out exportedChunk);
+                        } else source = phase == "d-exp-source-resume" ? export.RequireCompleted(bytes) : export.Require(bytes);
+                    }
+                    catch { actualDExport?.Fault(); actualDExport = null; throw; }
                     if (mode != "DSourcePaused" || !clock.IsPaused || clock.IsFinished || frame != source.NativeFrame || source.Session == null)
                         throw new InvalidOperationException("Source D is not sealed at its original paused boundary.");
                     if (phase == "d-exp-source-resume") {
@@ -68,12 +76,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                         Modding.Logger.Log("[HKTAS] Actual D sealed source header prepared: elapsedMilliseconds=" + exportElapsed.ElapsedMilliseconds
                             + ";sameBytesHashAndMetadataEqual=true;packetWrittenToDisk=false");
                     } else {
-                        if (fields.Count != 3 || !int.TryParse(Get("offset"), out var offset) || offset < 0
-                            || offset >= bytes.Length || offset % CanonicalActualDExperiment.ChunkBytes != 0) throw new InvalidDataException("Invalid source chunk offset.");
-                        reply["data"] = Convert.ToBase64String(bytes, offset, Math.Min(CanonicalActualDExperiment.ChunkBytes, bytes.Length - offset));
+                        reply["data"] = Convert.ToBase64String(exportedChunk ?? throw new InvalidOperationException("Source chunk was not verified."));
                     }
                     return reply;
-                    } catch { actualDExport = null; throw; }
+                    } catch { actualDExport?.Fault(); actualDExport = null; throw; }
                 }
                 var job = s0Observation ?? throw new InvalidOperationException("No zero-Movie target for actual D.");
                 try {

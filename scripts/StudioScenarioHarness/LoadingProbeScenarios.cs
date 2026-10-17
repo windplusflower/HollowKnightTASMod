@@ -160,6 +160,7 @@ internal static partial class StudioScenarioHarness
         }
         else Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_RECORD_INPUTS", null);
         await Field<Func<string, Task>>(vm, "launchGame")(@"D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight.exe");
+        byte[]? actualDBytes = null;
         try
         {
             Execute(vm.NewFullRunMovieCommand);
@@ -255,7 +256,6 @@ internal static partial class StudioScenarioHarness
                     return await (Task<IReadOnlyDictionary<string, string>>)request.Invoke(null,
                         new object[] { vm.SelectedSession!.Client, fields, CancellationToken.None })!;
                 }
-                byte[]? actualDBytes = null;
                 IReadOnlyDictionary<string, string>? actualDHeader = null;
                 if (actualDExperiment && actualDStage != "target") {
                     await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
@@ -486,7 +486,10 @@ internal static partial class StudioScenarioHarness
                 finally { picker.SetValue(vm, previousPicker); }
             }
         }
-        finally { movies.VerifyOriginalSavesUnchanged(); }
+        finally {
+            if (actualDBytes != null) Array.Clear(actualDBytes, 0, actualDBytes.Length);
+            movies.VerifyOriginalSavesUnchanged();
+        }
     }
 
     static async Task CheckSerialPauseAsync(MainViewModel vm, StartupBootController boot)
