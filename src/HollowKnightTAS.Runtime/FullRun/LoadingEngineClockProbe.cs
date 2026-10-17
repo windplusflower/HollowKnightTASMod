@@ -54,8 +54,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             var engine = Process.GetCurrentProcess().Modules.Cast<ProcessModule>().Single(m => m.ModuleName == "UnityPlayer.dll");
             using (var file = File.OpenRead(engine.FileName))
-            using (var sha = SHA256.Create())
-                if (BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "").ToLowerInvariant() != EngineSha256)
+                if (BitConverter.ToString(CanonicalEngineFileSha256.ComputeHash(file)).Replace("-", "").ToLowerInvariant() != EngineSha256)
                     throw new InvalidOperationException("Native loading experiments require the exact installed engine build.");
             return engine;
         }

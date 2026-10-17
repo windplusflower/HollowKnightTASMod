@@ -16,6 +16,37 @@ public sealed class CanonicalCarryGraphCodecTests
         => entries.ToDictionary(e => e.key, e => e.value, StringComparer.Ordinal);
     private static string? NoExternal(object value) => null;
     private static object NoBinding(string key) => throw new InvalidDataException("Unexpected external: " + key);
+    private enum SignedBits : long { Min = long.MinValue, Max = long.MaxValue }
+    private enum UnsignedBits : ulong { Zero = 0, Max = ulong.MaxValue }
+    [TestMethod]
+    public void Scalar_readback_matches_original_encoding_including_every_bit_and_decimal_representation()
+    {
+        var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+        var same = (Func<object, object, Type, bool>)typeof(CanonicalCarryGraphCodec).GetMethod("SameScalarBits", flags)!
+            .CreateDelegate(typeof(Func<object, object, Type, bool>));
+        var encode = (Func<object, Type, string>)typeof(CanonicalCarryGraphCodec).GetMethod("EncodeScalar", flags)!
+            .CreateDelegate(typeof(Func<object, Type, string>));
+        object[] edges = { false, true, (byte)0, byte.MaxValue, sbyte.MinValue, sbyte.MaxValue, short.MinValue, short.MaxValue,
+            (ushort)0, ushort.MaxValue, int.MinValue, int.MaxValue, (uint)0, uint.MaxValue, long.MinValue, long.MaxValue,
+            (ulong)0, ulong.MaxValue, '\0', '\uffff', SignedBits.Min, SignedBits.Max, UnsignedBits.Zero, UnsignedBits.Max,
+            0f, -0f, float.PositiveInfinity, float.NegativeInfinity, float.NaN,
+            0d, -0d, double.PositiveInfinity, double.NegativeInfinity, double.NaN,
+            decimal.Zero, decimal.MinValue, decimal.MaxValue, new decimal(0, 0, 0, true, 0),
+            new decimal(100, 0, 0, false, 2), new decimal(1, 0, 0, false, 0), new decimal(0, 0, 0, false, 28) };
+        void Check(object a, object b) {
+            var type = a.GetType(); Assert.AreEqual(encode(a, type) == encode(b, type), same(a, b, type));
+        }
+        foreach (var a in edges) foreach (var b in edges) if (a.GetType() == b.GetType()) Check(a, b);
+        var random = new Random(73191); var bytes = new byte[8];
+        for (var i = 0; i < 10000; i++) {
+            random.NextBytes(bytes); var bits = BitConverter.ToInt64(bytes);
+            object single = BitConverter.Int32BitsToSingle((int)bits), dual = BitConverter.Int64BitsToDouble(bits);
+            Check(single, single); Check(single, BitConverter.Int32BitsToSingle((int)bits ^ 1));
+            Check(dual, dual); Check(dual, BitConverter.Int64BitsToDouble(bits ^ 1));
+            object number = new decimal(random.Next(), random.Next(), random.Next(), i % 2 == 0, (byte)(i % 29));
+            Check(number, number); Check(number, decimal.Zero);
+        }
+    }
 
     private static (CanonicalPreparedWritePlan plan, CanonicalCarryGraphCodec.PreparedLifecycleWrites phase,
         Owner target, Owner other, Dictionary<string, object> roots, CanonicalCarryGraphCodec.PreparedView view) LifecyclePlan()

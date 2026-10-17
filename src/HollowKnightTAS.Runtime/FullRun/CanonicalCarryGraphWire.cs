@@ -21,7 +21,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || value.Roots.Length > CanonicalCarryGraphCodec.MaximumNodes || value.Nodes.Length > CanonicalCarryGraphCodec.MaximumNodes
                 || value.Externals.Length > CanonicalCarryGraphCodec.MaximumNodes || value.Unsupported.Length > CanonicalCarryGraphCodec.MaximumValues)
                 throw new InvalidDataException("Invalid carry wire graph shape or count.");
-            var table = new SortedSet<string>(StringComparer.Ordinal);
+            // Deduplicate repeated field/type strings before sorting once.
+            // The resulting ordinal table and every encoded byte are unchanged.
+            var table = new HashSet<string>(StringComparer.Ordinal);
             void Intern(string? text) { if (text != null) table.Add(text); }
             Intern(value.Schema);
             foreach (var root in value.Roots) Intern(root.Binding);
@@ -44,7 +46,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             // the lossless table instead of repeatedly emitted field names.
             if (table.Count > MaximumStrings || table.Sum(text => (long)text.Length) > SceneCheckpointPacket.MaximumPayloadBytes / 4)
                 throw new InvalidDataException("Carry wire string table exceeds its bound.");
-            var strings = table.ToArray();
+            var strings = table.OrderBy(text => text, StringComparer.Ordinal).ToArray();
             var ids = strings.Select((text, index) => new { text, id = index + 1 }).ToDictionary(pair => pair.text, pair => pair.id, StringComparer.Ordinal);
             using var stream = new MemoryStream();
             using var writer = new BinaryWriter(stream, Utf8, true);

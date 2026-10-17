@@ -10,6 +10,7 @@
   <ItemGroup>
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalGeoSourceQueueContract.cs" Link="FullRun/CanonicalGeoSourceQueueContract.cs" />
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalSealedSource.cs" Link="FullRun/CanonicalSealedSource.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalEngineFileSha256.cs" Link="FullRun/CanonicalEngineFileSha256.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CinematicPlaybackClock.cs" Link="FullRun\CinematicPlaybackClock.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\Manifest\VerificationPreflight.cs" Link="Manifest\VerificationPreflight.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\FrameObservationQueue.cs" Link="FullRun\FrameObservationQueue.cs" />

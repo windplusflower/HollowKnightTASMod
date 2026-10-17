@@ -506,9 +506,29 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (expected == null || current == null) return expected == null && current == null;
             if (depth > 128 || expected.GetType() != current.GetType()) return false;
             var type = Nullable.GetUnderlyingType(declared) ?? declared;
-            if (IsScalar(type)) return EncodeScalar(expected, type) == EncodeScalar(current, type);
+            if (IsScalar(type)) return SameScalarBits(expected, current, type);
             if (!layouts.TryGetValue(TypeIdentity(type), out var layout)) throw new InvalidDataException("Carry stale-check value layout is absent.");
             return layout.Fields.All(field => SameRawSlot(field.GetValue(expected), field.GetValue(current), field.FieldType, depth + 1));
+        }
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit)]
+        private struct SingleBits
+        {
+            [System.Runtime.InteropServices.FieldOffset(0)] internal float Value;
+            [System.Runtime.InteropServices.FieldOffset(0)] internal uint Bits;
+        }
+        private static bool SameScalarBits(object expected, object current, Type type)
+        {
+            if (type == typeof(float)) return new SingleBits { Value = (float)expected }.Bits == new SingleBits { Value = (float)current }.Bits;
+            if (type == typeof(double)) return BitConverter.DoubleToInt64Bits((double)expected) == BitConverter.DoubleToInt64Bits((double)current);
+            if (type == typeof(decimal)) {
+                var left = decimal.GetBits((decimal)expected); var right = decimal.GetBits((decimal)current);
+                for (var i = 0; i < left.Length; i++) if (left[i] != right[i]) return false;
+                return true;
+            }
+            // This is reached only for a frozen scalar value type, with equal
+            // runtime types checked above: primitive integers/bool/char or enum.
+            // Their built-in Equals cannot call an application override.
+            return expected.Equals(current);
         }
 
         // Reads decoded field values, including proposed fields of existing
