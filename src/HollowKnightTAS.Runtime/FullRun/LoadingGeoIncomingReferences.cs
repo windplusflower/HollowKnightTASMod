@@ -180,7 +180,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Geo incoming alias needs an explicit writable containing owner: " + path);
             slots[path] = new Slot(owner, field, index, value, identity);
         }
-        internal CanonicalPreparedWritePlan Prepare(IReadOnlyDictionary<string, object> replacements)
+        internal CanonicalPreparedWritePlan Prepare(IReadOnlyDictionary<string, object> replacements, Action<object>? appliedWitness = null)
         {
             if ((counter == null && marker == null && mapKey == null) || externalReferences.Any(path => !slots.ContainsKey(path)))
                 throw new InvalidOperationException("Geo incoming directory contains an unbound delegate/native/collection slot.");
@@ -193,11 +193,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidOperationException("Geo incoming source slot changed after the original full traversal.");
             }
             Guard();
+            var witnessProduced = false;
             return new CanonicalPreparedWritePlan(Guard, () => {
                 foreach (var slot in selected) slot.Write(replacements[slot.Identity]);
             }, () => {
                 foreach (var slot in selected) if (!ReferenceEquals(slot.Read(), replacements[slot.Identity]))
                     throw new InvalidOperationException("Geo incoming complete source alias readback differs.");
+                if (appliedWitness != null && !witnessProduced) {
+                    witnessProduced = true;
+                    object Identity(object value) => value is UnityEngine.Object native
+                        ? new { type = value.GetType().FullName, nativeInstance = native.GetInstanceID(), alive = native != null }
+                        : (object)new { type = value.GetType().FullName, managedReference = RuntimeHelpers.GetHashCode(value) };
+                    appliedWitness(slots.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => new {
+                        path = pair.Key, logicalOwner = pair.Value.Identity, before = Identity(pair.Value.Original),
+                        after = Identity(replacements[pair.Value.Identity]), exactReferenceReadback = ReferenceEquals(pair.Value.Read(), replacements[pair.Value.Identity]) }).ToArray());
+                }
             });
         }
         private sealed class Slot

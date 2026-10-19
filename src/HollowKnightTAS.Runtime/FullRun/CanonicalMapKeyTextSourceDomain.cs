@@ -97,6 +97,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             void Native() {
                 if (!admitted() || saved == null) throw new InvalidOperationException("Map Key native source snapshot admission is absent.");
                 ObserveCold(keys);
+                var actualDirectory = CanonicalMapKeyTextDirectory.Build(keys);
+                if (!directory.Keys.SequenceEqual(actualDirectory.Keys) || directory.Any(pair => !ReferenceEquals(pair.Value, actualDirectory[pair.Key])))
+                    throw new InvalidOperationException("Map Key actual source owners changed during import.");
                 var current = CanonicalMapKeyTextCarry.Capture(directory);
                 if (!saved.NativeOwners.SequenceEqual(current.NativeOwners) || !saved.Lifecycle.SequenceEqual(current.Lifecycle)
                     || !saved.GameObjectOwners.SequenceEqual(current.GameObjectOwners) || !saved.ActiveSelf.SequenceEqual(current.ActiveSelf))
@@ -104,6 +107,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             void VerifySource() {
                 Native(); plan.VerifyReadback(); requireMainApplied();
+                var readOnlyNow = CanonicalMarkerReadonlyCarry.CaptureMapKey(directory);
+                var expectedReadOnly = saved!.Readonly;
+                if (!expectedReadOnly.Owners.SequenceEqual(readOnlyNow.Owners) || !expectedReadOnly.Aliases.SequenceEqual(readOnlyNow.Aliases)
+                    || !expectedReadOnly.ContainerIsSelf.SequenceEqual(readOnlyNow.ContainerIsSelf)
+                    || Enumerable.Range(0, 9).Any(owner => Enumerable.Range(0, 10).Any(index => !codec.SameRawSlot(expectedReadOnly.Powers[owner][index], readOnlyNow.Powers[owner][index], typeof(float), 0)))
+                    || Enumerable.Range(0, 9).Any(owner => Enumerable.Range(0, 4).Any(index => !codec.SameRawSlot(expectedReadOnly.Corners[owner][index], readOnlyNow.Corners[owner][index], typeof(Vector3), 0))))
+                    throw new InvalidOperationException("Map Key final readonly configuration, corner bits, runner or alias readback differs.");
                 var currentOwners = directory.Where(pair => pair.Value is MonoBehaviour).ToArray();
                 for (var owner = 0; owner < currentOwners.Length; owner++) {
                     var managedFields = CanonicalMapKeyTextCarry.ManagedFields(currentOwners[owner].Value.GetType());

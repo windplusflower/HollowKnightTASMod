@@ -20,9 +20,15 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly List<KeyValuePair<object, string>> memberRoots = new List<KeyValuePair<object, string>>();
         private readonly Dictionary<object, string> natives = new Dictionary<object, string>(new References());
         private readonly string[] native;
+        private readonly IReadOnlyDictionary<string, object> originalOwned;
+        private readonly Dictionary<object, string> logicalOwned = new Dictionary<object, string>(new References());
+        private bool incomingRebindPrepared, incomingRebindVerified;
         internal CanonicalMapKeyTextExternalGuard(Transform keys)
         {
             this.keys = keys;
+            originalOwned = LoadingGeoIncomingReferences.BuildMapKeyDirectory(keys);
+            foreach (var pair in originalOwned.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                if (!logicalOwned.ContainsKey(pair.Value)) logicalOwned.Add(pair.Value, "owned:" + pair.Key);
             var nodes = new List<Transform>();
             foreach (var key in CanonicalMapKeyTextDirectory.Keys) {
                 var node = keys.Find(key) ?? throw new InvalidOperationException("Map Key real parent is absent.");
@@ -41,6 +47,41 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (owners[index] is PlayMakerFSM && fields.Read(owners[index], "fsm") is Fsm fsm)
                     RegisterFsm(fsm, "ancestor[" + index + "]");
             managed = ReadAll(); native = ancestors.Select(Pose).ToArray();
+        }
+        internal static IReadOnlyDictionary<object, string> PrepareLogicalIncomingBindings(
+            IReadOnlyDictionary<string, object> original, IReadOnlyDictionary<string, object> replacement)
+        {
+            if (!original.Keys.OrderBy(key => key, StringComparer.Ordinal).SequenceEqual(replacement.Keys.OrderBy(key => key, StringComparer.Ordinal)))
+                throw new InvalidOperationException("Map Key exact logical incoming directory keys differ.");
+            var result = new Dictionary<object, string>(new References());
+            var oldToNew = new Dictionary<object, object>(new References());
+            var newToOld = new Dictionary<object, object>(new References());
+            foreach (var pair in original.OrderBy(pair => pair.Key, StringComparer.Ordinal)) {
+                var next = replacement[pair.Key];
+                if (ReferenceEquals(pair.Value, null) || ReferenceEquals(next, null) || pair.Value.GetType() != next.GetType()
+                    || oldToNew.TryGetValue(pair.Value, out var previousNew) && !ReferenceEquals(previousNew, next)
+                    || newToOld.TryGetValue(next, out var previousOld) && !ReferenceEquals(previousOld, pair.Value))
+                    throw new InvalidOperationException("Map Key logical incoming alias shape, original owner or replacement type differs.");
+                oldToNew[pair.Value] = next; newToOld[next] = pair.Value;
+                if (!result.ContainsKey(pair.Value)) result.Add(pair.Value, "owned:" + pair.Key);
+            }
+            foreach (var pair in oldToNew) {
+                var identity = result[pair.Key];
+                if (result.TryGetValue(pair.Value, out var existing) && existing != identity)
+                    throw new InvalidOperationException("Map Key incoming new owner overlaps another original identity.");
+                result[pair.Value] = identity;
+            }
+            return result;
+        }
+        internal void PrepareIncomingRebind(IReadOnlyList<GameObject> created)
+        {
+            if (incomingRebindPrepared) throw new InvalidOperationException("Map Key logical incoming rebinding is single-use.");
+            // Build itself checks each new leaf's exact actual Key parent and
+            // complete component order; arbitrary wrong-owner substitutions fail.
+            var replacement = LoadingGeoIncomingReferences.BuildMapKeyDirectory(keys, created);
+            var map = PrepareLogicalIncomingBindings(originalOwned, replacement);
+            incomingRebindPrepared = true;
+            foreach (var pair in map) logicalOwned[pair.Key] = pair.Value;
         }
         private void AddMember(object value, string name)
         {
@@ -68,6 +109,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private string? Reference(object value)
         {
+            if (logicalOwned.TryGetValue(value, out var owned))
+                return value is UnityEngine.Object ownNative ? owned + (ownNative == null ? ":destroyed" : ":live") : owned;
             if (members.TryGetValue(value, out var member)) return member;
             if (value is FsmState || value is FsmStateAction) {
                 if (fields.Read(value, "fsm") is Fsm owner) RegisterFsm(owner, "detached-fsm[" + members.Count + "]");
@@ -121,6 +164,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!ReferenceEquals(keys, CanonicalMapKeyTextDirectory.Current()) || !native.SequenceEqual(ancestors.Select(Pose))
                 || !managed.SequenceEqual(ReadAll()) || !owners.SequenceEqual(ancestors.SelectMany(node => node.GetComponents<MonoBehaviour>())))
                 throw new InvalidOperationException("Map Key canonical callback changed its real parent activation, pose, Control FSM or other ancestor fields.");
+            if (incomingRebindPrepared && !incomingRebindVerified) {
+                incomingRebindVerified = true;
+                Modding.Logger.Log("[HKTAS] Map Key full ancestor post-incoming preservation: completeManagedRoots=" + managed.Length
+                    + ";originalAncestorCount=" + ancestors.Length + ";logicalGraphAndCrossRootAliasesEqual=true;onlyExplicitOneToOneOwnedDirectoryMapped=true;parentNativePoseActivationExact=true");
+            }
         }
         public void Dispose() => fields.Dispose();
         private sealed class References : IEqualityComparer<object>

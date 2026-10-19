@@ -124,7 +124,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             Verify("clone-original-inactive-producer");
             if (!created.Select(text => text.activeSelf).SequenceEqual(originalSelf))
                 throw new InvalidOperationException("Map Key Text producer changed serialized activation.");
-            incoming.Prepare(LoadingGeoIncomingReferences.BuildMapKeyDirectory(source, created)).Apply();
+            externalGuard.PrepareIncomingRebind(created);
+            var incomingPlan = incoming.Prepare(LoadingGeoIncomingReferences.BuildMapKeyDirectory(source, created),
+                witness => Modding.Logger.Log("[HKTAS] Map Key startup exact incoming old/new slots: " + Newtonsoft.Json.JsonConvert.SerializeObject(witness)));
+            incomingPlan.Apply(); incomingPlan.VerifyReadback();
             Verify("rebind-original-incoming");
             RequireCold(directory);
             Modding.Logger.Log("[HKTAS] Original Map Key complete cold nine-leaf/thirty-six-Mono producer installed with full incoming alias readback.");

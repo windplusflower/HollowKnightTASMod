@@ -37,13 +37,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             // collider slots. Check those real consumers before native retirement.
             var filters = directory.Values.OfType<MeshFilter>().ToArray();
             foreach (var filter in Resources.FindObjectsOfTypeAll<MeshFilter>())
-                if (filter != null && meshes.Any(mesh => ReferenceEquals(mesh, filter.sharedMesh)) && !filters.Any(owner => ReferenceEquals(owner, filter)))
+                if (filter != null && meshes.Any(mesh => mesh == filter.sharedMesh) && !filters.Any(owner => ReferenceEquals(owner, filter)))
                     throw new InvalidOperationException("Map Key owned mesh has an external native MeshFilter consumer.");
             foreach (var collider in Resources.FindObjectsOfTypeAll<MeshCollider>())
-                if (collider != null && meshes.Any(mesh => ReferenceEquals(mesh, collider.sharedMesh)))
+                if (collider != null && meshes.Any(mesh => mesh == collider.sharedMesh))
                     throw new InvalidOperationException("Map Key owned mesh has an external native MeshCollider consumer.");
             foreach (var renderer in Resources.FindObjectsOfTypeAll<SkinnedMeshRenderer>())
-                if (renderer != null && meshes.Any(mesh => ReferenceEquals(mesh, renderer.sharedMesh)))
+                if (renderer != null && meshes.Any(mesh => mesh == renderer.sharedMesh))
                     throw new InvalidOperationException("Map Key owned mesh has an external native skinned-renderer consumer.");
             // TMP's original OnDestroy unregisters both queues. An inactive
             // hint must already be absent; all unrelated queue storage remains
@@ -88,7 +88,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
             }
             RequireCreated();
-            var plan = incoming.Prepare(LoadingGeoIncomingReferences.BuildMapKeyDirectory(keys, created));
+            externalGuard.PrepareIncomingRebind(created);
+            var plan = incoming.Prepare(LoadingGeoIncomingReferences.BuildMapKeyDirectory(keys, created),
+                witness => Modding.Logger.Log("[HKTAS] Map Key B exact incoming old/new slots: " + Newtonsoft.Json.JsonConvert.SerializeObject(witness)));
             plan.Apply();
             foreach (var text in old) UnityEngine.Object.DestroyImmediate(text);
             retireStarts();
