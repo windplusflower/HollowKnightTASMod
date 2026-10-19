@@ -848,12 +848,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                         {
                             var state = states.GetValue(stateIndex);
                             if (state == null) continue;
-                            AppendFsmMember(state, fsms, inventory);
+                            AppendFsmMember(state, fsms, inventory, fullInventory);
                             if (fields.Read(state, "actions") is Array actions)
                                 for (var actionIndex = 0; actionIndex < actions.Length; actionIndex++)
                                 {
                                     var action = actions.GetValue(actionIndex);
-                                    if (action != null) AppendFsmMember(action, fsms, inventory);
+                                    if (action != null) AppendFsmMember(action, fsms, inventory, fullInventory);
                                 }
                         }
                 }
@@ -877,10 +877,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                     fieldDiagnostics.Add(new { root = item.id, fields = digest.FieldDigests });
                 if (fullInventory && component is UnityEngine.UI.Text uiText && DetailedComponent(component, item.id))
                     textCacheDetails.Add(new { id = item.id, state = LoadingTextCacheObservation.Capture(uiText, fields, UnityId) });
-                var fieldDigests = fullInventory && fieldDetails && DetailedComponent(component, item.id)
-                    ? fields.Fields(component.GetType()).Select(field => new
+                var markerDetails = fullInventory && fieldDetails && FixedMarkerRoot(item.id);
+                var detailOwner = markerDetails && component is PlayMakerFSM
+                    ? fields.Read(component, "fsm") ?? throw new InvalidOperationException("Original Marker detailed FSM is absent.") : component;
+                var fieldDigests = fullInventory && fieldDetails && (DetailedComponent(component, item.id) || markerDetails)
+                    ? fields.Fields(detailOwner.GetType()).Select(field => new
                         { field = field.Name, owner = field.DeclaringType!.FullName,
-                            digest = fields.CaptureFields(component, item.id, field.Name).Sha256 }).ToArray() : null;
+                            digest = fields.CaptureFields(detailOwner, item.id, field.Name).Sha256 }).ToArray() : null;
                 inventory.Add(new { id = item.id, type = component.GetType().FullName,
                     digest = digest.Sha256, nodes = digest.Nodes, unsupported = digest.Unsupported, fieldDigests });
             }
@@ -1202,15 +1205,38 @@ namespace HollowKnightTAS.Runtime.FullRun
                 .GetMethod("CaptureParticleRandomState", BindingFlags.Public | BindingFlags.Static)!.Invoke(null, null)!;
         }
 
-        private void AppendFsmMember(object member, StringBuilder digestText, List<object> inventory)
+        private void AppendFsmMember(object member, StringBuilder digestText, List<object> inventory, bool fullInventory)
         {
             if (!fsmMemberIds.TryGetValue(member, out var id))
                 throw new InvalidOperationException("P0 FSM member identity unavailable.");
             var digest = fields.Capture(member, id, expandRoot: true);
             digestText.Append(id).Append(':').Append(digest.Sha256).Append('\n');
             foreach (var omitted in digest.Unsupported) omissions.Add(omitted);
+            // Keep the shared graph digest and alias inventory above intact.
+            // These additional independent fields distinguish actual Marker
+            // differences from unrelated shared reference-number prefixes.
+            var fieldDigests = fullInventory && fieldDetails && FixedMarkerRoot(id)
+                ? fields.Fields(member.GetType()).Select(field => new {
+                    field = field.Name, owner = field.DeclaringType!.FullName,
+                    digest = fields.CaptureFields(member, id, field.Name).Sha256 }).ToArray() : null;
             inventory.Add(new { id, type = member.GetType().FullName, digest = digest.Sha256,
-                nodes = digest.Nodes, unsupported = digest.Unsupported });
+                nodes = digest.Nodes, unsupported = digest.Unsupported, fieldDigests });
+        }
+
+        private static bool FixedMarkerRoot(string id)
+        {
+            if (id.IndexOf("/Map Marker Action[", StringComparison.Ordinal) < 0) return false;
+            // Boundary identities use same-name ordinals; suffix identities
+            // use original sibling indices. Match the fixed owner path in
+            // both formats without making incidental sibling numbers part
+            // of diagnostic field selection.
+            var path = System.Text.RegularExpressions.Regex.Replace(id, @"\[[0-9]+\]", "[]")
+                .Replace("DontDestroyOnLoad:", "DontDestroyOnLoad/").Replace('|', ':');
+            const string live = "DontDestroyOnLoad/_GameCameras[]/HudCamera[]/Inventory[]/Map[]/World Map[]/Map Marker Action[]";
+            const string frozen = "DontDestroyOnLoad/__HKTAS_OriginalMarkerColdTemplate[]/Map Marker Action[]";
+            return Under(live) || Under(frozen);
+            bool Under(string root) => path.StartsWith(root + "/", StringComparison.Ordinal)
+                || path.StartsWith(root + ":", StringComparison.Ordinal);
         }
 
         private bool DetailedComponent(Component component, string id)
