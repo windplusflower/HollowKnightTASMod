@@ -282,6 +282,56 @@ public sealed class CanonicalCarryGraphCodecTests
     private sealed class ExternalOwner { public object? Item; public object[] Items = Array.Empty<object>(); }
 
     [TestMethod]
+    public void Finite_marker_phase_preserves_disjoint_geo_aliases_and_all_parent_slots()
+    {
+        var codec = new CanonicalCarryGraphCodec(new[] { typeof(ExternalOwner), typeof(object[]) }, "two-producers");
+        var sourceGeo = new Value(); var sourceMarker = new Value(); var oldGeo = new Value(); var oldMarker = new Value();
+        var bornGeo = new Value(); var bornMarker = new Value();
+        var graph = codec.Capture(Roots(("owner", new ExternalOwner { Item = sourceGeo, Items = new object[] { sourceGeo, sourceMarker, sourceMarker } })),
+            value => ReferenceEquals(value, sourceGeo) ? "geo" : ReferenceEquals(value, sourceMarker) ? "marker" : null);
+        CanonicalCarryGraphCodec.ExternalRebinding? phases = null;
+        var target = new ExternalOwner();
+        var parent = codec.PrepareOwnedGraph(graph, Roots(("owner", target)), key => key == "geo" ? oldGeo : oldMarker,
+            exposeExternalRebinding: value => phases = value);
+        parent.Apply(); var array = target.Items;
+        phases!.Prepare(Roots(("geo", bornGeo))).Apply(); phases.CompleteGeoPhase();
+        var marker = phases.PrepareMarker(Roots(("marker", bornMarker))); marker.Apply();
+        parent.VerifyReadback(); marker.VerifyReadback();
+        Assert.AreSame(array, target.Items); Assert.AreSame(bornGeo, target.Item); Assert.AreSame(bornGeo, target.Items[0]);
+        Assert.AreSame(bornMarker, target.Items[1]); Assert.AreSame(bornMarker, target.Items[2]);
+        Assert.ThrowsExactly<InvalidOperationException>(() => phases.PrepareMarker(Roots(("marker", new Value()))));
+    }
+
+    [TestMethod]
+    public void Finite_marker_phase_rejects_order_overlap_shared_target_and_failure_retry()
+    {
+        foreach (var fault in new[] { "order", "unfinished", "overlap", "shared", "changed" }) {
+            var codec = new CanonicalCarryGraphCodec(new[] { typeof(ExternalOwner), typeof(object[]) }, "two-producers");
+            var sourceGeo = new Value(); var sourceMarker = new Value(); var oldGeo = new Value(); var oldMarker = new Value(); var bornGeo = new Value();
+            var graph = codec.Capture(Roots(("owner", new ExternalOwner { Item = sourceGeo, Items = new object[] { sourceMarker } })),
+                value => ReferenceEquals(value, sourceGeo) ? "geo" : ReferenceEquals(value, sourceMarker) ? "marker" : null);
+            CanonicalCarryGraphCodec.ExternalRebinding? phases = null; var target = new ExternalOwner();
+            var parent = codec.PrepareOwnedGraph(graph, Roots(("owner", target)), key => key == "geo" ? oldGeo : oldMarker,
+                exposeExternalRebinding: value => phases = value); parent.Apply();
+            if (fault == "order") Assert.ThrowsExactly<InvalidOperationException>(() => phases!.PrepareMarker(Roots(("marker", new Value()))));
+            else {
+                var geo = phases!.Prepare(Roots(("geo", bornGeo)));
+                if (fault == "unfinished") Assert.ThrowsExactly<InvalidOperationException>(phases.CompleteGeoPhase);
+                else {
+                    geo.Apply(); phases.CompleteGeoPhase();
+                    if (fault == "overlap") Assert.ThrowsExactly<InvalidDataException>(() => phases.PrepareMarker(Roots(("geo", new Value()))));
+                    else if (fault == "shared") Assert.ThrowsExactly<InvalidDataException>(() => phases.PrepareMarker(Roots(("marker", bornGeo))));
+                    else {
+                        var marker = phases.PrepareMarker(Roots(("marker", new Value()))); target.Items[0] = new Value();
+                        Assert.ThrowsExactly<InvalidOperationException>(marker.Apply);
+                    }
+                }
+            }
+            Assert.ThrowsExactly<InvalidOperationException>(() => phases!.PrepareMarker(Roots(("marker", new Value()))));
+        }
+    }
+
+    [TestMethod]
     public void Array_roots_are_rejected_symmetrically_by_capture_and_import_before_any_live_write()
     {
         var codec = new CanonicalCarryGraphCodec(new[] { typeof(ArrayOwner), typeof(int[]) }, "bound-array-v1");

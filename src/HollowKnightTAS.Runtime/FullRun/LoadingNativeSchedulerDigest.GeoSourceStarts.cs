@@ -13,9 +13,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             IReadOnlyDictionary<int, MonoBehaviour> produced, string prefix, IReadOnlyDictionary<int, string> names,
             Action requireDirectory, HeroController hero,
             Action admission, Action requireSourceNative)
+            => RestoreAbsentProducedStarts(source, produced, prefix, names, requireDirectory, hero, admission, requireSourceNative, 11);
+        internal Action RestoreAbsentProducedMarkerStarts(CanonicalSchedulerCarry source,
+            IReadOnlyDictionary<int, MonoBehaviour> produced, string prefix, IReadOnlyDictionary<int, string> names,
+            Action requireDirectory, HeroController hero, Action admission, Action requireSourceNative)
+            => RestoreAbsentProducedStarts(source, produced, prefix, names, requireDirectory, hero, admission, requireSourceNative, 8);
+        private Action RestoreAbsentProducedStarts(CanonicalSchedulerCarry source,
+            IReadOnlyDictionary<int, MonoBehaviour> produced, string prefix, IReadOnlyDictionary<int, string> names,
+            Action requireDirectory, HeroController hero, Action admission, Action requireSourceNative, int expectedOwnerCount)
         {
             admission(); requireDirectory(); requireSourceNative(); RequireFrozenCapturedQueue()();
-            if (produced.Count != 11 || produced.Any(pair => pair.Value == null || pair.Value.GetInstanceID() != pair.Key))
+            if (produced.Count != expectedOwnerCount || produced.Any(pair => pair.Value == null || pair.Value.GetInstanceID() != pair.Key))
                 throw new InvalidOperationException("Source Geo Start cleanup has no exact original produced owner directory.");
             var manager = capturedManager; var callbacks = capturedCallbacks;
             var managerBytes = (byte[])capturedManagerBytes.Clone();

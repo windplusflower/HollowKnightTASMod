@@ -16,7 +16,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static GeoCounter? FrozenCounter { get; private set; }
         private Transform? parent;
         private int sibling;
-        internal void Capture(GeoCounter source)
+        internal void Capture(GeoCounter source, GameObject? markerRoot = null, Action<LoadingGeoIncomingReferences>? installMarker = null)
         {
             var stage = "original-owner-admission";
             try {
@@ -28,7 +28,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Original Geo must be frozen before its original HUD parent activation.");
             sibling = source.transform.GetSiblingIndex();
             stage = "full-original-incoming-reader";
-            var incoming = ObserveIncoming(source);
+            var markerIncoming = installMarker == null ? null : new LoadingGeoIncomingReferences();
+            var incoming = ObserveIncoming(source, markerIncoming, markerRoot);
+            if (installMarker != null) installMarker(markerIncoming!);
             stage = "original-PD-counter-random-preservation";
             var originalSelf = source.gameObject.activeSelf;
             var random = UnityEngine.Random.state;
@@ -96,12 +98,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Original Geo activation has no registered produced owner.");
             created.gameObject.SetActive(template.gameObject.activeSelf);
         }
-        private static LoadingGeoIncomingReferences ObserveIncoming(GeoCounter source)
+        internal static LoadingGeoIncomingReferences ObserveIncoming(GeoCounter source,
+            LoadingGeoIncomingReferences? markerIncoming = null, GameObject? markerRoot = null, bool retiringMarkerMeshes = false)
         {
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
             long observedNodes = 0, logicalCharacters = 0; var observedRoots = 0;
             var identities = new BoundaryObjectIdentity();
             var incoming = new LoadingGeoIncomingReferences(); incoming.BeginSample(identities.Get, source);
+            if (markerIncoming != null) markerIncoming.BeginMarkerSample(identities.Get,
+                markerRoot ?? throw new InvalidOperationException("Shared original incoming reader has no exact Marker owner."));
+            if (retiringMarkerMeshes) (markerIncoming ?? throw new InvalidOperationException("Retiring Marker mesh reader is absent.")).ObserveRetiringMarkerMeshes();
             var members = new Dictionary<object, string>(new ManagedReferences());
             var destroyed = new Dictionary<UnityEngine.Object, string>(new ObjectReferences());
             var memberRoots = new List<KeyValuePair<object, string>>();
@@ -128,6 +134,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             string? Reference(object value) {
                 if (reader!.Capturing && incoming.Owns(value)) incoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
+                if (reader.Capturing && markerIncoming != null && markerIncoming.Owns(value))
+                    markerIncoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
                 if (members.TryGetValue(value, out var member)) return member;
                 if (value is HutongGames.PlayMaker.FsmState || value is HutongGames.PlayMaker.FsmStateAction) {
                     if (reader.Read(value, "fsm") is HutongGames.PlayMaker.Fsm owner)
@@ -159,8 +167,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 return null;
             }
             using (reader = new LoadingFieldDigest(Reference, type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object),
-                slotObservation: (owner, field, index, value, path) => incoming.ObserveSlot(owner, field, index, value, path, reader!.DiagnosticRoot),
-                observeSlotValue: incoming.Owns)) {
+                slotObservation: (owner, field, index, value, path) => {
+                    incoming.ObserveSlot(owner, field, index, value, path, reader!.DiagnosticRoot);
+                    markerIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
+                }, observeSlotValue: value => incoming.Owns(value) || markerIncoming != null && markerIncoming.Owns(value))) {
                 var owners = Resources.FindObjectsOfTypeAll<MonoBehaviour>().Where(owner => owner != null && owner.gameObject.scene.IsValid()
                     && owner.gameObject.scene.isLoaded && owner.GetType().Assembly != typeof(CanonicalGeoColdTemplate).Assembly).ToArray();
                 if (owners.Length > 16000) throw new InvalidOperationException("Original Geo incoming owner inventory exceeded its existing reader bound.");

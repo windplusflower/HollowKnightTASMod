@@ -51,6 +51,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 return key + "|array=" + ordinal;
             }
             if (ReferenceEquals(value, EqualityComparer<string>.Default)) return "runtime-comparer|string-default";
+            if (ReferenceEquals(value, EqualityComparer<int>.Default)) return "runtime-comparer|int32-default";
             if (value is Delegate callback)
             {
                 // Only the exact original dream-warp checks are registered.
@@ -96,6 +97,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 return method;
             }
             if (binding == "runtime-comparer|string-default") return EqualityComparer<string>.Default;
+            if (binding == "runtime-comparer|int32-default") return EqualityComparer<int>.Default;
             if (parts[0] == "metadata-type" && parts.Length == 4) return TypeAt(1);
             if (parts[0] == "metadata-method" && parts.Length == 5) return MethodAt(1);
             if (parts[0] == "original-callback" && parts.Length == 9)

@@ -18,15 +18,58 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly HashSet<string> externalReferences = new HashSet<string>(StringComparer.Ordinal);
         private string[] ownedRoots = Array.Empty<string>();
         private GeoCounter? counter;
+        private GameObject? marker;
         internal bool Owns(object? value) => value != null && owned.ContainsKey(value);
         internal void BeginSample(Func<UnityEngine.Object, string> identity, GeoCounter? explicitCounter = null)
         {
             owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear(); ownedRoots = Array.Empty<string>();
+            marker = null;
             var cameras = typeof(GameCameras).GetField("_instance", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null) as GameCameras;
             counter = explicitCounter ?? (cameras == null ? null : cameras.geoCounter);
             if (counter == null) return;
             PopulateOwnedDirectory(counter);
             ownedRoots = owned.Keys.OfType<MonoBehaviour>().Select(identity).ToArray();
+        }
+        // A finite second owner domain shares the existing slot/alias reader.
+        // This entry accepts only the exact original Marker directory above;
+        // it does not broaden the existing Geo shape or its admission.
+        internal void BeginMarkerSample(Func<UnityEngine.Object, string> identity, GameObject? explicitMarker = null)
+        {
+            owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear(); ownedRoots = Array.Empty<string>();
+            counter = null; marker = explicitMarker ?? CanonicalMarkerDirectory.Current();
+            foreach (var pair in CanonicalMarkerDirectory.Build(marker)) {
+                owned.Add(pair.Value, pair.Key);
+                if (pair.Value is PlayMakerFSM fsm) {
+                    var raw = typeof(PlayMakerFSM).GetField("fsm", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(fsm);
+                    AddManaged(raw, pair.Key + "/fsm");
+                }
+            }
+            foreach (var pair in CanonicalMarkerReadonlyCarry.Directory(CanonicalMarkerDirectory.Build(marker)))
+                if (!owned.ContainsKey(pair.Value)) owned.Add(pair.Value, pair.Key);
+            foreach (var pair in CanonicalMarkerEventCarry.Directory(CanonicalMarkerDirectory.Build(marker)))
+                if (!owned.ContainsKey(pair.Value)) owned.Add(pair.Value, pair.Key);
+            ownedRoots = owned.Keys.OfType<MonoBehaviour>().Select(identity).ToArray();
+        }
+        internal static IReadOnlyDictionary<string, object> BuildMarkerDirectory(GameObject marker)
+        {
+            var directory = new LoadingGeoIncomingReferences();
+            directory.BeginMarkerSample(_ => "unused-marker-local-root", marker);
+            return directory.OwnedDirectory();
+        }
+        // A cold Canon retires these exact TMP-owned meshes through the
+        // original OnDestroy. They have no replacement: any external consumer
+        // therefore fails Prepare rather than silently retaining a dead mesh.
+        internal void ObserveRetiringMarkerMeshes()
+        {
+            if (marker == null || counter != null) throw new InvalidOperationException("Retiring Marker mesh observation has no exact directory.");
+            var field = typeof(TMPro.TextMeshPro).GetField("m_mesh", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            foreach (var pair in CanonicalMarkerDirectory.Build(marker).Where(pair => pair.Value is TMPro.TextMeshPro)) {
+                var value = field.GetValue(pair.Value);
+                if (ReferenceEquals(value, null)) continue;
+                if (!(value is Mesh mesh) || mesh == null || owned.ContainsKey(mesh))
+                    throw new InvalidOperationException("Retiring Marker TMP mesh is dead, shared or has an unknown type.");
+                owned.Add(mesh, pair.Key + "/retired-owned-mesh");
+            }
         }
         // Directory consumers need exact local aliases, not world-root paths.
         // Keep the same native/managed admission below without constructing a
@@ -59,7 +102,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal IReadOnlyDictionary<string, object> OwnedDirectory() => owned.ToDictionary(pair => pair.Value, pair => pair.Key, StringComparer.Ordinal);
         internal LoadingGeoIncomingReferences Freeze()
         {
-            var copy = new LoadingGeoIncomingReferences { counter = counter, ownedRoots = (string[])ownedRoots.Clone() };
+            var copy = new LoadingGeoIncomingReferences { counter = counter, marker = marker, ownedRoots = (string[])ownedRoots.Clone() };
             foreach (var pair in owned) copy.owned.Add(pair.Key, pair.Value);
             foreach (var item in references) copy.references.Add(item);
             foreach (var pair in slots) copy.slots.Add(pair.Key, pair.Value);
@@ -108,7 +151,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal CanonicalPreparedWritePlan Prepare(IReadOnlyDictionary<string, object> replacements)
         {
-            if (counter == null || externalReferences.Any(path => !slots.ContainsKey(path)))
+            if ((counter == null && marker == null) || externalReferences.Any(path => !slots.ContainsKey(path)))
                 throw new InvalidOperationException("Geo incoming directory contains an unbound delegate/native/collection slot.");
             var selected = slots.Values.ToArray();
             foreach (var slot in selected)

@@ -22,15 +22,19 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalHudJournalPolicy journal;
         private readonly Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies;
         private readonly Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreGeoSourceDependencies;
+        private readonly Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreMarkerSourceDependencies;
         private readonly CanonicalGeoSourceDomain geoDomain = new CanonicalGeoSourceDomain();
         private readonly CanonicalMapSourceDomain mapDomain = new CanonicalMapSourceDomain();
+        private readonly CanonicalMarkerSourceDomain markerDomain = new CanonicalMarkerSourceDomain();
+        internal byte[] MarkerGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] MapGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] GeoGraph { get; private set; } = Array.Empty<byte>();
         internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates, CanonicalHudJournalPolicy journal,
             Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies,
-            Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreGeoSourceDependencies)
+            Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreGeoSourceDependencies,
+            Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreMarkerSourceDependencies)
         { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; this.journal = journal;
-            this.restoreHudSourceDependencies = restoreHudSourceDependencies; this.restoreGeoSourceDependencies = restoreGeoSourceDependencies; }
+            this.restoreHudSourceDependencies = restoreHudSourceDependencies; this.restoreGeoSourceDependencies = restoreGeoSourceDependencies; this.restoreMarkerSourceDependencies = restoreMarkerSourceDependencies; }
         internal EventAudit[] EventBindingAudit { get; private set; } = Array.Empty<EventAudit>();
         internal CanonicalEventCarryRoots.Audit? EventGlobalsAudit { get; private set; }
         internal CanonicalEventGraphContract.Audit? EventGraphAudit { get; private set; }
@@ -187,6 +191,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             GeoGraph = targetDirectoryOnly ? Array.Empty<byte>() : geoDomain.Capture(GameCameras.instance.geoCounter,
                 CanonicalGeoColdTemplate.Directory(GameCameras.instance.geoCounter.gameObject), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             MapGraph = targetDirectoryOnly ? Array.Empty<byte>() : mapDomain.Capture(mainNodes, bindings.Bind, bindings.AuditGeoAssets);
+            MarkerGraph = targetDirectoryOnly ? Array.Empty<byte>() : markerDomain.Capture(CanonicalMarkerDirectory.Current(), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             var mainBindings = new SortedDictionary<string, object>(InputCarryAudit.FixedBindings.ToDictionary(pair => pair.Key, pair => pair.Value), StringComparer.Ordinal);
             foreach (var pair in roots) mainBindings.Add("canonical-main-root/" + pair.Key, pair.Value);
             var inputExternal = new ExternalBindings(identities, assetTemplates, canonicalSenders, mainBindings, captureEpoch, bindings.ownerDirectory);
@@ -368,6 +373,54 @@ namespace HollowKnightTAS.Runtime.FullRun
                         (applyGeo ?? throw new InvalidOperationException("Source Geo final plan was not prepared."))();
                     }, () => (beginGeoLifecycle ?? throw new InvalidOperationException("Geo lifecycle controller is absent."))(),
                         () => (requireGeoNative ?? throw new InvalidOperationException("Geo native source witness is absent."))());
+                    mainRebinding!.CompleteGeoPhase(); sdkRebinding!.CompleteGeoPhase();
+                });
+                domainActions.Add(() => {
+                    ActualTargetStage = "marker-source-producer";
+                    var envelope = actualSourceValidation ?? throw new InvalidOperationException("Post-main Marker has no sealed source envelope.");
+                    void RequireMain() { main.VerifyReadback(); sdk.VerifyReadback(); }
+                    Action? applyMarker = null;
+                    Action? beginMarkerLifecycle = null;
+                    Action? requireMarkerNative = null;
+                    Action? reapplyEventData = null;
+                    restoreMarkerSourceDependencies(continuation!.Scheduler, admitted, (oldDirectory, producedDirectory) => {
+                        var marker = (GameObject)producedDirectory["$"];
+                        ActualTargetStage = "marker-prepare-source-graph";
+                        IReadOnlyDictionary<string, object>? newDirectory = null;
+                        applyMarker = markerDomain.Prepare(envelope.Marker, marker,
+                            mainView!, RequireMain, bindings.ResolveTarget, admitted, directory => newDirectory = directory, out var beginLifecycle, out var verifyNative);
+                        beginMarkerLifecycle = beginLifecycle; requireMarkerNative = verifyNative;
+                        if (newDirectory == null) throw new InvalidOperationException("Source Marker has no prepared final alias directory.");
+                        Dictionary<string, object> Replacements(CanonicalCarryGraphData graph, Func<string, object> resolve) {
+                            var replacements = new Dictionary<string, object>(StringComparer.Ordinal);
+                            foreach (var external in graph.Externals) {
+                                var current = resolve(external.Binding);
+                                var matches = oldDirectory.Where(pair => ReferenceEquals(pair.Value, current)).ToArray();
+                                if (matches.Length > 1) throw new InvalidDataException("Marker external owner directory contains duplicate identities.");
+                                if (matches.Length == 1) replacements.Add(external.Binding, newDirectory[matches[0].Key]);
+                            }
+                            return replacements;
+                        }
+                        var mainChanges = Replacements(sourceMain, bindings.ResolveTarget);
+                        var sdkChanges = Replacements(sourceInput, inputExternal.ResolveTarget);
+                        ActualTargetStage = "marker-main-input-external-rebind";
+                        if (mainChanges.Count != 0) mainRebinding!.PrepareMarker(mainChanges).Apply();
+                        if (sdkChanges.Count != 0) sdkRebinding!.PrepareMarker(sdkChanges).Apply();
+                        RequireMain();
+                        reapplyEventData = CanonicalEventDataCarry.PrepareSourceReapply(mainView!, admitted);
+                        return newDirectory;
+                    }, verifyIncoming => {
+                        ActualTargetStage = "marker-reapply-source-event-data";
+                        (reapplyEventData ?? throw new InvalidOperationException("Source EventData replay was not prepared."))();
+                        // This same-thread protected interval performs only
+                        // incoming/native observations. Its one complete main
+                        // and SDK check is finalAdmission immediately before
+                        // the first Marker write-before snapshot, not repeated here.
+                        verifyIncoming();
+                        ActualTargetStage = "marker-apply-source-graph";
+                        (applyMarker ?? throw new InvalidOperationException("Source Marker final plan was not prepared."))();
+                    }, () => (beginMarkerLifecycle ?? throw new InvalidOperationException("Marker lifecycle controller is absent."))(),
+                        () => (requireMarkerNative ?? throw new InvalidOperationException("Marker native source witness is absent."))());
                 });
                 domainActions.Add(() => {
                     ActualTargetStage = "map-source-graph-activation";
@@ -491,7 +544,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 else if (canonicalSenders.Snapshot().Slots.Any(slot => slot.Key == binding)) value = canonicalSenders.Resolve(binding);
                 else if (binding.StartsWith("metadata-", StringComparison.Ordinal) || binding.StartsWith("original-callback|", StringComparison.Ordinal)
-                    || binding == "runtime-comparer|string-default") value = metadata.Resolve(binding);
+                    || binding == "runtime-comparer|string-default" || binding == "runtime-comparer|int32-default") value = metadata.Resolve(binding);
                 else {
                     if (!nativeDirectory.TryGetValue(binding, out value!))
                         throw new InvalidDataException("Target native/FSM external has no unique registered identity: " + binding);

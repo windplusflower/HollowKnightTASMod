@@ -25,6 +25,10 @@ public sealed class CanonicalCarryReflectionBindingsTests
         Assert.AreEqual(method, bindings.Resolve(bindings.Bind(method)!));
         Assert.AreSame(Original, bindings.Resolve(bindings.Bind(Original)!));
         Assert.AreSame(EqualityComparer<string>.Default, bindings.Resolve(bindings.Bind(EqualityComparer<string>.Default)!));
+        Assert.AreSame(EqualityComparer<int>.Default, bindings.Resolve(bindings.Bind(EqualityComparer<int>.Default)!));
+        var otherIntComparer = Activator.CreateInstance(EqualityComparer<int>.Default.GetType(), nonPublic: true)!;
+        Assert.AreNotSame(EqualityComparer<int>.Default, otherIntComparer);
+        Assert.IsNull(bindings.Bind(otherIntComparer));
     }
 
     [TestMethod]

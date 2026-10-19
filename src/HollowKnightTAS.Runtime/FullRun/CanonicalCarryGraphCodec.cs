@@ -457,6 +457,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly HashSet<int> copiedExternal;
             private readonly object[] rootOwners;
             private bool consumed;
+            private bool markerConsumed;
+            private bool geoCompleted, terminal;
+            private CanonicalPreparedWritePlan? geoPlan;
+            private readonly HashSet<int> transferred = new HashSet<int>();
             internal ExternalRebinding(CanonicalCarryGraphData.External[] source, object[] external,
                 List<Tuple<int, Func<object?>, Action<object>>> slots, HashSet<int> copiedExternal,
                 object[] rootOwners, CanonicalPreparedWritePlan parent)
@@ -464,12 +468,38 @@ namespace HollowKnightTAS.Runtime.FullRun
                 this.copiedExternal = copiedExternal; this.rootOwners = rootOwners; }
             internal CanonicalPreparedWritePlan Prepare(IReadOnlyDictionary<string, object> replacements)
             {
-                if (consumed || replacements.Count == 0) throw new InvalidOperationException("Deferred external phase is absent or consumed.");
+                if (terminal || consumed || markerConsumed || geoCompleted || replacements.Count == 0) {
+                    terminal = true;
+                    throw new InvalidOperationException("Deferred external phase is absent or consumed.");
+                }
                 parent.VerifyReadback(); consumed = true;
+                try { geoPlan = PrepareExact(replacements); return geoPlan; } catch { terminal = true; throw; }
+            }
+            internal void CompleteGeoPhase()
+            {
+                if (terminal || geoCompleted || markerConsumed) {
+                    terminal = true;
+                    throw new InvalidOperationException("Geo external completion is consumed or terminal.");
+                }
+                try { geoPlan?.VerifyReadback(); parent.VerifyReadback(); consumed = true; geoCompleted = true; } catch { terminal = true; throw; }
+            }
+            // Marker is the second finite original producer. The original Geo
+            // phase stays single-use; no external slot can be transferred twice.
+            internal CanonicalPreparedWritePlan PrepareMarker(IReadOnlyDictionary<string, object> replacements)
+            {
+                if (terminal || !geoCompleted || markerConsumed || replacements.Count == 0) {
+                    terminal = true;
+                    throw new InvalidOperationException("Marker external phase is out of order, absent or consumed.");
+                }
+                markerConsumed = true;
+                try { parent.VerifyReadback(); return PrepareExact(replacements); } catch { terminal = true; throw; }
+            }
+            private CanonicalPreparedWritePlan PrepareExact(IReadOnlyDictionary<string, object> replacements)
+            {
                 var proposed = (object[])external.Clone(); var selected = new HashSet<int>();
                 foreach (var pair in replacements) {
                     var index = Array.FindIndex(source, item => item.Binding == pair.Key);
-                    if (index < 0 || pair.Value == null || Identity(pair.Value.GetType()) != source[index].Type
+                    if (index < 0 || transferred.Contains(index) || pair.Value == null || Identity(pair.Value.GetType()) != source[index].Type
                         || ReferenceEquals(pair.Value, external[index]) || rootOwners.Any(owner => ReferenceEquals(owner, pair.Value)))
                         throw new InvalidDataException("Deferred external replacement has no distinct exact source binding: " + pair.Key);
                     if (copiedExternal.Contains(index))
@@ -481,26 +511,35 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var changed = slots.Where(slot => selected.Contains(slot.Item1)).ToArray();
                 if (selected.Any(index => !changed.Any(slot => slot.Item1 == index)))
                     throw new InvalidDataException("Deferred external replacement has no reachable field slot.");
+                foreach (var index in selected) transferred.Add(index);
                 void Guard() {
-                    parent.VerifyReadback();
-                    foreach (var slot in changed) if (!ReferenceEquals(slot.Item2(), external[slot.Item1]))
-                        throw new InvalidOperationException("Deferred external source slot changed before application.");
+                    try {
+                        if (terminal) throw new InvalidOperationException("Deferred external phase is terminal.");
+                        parent.VerifyReadback();
+                        foreach (var slot in changed) if (!ReferenceEquals(slot.Item2(), external[slot.Item1]))
+                            throw new InvalidOperationException("Deferred external source slot changed before application.");
+                    } catch { terminal = true; throw; }
                 }
                 void Verify() {
-                    foreach (var slot in changed) if (!ReferenceEquals(slot.Item2(), proposed[slot.Item1]))
-                        throw new InvalidOperationException("Deferred external source slot readback differs.");
-                    parent.VerifyReadback();
+                    try {
+                        if (terminal) throw new InvalidOperationException("Deferred external phase is terminal.");
+                        foreach (var slot in changed) if (!ReferenceEquals(slot.Item2(), proposed[slot.Item1]))
+                            throw new InvalidOperationException("Deferred external source slot readback differs.");
+                        parent.VerifyReadback();
+                    } catch { terminal = true; throw; }
                 }
                 return new CanonicalPreparedWritePlan(Guard, () => {
-                    foreach (var slot in changed) slot.Item3(proposed[slot.Item1]);
-                    foreach (var index in selected) external[index] = proposed[index];
+                    try {
+                        foreach (var slot in changed) slot.Item3(proposed[slot.Item1]);
+                        foreach (var index in selected) external[index] = proposed[index];
+                    } catch { terminal = true; throw; }
                 }, Verify);
             }
         }
 
         // Declared reference slots retain identity; value slots compare every
         // frozen raw field and scalar bit, never user Equals or a property.
-        private bool SameRawSlot(object? expected, object? current, Type declared, int depth)
+        internal bool SameRawSlot(object? expected, object? current, Type declared, int depth)
         {
             if (!declared.IsValueType) return ReferenceEquals(expected, current);
             if (expected == null || current == null) return expected == null && current == null;

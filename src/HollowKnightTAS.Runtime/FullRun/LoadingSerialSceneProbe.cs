@@ -39,6 +39,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private CanonicalBoundaryMutationScope? protectedClockCanonScope;
         private bool protectedSourceCharmDerivationConsumed;
         private bool protectedSourceGeoDerivationConsumed;
+        private bool protectedSourceMarkerDerivationConsumed;
         private readonly System.Collections.Generic.Dictionary<int, string> retiredSourceOwners = new System.Collections.Generic.Dictionary<int, string>();
         internal static string? RetiredSourceOwner(int instanceId) => instance != null
             && instance.sourceUnloaded && instance.retiredSourceOwners.TryGetValue(instanceId, out var identity) ? identity : null;
@@ -368,6 +369,23 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || self.protectedSourceGeoDerivationConsumed)
                 throw new InvalidOperationException("Source Geo derivation requires its single protected actual D mutation scope.");
             self.protectedSourceGeoDerivationConsumed = true;
+            using var scope = new CanonicalBoundaryMutationScope(requireAdmission);
+            scope.Enter(); self.protectedClockCanonScope = scope;
+            try {
+                RequireCanonicalMutationBoundary();
+                deriveAndApplySource(); requireAdmission();
+                GetProtectedObservationBoundary(); requireAdmission();
+            }
+            finally { self.protectedClockCanonScope = null; }
+        }
+        internal static void DeriveProtectedSourceMarkerDirectory(Action deriveAndApplySource, Action requireAdmission)
+        {
+            GetProtectedObservationBoundary();
+            var self = instance!;
+            if (!CanonicalActualDExperiment.Enabled || !CanonicalClockApplyExperiment.Enabled || self.protectedClockCanonScope != null
+                || self.protectedSourceMarkerDerivationConsumed)
+                throw new InvalidOperationException("Source Marker derivation requires its single protected actual D mutation scope.");
+            self.protectedSourceMarkerDerivationConsumed = true;
             using var scope = new CanonicalBoundaryMutationScope(requireAdmission);
             scope.Enter(); self.protectedClockCanonScope = scope;
             try {

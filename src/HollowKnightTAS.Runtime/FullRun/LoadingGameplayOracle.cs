@@ -73,6 +73,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly SortedSet<string> detachedFsmReferences = new SortedSet<string>(StringComparer.Ordinal);
         private readonly LoadingGeoIncomingReferences geoIncoming = new LoadingGeoIncomingReferences();
         private readonly LoadingGeoIncomingReferences frozenGeoIncoming = new LoadingGeoIncomingReferences();
+        private readonly LoadingGeoIncomingReferences markerIncoming = new LoadingGeoIncomingReferences();
+        private readonly LoadingGeoIncomingReferences frozenMarkerIncoming = new LoadingGeoIncomingReferences();
+        private bool frozenMarkerSample;
         private bool frozenGeoSample;
         private readonly List<object> detachedFsmMetadata = new List<object>();
         private readonly List<Tuple<object, string>> detachedFsmRoots = new List<Tuple<object, string>>();
@@ -133,8 +136,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     directFloatingField: _ => true,
                     slotObservation: (owner, field, index, value, path) => {
                         geoIncoming.ObserveSlot(owner, field, index, value, path, fields!.DiagnosticRoot);
+                        markerIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
+                        if (frozenMarkerSample) frozenMarkerIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (frozenGeoSample) frozenGeoIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
-                    }, observeSlotValue: value => geoIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value));
+                    }, observeSlotValue: value => geoIncoming.Owns(value) || markerIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value));
             if (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1")
                 nativeScheduler = new LoadingNativeSchedulerDigest();
             if (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
@@ -264,6 +269,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal Action RequireFrozenS0Scheduler() => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).RequireFrozenCapturedQueue();
         internal LoadingGeoIncomingReferences FreezeGeoIncoming() => geoIncoming.Freeze();
+        internal LoadingGeoIncomingReferences FreezeMarkerIncoming() => markerIncoming.Freeze();
         internal Action PrepareOwnedHudLifecycle(IReadOnlyDictionary<int, MonoBehaviour> oldOwners, Func<int, bool> ownsNewStart, out Action retireStarts)
             => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).BeginOwnedStartLifecycle(oldOwners, ownsNewStart, out retireStarts);
         // The original owned-lifecycle recapture already assigned these exact
@@ -271,10 +277,21 @@ namespace HollowKnightTAS.Runtime.FullRun
         // the controlled queue write. Reuse only this one frozen directory.
         internal (string Prefix, IReadOnlyDictionary<int, string> Names, Action Guard) PrepareProducedGeoSchedulerNames(
             GeoCounter root, IReadOnlyDictionary<int, MonoBehaviour> produced)
+            => PrepareProducedSchedulerNames(root.gameObject, produced);
+        internal (string Prefix, IReadOnlyDictionary<int, string> Names, Action Guard) PrepareProducedMarkerSchedulerNames(
+            GameObject root, IReadOnlyDictionary<int, MonoBehaviour> produced)
+        {
+            var exact = CanonicalMarkerDirectory.Build(root).Values.OfType<MonoBehaviour>().ToArray();
+            if (produced.Count != 8 || exact.Length != 8 || exact.Any(owner => !produced.TryGetValue(owner.GetInstanceID(), out var actual) || !ReferenceEquals(owner, actual)))
+                throw new InvalidOperationException("Marker produced scheduler requires its exact eight original owners.");
+            return PrepareProducedSchedulerNames(root, produced);
+        }
+        private (string Prefix, IReadOnlyDictionary<int, string> Names, Action Guard) PrepareProducedSchedulerNames(
+            GameObject root, IReadOnlyDictionary<int, MonoBehaviour> produced)
         {
             var objects = hudSchedulerObjects; var behaviours = hudSchedulerBehaviours; var frozen = hudSchedulerOwners;
             if (objects == null || behaviours == null || frozen == null || !hudSchedulerOwnerReuseAvailable
-                || !objects.TryGetValue(root.gameObject.GetInstanceID(), out var prefix))
+                || !objects.TryGetValue(root.GetInstanceID(), out var prefix))
                 throw new InvalidOperationException("Produced Geo has no unused frozen scheduler owner directory.");
             var pointer = typeof(UnityEngine.Object).GetField("m_CachedPtr", BindingFlags.Instance | BindingFlags.NonPublic)!;
             var selected = produced.ToDictionary(pair => pair.Key, pair => frozen.Single(item => ReferenceEquals(item.Item1, pair.Value)));
@@ -282,7 +299,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             void Guard() {
                 if (!hudSchedulerOwnerReuseAvailable || !ReferenceEquals(objects, hudSchedulerObjects)
                     || !ReferenceEquals(behaviours, hudSchedulerBehaviours) || !ReferenceEquals(frozen, hudSchedulerOwners)
-                    || !objects.TryGetValue(root.gameObject.GetInstanceID(), out var currentPrefix) || currentPrefix != prefix)
+                    || !objects.TryGetValue(root.GetInstanceID(), out var currentPrefix) || currentPrefix != prefix)
                     throw new InvalidOperationException("Produced Geo scheduler directory was consumed or replaced.");
                 foreach (var pair in produced) {
                     var owner = pair.Value; var saved = selected[pair.Key];
@@ -303,6 +320,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             => (nativeScheduler ?? throw new InvalidOperationException("Missing original Geo scheduler observation.")).RestoreAbsentProducedGeoStarts(
                 source, produced, prefix, names, requireDirectory,
                 HeroController.SilentInstance ?? throw new InvalidOperationException("Missing Geo source Hero."), admission, requireSourceNative);
+        internal Action RestoreAbsentProducedMarkerStarts(CanonicalSchedulerCarry source, IReadOnlyDictionary<int, MonoBehaviour> produced,
+            string prefix, IReadOnlyDictionary<int, string> names, Action requireDirectory, Action admission, Action requireSourceNative)
+            => (nativeScheduler ?? throw new InvalidOperationException("Missing Marker scheduler observation.")).RestoreAbsentProducedMarkerStarts(
+                source, produced, prefix, names, requireDirectory,
+                HeroController.SilentInstance ?? throw new InvalidOperationException("Missing Marker source Hero."), admission, requireSourceNative);
         internal void RecaptureOwnedHudScheduler(Action admission, Action requireTransition)
         {
             if (!boundaryCapture || nativeScheduler == null) throw new InvalidOperationException("HUD lifecycle requires its original boundary reader.");
@@ -703,6 +725,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             assetValues.BeginSample();
             textCacheDetails.Clear();
             geoIncoming.BeginSample(UnityId);
+            markerIncoming.BeginMarkerSample(UnityId);
+            var frozenMarker = CanonicalMarkerColdTemplate.FrozenOwner;
+            frozenMarkerSample = frozenMarker != null;
+            if (frozenMarkerSample) frozenMarkerIncoming.BeginMarkerSample(UnityId, frozenMarker);
             var frozenGeo = CanonicalGeoColdTemplate.FrozenCounter;
             frozenGeoSample = frozenGeo != null;
             if (frozenGeoSample) frozenGeoIncoming.BeginSample(UnityId, frozenGeo);
@@ -959,6 +985,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             CaptureProgress("asset-values");
             result["assetValues"] = nativePhysicsOnly || !fullInventory ? "not-observed" : CaptureAssetValues(inventory);
             if (frozenGeoSample) frozenGeoIncoming.RequireNoExternalConsumers();
+            if (frozenMarkerSample) frozenMarkerIncoming.RequireNoExternalConsumers();
             CaptureProgress("final-digests");
             result["assetBindings"] = Hash(JsonConvert.SerializeObject(assetIdentities.Snapshot()));
             result["unsupported"] = Hash(string.Join("\n", omissions));
@@ -1205,6 +1232,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private string? ReferenceCore(object value)
         {
             if (fields.Capturing && geoIncoming.Owns(value)) geoIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
+            if (fields.Capturing && markerIncoming.Owns(value)) markerIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
+            if (fields.Capturing && frozenMarkerSample && frozenMarkerIncoming.Owns(value)) frozenMarkerIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && frozenGeoSample && frozenGeoIncoming.Owns(value)) frozenGeoIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (boundaryCapture && assetArrays.Reference(value) is string arrayId)
                 return "asset-array:" + arrayId + ":shared:" + fields.BindSharedReference(value).ToString(CultureInfo.InvariantCulture);
@@ -1421,7 +1450,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var content = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new {
                 format = LoadingInventoryRootEncoding.Format, names = encoded.Names, types = encoded.Types, roots = encoded.Roots,
                 detachedFsmReferences, detachedFsmMetadata, originalGeoLifecycle = LoadingGeoLifecycleObservation.Capture(),
-                originalMapLifecycle = LoadingMapLifecycleObservation.Capture(), geoIncomingReferences = geoIncoming.Snapshot() }));
+                originalMapLifecycle = LoadingMapLifecycleObservation.Capture(), geoIncomingReferences = geoIncoming.Snapshot(), markerIncomingReferences = markerIncoming.Snapshot() }));
             if (content.Length > 16 * 1024 * 1024)
                 throw new InvalidOperationException("Actual D suffix inventory exceeds the original 16 MiB diagnostic bound.");
             using (var compressed = new MemoryStream()) {

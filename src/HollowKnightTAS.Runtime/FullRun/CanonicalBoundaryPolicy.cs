@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Collections.Generic;
@@ -29,6 +29,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly bool phaseOneTrace;
         private readonly CanonicalRetiredMeshPolicy retiredMeshes;
         private LoadingGeoIncomingReferences? pendingGeoIncoming;
+        private LoadingGeoIncomingReferences? pendingMarkerIncoming;
         private readonly Dictionary<int, string> retiringGeo = new Dictionary<int, string>();
         internal string ActualTargetStage => carry?.ActualTargetStage ?? "no-carry";
         internal byte[]? ExperimentalSource { get; private set; }
@@ -58,6 +59,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 prepareMark = now;
             }
             pendingGeoIncoming = observer.FreezeGeoIncoming();
+            pendingMarkerIncoming = observer.FreezeMarkerIncoming();
             var epoch = CanonicalInputEpochRuntime.Capture(origin, targetNative, controlOrigin);
             var identities = new BoundaryObjectIdentity();
             PreparedPhase("frozen-owner-context");
@@ -155,6 +157,46 @@ namespace HollowKnightTAS.Runtime.FullRun
                 + ";metadataAssembliesEqual=" + metadata.LoadedAssembliesEqual + ";completeStateCoverage=false");
             }, Require);
         }
+        private void RestoreMarkerSourceDependencies(CanonicalSchedulerCarry sourceScheduler, Func<bool> admitted,
+            Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>> rebindGraphs,
+            Action<Action> applyMarkerSource, Action beginOriginalLifecycle, Action requireMarkerNative)
+        {
+            void Require() { if (!admitted()) throw new InvalidOperationException("Marker producer lost its original paused admission."); }
+            LoadingSerialSceneProbe.DeriveProtectedSourceMarkerDirectory(() => {
+            Require();
+            var current = observer ?? throw new InvalidOperationException("Marker producer has no original observer.");
+            var incoming = pendingMarkerIncoming ?? throw new InvalidOperationException("Marker producer has no frozen full incoming reader.");
+            pendingMarkerIncoming = null;
+            var marker = CanonicalMarkerDirectory.Current();
+            void Stage(string phase) { carry!.ActualTargetStage = phase; Require(); }
+            Stage("marker-existing-common-cold-Canon");
+            CanonicalMarkerBoundaryPolicy.RequireCold(marker);
+            var originalNative = CanonicalMarkerCarry.Capture(marker);
+            var oldDirectory = LoadingGeoIncomingReferences.BuildMarkerDirectory(marker);
+            // Every path already produced the real cold native owner in B's
+            // common Canon. Only the complete source managed graph is imported
+            // here; there is no target-only birth, activation or Start rewrite.
+            var newDirectory = rebindGraphs(oldDirectory, oldDirectory);
+            Stage("marker-cold-source-incoming-aliases");
+            var incomingPlan = incoming.Prepare(newDirectory);
+            incomingPlan.Apply();
+            beginOriginalLifecycle();
+            applyMarkerSource(incomingPlan.VerifyReadback);
+            requireMarkerNative();
+            CanonicalMarkerBoundaryPolicy.RequireCold(marker);
+            var finalNative = CanonicalMarkerCarry.Capture(marker);
+            if (!originalNative.Lifecycle.SequenceEqual(finalNative.Lifecycle)
+                || !originalNative.Registered.SequenceEqual(finalNative.Registered)
+                || !originalNative.ActiveSelf.SequenceEqual(finalNative.ActiveSelf))
+                throw new InvalidOperationException("Cold Marker source graph changed its native Canon.");
+            Stage("marker-canonical-action-metadata");
+            var metadata = CanonicalBoundaryStaticPolicy.ResetActionMetadata();
+            incomingPlan.VerifyReadback(); Require();
+            Modding.Logger.Log("[HKTAS] Marker common cold Canon source installation readback passed: completeManagedGraph=true;"
+                + "finalPreparedIncomingAliases=true;noTargetNativeLifecycle=true;metadataRecomputedEqual=" + metadata.RecomputedEqual
+                + ";metadataAssembliesEqual=" + metadata.LoadedAssembliesEqual + ";completeStateCoverage=false");
+            }, Require);
+        }
         internal CanonicalBoundaryPolicy()
         {
             CanonicalPhaseOneTrace.RequireContext(Environment.GetEnvironmentVariable);
@@ -216,7 +258,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("begin", new { movieInputNativeOrigin, controlledNativeFrame = checked(native - movieInputNativeOrigin) });
             Progress("original-Geo-lifecycle-before-Canon", LoadingGeoLifecycleObservation.Capture());
             Progress("original-Map-lifecycle-before-Canon", LoadingMapLifecycleObservation.Capture());
-            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates, journal, RestoreHudSourceDependencies, RestoreGeoSourceDependencies); }
+            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates, journal, RestoreHudSourceDependencies, RestoreGeoSourceDependencies, RestoreMarkerSourceDependencies); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
@@ -241,6 +283,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("R2-six-owned-HUD-particles-cleared-and-armed", new { count = hudParticles.Reset() });
             Progress("R2-original-Hero-Fall-Trail-stopped-and-cleared", CanonicalHeroFallTrailPolicy.Reset());
             Progress("R2-checkpoint-icon-idle-timer", CanonicalCheckpointIconPolicy.ResetIdleTimer());
+            if (observer == null) {
+                observer = LoadingGameplayOracle.CreateBoundaryObserver(sessionDirectory, movieInputNativeOrigin);
+                observerSession = sessionDirectory;
+            }
+            if (!StringComparer.Ordinal.Equals(observerSession, sessionDirectory))
+                throw new InvalidOperationException("Canonical observer cannot change its protected session binding.");
+            Progress("R2-original-Marker-common-cold-Canon", CanonicalMarkerBoundaryPolicy.Reset(hudStartup.MarkerColdDefinition, observer));
             var identities = new BoundaryObjectIdentity();
             var carryFsmBindings = CanonicalHeroFsmBindings.Validate(identities);
             Progress("D-Hero-FSM-bindings-validated", new { carryFsmBindings, canonicalVisualBindings = 2 });
@@ -311,7 +360,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidOperationException("Actual D source has unread or unsupported managed data: "
                             + string.Join(", ", data.Unsupported));
                     ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, MovieFrame = movie, NativeFrame = native,
-                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
+                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
                     Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,
                         blockingQualifications = carry.BlockingQualifications });
                 }

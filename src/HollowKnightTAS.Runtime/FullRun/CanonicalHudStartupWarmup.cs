@@ -18,8 +18,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool complete;
         private int firstFrame;
         private readonly CanonicalGeoColdTemplate geoTemplate = new CanonicalGeoColdTemplate();
+        private readonly CanonicalMarkerColdTemplate markerTemplate = new CanonicalMarkerColdTemplate();
         private CanonicalMapTextStartup? mapText;
         internal CanonicalGeoColdTemplate GeoTemplate => geoTemplate;
+        // Startup only retains the actual serialized cold definition. The
+        // three execution paths normalize the live hint at each unloaded B.
+        internal CanonicalMarkerColdTemplate MarkerColdDefinition => markerTemplate;
 
         internal bool Advance()
         {
@@ -39,7 +43,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     next.GetComponents<PlayMakerFSM>().Single(fsm => ((Fsm)Raw.GetValue(fsm)).Name == "charm_unequip_shift"),
                     charms.GetComponents<PlayMakerFSM>().Single(fsm => ((Fsm)Raw.GetValue(fsm)).Name == "Initial Activation") };
                 firstFrame = Time.frameCount;
-                geoTemplate.Capture(cameras.geoCounter);
+                var marker = CanonicalMarkerDirectory.Current();
+                geoTemplate.Capture(cameras.geoCounter, marker, incoming => markerTemplate.Capture(marker, incoming));
                 Modding.Logger.Log("[HKTAS] Original Geo before HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingGeoLifecycleObservation.Capture()));
                 Modding.Logger.Log("[HKTAS] Original Map before HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingMapLifecycleObservation.Capture()));
                 if (!camera.enabled || !cameras.gameObject.activeInHierarchy)
@@ -74,6 +79,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             Modding.Logger.Log("[HKTAS] Original HUD initialization completed; original PD derivation preserved and Invoke finished naturally.");
             return true;
         }
-        public void Dispose() { mapText?.Dispose(); geoTemplate.Dispose(); }
+        public void Dispose() { mapText?.Dispose(); markerTemplate.Dispose(); geoTemplate.Dispose(); }
     }
 }
