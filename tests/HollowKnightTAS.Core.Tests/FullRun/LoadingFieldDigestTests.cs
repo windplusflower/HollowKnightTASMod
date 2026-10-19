@@ -379,6 +379,31 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         }
 
         [TestMethod]
+        public void GlobalReferenceNumberOffsetsChangeOpaqueRootsButNotIndependentFieldValues()
+        {
+            (string Global, string Local) Capture(bool prefix, bool changedValue)
+            {
+                using var digest = NewDigest();
+                var shared = new Node();
+                if (changedValue) shared.A = new Node();
+                var owner = new Node { A = shared, B = shared };
+                digest.BeginSharedGraph();
+                try {
+                    if (prefix) digest.Capture(new Node { A = new Node() }, "unrelated-prefix", true);
+                    var global = digest.Capture(owner, "fixed-owner", true).Sha256;
+                    var local = digest.CaptureFields(owner, "fixed-owner", "A", "B").Sha256;
+                    return (global, local);
+                }
+                finally { digest.EndSharedGraph(); }
+            }
+            var source = Capture(false, false);
+            var target = Capture(true, false);
+            Assert.AreNotEqual(source.Global, target.Global);
+            Assert.AreEqual(source.Local, target.Local);
+            Assert.AreNotEqual(source.Local, Capture(true, true).Local);
+        }
+
+        [TestMethod]
         public void RawFloatBitsAndInheritedPrivateFieldsAffectDigest()
         {
             var digest = NewDigest();
