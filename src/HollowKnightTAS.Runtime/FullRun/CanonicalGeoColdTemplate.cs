@@ -16,7 +16,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static GeoCounter? FrozenCounter { get; private set; }
         private Transform? parent;
         private int sibling;
-        internal void Capture(GeoCounter source, GameObject? markerRoot = null, Action<LoadingGeoIncomingReferences>? installMarker = null)
+        internal void Capture(GeoCounter source, GameObject? markerRoot = null, Action<LoadingGeoIncomingReferences>? installMarker = null,
+            Transform? mapKeyRoot = null, Action<LoadingGeoIncomingReferences>? installMapKey = null)
         {
             var stage = "original-owner-admission";
             try {
@@ -29,8 +30,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             sibling = source.transform.GetSiblingIndex();
             stage = "full-original-incoming-reader";
             var markerIncoming = installMarker == null ? null : new LoadingGeoIncomingReferences();
-            var incoming = ObserveIncoming(source, markerIncoming, markerRoot);
+            var mapKeyIncoming = installMapKey == null ? null : new LoadingGeoIncomingReferences();
+            var incoming = ObserveIncoming(source, markerIncoming, markerRoot, mapKeyIncoming: mapKeyIncoming, mapKeyRoot: mapKeyRoot);
             if (installMarker != null) installMarker(markerIncoming!);
+            if (installMapKey != null) installMapKey(mapKeyIncoming!);
             stage = "original-PD-counter-random-preservation";
             var originalSelf = source.gameObject.activeSelf;
             var random = UnityEngine.Random.state;
@@ -99,7 +102,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             created.gameObject.SetActive(template.gameObject.activeSelf);
         }
         internal static LoadingGeoIncomingReferences ObserveIncoming(GeoCounter source,
-            LoadingGeoIncomingReferences? markerIncoming = null, GameObject? markerRoot = null, bool retiringMarkerMeshes = false)
+            LoadingGeoIncomingReferences? markerIncoming = null, GameObject? markerRoot = null, bool retiringMarkerMeshes = false,
+            LoadingGeoIncomingReferences? mapKeyIncoming = null, Transform? mapKeyRoot = null, bool retiringMapKeyMeshes = false)
         {
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
             long observedNodes = 0, logicalCharacters = 0; var observedRoots = 0;
@@ -108,6 +112,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (markerIncoming != null) markerIncoming.BeginMarkerSample(identities.Get,
                 markerRoot ?? throw new InvalidOperationException("Shared original incoming reader has no exact Marker owner."));
             if (retiringMarkerMeshes) (markerIncoming ?? throw new InvalidOperationException("Retiring Marker mesh reader is absent.")).ObserveRetiringMarkerMeshes();
+            if (mapKeyIncoming != null) mapKeyIncoming.BeginMapKeySample(identities.Get,
+                mapKeyRoot ?? throw new InvalidOperationException("Shared original incoming reader has no exact Map Key owner."));
+            if (retiringMapKeyMeshes) (mapKeyIncoming ?? throw new InvalidOperationException("Retiring Map Key mesh reader is absent.")).ObserveRetiringMapKeyMeshes();
             var members = new Dictionary<object, string>(new ManagedReferences());
             var destroyed = new Dictionary<UnityEngine.Object, string>(new ObjectReferences());
             var memberRoots = new List<KeyValuePair<object, string>>();
@@ -136,6 +143,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (reader!.Capturing && incoming.Owns(value)) incoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
                 if (reader.Capturing && markerIncoming != null && markerIncoming.Owns(value))
                     markerIncoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
+                if (reader.Capturing && mapKeyIncoming != null && mapKeyIncoming.Owns(value))
+                    mapKeyIncoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
                 if (members.TryGetValue(value, out var member)) return member;
                 if (value is HutongGames.PlayMaker.FsmState || value is HutongGames.PlayMaker.FsmStateAction) {
                     if (reader.Read(value, "fsm") is HutongGames.PlayMaker.Fsm owner)
@@ -170,7 +179,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 slotObservation: (owner, field, index, value, path) => {
                     incoming.ObserveSlot(owner, field, index, value, path, reader!.DiagnosticRoot);
                     markerIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
-                }, observeSlotValue: value => incoming.Owns(value) || markerIncoming != null && markerIncoming.Owns(value))) {
+                    mapKeyIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
+                }, observeSlotValue: value => incoming.Owns(value) || markerIncoming != null && markerIncoming.Owns(value)
+                    || mapKeyIncoming != null && mapKeyIncoming.Owns(value))) {
                 var owners = Resources.FindObjectsOfTypeAll<MonoBehaviour>().Where(owner => owner != null && owner.gameObject.scene.IsValid()
                     && owner.gameObject.scene.isLoaded && owner.GetType().Assembly != typeof(CanonicalGeoColdTemplate).Assembly).ToArray();
                 if (owners.Length > 16000) throw new InvalidOperationException("Original Geo incoming owner inventory exceeded its existing reader bound.");

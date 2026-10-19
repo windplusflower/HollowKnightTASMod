@@ -457,7 +457,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly HashSet<int> copiedExternal;
             private readonly object[] rootOwners;
             private bool consumed;
-            private bool markerConsumed;
+            private bool markerConsumed, markerCompleted, mapKeyConsumed;
+            private CanonicalPreparedWritePlan? markerPlan;
             private bool geoCompleted, terminal;
             private CanonicalPreparedWritePlan? geoPlan;
             private readonly HashSet<int> transferred = new HashSet<int>();
@@ -487,12 +488,29 @@ namespace HollowKnightTAS.Runtime.FullRun
             // phase stays single-use; no external slot can be transferred twice.
             internal CanonicalPreparedWritePlan PrepareMarker(IReadOnlyDictionary<string, object> replacements)
             {
-                if (terminal || !geoCompleted || markerConsumed || replacements.Count == 0) {
+                if (terminal || !geoCompleted || markerConsumed || markerCompleted || mapKeyConsumed || replacements.Count == 0) {
                     terminal = true;
                     throw new InvalidOperationException("Marker external phase is out of order, absent or consumed.");
                 }
                 markerConsumed = true;
-                try { parent.VerifyReadback(); return PrepareExact(replacements); } catch { terminal = true; throw; }
+                try { parent.VerifyReadback(); markerPlan = PrepareExact(replacements); return markerPlan; } catch { terminal = true; throw; }
+            }
+            internal void CompleteMarkerPhase()
+            {
+                if (terminal || !geoCompleted || markerCompleted || mapKeyConsumed) {
+                    terminal = true; throw new InvalidOperationException("Marker external completion is out of order or consumed.");
+                }
+                try { markerPlan?.VerifyReadback(); parent.VerifyReadback(); markerCompleted = true; }
+                catch { terminal = true; throw; }
+            }
+            internal CanonicalPreparedWritePlan PrepareMapKey(IReadOnlyDictionary<string, object> replacements)
+            {
+                if (terminal || !markerCompleted || mapKeyConsumed || replacements.Count == 0) {
+                    terminal = true; throw new InvalidOperationException("Map Key external phase is out of order, absent or consumed.");
+                }
+                mapKeyConsumed = true;
+                try { parent.VerifyReadback(); return PrepareExact(replacements); }
+                catch { terminal = true; throw; }
             }
             private CanonicalPreparedWritePlan PrepareExact(IReadOnlyDictionary<string, object> replacements)
             {

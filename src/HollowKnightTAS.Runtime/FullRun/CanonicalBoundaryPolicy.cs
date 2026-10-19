@@ -30,6 +30,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalRetiredMeshPolicy retiredMeshes;
         private LoadingGeoIncomingReferences? pendingGeoIncoming;
         private LoadingGeoIncomingReferences? pendingMarkerIncoming;
+        private LoadingGeoIncomingReferences? pendingMapKeyIncoming;
         private readonly Dictionary<int, string> retiringGeo = new Dictionary<int, string>();
         internal string ActualTargetStage => carry?.ActualTargetStage ?? "no-carry";
         internal byte[]? ExperimentalSource { get; private set; }
@@ -60,6 +61,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             pendingGeoIncoming = observer.FreezeGeoIncoming();
             pendingMarkerIncoming = observer.FreezeMarkerIncoming();
+            pendingMapKeyIncoming = observer.FreezeMapKeyIncoming();
             var epoch = CanonicalInputEpochRuntime.Capture(origin, targetNative, controlOrigin);
             var identities = new BoundaryObjectIdentity();
             PreparedPhase("frozen-owner-context");
@@ -258,7 +260,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("begin", new { movieInputNativeOrigin, controlledNativeFrame = checked(native - movieInputNativeOrigin) });
             Progress("original-Geo-lifecycle-before-Canon", LoadingGeoLifecycleObservation.Capture());
             Progress("original-Map-lifecycle-before-Canon", LoadingMapLifecycleObservation.Capture());
-            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates, journal, RestoreHudSourceDependencies, RestoreGeoSourceDependencies, RestoreMarkerSourceDependencies); }
+            try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates, journal, RestoreHudSourceDependencies, RestoreGeoSourceDependencies, RestoreMarkerSourceDependencies, () => {
+                var incoming = pendingMapKeyIncoming ?? throw new InvalidOperationException("Map Key frozen incoming reader is absent or consumed.");
+                pendingMapKeyIncoming = null; return incoming; }); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
@@ -289,6 +293,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (!StringComparer.Ordinal.Equals(observerSession, sessionDirectory))
                 throw new InvalidOperationException("Canonical observer cannot change its protected session binding.");
+            Progress("R2-original-MapKeyText-common-cold-Canon", CanonicalMapKeyTextBoundaryPolicy.Reset(hudStartup.MapKeyTextColdDefinition, observer));
             Progress("R2-original-Marker-common-cold-Canon", CanonicalMarkerBoundaryPolicy.Reset(hudStartup.MarkerColdDefinition, observer));
             var identities = new BoundaryObjectIdentity();
             var carryFsmBindings = CanonicalHeroFsmBindings.Validate(identities);
@@ -360,7 +365,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidOperationException("Actual D source has unread or unsupported managed data: "
                             + string.Join(", ", data.Unsupported));
                     ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, MovieFrame = movie, NativeFrame = native,
-                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
+                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
                     Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,
                         blockingQualifications = carry.BlockingQualifications });
                 }

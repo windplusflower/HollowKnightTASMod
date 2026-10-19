@@ -40,6 +40,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool protectedSourceCharmDerivationConsumed;
         private bool protectedSourceGeoDerivationConsumed;
         private bool protectedSourceMarkerDerivationConsumed;
+        private bool protectedSourceMapKeyDerivationConsumed;
         private readonly System.Collections.Generic.Dictionary<int, string> retiredSourceOwners = new System.Collections.Generic.Dictionary<int, string>();
         internal static string? RetiredSourceOwner(int instanceId) => instance != null
             && instance.sourceUnloaded && instance.retiredSourceOwners.TryGetValue(instanceId, out var identity) ? identity : null;
@@ -386,6 +387,23 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || self.protectedSourceMarkerDerivationConsumed)
                 throw new InvalidOperationException("Source Marker derivation requires its single protected actual D mutation scope.");
             self.protectedSourceMarkerDerivationConsumed = true;
+            using var scope = new CanonicalBoundaryMutationScope(requireAdmission);
+            scope.Enter(); self.protectedClockCanonScope = scope;
+            try {
+                RequireCanonicalMutationBoundary();
+                deriveAndApplySource(); requireAdmission();
+                GetProtectedObservationBoundary(); requireAdmission();
+            }
+            finally { self.protectedClockCanonScope = null; }
+        }
+        internal static void DeriveProtectedSourceMapKeyDirectory(Action deriveAndApplySource, Action requireAdmission)
+        {
+            GetProtectedObservationBoundary();
+            var self = instance!;
+            if (!CanonicalActualDExperiment.Enabled || !CanonicalClockApplyExperiment.Enabled || self.protectedClockCanonScope != null
+                || self.protectedSourceMapKeyDerivationConsumed)
+                throw new InvalidOperationException("Source Map Key derivation requires its single protected actual D mutation scope.");
+            self.protectedSourceMapKeyDerivationConsumed = true;
             using var scope = new CanonicalBoundaryMutationScope(requireAdmission);
             scope.Enter(); self.protectedClockCanonScope = scope;
             try {

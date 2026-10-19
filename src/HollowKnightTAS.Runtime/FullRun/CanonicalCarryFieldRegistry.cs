@@ -27,9 +27,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             .Select(name => typeof(FsmEvent).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new InvalidDataException("Pinned FsmEvent field binding is absent: " + name)).ToArray();
 
-        internal static CanonicalCarryGraphCodec Create(bool inputDomain = false, bool geoDomain = false, bool mapDomain = false, bool markerDomain = false)
+        internal static CanonicalCarryGraphCodec Create(bool inputDomain = false, bool geoDomain = false, bool mapDomain = false, bool markerDomain = false,
+            bool mapKeyTextDomain = false)
         {
-            if ((inputDomain ? 1 : 0) + (geoDomain ? 1 : 0) + (mapDomain ? 1 : 0) + (markerDomain ? 1 : 0) > 1) throw new InvalidDataException("Carry domains must be distinct.");
+            if ((inputDomain ? 1 : 0) + (geoDomain ? 1 : 0) + (mapDomain ? 1 : 0) + (markerDomain ? 1 : 0) + (mapKeyTextDomain ? 1 : 0) > 1)
+                throw new InvalidDataException("Carry domains must be distinct.");
             string ReadResource(string name)
             {
                 using var stream = typeof(CanonicalCarryFieldRegistry).Assembly.GetManifestResourceStream(name)
@@ -108,12 +110,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             types.AddRange(CanonicalMapSourceDomain.DataTypes);
             types.AddRange(CanonicalMarkerCarry.DataTypes);
             types.AddRange(CanonicalMarkerReadonlyCarry.DataTypes);
-            if (markerDomain) types.AddRange(CanonicalMarkerCarry.OriginalDataTypes());
-            if (markerDomain) types.AddRange(CanonicalMarkerEventCarry.Types());
+            if (mapKeyTextDomain) types.AddRange(CanonicalMapKeyTextCarry.DataTypes);
+            if (markerDomain || mapKeyTextDomain) types.AddRange(CanonicalMarkerCarry.OriginalDataTypes());
+            if (markerDomain || mapKeyTextDomain) types.AddRange(CanonicalMarkerEventCarry.Types());
             using var hash = SHA256.Create();
-            return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v2:" : geoDomain ? "canonical-geo-fields-v1:" : mapDomain ? "canonical-map-fields-v1:" : markerDomain ? "canonical-marker-fields-v1:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
+            return new CanonicalCarryGraphCodec(types, (inputDomain ? "canonical-input-fields-v2:" : geoDomain ? "canonical-geo-fields-v1:" : mapDomain ? "canonical-map-fields-v1:" : markerDomain ? "canonical-marker-fields-v1:" : mapKeyTextDomain ? "canonical-map-key-text-fields-v1:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
                 hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + loadingText + "\n" + geoText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
-                    + "\n" + (markerDomain ? CanonicalMarkerCarry.SchemaIdentity : "") + "\n" + CanonicalGameplayCarry.SchemaIdentity + "\n" + CanonicalClockCarry.SchemaIdentity
+                    + "\n" + (markerDomain ? CanonicalMarkerCarry.SchemaIdentity : "")
+                    + (mapKeyTextDomain ? "\n" + CanonicalMapKeyTextCarry.SchemaIdentity : "")
+                    + "\n" + CanonicalGameplayCarry.SchemaIdentity + "\n" + CanonicalClockCarry.SchemaIdentity
                     + "\n" + CanonicalHeroAnimationCallbacks.SchemaIdentity
                     + "\n" + string.Join(";", CanonicalCarryGraphCodec.Fields(typeof(CanonicalMapSourceDomain.Data)).Select(field => field.Name + "=" + field.FieldType.FullName))
                     + "\n" + CanonicalHeroTriggerCallbacks.SchemaIdentity + "\n" + CanonicalGeoCarry.SchemaIdentity
@@ -156,7 +161,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                         .Select(field => field.Name + "=" + CanonicalCarryGraphCodec.Identity(field.FieldType))))))
                 .Replace("-", "").ToLowerInvariant(), PortableValue, AllocatedValue,
                 graph => {
-                    if (markerDomain) {
+                    if (mapKeyTextDomain) {
+                        if (graph.Roots == null || graph.Roots.Length != 1 || graph.Roots[0].Binding != CanonicalMapKeyTextCarry.Root)
+                            throw new InvalidDataException("Map Key Text carry domain contains an unknown or missing original root.");
+                    }
+                    else if (markerDomain) {
                         if (graph.Roots == null || graph.Roots.Length != 2 || graph.Roots.Count(root => root.Binding == CanonicalMarkerCarry.Root) != 1
                             || graph.Roots.Count(root => root.Binding == "Marker/Fsm/$:PlayMakerFSM[0]") != 1)
                             throw new InvalidDataException("Marker carry domain contains an unknown or missing original root.");

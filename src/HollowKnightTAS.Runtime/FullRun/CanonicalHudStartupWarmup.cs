@@ -19,11 +19,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         private int firstFrame;
         private readonly CanonicalGeoColdTemplate geoTemplate = new CanonicalGeoColdTemplate();
         private readonly CanonicalMarkerColdTemplate markerTemplate = new CanonicalMarkerColdTemplate();
+        private readonly CanonicalMapKeyTextColdTemplate mapKeyTemplate = new CanonicalMapKeyTextColdTemplate();
         private CanonicalMapTextStartup? mapText;
         internal CanonicalGeoColdTemplate GeoTemplate => geoTemplate;
         // Startup only retains the actual serialized cold definition. The
         // three execution paths normalize the live hint at each unloaded B.
         internal CanonicalMarkerColdTemplate MarkerColdDefinition => markerTemplate;
+        internal CanonicalMapKeyTextColdTemplate MapKeyTextColdDefinition => mapKeyTemplate;
 
         internal bool Advance()
         {
@@ -44,7 +46,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     charms.GetComponents<PlayMakerFSM>().Single(fsm => ((Fsm)Raw.GetValue(fsm)).Name == "Initial Activation") };
                 firstFrame = Time.frameCount;
                 var marker = CanonicalMarkerDirectory.Current();
-                geoTemplate.Capture(cameras.geoCounter, marker, incoming => markerTemplate.Capture(marker, incoming));
+                var keys = CanonicalMapKeyTextDirectory.Current();
+                geoTemplate.Capture(cameras.geoCounter, marker, incoming => markerTemplate.Capture(marker, incoming),
+                    keys, incoming => mapKeyTemplate.Capture(keys, incoming));
                 Modding.Logger.Log("[HKTAS] Original Geo before HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingGeoLifecycleObservation.Capture()));
                 Modding.Logger.Log("[HKTAS] Original Map before HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingMapLifecycleObservation.Capture()));
                 if (!camera.enabled || !cameras.gameObject.activeInHierarchy)
@@ -79,6 +83,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             Modding.Logger.Log("[HKTAS] Original HUD initialization completed; original PD derivation preserved and Invoke finished naturally.");
             return true;
         }
-        public void Dispose() { mapText?.Dispose(); markerTemplate.Dispose(); geoTemplate.Dispose(); }
+        public void Dispose() { mapText?.Dispose(); mapKeyTemplate.Dispose(); markerTemplate.Dispose(); geoTemplate.Dispose(); }
     }
 }

@@ -28,6 +28,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             public int[] Aliases = Array.Empty<int>();
         }
         internal static IReadOnlyDictionary<string, object> Directory(IReadOnlyDictionary<string, UnityEngine.Object> directory)
+            => DirectoryCore(directory, 2);
+        internal static IReadOnlyDictionary<string, object> MapKeyDirectory(IReadOnlyDictionary<string, UnityEngine.Object> directory)
+            => DirectoryCore(directory, 9);
+        private static IReadOnlyDictionary<string, object> DirectoryCore(IReadOnlyDictionary<string, UnityEngine.Object> directory, int texts)
         {
             if (typeof(UnityEngine.UI.Graphic).Module.ModuleVersionId != new Guid("b4d135af-a1fd-407b-bcc7-280e400336cf"))
                 throw new InvalidDataException("Marker readonly UI module ABI differs.");
@@ -39,7 +43,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     result.Add(pair.Key + "/readonly/" + field.Name, value);
                 }
             }
-            if (result.Count != 6) throw new InvalidDataException("Marker six readonly references differ.");
+            if (result.Count != texts * 3) throw new InvalidDataException("Fixed UI readonly reference count differs.");
             return result;
         }
         private static FieldInfo[] RunnerFields(object runner)
@@ -53,12 +57,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             return fields;
         }
         internal static Data Capture(IReadOnlyDictionary<string, UnityEngine.Object> directory)
+            => CaptureCore(directory, 2);
+        internal static Data CaptureMapKey(IReadOnlyDictionary<string, UnityEngine.Object> directory)
+            => CaptureCore(directory, 9);
+        private static Data CaptureCore(IReadOnlyDictionary<string, UnityEngine.Object> directory, int texts)
         {
             var owners = directory.Where(pair => pair.Value is TMPro.TextMeshPro).ToArray();
-            var references = Directory(directory).Values.ToArray();
+            var references = DirectoryCore(directory, texts).Values.ToArray();
             var aliases = new int[references.Length];
             for (var i = 0; i < references.Length; i++) aliases[i] = Array.FindIndex(references, value => ReferenceEquals(value, references[i]));
-            var powers = new float[2][]; var corners = new Vector3[2][]; var containers = new bool[2];
+            var powers = new float[texts][]; var corners = new Vector3[texts][]; var containers = new bool[texts];
             for (var i = 0; i < owners.Length; i++) {
                 var power = Power.GetValue(owners[i].Value) as float[];
                 var corner = Corners.GetValue(owners[i].Value) as Vector3[];
@@ -78,12 +86,18 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static Action Prepare(Data source, IReadOnlyDictionary<string, UnityEngine.Object> directory,
             CanonicalCarryGraphCodec codec, Func<bool> admitted)
+            => PrepareCore(source, directory, codec, admitted, 2);
+        internal static Action PrepareMapKey(Data source, IReadOnlyDictionary<string, UnityEngine.Object> directory,
+            CanonicalCarryGraphCodec codec, Func<bool> admitted)
+            => PrepareCore(source, directory, codec, admitted, 9);
+        private static Action PrepareCore(Data source, IReadOnlyDictionary<string, UnityEngine.Object> directory,
+            CanonicalCarryGraphCodec codec, Func<bool> admitted, int texts)
         {
-            var actual = Capture(directory); var references = Directory(directory);
-            if (!source.Owners.SequenceEqual(actual.Owners) || source.Powers.Length != 2 || source.Corners.Length != 2
-                || source.ContainerIsSelf.Length != 2 || !source.Aliases.SequenceEqual(actual.Aliases))
+            var actual = CaptureCore(directory, texts); var references = DirectoryCore(directory, texts);
+            if (!source.Owners.SequenceEqual(actual.Owners) || source.Powers.Length != texts || source.Corners.Length != texts
+                || source.ContainerIsSelf.Length != texts || !source.Aliases.SequenceEqual(actual.Aliases))
                 throw new InvalidDataException("Marker source readonly complete directory/alias differs.");
-            for (var i = 0; i < 2; i++) {
+            for (var i = 0; i < texts; i++) {
                 if (source.Powers[i] == null || source.Powers[i].Length != 10 || source.Corners[i] == null || source.Corners[i].Length != 4
                     || source.ContainerIsSelf[i] != actual.ContainerIsSelf[i]
                     || Enumerable.Range(0, 10).Any(index => !codec.SameRawSlot(source.Powers[i][index], actual.Powers[i][index], typeof(float), 0)))
@@ -93,23 +107,23 @@ namespace HollowKnightTAS.Runtime.FullRun
             return () => {
                 if (consumed || !admitted()) throw new InvalidOperationException("Marker readonly cache lost single-use source admission.");
                 consumed = true;
-                var current = Directory(directory);
+                var current = DirectoryCore(directory, texts);
                 if (references.Any(pair => !ReferenceEquals(pair.Value, current[pair.Key])))
                     throw new InvalidOperationException("Marker readonly constructor reference changed.");
-                var now = Capture(directory);
+                var now = CaptureCore(directory, texts);
                 if (!now.ContainerIsSelf.SequenceEqual(source.ContainerIsSelf) || !now.Aliases.SequenceEqual(source.Aliases))
                     throw new InvalidOperationException("Marker readonly original runner/alias changed before source writes.");
-                for (var i = 0; i < 2; i++) {
+                for (var i = 0; i < texts; i++) {
                     var owner = directory[source.Owners[i]];
                     var corners = (Vector3[])Corners.GetValue(owner);
                     Array.Copy(source.Corners[i], corners, 4);
                     for (var index = 0; index < 4; index++) if (!codec.SameRawSlot(source.Corners[i][index], corners[index], typeof(Vector3), 0))
                         throw new InvalidOperationException("Marker readonly corner cache source readback differs.");
                 }
-                var after = Capture(directory);
+                var after = CaptureCore(directory, texts);
                 if (!after.ContainerIsSelf.SequenceEqual(source.ContainerIsSelf) || !after.Aliases.SequenceEqual(source.Aliases)
-                    || Enumerable.Range(0, 2).Any(i => Enumerable.Range(0, 10).Any(j => !codec.SameRawSlot(source.Powers[i][j], after.Powers[i][j], typeof(float), 0)))
-                    || Enumerable.Range(0, 2).Any(i => Enumerable.Range(0, 4).Any(j => !codec.SameRawSlot(source.Corners[i][j], after.Corners[i][j], typeof(Vector3), 0))))
+                    || Enumerable.Range(0, texts).Any(i => Enumerable.Range(0, 10).Any(j => !codec.SameRawSlot(source.Powers[i][j], after.Powers[i][j], typeof(float), 0)))
+                    || Enumerable.Range(0, texts).Any(i => Enumerable.Range(0, 4).Any(j => !codec.SameRawSlot(source.Corners[i][j], after.Corners[i][j], typeof(Vector3), 0))))
                     throw new InvalidOperationException("Marker readonly complete configuration/source state readback differs.");
             };
         }

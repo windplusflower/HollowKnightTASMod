@@ -26,15 +26,18 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalGeoSourceDomain geoDomain = new CanonicalGeoSourceDomain();
         private readonly CanonicalMapSourceDomain mapDomain = new CanonicalMapSourceDomain();
         private readonly CanonicalMarkerSourceDomain markerDomain = new CanonicalMarkerSourceDomain();
+        private readonly Func<LoadingGeoIncomingReferences> consumeMapKeyIncoming;
+        private readonly CanonicalMapKeyTextSourceDomain mapKeyDomain = new CanonicalMapKeyTextSourceDomain();
+        internal byte[] MapKeyTextGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] MarkerGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] MapGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] GeoGraph { get; private set; } = Array.Empty<byte>();
         internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates, CanonicalHudJournalPolicy journal,
             Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies,
             Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreGeoSourceDependencies,
-            Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreMarkerSourceDependencies)
+            Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreMarkerSourceDependencies, Func<LoadingGeoIncomingReferences> consumeMapKeyIncoming)
         { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; this.journal = journal;
-            this.restoreHudSourceDependencies = restoreHudSourceDependencies; this.restoreGeoSourceDependencies = restoreGeoSourceDependencies; this.restoreMarkerSourceDependencies = restoreMarkerSourceDependencies; }
+            this.restoreHudSourceDependencies = restoreHudSourceDependencies; this.restoreGeoSourceDependencies = restoreGeoSourceDependencies; this.restoreMarkerSourceDependencies = restoreMarkerSourceDependencies; this.consumeMapKeyIncoming = consumeMapKeyIncoming; }
         internal EventAudit[] EventBindingAudit { get; private set; } = Array.Empty<EventAudit>();
         internal CanonicalEventCarryRoots.Audit? EventGlobalsAudit { get; private set; }
         internal CanonicalEventGraphContract.Audit? EventGraphAudit { get; private set; }
@@ -191,6 +194,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             GeoGraph = targetDirectoryOnly ? Array.Empty<byte>() : geoDomain.Capture(GameCameras.instance.geoCounter,
                 CanonicalGeoColdTemplate.Directory(GameCameras.instance.geoCounter.gameObject), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             MapGraph = targetDirectoryOnly ? Array.Empty<byte>() : mapDomain.Capture(mainNodes, bindings.Bind, bindings.AuditGeoAssets);
+            MapKeyTextGraph = targetDirectoryOnly ? Array.Empty<byte>() : mapKeyDomain.Capture(CanonicalMapKeyTextDirectory.Current(), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             MarkerGraph = targetDirectoryOnly ? Array.Empty<byte>() : markerDomain.Capture(CanonicalMarkerDirectory.Current(), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             var mainBindings = new SortedDictionary<string, object>(InputCarryAudit.FixedBindings.ToDictionary(pair => pair.Key, pair => pair.Value), StringComparer.Ordinal);
             foreach (var pair in roots) mainBindings.Add("canonical-main-root/" + pair.Key, pair.Value);
@@ -421,12 +425,49 @@ namespace HollowKnightTAS.Runtime.FullRun
                         (applyMarker ?? throw new InvalidOperationException("Source Marker final plan was not prepared."))();
                     }, () => (beginMarkerLifecycle ?? throw new InvalidOperationException("Marker lifecycle controller is absent."))(),
                         () => (requireMarkerNative ?? throw new InvalidOperationException("Marker native source witness is absent."))());
+                    mainRebinding!.CompleteMarkerPhase(); sdkRebinding!.CompleteMarkerPhase();
                 });
                 domainActions.Add(() => {
                     ActualTargetStage = "map-source-graph-activation";
                     var envelope = actualSourceValidation ?? throw new InvalidOperationException("Map requires the sealed source envelope.");
                     mapDomain.Prepare(envelope.Map, mainView!, () => { main.VerifyReadback(); sdk.VerifyReadback(); }, bindings.ResolveTarget, admitted, out var verifyMap)();
                     sourceChecks.Add(verifyMap);
+                });
+                domainActions.Add(() => {
+                    void Require() { if (!admitted()) throw new InvalidOperationException("Map Key source lost paused admission."); }
+                    LoadingSerialSceneProbe.DeriveProtectedSourceMapKeyDirectory(() => {
+                    ActualTargetStage = "map-key-text-source-graph";
+                    var envelope = actualSourceValidation ?? throw new InvalidOperationException("Map Key requires the sealed source envelope.");
+                    var keys = CanonicalMapKeyTextDirectory.Current();
+                    var oldDirectory = LoadingGeoIncomingReferences.BuildMapKeyDirectory(keys);
+                    IReadOnlyDictionary<string, object>? finalDirectory = null;
+                    void RequireMain() { main.VerifyReadback(); sdk.VerifyReadback(); }
+                    var applyMapKey = mapKeyDomain.Prepare(envelope.MapKeyText, keys, mainView!, RequireMain,
+                        bindings.ResolveTarget, admitted, value => finalDirectory = value, out var verifyMapKey);
+                    if (finalDirectory == null) throw new InvalidDataException("Map Key final prepared directory is absent.");
+                    Dictionary<string, object> Replacements(CanonicalCarryGraphData graph, Func<string, object> resolve) {
+                        var changes = new Dictionary<string, object>(StringComparer.Ordinal);
+                        foreach (var external in graph.Externals) {
+                            var current = resolve(external.Binding);
+                            var matches = oldDirectory.Where(pair => ReferenceEquals(pair.Value, current)).ToArray();
+                            if (matches.Length > 1) throw new InvalidDataException("Map Key external owner identity is ambiguous.");
+                            if (matches.Length == 1 && !ReferenceEquals(current, finalDirectory[matches[0].Key]))
+                                changes.Add(external.Binding, finalDirectory[matches[0].Key]);
+                        }
+                        return changes;
+                    }
+                    var mainChanges = Replacements(sourceMain, bindings.ResolveTarget);
+                    var sdkChanges = Replacements(sourceInput, inputExternal.ResolveTarget);
+                    if (mainChanges.Count != 0) mainRebinding!.PrepareMapKey(mainChanges).Apply();
+                    if (sdkChanges.Count != 0) sdkRebinding!.PrepareMapKey(sdkChanges).Apply();
+                    RequireMain();
+                    var incomingPlan = consumeMapKeyIncoming().Prepare(finalDirectory);
+                    incomingPlan.Apply();
+                    CanonicalEventDataCarry.PrepareSourceReapply(mainView!, admitted)();
+                    incomingPlan.VerifyReadback();
+                    applyMapKey(); incomingPlan.VerifyReadback(); Require();
+                    sourceChecks.Add(() => { verifyMapKey(); incomingPlan.VerifyReadback(); });
+                    }, Require);
                 });
                 domainActions.Add(() => prepareScheduler(continuation!.Scheduler)());
                 var actual = new CanonicalCarryPairPreparation(main, sdk, () => {
