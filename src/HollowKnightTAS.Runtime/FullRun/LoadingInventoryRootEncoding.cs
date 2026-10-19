@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
+using System.IO.Compression;
+using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -14,6 +17,26 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal object[] Names { get; }
         internal string[] Types { get; }
         internal JArray Roots { get; }
+
+        // This is the production suffix payload serializer. Keep every root
+        // member, including bounded independent field diagnostics, in the
+        // actual compressed artifact rather than a separate selector audit.
+        internal object EncodeSuffix(object metadata)
+        {
+            var payload = new JObject { ["format"] = Format, ["names"] = JArray.FromObject(Names),
+                ["types"] = JArray.FromObject(Types), ["roots"] = Roots.DeepClone() };
+            foreach (var property in JObject.FromObject(metadata).Properties()) {
+                if (payload.Property(property.Name) != null) throw new InvalidOperationException("Suffix diagnostic metadata overlaps the original inventory.");
+                payload.Add(property.Name, property.Value.DeepClone());
+            }
+            var content = Encoding.UTF8.GetBytes(payload.ToString(Formatting.None));
+            if (content.Length > 16 * 1024 * 1024)
+                throw new InvalidOperationException("Actual D suffix inventory exceeds the original 16 MiB diagnostic bound.");
+            using var compressed = new MemoryStream();
+            using (var gzip = new GZipStream(compressed, CompressionMode.Compress, true)) gzip.Write(content, 0, content.Length);
+            return new { encoding = "gzip-base64-utf8-json-v1", bytes = content.Length,
+                sha256 = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(content), gzipBase64 = Convert.ToBase64String(compressed.ToArray()) };
+        }
 
         internal LoadingInventoryRootEncoding(object[] roots)
         {

@@ -899,12 +899,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                     fieldDiagnostics.Add(new { root = item.id, fields = digest.FieldDigests });
                 if (fullInventory && component is UnityEngine.UI.Text uiText && DetailedComponent(component, item.id))
                     textCacheDetails.Add(new { id = item.id, state = LoadingTextCacheObservation.Capture(uiText, fields, UnityId) });
-                var markerDetails = fullInventory && fieldDetails && FixedMarkerRoot(item.id);
+                var markerDetails = fullInventory && FixedMarkerRoot(item.id);
                 var detailOwner = markerDetails && component is PlayMakerFSM
                     ? fields.Read(component, "fsm") ?? throw new InvalidOperationException("Original Marker detailed FSM is absent.") : component;
-                var fieldDigests = fullInventory && fieldDetails && (DetailedComponent(component, item.id) || markerDetails)
-                    ? fields.Fields(detailOwner.GetType()).Select(field => new
-                        { field = field.Name, owner = field.DeclaringType!.FullName,
+                var fieldDigests = markerDetails ? CaptureFixedMarkerFields(fields, detailOwner, item.id, fullInventory)
+                    : fullInventory && fieldDetails && DetailedComponent(component, item.id)
+                        ? fields.Fields(detailOwner.GetType()).Select(field => new { field = field.Name, owner = field.DeclaringType!.FullName,
                             digest = fields.CaptureFields(detailOwner, item.id, field.Name).Sha256 }).ToArray() : null;
                 inventory.Add(new { id = item.id, type = component.GetType().FullName,
                     digest = digest.Sha256, nodes = digest.Nodes, unsupported = digest.Unsupported, fieldDigests });
@@ -1238,14 +1238,19 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Keep the shared graph digest and alias inventory above intact.
             // These additional independent fields distinguish actual Marker
             // differences from unrelated shared reference-number prefixes.
-            var fieldDigests = fullInventory && fieldDetails && FixedMarkerRoot(id)
-                ? fields.Fields(member.GetType()).Select(field => new {
-                    field = field.Name, owner = field.DeclaringType!.FullName,
-                    digest = fields.CaptureFields(member, id, field.Name).Sha256 }).ToArray() : null;
+            var fieldDigests = CaptureFixedMarkerFields(fields, member, id, fullInventory);
             inventory.Add(new { id, type = member.GetType().FullName, digest = digest.Sha256,
                 nodes = digest.Nodes, unsupported = digest.Unsupported, fieldDigests });
         }
 
+        internal static object[]? CaptureFixedMarkerFields(LoadingFieldDigest reader, object owner, string id, bool fullInventory)
+        {
+            if (!fullInventory || !FixedMarkerRoot(id)) return null;
+            var declarations = reader.Fields(owner.GetType()).ToArray();
+            if (declarations.Length > 256) throw new InvalidOperationException("Fixed Marker independent diagnostic field bound exceeded.");
+            return declarations.Select(field => (object)new { field = field.Name, owner = field.DeclaringType!.FullName,
+                digest = reader.CaptureFields(owner, id, field.Name).Sha256 }).ToArray();
+        }
         private static bool FixedMarkerRoot(string id)
         {
             if (id.IndexOf("/Map Marker Action[", StringComparison.Ordinal) < 0) return false;
@@ -1499,17 +1504,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private object EncodeSuffixInventory()
         {
             var encoded = new LoadingInventoryRootEncoding(lastInventory);
-            var content = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new {
-                format = LoadingInventoryRootEncoding.Format, names = encoded.Names, types = encoded.Types, roots = encoded.Roots,
+            return encoded.EncodeSuffix(new {
                 detachedFsmReferences, detachedFsmMetadata, originalGeoLifecycle = LoadingGeoLifecycleObservation.Capture(),
-                originalMapLifecycle = LoadingMapLifecycleObservation.Capture(), geoIncomingReferences = geoIncoming.Snapshot(), markerIncomingReferences = markerIncoming.Snapshot(), mapKeyIncomingReferences = mapKeyIncoming.Snapshot(), mapKeyParentIncomingReferences = mapKeyParentIncoming.Snapshot() }));
-            if (content.Length > 16 * 1024 * 1024)
-                throw new InvalidOperationException("Actual D suffix inventory exceeds the original 16 MiB diagnostic bound.");
-            using (var compressed = new MemoryStream()) {
-                using (var gzip = new GZipStream(compressed, CompressionMode.Compress, true)) gzip.Write(content, 0, content.Length);
-                return new { encoding = "gzip-base64-utf8-json-v1", bytes = content.Length,
-                    sha256 = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(content), gzipBase64 = Convert.ToBase64String(compressed.ToArray()) };
-            }
+                originalMapLifecycle = LoadingMapLifecycleObservation.Capture(), geoIncomingReferences = geoIncoming.Snapshot(), markerIncomingReferences = markerIncoming.Snapshot(), mapKeyIncomingReferences = mapKeyIncoming.Snapshot(), mapKeyParentIncomingReferences = mapKeyParentIncoming.Snapshot() });
         }
 
         private void Write(object value)

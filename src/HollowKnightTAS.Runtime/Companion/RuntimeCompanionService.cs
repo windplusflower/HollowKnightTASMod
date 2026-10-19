@@ -6,6 +6,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Threading;
 using HollowKnightTAS.Core.Cryptography;
+using HollowKnightTAS.Core.Movie;
 using HollowKnightTAS.Core.Ipc;
 using HollowKnightTAS.Core.Automation;
 using HollowKnightTAS.Runtime.Inspector;
@@ -185,6 +186,12 @@ namespace HollowKnightTAS.Runtime.Companion
             server.Start();
             On.GameManager.Update += OnGameManagerUpdate;
             gameManagerUpdateHookRegistered = true;
+            // The canonical execution profile shares this service entry for
+            // recording, full replay and restore. Its TAS-owned hotkey pump
+            // must not depend on spending thirty updates in a gameplay scene.
+            // The existing hook yields hotkey handling to this same runner.
+            if (settings.CompanionOverlayEnabled && NativeExecutionProfile.UsesCanonicalBoundary(MovieProtocolV2.SelectedNativeProfileId))
+                EnsureRuntimePump();
             emit(
                 "companion-service-started",
                 new Dictionary<string, string>(
