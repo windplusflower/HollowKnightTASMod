@@ -20,13 +20,21 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly List<KeyValuePair<object, string>> memberRoots = new List<KeyValuePair<object, string>>();
         private readonly Dictionary<object, string> natives = new Dictionary<object, string>(new References());
         private readonly string[] native;
+        private readonly Transform[] subtreeNodes;
+        private readonly Component[] subtreeComponents;
+        private readonly string[] subtreeNative;
         private readonly IReadOnlyDictionary<string, object> originalOwned;
         private readonly Dictionary<object, string> logicalOwned = new Dictionary<object, string>(new References());
         private bool incomingRebindPrepared, incomingRebindVerified;
-        internal CanonicalMapKeyTextExternalGuard(Transform keys)
+        private readonly Transform[] sourceParentPoseOwners;
+        private readonly MonoBehaviour[] sourceManagedOwners;
+        internal CanonicalMapKeyTextExternalGuard(Transform keys, IReadOnlyDictionary<string, object>? sourceParentOwned = null,
+            MonoBehaviour[]? sourceManagedOwners = null, Transform[]? sourcePoseOwners = null)
         {
             this.keys = keys;
-            originalOwned = LoadingGeoIncomingReferences.BuildMapKeyDirectory(keys);
+            this.sourceManagedOwners = sourceManagedOwners ?? Array.Empty<MonoBehaviour>();
+            originalOwned = sourceParentOwned ?? LoadingGeoIncomingReferences.BuildMapKeyDirectory(keys);
+            sourceParentPoseOwners = sourcePoseOwners ?? Array.Empty<Transform>();
             foreach (var pair in originalOwned.OrderBy(pair => pair.Key, StringComparer.Ordinal))
                 if (!logicalOwned.ContainsKey(pair.Value)) logicalOwned.Add(pair.Value, "owned:" + pair.Key);
             var nodes = new List<Transform>();
@@ -34,11 +42,20 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var node = keys.Find(key) ?? throw new InvalidOperationException("Map Key real parent is absent.");
                 while (node != null) { if (!nodes.Contains(node)) nodes.Add(node); node = node.parent; }
             }
+            subtreeNodes = sourceManagedOwners == null ? Array.Empty<Transform>() : keys.parent.GetComponentsInChildren<Transform>(true)
+                .Where(node => !CanonicalMapKeyTextDirectory.Keys.Any(key => {
+                    var leaf = keys.Find(key + "/Text"); return ReferenceEquals(node, leaf) || node.IsChildOf(leaf);
+                })).ToArray();
+            foreach (var node in subtreeNodes) if (!nodes.Contains(node)) nodes.Add(node);
             ancestors = nodes.ToArray();
+            subtreeComponents = subtreeNodes.SelectMany(node => node.GetComponents<Component>())
+                .Where(component => !(component is Transform) && !(component is MonoBehaviour))
+                .Concat(ancestors.SelectMany(node => node.GetComponents<Camera>())).Distinct().ToArray();
             if (keys.parent == null || keys.parent.name != "Map Key" || keys.parent.parent == null || keys.parent.parent.name != "Inventory"
                 || keys.parent.parent.parent == null || !ReferenceEquals(keys.parent.parent.parent, GameCameras.instance.hudCamera.transform))
                 throw new InvalidOperationException("Map Key actual Inventory/HudCamera ancestry differs.");
-            owners = ancestors.SelectMany(node => node.GetComponents<MonoBehaviour>()).ToArray();
+            owners = ancestors.SelectMany(node => node.GetComponents<MonoBehaviour>())
+                .Where(owner => sourceManagedOwners == null || !sourceManagedOwners.Any(permitted => ReferenceEquals(owner, permitted))).ToArray();
             if (owners.Any(owner => ReferenceEquals(owner, null) || owner == null))
                 throw new InvalidOperationException("Map Key ancestor contains a missing native script.");
             fields = new LoadingFieldDigest(Reference,
@@ -46,7 +63,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             for (var index = 0; index < owners.Length; index++)
                 if (owners[index] is PlayMakerFSM && fields.Read(owners[index], "fsm") is Fsm fsm)
                     RegisterFsm(fsm, "ancestor[" + index + "]");
-            managed = ReadAll(); native = ancestors.Select(Pose).ToArray();
+            managed = ReadAll(); native = ancestors.Select(Pose).ToArray(); subtreeNative = ReadSubtreeNative();
         }
         internal static IReadOnlyDictionary<object, string> PrepareLogicalIncomingBindings(
             IReadOnlyDictionary<string, object> original, IReadOnlyDictionary<string, object> replacement)
@@ -73,15 +90,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             return result;
         }
-        internal void PrepareIncomingRebind(IReadOnlyList<GameObject> created)
+        internal void PrepareExactIncomingRebind(IReadOnlyDictionary<string, object> replacement)
         {
             if (incomingRebindPrepared) throw new InvalidOperationException("Map Key logical incoming rebinding is single-use.");
-            // Build itself checks each new leaf's exact actual Key parent and
-            // complete component order; arbitrary wrong-owner substitutions fail.
-            var replacement = LoadingGeoIncomingReferences.BuildMapKeyDirectory(keys, created);
             var map = PrepareLogicalIncomingBindings(originalOwned, replacement);
             incomingRebindPrepared = true;
             foreach (var pair in map) logicalOwned[pair.Key] = pair.Value;
+        }
+        internal void PrepareIncomingRebind(IReadOnlyList<GameObject> created)
+        {
+            // Build proves actual Key parent/component identity before mapping.
+            PrepareExactIncomingRebind(LoadingGeoIncomingReferences.BuildMapKeyDirectory(keys, created));
         }
         private void AddMember(object value, string name)
         {
@@ -145,9 +164,27 @@ namespace HollowKnightTAS.Runtime.FullRun
             } finally { fields.EndSharedGraph(); }
             return hashes.ToArray();
         }
-        private static int Bits(float value) => BitConverter.ToInt32(BitConverter.GetBytes(value), 0);
-        private static string Pose(Transform node)
+        private string[] ReadSubtreeNative()
         {
+            var result = new List<string>();
+            for (var index = 0; index < subtreeComponents.Length; index++) {
+                var component = subtreeComponents[index];
+                if (component == null) throw new InvalidOperationException("Map Key unowned native subtree component disappeared.");
+                var observation = LoadingNativeComponentObservation.Capture(component,
+                    reason => throw new InvalidOperationException("Map Key unowned native callback field is unread: " + reason));
+                if (observation == null) throw new InvalidOperationException("Map Key unowned native callback component has no reader: " + component.GetType().FullName);
+                var digest = fields.Capture(observation, "map-key-unowned-native[" + index + "]", expandRoot: true);
+                if (digest.Unsupported.Count != 0) throw new InvalidOperationException("Map Key unowned native callback graph has unread fields.");
+                result.Add(digest.Sha256);
+            }
+            return result.ToArray();
+        }
+        private static int Bits(float value) => BitConverter.ToInt32(BitConverter.GetBytes(value), 0);
+        private string Pose(Transform node)
+        {
+            if (sourceParentPoseOwners.Any(owner => ReferenceEquals(owner, node)))
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { id = node.GetInstanceID(), parent = node.parent == null ? 0 : node.parent.GetInstanceID(),
+                    sibling = node.GetSiblingIndex(), node.gameObject.layer, node.gameObject.tag, node.gameObject.isStatic, hideFlags = (int)node.gameObject.hideFlags });
             var position = node.localPosition; var rotation = node.localRotation; var scale = node.localScale;
             var shape = new List<int> { Bits(position.x), Bits(position.y), Bits(position.z), Bits(rotation.x), Bits(rotation.y), Bits(rotation.z), Bits(rotation.w),
                 Bits(scale.x), Bits(scale.y), Bits(scale.z) };
@@ -156,13 +193,20 @@ namespace HollowKnightTAS.Runtime.FullRun
                     shape.Add(Bits(value.x)); shape.Add(Bits(value.y));
                 }
             }
+            var inheritedSourceActivation = sourceParentPoseOwners.Any(owner => ReferenceEquals(node.parent, owner));
             return Newtonsoft.Json.JsonConvert.SerializeObject(new { id = node.GetInstanceID(), parent = node.parent == null ? 0 : node.parent.GetInstanceID(),
-                active = node.gameObject.activeSelf, hierarchy = node.gameObject.activeInHierarchy, poseBits = shape, sibling = node.GetSiblingIndex() });
+                active = node.gameObject.activeSelf, hierarchy = inheritedSourceActivation ? (bool?)null : node.gameObject.activeInHierarchy,
+                poseBits = shape, sibling = node.GetSiblingIndex(), node.gameObject.layer, node.gameObject.tag, node.gameObject.isStatic,
+                hideFlags = (int)node.gameObject.hideFlags });
         }
         internal void Verify()
         {
             if (!ReferenceEquals(keys, CanonicalMapKeyTextDirectory.Current()) || !native.SequenceEqual(ancestors.Select(Pose))
-                || !managed.SequenceEqual(ReadAll()) || !owners.SequenceEqual(ancestors.SelectMany(node => node.GetComponents<MonoBehaviour>())))
+                || !managed.SequenceEqual(ReadAll()) || !subtreeNative.SequenceEqual(ReadSubtreeNative())
+                || !subtreeComponents.SequenceEqual(subtreeNodes.SelectMany(node => node.GetComponents<Component>())
+                    .Where(component => !(component is Transform) && !(component is MonoBehaviour))
+                    .Concat(ancestors.SelectMany(node => node.GetComponents<Camera>())).Distinct()) || !owners.SequenceEqual(ancestors.SelectMany(node => node.GetComponents<MonoBehaviour>())
+                    .Where(owner => !sourceManagedOwners.Any(permitted => ReferenceEquals(owner, permitted)))))
                 throw new InvalidOperationException("Map Key canonical callback changed its real parent activation, pose, Control FSM or other ancestor fields.");
             if (incomingRebindPrepared && !incomingRebindVerified) {
                 incomingRebindVerified = true;

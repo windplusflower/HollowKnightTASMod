@@ -75,6 +75,30 @@ namespace HollowKnightTAS.Runtime.FullRun
             directory.BeginMapKeySample(_ => "unused-map-key-local-root", keys, leaves);
             return directory.OwnedDirectory();
         }
+        internal void BeginMapKeyParentSample(Func<UnityEngine.Object, string> identity, Transform keys)
+        {
+            owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear(); ownedRoots = Array.Empty<string>();
+            counter = null; marker = null; mapKey = keys;
+            var directory = new CanonicalMapKeyParentDirectory(keys);
+            foreach (var pair in directory.Native) owned.Add(pair.Value, pair.Key);
+            AddManaged(directory.Fsm, "$:PlayMakerFSM[0]/fsm");
+            for (var index = 0; index < 3; index++) owned.Add(directory.Containers[index], CanonicalMapKeyParentDirectory.ContainerPrefix + CanonicalMapKeyParentDirectory.ContainerNames[index]);
+            ownedRoots = new MonoBehaviour[] { directory.Control, directory.Fade }.Select(identity).ToArray();
+        }
+        internal string[] PathsForIdentity(string identity)
+            => references.Where(path => path.StartsWith(identity + " <- ", StringComparison.Ordinal))
+                .Select(path => path.Substring(identity.Length + 4)).OrderBy(path => path, StringComparer.Ordinal).ToArray();
+        internal void RequireMapKeyTextArraySlots(Array actualCurrentContainer)
+        {
+            if (actualCurrentContainer.GetType() != typeof(TMPro.TextMeshPro[]) || actualCurrentContainer.Length != 11 || slots.Count != 9)
+                throw new InvalidOperationException("Map Key old/new source slots have an unknown array owner shape.");
+            for (var index = 0; index < 9; index++) {
+                var identity = "$/" + CanonicalMapKeyTextDirectory.Keys[index] + "/Text:TMPro.TextMeshPro[0]";
+                var matches = slots.Values.Where(slot => slot.Identity == identity).ToArray();
+                if (matches.Length != 1 || !matches[0].IsArraySlot(actualCurrentContainer, index + 1))
+                    throw new InvalidOperationException("Map Key frozen incoming slot does not bind the real current FadeGroup array/source index.");
+            }
+        }
         internal void ObserveRetiringMapKeyMeshes()
         {
             if (mapKey == null || marker != null || counter != null) throw new InvalidOperationException("Retiring Map Key mesh observation has no exact directory.");
@@ -216,6 +240,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal readonly object Original; internal readonly string Identity;
             internal Slot(object owner, FieldInfo? field, int index, object original, string identity)
             { this.owner = owner; this.field = field; this.index = index; Original = original; Identity = identity; }
+            internal bool IsArraySlot(Array array, int arrayIndex) => field == null && ReferenceEquals(owner, array) && index == arrayIndex && ReferenceEquals(Read(), Original);
             internal object? Read() => field == null ? ((Array)owner).GetValue(index) : field.GetValue(owner);
             internal void Write(object value) { if (field == null) ((Array)owner).SetValue(value, index); else field.SetValue(owner, value); }
         }

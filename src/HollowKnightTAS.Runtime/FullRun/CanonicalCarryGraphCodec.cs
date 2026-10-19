@@ -457,7 +457,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly HashSet<int> copiedExternal;
             private readonly object[] rootOwners;
             private bool consumed;
-            private bool markerConsumed, markerCompleted, mapKeyConsumed;
+            private bool markerConsumed, markerCompleted, parentConsumed, parentCompleted, mapKeyConsumed;
+            private CanonicalPreparedWritePlan? parentPlan;
             private CanonicalPreparedWritePlan? markerPlan;
             private bool geoCompleted, terminal;
             private CanonicalPreparedWritePlan? geoPlan;
@@ -503,9 +504,26 @@ namespace HollowKnightTAS.Runtime.FullRun
                 try { markerPlan?.VerifyReadback(); parent.VerifyReadback(); markerCompleted = true; }
                 catch { terminal = true; throw; }
             }
+            internal CanonicalPreparedWritePlan PrepareMapKeyParents(IReadOnlyDictionary<string, object> replacements)
+            {
+                if (terminal || !markerCompleted || parentConsumed || parentCompleted || mapKeyConsumed || replacements.Count == 0) {
+                    terminal = true; throw new InvalidOperationException("Map Key parent external phase is out of order, absent or consumed.");
+                }
+                parentConsumed = true;
+                try { parent.VerifyReadback(); parentPlan = PrepareExact(replacements); return parentPlan; }
+                catch { terminal = true; throw; }
+            }
+            internal void CompleteMapKeyParentPhase()
+            {
+                if (terminal || !markerCompleted || parentCompleted || mapKeyConsumed) {
+                    terminal = true; throw new InvalidOperationException("Map Key parent external completion is out of order or consumed.");
+                }
+                try { parentPlan?.VerifyReadback(); parent.VerifyReadback(); parentCompleted = true; }
+                catch { terminal = true; throw; }
+            }
             internal CanonicalPreparedWritePlan PrepareMapKey(IReadOnlyDictionary<string, object> replacements)
             {
-                if (terminal || !markerCompleted || mapKeyConsumed || replacements.Count == 0) {
+                if (terminal || !parentCompleted || mapKeyConsumed || replacements.Count == 0) {
                     terminal = true; throw new InvalidOperationException("Map Key external phase is out of order, absent or consumed.");
                 }
                 mapKeyConsumed = true;

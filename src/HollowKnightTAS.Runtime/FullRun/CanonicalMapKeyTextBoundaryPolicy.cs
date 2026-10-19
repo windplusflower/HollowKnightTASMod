@@ -11,10 +11,11 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal static class CanonicalMapKeyTextBoundaryPolicy
     {
         private const BindingFlags Instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-        internal static object Reset(CanonicalMapKeyTextColdTemplate template, LoadingGameplayOracle observer)
+        internal static object Reset(CanonicalMapKeyTextColdTemplate template, LoadingGameplayOracle observer,
+            Action requireParentDependency, LoadingGeoIncomingReferences? frozenIncoming = null, Tuple<Action, Action>? outerLifecycle = null, Action<Action>? exposeIncomingReadback = null)
         {
             void Require() => LoadingSerialSceneProbe.RequireCanonicalMutationBoundary();
-            Require();
+            Require(); requireParentDependency();
             var keys = CanonicalMapKeyTextDirectory.Current();
             var directory = CanonicalMapKeyTextDirectory.Build(keys);
             using var externalGuard = new CanonicalMapKeyTextExternalGuard(keys);
@@ -71,12 +72,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             var tmpBefore = Tmp();
             var rng = UnityEngine.Random.state; var particles = LoadingGameplayOracle.CaptureParticleRandomState();
-            var incoming = new LoadingGeoIncomingReferences();
-            CanonicalGeoColdTemplate.ObserveIncoming(GameCameras.instance.geoCounter, mapKeyIncoming: incoming, mapKeyRoot: keys, retiringMapKeyMeshes: true);
+            var incoming = frozenIncoming ?? new LoadingGeoIncomingReferences();
+            if (frozenIncoming == null)
+                CanonicalGeoColdTemplate.ObserveIncoming(GameCameras.instance.geoCounter, mapKeyIncoming: incoming, mapKeyRoot: keys, retiringMapKeyMeshes: true);
+            else incoming.RequireMapKeyTextArraySlots((Array)typeof(FadeGroup).GetField("texts")!.GetValue(keys.parent.GetComponent<FadeGroup>()));
             var owners = directory.Values.OfType<MonoBehaviour>().ToDictionary(owner => owner.GetInstanceID());
-            observer.RecaptureOwnedHudScheduler(Require, () => { });
-            // A true cold Instantiate must add no Start or coroutine callback.
-            var transition = observer.PrepareOwnedHudLifecycle(owners, _ => false, out var retireStarts);
+            Action transition, retireStarts;
+            if (outerLifecycle == null) {
+                observer.RecaptureOwnedHudScheduler(Require, () => { });
+                transition = observer.PrepareOwnedHudLifecycle(owners, _ => false, out retireStarts);
+            }
+            else { transition = outerLifecycle.Item1; retireStarts = outerLifecycle.Item2; }
             var created = template.ProduceInactive();
             void RequireCreated() {
                 var current = CanonicalMapKeyTextDirectory.Build(keys, created);
@@ -95,7 +101,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var text in old) UnityEngine.Object.DestroyImmediate(text);
             retireStarts();
             observer.RecaptureOwnedHudScheduler(Require, transition);
-            plan.VerifyReadback(); RequireCreated(); Require(); externalGuard.Verify();
+            plan.VerifyReadback(); RequireCreated(); Require(); externalGuard.Verify(); requireParentDependency();
             if (created.Where((text, index) => !ReferenceEquals(text.transform.parent, parents[index])).Any()
                 || parents.Any(parent => parent.gameObject.activeInHierarchy) || old.Any(text => text != null)
                 || !CanonicalMapKeyTextDirectory.Build(keys).Values.OfType<GameObject>().OrderBy(text => text.GetInstanceID())
@@ -103,6 +109,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || !ReferenceEquals(controllerBefore, controllerEvent.GetValue(input)) || !ReferenceEquals(tmp, tmpField.GetValue(null)) || tmpBefore != Tmp()
                 || !rng.Equals(UnityEngine.Random.state) || !particles.SequenceEqual(LoadingGameplayOracle.CaptureParticleRandomState()))
                 throw new InvalidOperationException("Map Key Text cold Canon changed an external callback, queue, RNG, registration or retired native mesh contract.");
+            exposeIncomingReadback?.Invoke(plan.VerifyReadback);
             return new { originalTextLeaves = 9, originalMonoOwners = 36, realColdNative = true,
                 fullIncomingReadback = true, retiredOwnedMeshes = meshes.Length, controllerAndTmpQueuesPreserved = true,
                 keyParentDataTouched = false, sourceHistoryReplayed = false, completeStateCoverage = false };

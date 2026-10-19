@@ -10,6 +10,38 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
 public sealed class CanonicalCarryPairPreparationTests
 {
     [TestMethod]
+    public void Frozen_incoming_guard_precedes_overlapping_dependency_and_both_readbacks_hold()
+    {
+        var old = new object(); var next = new object(); object slot = old;
+        var dependency = new CanonicalPreparedWritePlan(() => Assert.AreSame(old, slot), () => slot = next,
+            () => Assert.AreSame(next, slot));
+        var incoming = new CanonicalPreparedWritePlan(() => Assert.AreSame(old, slot), () => slot = next,
+            () => Assert.AreSame(next, slot));
+        incoming.ApplyWithGuardedDependency(dependency.Apply);
+        incoming.VerifyReadback(); dependency.VerifyReadback();
+        Assert.ThrowsExactly<InvalidOperationException>(() => incoming.ApplyWithGuardedDependency(dependency.Apply));
+    }
+    [TestMethod]
+    public void Frozen_incoming_rejects_stale_slot_before_dependency_and_faults_permanently()
+    {
+        var dependencyWrites = 0; var incomingWrites = 0;
+        var incoming = new CanonicalPreparedWritePlan(() => throw new InvalidDataException("stale"),
+            () => incomingWrites++, () => { });
+        Assert.ThrowsExactly<InvalidDataException>(() => incoming.ApplyWithGuardedDependency(() => dependencyWrites++));
+        Assert.AreEqual(0, dependencyWrites); Assert.AreEqual(0, incomingWrites);
+        Assert.ThrowsExactly<InvalidOperationException>(() => incoming.Apply());
+        Assert.ThrowsExactly<InvalidOperationException>(() => incoming.VerifyReadback());
+    }
+    [TestMethod]
+    public void Dependency_failure_faults_incoming_without_reaching_its_write()
+    {
+        var incomingWrites = 0;
+        var incoming = new CanonicalPreparedWritePlan(() => { }, () => incomingWrites++, () => { });
+        Assert.ThrowsExactly<InvalidDataException>(() => incoming.ApplyWithGuardedDependency(() => throw new InvalidDataException("dependency")));
+        Assert.AreEqual(0, incomingWrites);
+        Assert.ThrowsExactly<InvalidOperationException>(() => incoming.ApplyWithGuardedDependency(() => { }));
+    }
+    [TestMethod]
     public void Domain_writes_use_source_postconditions_without_reusing_old_value_guards()
     {
         var graphA = 0; var graphB = 0; var domain = 0; var postChecked = false;

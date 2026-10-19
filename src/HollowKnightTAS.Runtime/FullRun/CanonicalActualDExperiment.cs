@@ -13,9 +13,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal const int MaximumBytes = 32 * 1024 * 1024, ChunkBytes = 262144;
         internal static bool Enabled => Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_EXPERIMENT") == "1";
         internal static bool CaptureSource => Enabled && Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_SOURCE") == "1";
-        public int Schema = 5, Ordinal;
+        public int Schema = 6, Ordinal;
         public long MovieFrame, NativeFrame;
-        public byte[] Main = Array.Empty<byte>(), Input = Array.Empty<byte>(), Geo = Array.Empty<byte>(), Map = Array.Empty<byte>(), Marker = Array.Empty<byte>(), MapKeyText = Array.Empty<byte>();
+        public byte[] Main = Array.Empty<byte>(), Input = Array.Empty<byte>(), Geo = Array.Empty<byte>(), Map = Array.Empty<byte>(), Marker = Array.Empty<byte>(), MapKeyText = Array.Empty<byte>(), MapKeyParents = Array.Empty<byte>();
         public CanonicalClockApplyExperiment Clock = new CanonicalClockApplyExperiment();
         public SessionCarry? Session;
         internal sealed class SessionCarry
@@ -47,10 +47,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private void Validate()
         {
-            if (!Enabled || Schema != 5 || Ordinal != 1 || MovieFrame < 0 || NativeFrame < 0
+            if (!Enabled || Schema != 6 || Ordinal != 1 || MovieFrame < 0 || NativeFrame < 0
                 || Main == null || Input == null || Geo == null || Map == null || Map.Length == 0 || Main.Length == 0 || Input.Length == 0 || Geo.Length == 0
-                || Marker == null || Marker.Length == 0 || MapKeyText == null || MapKeyText.Length == 0
-                || (long)Main.Length + Input.Length + Geo.Length + Map.Length + Marker.Length + MapKeyText.Length > MaximumBytes || Clock == null || Clock.NativeFrame != NativeFrame)
+                || Marker == null || Marker.Length == 0 || MapKeyText == null || MapKeyText.Length == 0 || MapKeyParents == null || MapKeyParents.Length == 0
+                || (long)Main.Length + Input.Length + Geo.Length + Map.Length + Marker.Length + MapKeyText.Length + MapKeyParents.Length > MaximumBytes || Clock == null || Clock.NativeFrame != NativeFrame)
                 throw new InvalidDataException("Actual D source schema, epoch or graph bounds differ.");
             Clock.Clock.Validate(NativeFrame); CanonicalFsmTimeCarry.Validate(Clock.FsmTime);
         }

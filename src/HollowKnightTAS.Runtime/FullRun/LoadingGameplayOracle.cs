@@ -79,6 +79,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly LoadingGeoIncomingReferences mapKeyIncoming = new LoadingGeoIncomingReferences();
         private readonly LoadingGeoIncomingReferences frozenMapKeyIncoming = new LoadingGeoIncomingReferences();
         private bool frozenMapKeySample;
+        private readonly LoadingGeoIncomingReferences mapKeyParentIncoming = new LoadingGeoIncomingReferences();
+        private bool readingMapKeyManagedRoots;
         private bool frozenGeoSample;
         private readonly List<object> detachedFsmMetadata = new List<object>();
         private readonly List<Tuple<object, string>> detachedFsmRoots = new List<Tuple<object, string>>();
@@ -140,11 +142,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     slotObservation: (owner, field, index, value, path) => {
                         geoIncoming.ObserveSlot(owner, field, index, value, path, fields!.DiagnosticRoot);
                         markerIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
-                        mapKeyIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
-                        if (frozenMapKeySample) frozenMapKeyIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
+                        if (readingMapKeyManagedRoots) {
+                            mapKeyIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
+                            mapKeyParentIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
+                            if (frozenMapKeySample) frozenMapKeyIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
+                        }
                         if (frozenMarkerSample) frozenMarkerIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (frozenGeoSample) frozenGeoIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
-                    }, observeSlotValue: value => geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value));
+                    }, observeSlotValue: value => geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || mapKeyParentIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value));
             if (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1")
                 nativeScheduler = new LoadingNativeSchedulerDigest();
             if (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
@@ -276,6 +281,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal LoadingGeoIncomingReferences FreezeGeoIncoming() => geoIncoming.Freeze();
         internal LoadingGeoIncomingReferences FreezeMarkerIncoming() => markerIncoming.Freeze();
         internal LoadingGeoIncomingReferences FreezeMapKeyIncoming() => mapKeyIncoming.Freeze();
+        internal LoadingGeoIncomingReferences FreezeMapKeyParentIncoming() => mapKeyParentIncoming.Freeze();
         internal Action PrepareOwnedHudLifecycle(IReadOnlyDictionary<int, MonoBehaviour> oldOwners, Func<int, bool> ownsNewStart, out Action retireStarts)
             => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).BeginOwnedStartLifecycle(oldOwners, ownsNewStart, out retireStarts);
         // The original owned-lifecycle recapture already assigned these exact
@@ -732,6 +738,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             textCacheDetails.Clear();
             geoIncoming.BeginSample(UnityId);
             mapKeyIncoming.BeginMapKeySample(UnityId, CanonicalMapKeyTextDirectory.Current());
+            mapKeyIncoming.ObserveRetiringMapKeyMeshes();
+            mapKeyParentIncoming.BeginMapKeyParentSample(UnityId, CanonicalMapKeyTextDirectory.Current());
             var frozenMapKey = CanonicalMapKeyTextColdTemplate.FrozenKeys;
             frozenMapKeySample = frozenMapKey != null;
             if (frozenMapKeySample) frozenMapKeyIncoming.BeginMapKeySample(UnityId, frozenMapKey!);
@@ -829,6 +837,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             var inventory = new List<object>();
             CaptureProgress("managed-and-fsm-fields");
+            // Only the actual Mono/static/Fsm roots expose writable managed
+            // incoming slots. Native observation DTOs are read evidence, never
+            // live field owners. Retired native consumers are checked directly.
+            readingMapKeyManagedRoots = true;
             var fieldDiagnostics = new List<object>();
             var mono = new StringBuilder(); var fsms = new StringBuilder(); var staticRoots = new StringBuilder();
             if (!boundaryCapture) fields.BeginSharedGraph();
@@ -951,7 +963,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     digest = digest.Sha256, nodes = digest.Nodes, unsupported = digest.Unsupported });
             }
             }
-            finally { if (!boundaryCapture) fields.EndSharedGraph(); }
+            finally { readingMapKeyManagedRoots = false; if (!boundaryCapture) fields.EndSharedGraph(); }
             CaptureProgress("native-physics");
             var allBodies = Resources.FindObjectsOfTypeAll<Rigidbody2D>().Where(body => body != null && Loaded(body.gameObject)).ToArray();
             var physicsDigest = nativePhysics == null ? "disabled" : nativePhysics.Capture(allBodies,
@@ -1269,8 +1281,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private string? ReferenceCore(object value)
         {
             if (fields.Capturing && geoIncoming.Owns(value)) geoIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
-            if (fields.Capturing && mapKeyIncoming.Owns(value)) mapKeyIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
-            if (fields.Capturing && frozenMapKeySample && frozenMapKeyIncoming.Owns(value)) frozenMapKeyIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
+            if (fields.Capturing && readingMapKeyManagedRoots && mapKeyParentIncoming.Owns(value)) mapKeyParentIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
+            if (fields.Capturing && readingMapKeyManagedRoots && mapKeyIncoming.Owns(value)) mapKeyIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
+            if (fields.Capturing && readingMapKeyManagedRoots && frozenMapKeySample && frozenMapKeyIncoming.Owns(value)) frozenMapKeyIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && markerIncoming.Owns(value)) markerIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && frozenMarkerSample && frozenMarkerIncoming.Owns(value)) frozenMarkerIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && frozenGeoSample && frozenGeoIncoming.Owns(value)) frozenGeoIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
@@ -1489,7 +1502,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var content = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new {
                 format = LoadingInventoryRootEncoding.Format, names = encoded.Names, types = encoded.Types, roots = encoded.Roots,
                 detachedFsmReferences, detachedFsmMetadata, originalGeoLifecycle = LoadingGeoLifecycleObservation.Capture(),
-                originalMapLifecycle = LoadingMapLifecycleObservation.Capture(), geoIncomingReferences = geoIncoming.Snapshot(), markerIncomingReferences = markerIncoming.Snapshot(), mapKeyIncomingReferences = mapKeyIncoming.Snapshot() }));
+                originalMapLifecycle = LoadingMapLifecycleObservation.Capture(), geoIncomingReferences = geoIncoming.Snapshot(), markerIncomingReferences = markerIncoming.Snapshot(), mapKeyIncomingReferences = mapKeyIncoming.Snapshot(), mapKeyParentIncomingReferences = mapKeyParentIncoming.Snapshot() }));
             if (content.Length > 16 * 1024 * 1024)
                 throw new InvalidOperationException("Actual D suffix inventory exceeds the original 16 MiB diagnostic bound.");
             using (var compressed = new MemoryStream()) {

@@ -692,7 +692,7 @@ public sealed class CanonicalCarryGraphCodecTests
             if (fault == "unfinished") {
                 Assert.ThrowsExactly<InvalidOperationException>(phases.CompleteMarkerPhase); continue;
             }
-            marker.Apply(); phases.CompleteMarkerPhase();
+            marker.Apply(); phases.CompleteMarkerPhase(); phases.CompleteMapKeyParentPhase();
             if (fault == "overlap") Assert.ThrowsExactly<InvalidDataException>(() => phases.PrepareMapKey(Roots(("geo", new Value()))));
             else if (fault == "collapse") Assert.ThrowsExactly<InvalidDataException>(() => phases.PrepareMapKey(Roots(("key", nextValues[1]))));
             else {
@@ -705,6 +705,37 @@ public sealed class CanonicalCarryGraphCodecTests
                 Assert.AreSame(nextValues[2], target.Items[1]); Assert.AreSame(nextValues[2], target.Items[2]);
             }
             Assert.ThrowsExactly<InvalidOperationException>(() => phases.PrepareMapKey(Roots(("key", new Value()))));
+        }
+    }
+
+    [TestMethod]
+    public void Parent_external_phase_is_finite_ordered_and_disjoint_from_leaf_transfer()
+    {
+        foreach (var fault in new[] { "none", "order", "unfinished", "stale", "overlap", "collapse" }) {
+            var codec = new CanonicalCarryGraphCodec(new[] { typeof(ExternalOwner), typeof(Value), typeof(object[]) }, "four-producers-v1");
+            var original = new[] { new Value(), new Value(), new Value(), new Value() };
+            var next = new[] { new Value(), new Value(), new Value(), new Value() };
+            var names = new[] { "geo", "marker", "parents", "leaves" };
+            var source = new ExternalOwner { Item = original[0], Items = new object[] { original[1], original[2], original[3], original[3] } };
+            var graph = codec.Capture(Roots(("owner", source)), value => Array.FindIndex(original, item => ReferenceEquals(item, value)) is var at && at >= 0 ? names[at] : null);
+            var target = new ExternalOwner(); CanonicalCarryGraphCodec.ExternalRebinding? phases = null;
+            var root = codec.PrepareOwnedGraph(graph, Roots(("owner", target)), name => original[Array.IndexOf(names, name)], exposeExternalRebinding: value => phases = value);
+            root.Apply();
+            if (fault == "order") {
+                Assert.ThrowsExactly<InvalidOperationException>(() => phases!.PrepareMapKeyParents(Roots(("parents", next[2])))); continue;
+            }
+            phases!.Prepare(Roots(("geo", next[0]))).Apply(); phases.CompleteGeoPhase();
+            phases.PrepareMarker(Roots(("marker", next[1]))).Apply(); phases.CompleteMarkerPhase();
+            var parent = phases.PrepareMapKeyParents(Roots(("parents", next[2])));
+            if (fault == "unfinished") { Assert.ThrowsExactly<InvalidOperationException>(phases.CompleteMapKeyParentPhase); continue; }
+            if (fault == "stale") { target.Items[1] = new Value(); Assert.ThrowsExactly<InvalidOperationException>(parent.Apply); continue; }
+            parent.Apply(); phases.CompleteMapKeyParentPhase();
+            if (fault == "overlap") { Assert.ThrowsExactly<InvalidDataException>(() => phases.PrepareMapKey(Roots(("parents", new Value())))); continue; }
+            if (fault == "collapse") { Assert.ThrowsExactly<InvalidDataException>(() => phases.PrepareMapKey(Roots(("leaves", next[2])))); continue; }
+            phases.PrepareMapKey(Roots(("leaves", next[3]))).Apply();
+            root.VerifyReadback(); parent.VerifyReadback();
+            Assert.AreSame(next[2], target.Items[1]); Assert.AreSame(next[3], target.Items[2]); Assert.AreSame(next[3], target.Items[3]);
+            Assert.ThrowsExactly<InvalidOperationException>(phases.CompleteMapKeyParentPhase);
         }
     }
 

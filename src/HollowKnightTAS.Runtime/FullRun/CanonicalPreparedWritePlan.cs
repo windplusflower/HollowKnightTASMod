@@ -30,6 +30,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             try { guard(); write(); readback(); state = State.Complete; }
             catch { state = State.Faulted; throw; }
         }
+        // Validate this exact frozen incoming set before a sealed external
+        // rebind moves overlapping slots. Both plans still perform their full
+        // readback; the dependency may only be another guarded source plan.
+        internal void ApplyWithGuardedDependency(Action dependency)
+        {
+            if (state != State.Prepared) throw new InvalidOperationException("Canonical write preparation was already consumed or faulted.");
+            state = State.Applying;
+            try { guard(); dependency(); write(); readback(); state = State.Complete; }
+            catch { state = State.Faulted; throw; }
+        }
         internal void VerifyReadback()
         {
             if (state != State.Complete) throw new InvalidOperationException("Canonical graph has not completed application.");

@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Diagnostics;
+using System.Reflection;
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
@@ -30,7 +31,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalRetiredMeshPolicy retiredMeshes;
         private LoadingGeoIncomingReferences? pendingGeoIncoming;
         private LoadingGeoIncomingReferences? pendingMarkerIncoming;
-        private LoadingGeoIncomingReferences? pendingMapKeyIncoming;
+        private LoadingGeoIncomingReferences? pendingMapKeyIncoming, pendingMapKeyParentIncoming;
         private readonly Dictionary<int, string> retiringGeo = new Dictionary<int, string>();
         internal string ActualTargetStage => carry?.ActualTargetStage ?? "no-carry";
         internal byte[]? ExperimentalSource { get; private set; }
@@ -62,6 +63,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             pendingGeoIncoming = observer.FreezeGeoIncoming();
             pendingMarkerIncoming = observer.FreezeMarkerIncoming();
             pendingMapKeyIncoming = observer.FreezeMapKeyIncoming();
+            pendingMapKeyParentIncoming = observer.FreezeMapKeyParentIncoming();
             var epoch = CanonicalInputEpochRuntime.Capture(origin, targetNative, controlOrigin);
             var identities = new BoundaryObjectIdentity();
             PreparedPhase("frozen-owner-context");
@@ -199,6 +201,45 @@ namespace HollowKnightTAS.Runtime.FullRun
                 + ";metadataAssembliesEqual=" + metadata.LoadedAssembliesEqual + ";completeStateCoverage=false");
             }, Require);
         }
+        private void RestoreMapKeyParentDependencies(Action applyDependencies, Action<Tuple<Action, Action>> normalize)
+        {
+            LoadingSerialSceneProbe.RequireCanonicalMutationBoundary();
+            var current = observer ?? throw new InvalidOperationException("Map Key parent lifecycle has no original observer.");
+            var directory = CanonicalMapKeyTextDirectory.Build(CanonicalMapKeyTextDirectory.Current());
+            var owners = directory.Values.OfType<MonoBehaviour>().ToDictionary(owner => owner.GetInstanceID());
+            CanonicalMarkerEventCarry.RequireEmpty(directory); CanonicalMarkerReadonlyCarry.CaptureMapKey(directory);
+            var events = new MapTextEventGuard(); var updates = new MapTextUpdateGuard();
+            var tmp = CanonicalMapTextStartup.Static(typeof(TMPro.TMP_UpdateManager), "s_Instance");
+            var ids = new HashSet<int>(directory.Values.OfType<TMPro.TextMeshPro>().Select(owner => owner.GetInstanceID()));
+            foreach (var name in new[] { "m_GraphicQueueLookup", "m_GraphicRebuildQueue", "m_LayoutQueueLookup", "m_LayoutRebuildQueue" }) {
+                var queue = CanonicalMapTextStartup.Raw(tmp, name);
+                if (queue is System.Collections.IDictionary lookup && lookup.Keys.Cast<object>().Any(key => key is int id && ids.Contains(id))
+                    || queue is System.Collections.IList list && list.Cast<object>().Any(item => directory.Values.Any(owner => ReferenceEquals(owner, item))))
+                    throw new InvalidOperationException("Source parent OnDisable needs an unsupported live TMP queue continuation.");
+            }
+            using var fields = new LoadingFieldDigest(value => value is UnityEngine.Object native ? "map-key-parent-native:" + native.GetInstanceID() : null,
+                type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object));
+            string ReadTmp() {
+                var result = fields.Capture(tmp, "map-key-parent-original-TMP-queues", expandRoot: true);
+                if (result.Unsupported.Count != 0) throw new InvalidOperationException("Map Key parent TMP queue graph has unread fields.");
+                return result.Sha256;
+            }
+            var queues = ReadTmp(); var rng = UnityEngine.Random.state; var particles = LoadingGameplayOracle.CaptureParticleRandomState();
+            var input = GameManager.instance.inputHandler;
+            var controllerField = typeof(InputHandler).GetField("RefreshActiveControllerEvent", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!;
+            var controller = controllerField.GetValue(input);
+            current.RecaptureOwnedHudScheduler(LoadingSerialSceneProbe.RequireCanonicalMutationBoundary, () => { });
+            // One original transition envelope starts before the first parent
+            // source write and is closed only after the old leaves retire.
+            var transition = current.PrepareOwnedHudLifecycle(owners, _ => false, out var retireStarts);
+            applyDependencies();
+            normalize(Tuple.Create(transition, retireStarts));
+            events.Verify(); updates.Verify();
+            if (!ReferenceEquals(tmp, CanonicalMapTextStartup.Static(typeof(TMPro.TMP_UpdateManager), "s_Instance"))
+                || queues != ReadTmp() || !ReferenceEquals(controller, controllerField.GetValue(input))
+                || !rng.Equals(UnityEngine.Random.state) || !particles.SequenceEqual(LoadingGameplayOracle.CaptureParticleRandomState()))
+                throw new InvalidOperationException("Map Key parent callback changed TMP backing graphs, controller events or RNG.");
+        }
         internal CanonicalBoundaryPolicy()
         {
             CanonicalPhaseOneTrace.RequireContext(Environment.GetEnvironmentVariable);
@@ -262,7 +303,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("original-Map-lifecycle-before-Canon", LoadingMapLifecycleObservation.Capture());
             try { carry ??= new CanonicalCarryCapture(assetTemplates, visualTemplates, journal, RestoreHudSourceDependencies, RestoreGeoSourceDependencies, RestoreMarkerSourceDependencies, () => {
                 var incoming = pendingMapKeyIncoming ?? throw new InvalidOperationException("Map Key frozen incoming reader is absent or consumed.");
-                pendingMapKeyIncoming = null; return incoming; }); }
+                pendingMapKeyIncoming = null; return incoming; }, () => {
+                var incoming = pendingMapKeyParentIncoming ?? throw new InvalidOperationException("Map Key parent frozen incoming reader is absent or consumed.");
+                pendingMapKeyParentIncoming = null; return incoming;
+                }, () => (observer ?? throw new InvalidOperationException("Map Key source snapshot has no original observer.")).FreezeMapKeyParentIncoming(),
+                RestoreMapKeyParentDependencies, (dependency, incoming, lifecycle, readback) =>
+                    CanonicalMapKeyTextBoundaryPolicy.Reset(hudStartup.MapKeyTextColdDefinition,
+                        observer ?? throw new InvalidOperationException("Map Key deferred Canon has no observer."), dependency, incoming, lifecycle, readback)); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
@@ -293,7 +340,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (!StringComparer.Ordinal.Equals(observerSession, sessionDirectory))
                 throw new InvalidOperationException("Canonical observer cannot change its protected session binding.");
-            Progress("R2-original-MapKeyText-common-cold-Canon", CanonicalMapKeyTextBoundaryPolicy.Reset(hudStartup.MapKeyTextColdDefinition, observer));
+            var keyDependency = CanonicalMapKeyParentSourceDomain.ReadCurrentDependency(CanonicalMapKeyTextDirectory.Current());
+            var waitingForSourceKeyDependencies = CanonicalActualDExperiment.Enabled && !CanonicalActualDExperiment.CaptureSource;
+            Progress("R2-MapKey-parent-dependencies-read", new { actualCurrentValues = true, waitingForSourceD = waitingForSourceKeyDependencies });
+            if (!waitingForSourceKeyDependencies)
+                Progress("R2-original-MapKeyText-common-cold-Canon", CanonicalMapKeyTextBoundaryPolicy.Reset(hudStartup.MapKeyTextColdDefinition, observer, keyDependency));
+            else Progress("R2-MapKey-Canon-awaiting-actual-source-parent-D", new { mutationExecuted = false, activeWriteGuardUnchanged = true });
             Progress("R2-original-Marker-common-cold-Canon", CanonicalMarkerBoundaryPolicy.Reset(hudStartup.MarkerColdDefinition, observer));
             var identities = new BoundaryObjectIdentity();
             var carryFsmBindings = CanonicalHeroFsmBindings.Validate(identities);
@@ -365,7 +417,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidOperationException("Actual D source has unread or unsupported managed data: "
                             + string.Join(", ", data.Unsupported));
                     ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, MovieFrame = movie, NativeFrame = native,
-                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
+                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
                     Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,
                         blockingQualifications = carry.BlockingQualifications });
                 }
