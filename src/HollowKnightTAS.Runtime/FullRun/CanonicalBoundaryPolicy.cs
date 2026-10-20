@@ -417,7 +417,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidOperationException("Actual D source has unread or unsupported managed data: "
                             + string.Join(", ", data.Unsupported));
                     ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, MovieFrame = movie, NativeFrame = native,
-                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
+                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, Physics = carry.PhysicsGraph, Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
                     Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,
                         blockingQualifications = carry.BlockingQualifications });
                 }

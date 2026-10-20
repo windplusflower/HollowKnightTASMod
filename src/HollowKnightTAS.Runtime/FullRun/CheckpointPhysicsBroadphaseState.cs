@@ -14,7 +14,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     [Serializable]
     internal sealed partial class CheckpointPhysicsBroadphaseState
     {
-        public int Version = 1, Root, Count, FreeHead, InsertionCount, ProxyCount, QueryProxy, WorldFlags, SimulationId;
+        public int Version = 2, Root, Count, FreeHead, InsertionCount, ProxyCount, QueryProxy, WorldFlags, SimulationId;
         public uint Path;
         public byte[] Step = null!;
         public Node[] Nodes = null!;
@@ -23,6 +23,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             public int Parent, Child1 = -1, Child2 = -1, Height;
             public string? Proxy;
+            // Active internal slots can retain a local fixture proxy pointer.
+            // Carry its logical owner too; never copy a source address or erase it.
+            public string? UserData;
             public byte[] Bounds = Array.Empty<byte>(), ProxyBounds = Array.Empty<byte>();
             public int ProxyChild;
         }
@@ -49,6 +52,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static IntPtr Pointer(byte[] b, int offset) => new IntPtr(BitConverter.ToInt64(b, offset));
         private static int Int(byte[] b, int offset) => BitConverter.ToInt32(b, offset);
+        private static void PutInt(byte[] bytes, int offset, int value)
+        {
+            bytes[offset] = (byte)value; bytes[offset + 1] = (byte)(value >> 8);
+            bytes[offset + 2] = (byte)(value >> 16); bytes[offset + 3] = (byte)(value >> 24);
+        }
         private static byte[] Slice(byte[] b, int offset, int size) => b.Skip(offset).Take(size).ToArray();
         private static IntPtr Native(UnityEngine.Object value) => (IntPtr)CachedPointer.GetValue(value)!;
         private static int Bound(long value, int maximum, string name)
@@ -82,7 +90,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             LoadingEngineClockProbe.RequirePinnedEngine();
             var hero = HeroController.SilentInstance ?? throw new InvalidOperationException("Broadphase Hero is absent.");
-            var body = Read(Native(hero.GetComponent<Rigidbody2D>()), 296); var scene = Pointer(body, 288);
+            var rigidbody = hero.GetComponent<Rigidbody2D>();
+            if (hero == null || rigidbody == null || Native(rigidbody) == IntPtr.Zero) throw new InvalidOperationException("Broadphase live Hero/body is absent.");
+            var body = Read(Native(rigidbody), 296); var scene = Pointer(body, 288);
             var sceneBytes = Read(scene, 1184); var world = Pointer(sceneBytes, 8); var state = IntPtr.Add(world, WorldState);
             var header = Read(state, 360); var cache = Pointer(sceneBytes, 40);
             // No native call is running while the checkpoint callback is parked.
@@ -108,6 +118,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (count == 0) continue;
                 var fixtures = Read(Pointer(owner, 88), count * 8);
                 var components = collider.GetComponents<Collider2D>(); var component = Array.FindIndex(components, c => ReferenceEquals(c, collider));
+                if (component < 0) throw new InvalidOperationException("Broadphase collider component identity differs.");
                 for (var i = 0; i < count; i++)
                 {
                     var fixturePointer = Pointer(fixtures, i * 8); var fixture = Read(fixturePointer, 88);
@@ -143,6 +154,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             return Capture(Bind(restoredSpatters, restoredGeos, restoredProjectiles));
         }
+        internal static CheckpointPhysicsBroadphaseState CaptureCanonical(BoundaryObjectIdentity identities)
+        {
+            using var validation = new LoadingEngineClockProbe.CheckpointValidation();
+            return Capture(Bind(Array.Empty<GameObject>(), Array.Empty<GameObject>(), Array.Empty<GameObject>(), identities));
+        }
         private static CheckpointPhysicsBroadphaseState Capture(Live live)
         {
             var b = live.Header; var capacity = Bound(Int(b, 28), MaximumNodes, "node capacity");
@@ -155,6 +171,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var node = new Node { Height = height, Parent = Int(bytes, offset + 24) }; nodes[i] = node;
                 if (height == -1) continue;
                 node.Bounds = Slice(bytes, offset, 16); node.Child1 = Int(bytes, offset + 28); node.Child2 = Int(bytes, offset + 32);
+                var userData = Pointer(bytes, offset + 16);
+                if (userData != IntPtr.Zero && !aliases.TryGetValue(userData, out node.UserData))
+                    throw new InvalidOperationException("Broadphase active user data is not a locally bound proxy.");
                 if (node.Child1 != -1) continue;
                 var proxy = Pointer(bytes, offset + 16);
                 if (!aliases.TryGetValue(proxy, out node.Proxy)) throw new InvalidOperationException("Broadphase leaf is unbound.");
@@ -255,25 +274,34 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private void Validate()
         {
-            if (Version != 1 || Nodes == null || Nodes.Length == 0 || Nodes.Length > MaximumNodes || Step == null || Step.Length != 8
+            if (Version != 2 || Nodes == null || Nodes.Length == 0 || Nodes.Length > MaximumNodes || Step == null || Step.Length != 8
                 || Pairs == null || Pairs.Length > MaximumNodes * 4 || (Pairs.Length & 1) != 0 || Moves == null || Moves.Length > MaximumNodes * 2)
                 throw new InvalidDataException("Broadphase checkpoint schema differs.");
             if (Nodes.Any(n => n == null || n.Height < -1 || n.Height > 64) || (WorldFlags & 2) != 0)
                 throw new InvalidDataException("Broadphase checkpoint nodes/lock state differ.");
-            var free = new HashSet<int>(); var active = new HashSet<int>(); var proxies = new HashSet<string>();
+            // Every node index is already bounded by this array. A dense
+            // visitation map proves the same disjoint/complete tree+free
+            // coverage without allocating two 32768-entry hash tables.
+            var membership = new byte[Nodes.Length]; var freeCount = 0; var activeCount = 0; var proxies = new HashSet<string>();
             for (var n = FreeHead; n != -1; n = Nodes[n].Parent)
-                if (n < 0 || n >= Nodes.Length || !free.Add(n) || Nodes[n].Height != -1) throw new InvalidDataException("Broadphase free chain differs.");
+            {
+                if (n < 0 || n >= Nodes.Length || membership[n] != 0 || Nodes[n].Height != -1) throw new InvalidDataException("Broadphase free chain differs.");
+                membership[n] = 1; freeCount++;
+            }
             void Visit(int i, int parent)
             {
-                if (i < 0 || i >= Nodes.Length || !active.Add(i) || Nodes[i].Parent != parent || Nodes[i].Height < 0)
+                if (i < 0 || i >= Nodes.Length || membership[i] != 0 || Nodes[i].Parent != parent || Nodes[i].Height < 0)
                     throw new InvalidDataException("Broadphase active tree differs.");
+                membership[i] = 2; activeCount++;
                 var node = Nodes[i];
                 if (node.Bounds == null || node.Bounds.Length != 16) throw new InvalidDataException("Broadphase bounds differ.");
                 for (var j = 0; j < 4; j++) if (float.IsNaN(BitConverter.ToSingle(node.Bounds, j * 4)) || float.IsInfinity(BitConverter.ToSingle(node.Bounds, j * 4)))
                     throw new InvalidDataException("Broadphase bounds are not finite.");
                 if (node.Child1 == -1)
                 {
-                    if (node.Child2 != -1 || node.Height != 0 || node.Proxy == null || node.Proxy.Length > 4096 || !proxies.Add(node.Proxy) || node.ProxyBounds == null || node.ProxyBounds.Length != 16)
+                    if (node.Child2 != -1 || node.Height != 0 || node.Proxy == null || node.Proxy.Length > 4096 || node.ProxyChild < 0 || node.ProxyChild >= MaximumNodes
+                        || !node.Proxy.EndsWith("/proxy[" + node.ProxyChild + "]", StringComparison.Ordinal)
+                        || node.UserData != node.Proxy || !proxies.Add(node.Proxy) || node.ProxyBounds == null || node.ProxyBounds.Length != 16)
                         throw new InvalidDataException("Broadphase leaf differs.");
                     for (var j = 0; j < 4; j++) if (float.IsNaN(BitConverter.ToSingle(node.ProxyBounds, j * 4)) || float.IsInfinity(BitConverter.ToSingle(node.ProxyBounds, j * 4)))
                         throw new InvalidDataException("Broadphase proxy bounds are not finite.");
@@ -287,18 +315,33 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
             }
             if (Root != -1) Visit(Root, -1);
-            if (active.Count != Count || proxies.Count != ProxyCount || active.Overlaps(free) || active.Count + free.Count != Nodes.Length
+            if (activeCount != Count || proxies.Count != ProxyCount || activeCount + freeCount != Nodes.Length
                 || Pairs.Concat(Moves).Any(i => i < -1 || i >= Nodes.Length)) throw new InvalidDataException("Broadphase node coverage differs.");
+            for (var i = 0; i < Nodes.Length; i++)
+                if (membership[i] == 2 && Nodes[i].UserData != null && !proxies.Contains(Nodes[i].UserData!))
+                    throw new InvalidDataException("Broadphase active user data owner differs.");
+            if (QueryProxy < -1 || QueryProxy >= Nodes.Length || (QueryProxy != -1 && membership[QueryProxy] != 2))
+                throw new InvalidDataException("Broadphase query proxy differs.");
         }
         internal Action PrepareApply(GameObject[] spatters, GameObject[] geos, GameObject[] projectiles)
+            => PrepareApply(spatters, geos, projectiles, null);
+        internal Action PrepareCanonicalApply(BoundaryObjectIdentity identities)
+            => PrepareApply(Array.Empty<GameObject>(), Array.Empty<GameObject>(), Array.Empty<GameObject>(), identities);
+        private Action PrepareApply(GameObject[] spatters, GameObject[] geos, GameObject[] projectiles, BoundaryObjectIdentity? identities)
         {
             Validate();
             if (spatters == null || geos == null || projectiles == null || spatters.Concat(geos).Concat(projectiles).Any(go => go == null)
                 || spatters.Concat(geos).Concat(projectiles).Distinct().Count() != spatters.Length + geos.Length + projectiles.Length)
                 throw new InvalidDataException("Broadphase prepared actor aliases differ.");
+            var consumed = false;
             return () =>
             {
-                var live = Bind(spatters, geos, projectiles); var aliases = Nodes.Where(n => n.Proxy != null).Select(n => n.Proxy!).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+                if (consumed) throw new InvalidOperationException("Broadphase prepared continuation was already consumed.");
+                consumed = true;
+                // Legacy restore already owns its transaction scope. The
+                // canonical continuation owns this one narrow native action.
+                using var validation = identities == null ? null : new LoadingEngineClockProbe.CheckpointValidation();
+                var live = Bind(spatters, geos, projectiles, identities); var aliases = Nodes.Where(n => n.Proxy != null).Select(n => n.Proxy!).OrderBy(x => x, StringComparer.Ordinal).ToArray();
                 if (!aliases.SequenceEqual(live.Proxies.Keys.OrderBy(x => x, StringComparer.Ordinal)))
                     throw new InvalidOperationException("Broadphase target fixture proxy identities differ: missing=" + string.Join(",", aliases.Except(live.Proxies.Keys))
                         + " extra=" + string.Join(",", live.Proxies.Keys.Except(aliases)));
@@ -314,20 +357,22 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (reserved.Count > MaximumNodes) throw new InvalidOperationException("Broadphase capacity preparation exceeded its bound.");
                     reserved.Add(allocate(live.Tree)); tree = Read(live.Tree, 40);
                 }
+                if (Int(tree, 20) != Nodes.Length) throw new InvalidOperationException("Broadphase target node capacity differs.");
                 // The engine allocated any larger array. Its owned pointer and
                 // allocator remain intact; all reserved slots are replaced below.
                 var nodeBytes = Read(Pointer(tree, 8), Nodes.Length * 40);
                 for (var i = 0; i < Nodes.Length; i++)
                 {
                     var n = Nodes[i]; var offset = i * 40;
-                    Array.Copy(BitConverter.GetBytes(n.Parent), 0, nodeBytes, offset + 24, 4);
-                    Array.Copy(BitConverter.GetBytes(n.Height), 0, nodeBytes, offset + 36, 4);
+                    PutInt(nodeBytes, offset + 24, n.Parent);
+                    PutInt(nodeBytes, offset + 36, n.Height);
                     if (n.Height == -1) continue;
                     Array.Copy(n.Bounds, 0, nodeBytes, offset, 16);
                     Array.Copy(BitConverter.GetBytes(n.Child1), 0, nodeBytes, offset + 28, 4);
                     Array.Copy(BitConverter.GetBytes(n.Child2), 0, nodeBytes, offset + 32, 4);
                     var proxy = n.Proxy == null ? IntPtr.Zero : live.Proxies[n.Proxy];
-                    Array.Copy(BitConverter.GetBytes(proxy.ToInt64()), 0, nodeBytes, offset + 16, 8);
+                    var userData = n.UserData == null ? IntPtr.Zero : live.Proxies[n.UserData];
+                    Array.Copy(BitConverter.GetBytes(userData.ToInt64()), 0, nodeBytes, offset + 16, 8);
                     if (proxy != IntPtr.Zero)
                     {
                         Write(proxy, n.ProxyBounds); Write(IntPtr.Add(proxy, 24), BitConverter.GetBytes(n.ProxyChild));
@@ -348,8 +393,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Write(IntPtr.Add(live.Tree, 40), BitConverter.GetBytes(ProxyCount)); Write(IntPtr.Add(live.Tree, 112), BitConverter.GetBytes(QueryProxy));
                 Write(live.State, BitConverter.GetBytes(WorldFlags)); Write(IntPtr.Add(live.State, 344), Step);
                 Write(IntPtr.Add(live.Cache, 80), BitConverter.GetBytes(SimulationId));
-                var actual = Capture(spatters, geos, projectiles);
-                if (Newtonsoft.Json.JsonConvert.SerializeObject(actual) != Newtonsoft.Json.JsonConvert.SerializeObject(this))
+                var actual = Capture(Bind(spatters, geos, projectiles, identities));
+                if (!actual.EncodeCompact().SequenceEqual(EncodeCompact()))
                     throw new InvalidOperationException("Restored broadphase values did not match the captured C.");
                 Modding.Logger.Log("[HKTAS] Restored broadphase values match captured C; fixture addresses rebound locally.");
             };

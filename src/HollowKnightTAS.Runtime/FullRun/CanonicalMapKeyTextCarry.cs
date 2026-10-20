@@ -13,6 +13,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static readonly Guid Module = new Guid("2b54cdaf-7a93-4f0e-b297-d50c4090ea9f");
         private static readonly Type[] Types = { typeof(SetTextMeshProGameText), typeof(TMPro.TextContainer), typeof(TMPro.TextMeshPro), typeof(ChangeFontByLanguage) };
         private static readonly int[] Counts = { 3, 12, 223, 14 };
+        // The four pinned assembly layouts are immutable. Keep every value
+        // read/write and owner/MVID guard, without sorting reflection metadata
+        // and rebuilding the same complete schema for every source readback.
+        private static readonly FieldInfo[][] Layouts = Types.Select(BuildFields).ToArray();
+        private static readonly string Schema = "original-map-key-nine-text-all-managed-v1-common-cold:" + Module + ":"
+            + CanonicalMarkerReadonlyCarry.SchemaIdentity + ":" + string.Join(";", Layouts.SelectMany(fields => fields
+                .Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName)));
         internal static readonly Type[] DataTypes = { typeof(Data), typeof(object[]), typeof(object[][]), typeof(string[]), typeof(bool[]), typeof(byte[]) };
         internal sealed class Data
         {
@@ -30,6 +37,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             var index = Array.IndexOf(Types, type);
             if (index < 0 || type.Module.ModuleVersionId != Module)
                 throw new InvalidDataException("Original Map Key Text managed owner ABI differs: " + type.FullName);
+            // Callers receive an independent array; cached metadata order
+            // cannot be changed by a consumer preparing its own field plan.
+            return (FieldInfo[])Layouts[index].Clone();
+        }
+        private static FieldInfo[] BuildFields(Type type)
+        {
+            var index = Array.IndexOf(Types, type);
+            if (index < 0 || type.Module.ModuleVersionId != Module)
+                throw new InvalidDataException("Original Map Key Text managed owner ABI differs: " + type.FullName);
             var fields = CanonicalCarryGraphCodec.Fields(type).Where(field => field.DeclaringType != typeof(UnityEngine.Object)
                 && field.DeclaringType != typeof(Component) && field.DeclaringType != typeof(Behaviour)
                 && field.DeclaringType != typeof(MonoBehaviour)).ToArray();
@@ -38,9 +54,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Original Map Key Text complete field directory differs: " + type.FullName);
             return fields;
         }
-        internal static string SchemaIdentity => "original-map-key-nine-text-all-managed-v1-common-cold:" + Module + ":"
-            + CanonicalMarkerReadonlyCarry.SchemaIdentity + ":" + string.Join(";", Types.SelectMany(type => ManagedFields(type)
-                .Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName)));
+        internal static string SchemaIdentity => Schema;
         internal static Data Capture(IReadOnlyDictionary<string, UnityEngine.Object> directory)
         {
             var owners = directory.Where(pair => pair.Value is MonoBehaviour).ToArray();

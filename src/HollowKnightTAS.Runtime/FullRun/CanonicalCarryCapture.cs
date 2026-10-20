@@ -37,6 +37,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal byte[] MarkerGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] MapGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] GeoGraph { get; private set; } = Array.Empty<byte>();
+        internal byte[] PhysicsGraph { get; private set; } = Array.Empty<byte>();
         internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates, CanonicalHudJournalPolicy journal,
             Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies,
             Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreGeoSourceDependencies,
@@ -138,6 +139,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (hero.cState == null) throw new InvalidDataException("Carry Hero state root is absent.");
             roots.Add("D/HeroControllerStates", hero.cState);
             roots.Add(CanonicalGameplayCarry.Root, CanonicalGameplayCarry.Capture(identities));
+            PhysicsGraph = targetDirectoryOnly ? Array.Empty<byte>() : CheckpointPhysicsBroadphaseState.CaptureCanonical(identities).EncodeCompact();
             var heroAnimationCallbacks = targetDirectoryOnly ? new CanonicalHeroAnimationCallbacks.Data()
                 : CanonicalHeroAnimationCallbacks.Capture(identities);
             roots.Add(CanonicalHeroAnimationCallbacks.Root, heroAnimationCallbacks);
@@ -518,6 +520,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     }, Require);
                 });
                 domainActions.Add(() => prepareScheduler(continuation!.Scheduler)());
+                var physics = CheckpointPhysicsBroadphaseState.DecodeCompact(actualSourceValidation!.Physics);
+                var applyPhysics = physics.PrepareCanonicalApply(identities);
+                domainActions.Add(() => { ActualTargetStage = "physics-source-values"; applyPhysics(); });
                 var actual = new CanonicalCarryPairPreparation(main, sdk, () => {
                     guardInputSlots(); guardEventSlots(); sceneMapping.Guard(); deviceManagers.Guard(); loadCallbacks.Guard();
                 }, admitted);
