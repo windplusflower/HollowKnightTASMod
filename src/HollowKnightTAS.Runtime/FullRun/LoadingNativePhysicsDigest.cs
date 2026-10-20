@@ -12,7 +12,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 {
     // Diagnostic only. Exact installed Unity/PDB layouts; read no padding,
     // never call native factories or export pointers as portable identities.
-    internal sealed class LoadingNativePhysicsDigest
+    internal sealed partial class LoadingNativePhysicsDigest
     {
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool ReadProcessMemory(IntPtr process, IntPtr address,
@@ -36,6 +36,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly SortedDictionary<string, StringBuilder> groups = new SortedDictionary<string, StringBuilder>(StringComparer.Ordinal);
         private readonly SortedDictionary<string, string> groupDigests = new SortedDictionary<string, string>(StringComparer.Ordinal);
         private readonly List<object> diagnosticEntries = new List<object>();
+        private readonly List<object> contactRawEvidence = new List<object>();
         private readonly bool detailed = Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_DETAILS") == "1";
         private static readonly HashSet<string> DiagnosticKinds = new HashSet<string>(new[] {
             "body", "fixture", "fixture-proxy", "shape", "polygon-active", "body-fixture-order",
@@ -76,12 +77,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal string[] Unsupported => unsupported.ToArray();
         internal IReadOnlyDictionary<string, string> Groups => groupDigests;
         internal object[] DiagnosticEntries => diagnosticEntries.ToArray();
+        internal object[] ContactRawEvidence => contactRawEvidence.ToArray();
 
         internal string Capture(IEnumerable<Rigidbody2D> bodies, IEnumerable<Collider2D> colliders,
             Func<UnityEngine.Object, string> identity, LoadingFieldDigest fields)
         {
             unsupported.Clear(); bodyIds.Clear(); fixtureIds.Clear(); contactIds.Clear(); bodyOwners.Clear(); fixtureOwners.Clear(); inventory.Clear(); text.Clear(); groups.Clear(); groupDigests.Clear();
             diagnosticEntries.Clear();
+            contactRawEvidence.Clear();
             var scenes = new Dictionary<IntPtr, int>();
             rigidbodyIds.Clear();
             var orderedBodies = bodies.OrderBy(identity, StringComparer.Ordinal).ToArray();
@@ -293,6 +296,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 var bytes = contact.Value;
                 Count(I32(bytes, 188), 2, "contact-manifold-points");
+                if (!allFixtures.TryGetValue(Pointer(bytes, 96), out var fixtureA)
+                    || !allFixtures.TryGetValue(Pointer(bytes, 104), out var fixtureB))
+                    throw new InvalidOperationException("P0 contact evidence fixture is outside the bound world.");
+                contactRawEvidence.Add(CaptureContactRaw(contactIds[contact.Key], bytes, fixtureA, fixtureB));
                 // The pinned constructor initializes current pointCount only.
                 // Retain old bytes in diagnostics until their read/write lifetime
                 // is proved; do not treat an uninitialized count as memory damage.

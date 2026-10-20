@@ -99,6 +99,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (reader.ReadInt32() != Magic) throw new InvalidDataException("Carry wire magic differs.");
                 var version = reader.ReadInt32();
                 var strings = new string[Count(MaximumStrings)]; long characters = 0;
+                var usedStrings = new bool[strings.Length];
                 for (var i = 0; i < strings.Length; i++)
                 {
                     var size = Count(SceneCheckpointPacket.MaximumPayloadBytes); var text = Utf8.GetString(reader.ReadBytes(size));
@@ -112,6 +113,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 {
                     var id = reader.ReadInt32();
                     if (id < 0 || id > strings.Length) throw new InvalidDataException("Carry wire string identity is invalid.");
+                    if (id != 0) usedStrings[id - 1] = true;
                     return id == 0 ? null : strings[id - 1];
                 }
                 var values = 0;
@@ -158,7 +160,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Type = Id() ?? throw new InvalidDataException("Carry external type is null.") };
                 value.Unsupported = new string[Count(CanonicalCarryGraphCodec.MaximumValues)];
                 for (var i = 0; i < value.Unsupported.Length; i++) value.Unsupported[i] = Id() ?? throw new InvalidDataException("Carry gap is null.");
-                if (stream.Position != stream.Length || !Encode(value).SequenceEqual(bytes))
+                // Every wire integer has fixed little-endian width, every tag
+                // has one encoding, and strict UTF-8 plus ordinal unique sorting
+                // fixes the string bytes and IDs. Encode interns exactly the
+                // strings reached by Id, so completeness is the remaining
+                // canonical condition. Preserve the original full acceptance
+                // set without allocating and writing the same packet again.
+                if (stream.Position != stream.Length || usedStrings.Any(used => !used))
                     throw new InvalidDataException("Carry wire payload is trailing or noncanonical.");
                 return value;
             }

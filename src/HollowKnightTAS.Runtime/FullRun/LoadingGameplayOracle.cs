@@ -676,6 +676,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         fontCacheDetails = assetValues.FontDetails,
                         unsupported = omissions, detachedFsmReferences, nativeScheduler = nativeScheduler?.Inventory,
                         nativePhysics = nativePhysics?.Inventory, nativePhysicsGroups = nativePhysics?.Groups,
+                        nativeContactRawEvidence = nativePhysics?.ContactRawEvidence,
                         fieldDiagnostics = lastFieldDiagnostics, nativeCoroutines = nativeScheduler?.FieldDiagnostics });
                     if (Encoding.UTF8.GetByteCount(inventory) > 16 * 1024 * 1024)
                         throw new InvalidOperationException("P0 candidate inventory exceeds its 16 MiB budget.");
@@ -689,6 +690,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     inventory = suffixCapture ? EncodeSuffixInventory() : null,
                     nativePhysics = fullInventory ? nativePhysics?.Inventory : null,
                     nativePhysicsEntries = nativePhysics?.DiagnosticEntries,
+                    nativeContactRawEvidence = nativePhysics?.ContactRawEvidence,
                     captureMilliseconds = captureElapsed.ElapsedMilliseconds,
                     captureStages = captureStages.ToArray() });
                 if (phase == "before" || phase == "after") gameplaySamples++;
@@ -1537,6 +1539,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         nativeScheduler = nativeScheduler?.Inventory,
                         nativePhysics = nativePhysics?.Inventory,
                         nativePhysicsGroups = nativePhysics?.Groups,
+                        nativeContactRawEvidence = nativePhysics?.ContactRawEvidence,
                         renderRng = RenderRngDiagnostic(), renderRngObservationMovieFrame = movieFrame()
                     }, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
                     var inventoryBytes = Encoding.UTF8.GetByteCount(inventory);
