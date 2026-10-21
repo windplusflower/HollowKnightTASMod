@@ -16,6 +16,7 @@ namespace HollowKnightTAS.Companion.Services
         private readonly Func<RuntimeSessionClient, IReadOnlyDictionary<string, string>, CancellationToken, Task<IReadOnlyDictionary<string, string>>> request;
         private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(100) };
         private readonly CancellationTokenSource cancel = new();
+        private readonly RuntimePollRequestGate pollGate = new();
         private RuntimeSessionClient? currentSession;
         private bool busy, disposed, refresh = true, wasSuspended;
         private long generation;
@@ -34,7 +35,7 @@ namespace HollowKnightTAS.Companion.Services
         private async Task<JsonDocument> Read(RuntimeSessionClient client, Dictionary<string, string> fields)
         {
             fields["requestId"] = "studio-fsm-" + Guid.NewGuid().ToString("N");
-            var response = await request(client, fields, cancel.Token);
+            var response = await pollGate.RequestAsync(client, fields, request, cancel.Token);
             return JsonDocument.Parse(response["snapshotJson"]);
         }
         private bool Valid(RuntimeSessionClient client, long epoch) => !disposed && epoch == generation && ReferenceEquals(client, session()) && client.IsConnected && !suspended();
@@ -48,6 +49,7 @@ namespace HollowKnightTAS.Companion.Services
             { Invalidate(UiText.T("等待游戏连接或回档完成…")); refresh = true; return; }
             if (!ReferenceEquals(client, currentSession)) { currentSession = client; generation++; refresh = true; Invalidate(UiText.T("正在重新绑定状态机…")); }
             if (busy) return;
+            if (pollGate.IsPending(client)) return;
             long epoch = generation;
             busy = true;
             try
@@ -132,6 +134,6 @@ namespace HollowKnightTAS.Companion.Services
         private void Invalidate(string message)
         { foreach (var card in Cards.Values) { card.Live = false; card.Status = UiText.T("数据已过期"); } Status = message; Updated?.Invoke(); }
         public void Dispose()
-        { if (disposed) return; disposed = true; generation++; timer.Stop(); timer.Tick -= Tick; foreach (var target in Targets) target.PropertyChanged -= SelectionChanged; cancel.Cancel(); if (!busy) cancel.Dispose(); }
+        { if (disposed) return; disposed = true; generation++; timer.Stop(); timer.Tick -= Tick; foreach (var target in Targets) target.PropertyChanged -= SelectionChanged; pollGate.Dispose(); cancel.Cancel(); if (!busy) cancel.Dispose(); }
     }
 }

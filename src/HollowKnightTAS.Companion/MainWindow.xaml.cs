@@ -91,6 +91,7 @@ namespace HollowKnightTAS.Companion
                 if (DataContext is MainViewModel vm)
                 {
                     vm.DisposeInfoOverlay();
+                    vm.DisposeInputGridPolling();
                     vm.InputGridRefreshed -= RestoreGridSelection;
                     vm.InputGridPositionChanged -= ScrollGridToFrame;
                     vm.PropertyChanged -= OnInputBindingsChanged;

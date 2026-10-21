@@ -17,6 +17,7 @@ namespace HollowKnightTAS.Companion.Services
         private readonly Action<double, double> moved;
         private readonly DispatcherTimer timer;
         private readonly CancellationTokenSource cancellation = new();
+        private readonly RuntimePollRequestGate pollGate = new();
         private InfoOverlaySettings settings = InfoOverlaySettings.Defaults();
         private InfoOverlayWindow? window;
         private RuntimeSessionClient? displayedSession;
@@ -51,15 +52,16 @@ namespace HollowKnightTAS.Companion.Services
             {
                 if (session == null || !session.IsConnected || suspended())
                 { window?.Hide(); displayedSession = null; return; }
+                if (pollGate.IsPending(session)) return;
                 if (!ReferenceEquals(displayedSession, session)) { window?.Hide(); displayedSession = session; }
                 var owner = ColliderOverlayController.FindMainWindow(session.GameProcessId);
                 if (!ColliderOverlayController.TryGetClientBounds(owner, out var bounds, out var dpi))
                 { window?.Hide(); return; }
-                var response = await request(session, new Dictionary<string, string>
+                var response = await pollGate.RequestAsync(session, new Dictionary<string, string>
                 {
                     ["requestId"] = "studio-info-" + Guid.NewGuid().ToString("N"), ["view"] = "info",
                     ["watches"] = System.Text.Json.JsonSerializer.Serialize(InfoOverlayModel.Watches(settings))
-                }, cancellation.Token);
+                }, request, cancellation.Token);
                 if (disposed || epoch != generation || !ReferenceEquals(session, sessionProvider()) || !session.IsConnected || suspended())
                 { window?.Hide(); return; }
                 if (!response.TryGetValue("snapshotJson", out var json)) throw new FormatException("Info snapshot is missing.");
@@ -99,6 +101,7 @@ namespace HollowKnightTAS.Companion.Services
         {
             if (disposed) return;
             disposed = true; generation++; timer.Stop(); timer.Tick -= OnTick;
+            pollGate.Dispose();
             cancellation.Cancel(); window?.Close(); window = null;
             if (!busy) cancellation.Dispose();
         }

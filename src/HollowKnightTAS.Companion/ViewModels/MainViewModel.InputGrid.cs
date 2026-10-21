@@ -25,6 +25,7 @@ namespace HollowKnightTAS.Companion.ViewModels
         private long currentFullRunMovieFrame = -1;
         private bool autoFollowGrid = true;
         private string? gridProgressRequestId;
+        private readonly RuntimePollRequestGate gridProgressPollGate = new();
         private DateTime gridProgressRequestedUtc;
         private TasAction gridAction = TasAction.Attack;
         private bool gridApplying;
@@ -269,15 +270,16 @@ namespace HollowKnightTAS.Companion.ViewModels
             var interval = startupBoot?.IsWaiting == true || currentControlMode == "Paused"
                 ? TimeSpan.FromSeconds(1) : TimeSpan.FromMilliseconds(200);
             if (now - gridProgressRequestedUtc < interval) return;
-            if (gridProgressRequestId != null
-                && now - gridProgressRequestedUtc < TimeSpan.FromSeconds(2))
-                return;
+            if (gridProgressPollGate.IsPending(session)) return;
             var requestId = "studio-grid-follow-" + Guid.NewGuid().ToString("N");
             gridProgressRequestId = requestId;
             gridProgressRequestedUtc = now;
+            long pollEpoch = 0;
             try
             {
                 var fullRun = startupBoot?.IsPending == true;
+                pollEpoch = gridProgressPollGate.Begin(session, requestId, fullRun
+                    ? HollowKnightTAS.Core.Ipc.IpcMessageTypes.FullRunState : HollowKnightTAS.Core.Ipc.IpcMessageTypes.RuntimeStatus);
                 await session.SendCommandAsync(fullRun
                         ? HollowKnightTAS.Core.Ipc.IpcMessageTypes.FullRunStatus
                         : HollowKnightTAS.Core.Ipc.IpcMessageTypes.RequestSnapshot,
@@ -289,8 +291,11 @@ namespace HollowKnightTAS.Companion.ViewModels
             {
                 // A disconnected session may disappear between the timer tick and the write.
                 if (gridProgressRequestId == requestId) gridProgressRequestId = null;
+                gridProgressPollGate.Abandon(session, requestId, pollEpoch);
             }
         }
+
+        internal void DisposeInputGridPolling() => gridProgressPollGate.Dispose();
 
         private void TrackGridFrame(long frame, bool forceScroll = false)
         {

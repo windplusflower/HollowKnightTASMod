@@ -488,6 +488,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                 currentMovieTick = -1;
                 currentFullRunMovieFrame = -1;
                 gridProgressRequestId = null;
+                gridProgressPollGate.Reset();
                 currentControlMode = string.Empty;
                 currentSceneEpoch = -1;
                 quickSlotCatalog = "[]";
