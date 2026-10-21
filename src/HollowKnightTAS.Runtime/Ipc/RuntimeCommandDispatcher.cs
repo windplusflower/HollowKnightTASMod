@@ -631,6 +631,8 @@ namespace HollowKnightTAS.Runtime.Ipc
         private void Dispatch(ValidatedRuntimeCommand command, bool allowBaselineCapture = true,
             bool atCompletedFrameBoundary = false)
         {
+            HollowKnightTAS.Runtime.FullRun.CanonicalSourceHeaderTiming.Mark(
+                HollowKnightTAS.Runtime.FullRun.CanonicalSourceHeaderTiming.Request(command.Fields), "command-dequeued-dispatch-enter");
             var requestId = command.Fields.TryGetValue(
                 "requestId",
                 out var supplied)
@@ -1197,6 +1199,8 @@ namespace HollowKnightTAS.Runtime.Ipc
             switch (command.MessageType)
             {
                 case IpcMessageTypes.SceneCheckpoint:
+                    HollowKnightTAS.Runtime.FullRun.CanonicalSourceHeaderTiming.Mark(
+                        HollowKnightTAS.Runtime.FullRun.CanonicalSourceHeaderTiming.Request(command.Fields), "dispatcher-command-start");
                     Publish(IpcMessageTypes.SceneCheckpointData, session.CheckpointCommand(command.Fields, manifestSha256));
                     return "Checkpoint data command completed; restoration is not qualified.";
                 case IpcMessageTypes.StartVideoExport:

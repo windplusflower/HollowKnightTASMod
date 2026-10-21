@@ -76,6 +76,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly LoadingGeoIncomingReferences markerIncoming = new LoadingGeoIncomingReferences();
         private readonly LoadingGeoIncomingReferences frozenMarkerIncoming = new LoadingGeoIncomingReferences();
         private bool frozenMarkerSample;
+        private readonly LoadingGeoIncomingReferences frozenMenuFlashIncoming = new LoadingGeoIncomingReferences();
+        private bool frozenMenuFlashSample;
         private readonly LoadingGeoIncomingReferences mapKeyIncoming = new LoadingGeoIncomingReferences();
         private readonly LoadingGeoIncomingReferences frozenMapKeyIncoming = new LoadingGeoIncomingReferences();
         private bool frozenMapKeySample;
@@ -149,7 +151,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                         }
                         if (frozenMarkerSample) frozenMarkerIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (frozenGeoSample) frozenGeoIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
-                    }, observeSlotValue: value => geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || mapKeyParentIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value));
+                        if (frozenMenuFlashSample) frozenMenuFlashIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
+                    }, observeSlotValue: value => geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || mapKeyParentIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value) || frozenMenuFlashSample && frozenMenuFlashIncoming.Owns(value));
             if (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1")
                 nativeScheduler = new LoadingNativeSchedulerDigest();
             if (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
@@ -691,6 +694,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     nativePhysics = fullInventory ? nativePhysics?.Inventory : null,
                     nativePhysicsEntries = nativePhysics?.DiagnosticEntries,
                     nativeContactRawEvidence = nativePhysics?.ContactRawEvidence,
+                    menuFlashCanvasDomain = fullInventory ? CanonicalMenuFlashColdPolicy.ObserveCanvasDomain(Reference) : null,
                     captureMilliseconds = captureElapsed.ElapsedMilliseconds,
                     captureStages = captureStages.ToArray() });
                 if (phase == "before" || phase == "after") gameplaySamples++;
@@ -752,6 +756,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             var frozenGeo = CanonicalGeoColdTemplate.FrozenCounter;
             frozenGeoSample = frozenGeo != null;
             if (frozenGeoSample) frozenGeoIncoming.BeginSample(UnityId, frozenGeo);
+            var frozenMenuFlash = CanonicalMenuFlashColdPolicy.FrozenRoot;
+            frozenMenuFlashSample = frozenMenuFlash != null;
+            if (frozenMenuFlashSample) frozenMenuFlashIncoming.BeginMenuFlashSample(UnityId, frozenMenuFlash!);
             var allBehaviours = Resources.FindObjectsOfTypeAll<MonoBehaviour>()
                 .Where(component => component != null && Loaded(component.gameObject)
                     && component.GetType().Assembly != typeof(LoadingGameplayOracle).Assembly)
@@ -1014,6 +1021,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (frozenGeoSample) frozenGeoIncoming.RequireNoExternalConsumers();
             if (frozenMarkerSample) frozenMarkerIncoming.RequireNoExternalConsumers();
             if (frozenMapKeySample) frozenMapKeyIncoming.RequireNoExternalConsumers();
+            if (frozenMenuFlashSample) frozenMenuFlashIncoming.RequireNoExternalConsumers();
             CaptureProgress("final-digests");
             result["assetBindings"] = Hash(JsonConvert.SerializeObject(assetIdentities.Snapshot()));
             result["unsupported"] = Hash(string.Join("\n", omissions));
@@ -1294,6 +1302,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (fields.Capturing && markerIncoming.Owns(value)) markerIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && frozenMarkerSample && frozenMarkerIncoming.Owns(value)) frozenMarkerIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && frozenGeoSample && frozenGeoIncoming.Owns(value)) frozenGeoIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
+            if (fields.Capturing && frozenMenuFlashSample && frozenMenuFlashIncoming.Owns(value)) frozenMenuFlashIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (boundaryCapture && assetArrays.Reference(value) is string arrayId)
                 return "asset-array:" + arrayId + ":shared:" + fields.BindSharedReference(value).ToString(CultureInfo.InvariantCulture);
             if (value is ParticleSystem.MinMaxGradient gradient) return GradientIdentity(gradient);

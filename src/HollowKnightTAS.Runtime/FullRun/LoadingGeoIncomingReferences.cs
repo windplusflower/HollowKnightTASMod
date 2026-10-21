@@ -20,11 +20,24 @@ namespace HollowKnightTAS.Runtime.FullRun
         private GeoCounter? counter;
         private GameObject? marker;
         private Transform? mapKey;
+        private bool menuFlash;
         internal bool Owns(object? value) => value != null && owned.ContainsKey(value);
+        internal void BeginMenuFlashSample(Func<UnityEngine.Object, string> identity, GameObject root)
+        {
+            owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear(); ownedRoots = Array.Empty<string>();
+            counter = null; marker = null; mapKey = null; menuFlash = true;
+            foreach (var pair in CanonicalMenuFlashColdPolicy.IncomingDirectory(root)) owned.Add(pair.Value, pair.Key);
+            ownedRoots = owned.Keys.OfType<MonoBehaviour>().Select(identity).ToArray();
+            var mesh = typeof(UnityEngine.UI.Graphic).GetField("m_CachedMesh", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(root.GetComponent<UnityEngine.UI.Image>());
+            if (!ReferenceEquals(mesh, null)) {
+                if (!(mesh is Mesh actual) || actual == null || owned.ContainsKey(actual)) throw new InvalidOperationException("Menu Flash retired mesh is dead/shared.");
+                owned.Add(actual, "$/retired-owned-mesh");
+            }
+        }
         internal void BeginSample(Func<UnityEngine.Object, string> identity, GeoCounter? explicitCounter = null)
         {
             owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear(); ownedRoots = Array.Empty<string>();
-            marker = null; mapKey = null;
+            marker = null; mapKey = null; menuFlash = false;
             var cameras = typeof(GameCameras).GetField("_instance", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null) as GameCameras;
             counter = explicitCounter ?? (cameras == null ? null : cameras.geoCounter);
             if (counter == null) return;
@@ -37,7 +50,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal void BeginMarkerSample(Func<UnityEngine.Object, string> identity, GameObject? explicitMarker = null)
         {
             owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear(); ownedRoots = Array.Empty<string>();
-            counter = null; mapKey = null; marker = explicitMarker ?? CanonicalMarkerDirectory.Current();
+            counter = null; mapKey = null; menuFlash = false; marker = explicitMarker ?? CanonicalMarkerDirectory.Current();
             foreach (var pair in CanonicalMarkerDirectory.Build(marker)) {
                 owned.Add(pair.Value, pair.Key);
                 if (pair.Value is PlayMakerFSM fsm) {
@@ -60,7 +73,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal void BeginMapKeySample(Func<UnityEngine.Object, string> identity, Transform keys, IReadOnlyList<GameObject>? leaves = null)
         {
             owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear(); ownedRoots = Array.Empty<string>();
-            counter = null; marker = null; mapKey = keys;
+            counter = null; marker = null; mapKey = keys; menuFlash = false;
             var directory = CanonicalMapKeyTextDirectory.Build(keys, leaves);
             foreach (var pair in directory) owned.Add(pair.Value, pair.Key);
             foreach (var pair in CanonicalMarkerReadonlyCarry.MapKeyDirectory(directory))
@@ -78,7 +91,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal void BeginMapKeyParentSample(Func<UnityEngine.Object, string> identity, Transform keys)
         {
             owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear(); ownedRoots = Array.Empty<string>();
-            counter = null; marker = null; mapKey = keys;
+            counter = null; marker = null; mapKey = keys; menuFlash = false;
             var directory = new CanonicalMapKeyParentDirectory(keys);
             foreach (var pair in directory.Native) owned.Add(pair.Value, pair.Key);
             AddManaged(directory.Fsm, "$:PlayMakerFSM[0]/fsm");
@@ -157,7 +170,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal IReadOnlyDictionary<string, object> OwnedDirectory() => owned.ToDictionary(pair => pair.Value, pair => pair.Key, StringComparer.Ordinal);
         internal LoadingGeoIncomingReferences Freeze()
         {
-            var copy = new LoadingGeoIncomingReferences { counter = counter, marker = marker, mapKey = mapKey, ownedRoots = (string[])ownedRoots.Clone() };
+            var copy = new LoadingGeoIncomingReferences { counter = counter, marker = marker, mapKey = mapKey, menuFlash = menuFlash, ownedRoots = (string[])ownedRoots.Clone() };
             foreach (var pair in owned) copy.owned.Add(pair.Key, pair.Value);
             foreach (var item in references) copy.references.Add(item);
             foreach (var pair in slots) copy.slots.Add(pair.Key, pair.Value);
@@ -206,7 +219,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal CanonicalPreparedWritePlan Prepare(IReadOnlyDictionary<string, object> replacements, Action<object>? appliedWitness = null)
         {
-            if ((counter == null && marker == null && mapKey == null) || externalReferences.Any(path => !slots.ContainsKey(path)))
+            if ((counter == null && marker == null && mapKey == null && !menuFlash) || externalReferences.Any(path => !slots.ContainsKey(path)))
                 throw new InvalidOperationException("Geo incoming directory contains an unbound delegate/native/collection slot.");
             var selected = slots.Values.ToArray();
             foreach (var slot in selected)

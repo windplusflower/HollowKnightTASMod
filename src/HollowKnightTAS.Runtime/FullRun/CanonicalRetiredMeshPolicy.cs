@@ -21,6 +21,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Register<tk2dSprite>("mesh", "meshColliderMesh");
             Register<tk2dClippedSprite>("mesh"); Register<tk2dSlicedSprite>("mesh"); Register<tk2dTiledSprite>("mesh");
             Register<tk2dStaticSpriteBatcher>("mesh", "colliderMesh"); Register<tk2dTextMesh>("mesh");
+            Register<UnityEngine.UI.Graphic>("m_CachedMesh");
         }
         private void Register<T>(params string[] names) where T : Component
         {

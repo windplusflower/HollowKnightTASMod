@@ -42,7 +42,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             CanonicalPhaseOneTrace.RequireContext(Environment.GetEnvironmentVariable);
             if (!CanonicalActualDExperiment.Enabled || !fields.TryGetValue("phase", out var phase)
                 || !fields.TryGetValue("requestId", out var requestId)) throw new InvalidDataException("Actual D experiment is disabled or malformed.");
+            CanonicalSourceHeaderTiming.Mark(requestId, "before-observation-queue");
             return observationQueue.Invoke(frame => {
+                CanonicalSourceHeaderTiming.Mark(requestId, "observation-command-start");
                 checkpointSaves!.AssertActive();
                 string Get(string key) => fields.TryGetValue(key, out var value) ? value : throw new InvalidDataException("Missing actual D field: " + key);
                 var reply = new Dictionary<string, string> { ["requestId"] = requestId, ["restoreQualified"] = "false" };
@@ -58,7 +60,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                             if (fields.Count != 3 || !int.TryParse(Get("offset"), out var chunkOffset))
                                 throw new InvalidDataException("Invalid source chunk offset.");
                             source = export.ReadChunk(bytes, chunkOffset, out exportedChunk);
-                        } else source = phase == "d-exp-source-resume" ? export.RequireCompleted(bytes) : export.Require(bytes);
+                        } else {
+                            CanonicalSourceHeaderTiming.Mark(requestId, "before-seal-require-full-hash");
+                            source = phase == "d-exp-source-resume" ? export.RequireCompleted(bytes) : export.Require(bytes);
+                            CanonicalSourceHeaderTiming.Mark(requestId, "after-seal-require-full-hash");
+                        }
                     }
                     catch { actualDExport?.Fault(); actualDExport = null; throw; }
                     if (mode != "DSourcePaused" || !clock.IsPaused || clock.IsFinished || frame != source.NativeFrame || source.Session == null)
@@ -71,7 +77,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     }
                     if (phase == "d-exp-source-info") {
                         if (fields.Count != 2) throw new InvalidDataException("Invalid source-info fields.");
-                        reply["length"] = bytes.Length.ToString(CultureInfo.InvariantCulture); reply["sha256"] = Sha256Utility.ComputeHex(bytes);
+                        reply["length"] = bytes.Length.ToString(CultureInfo.InvariantCulture);
+                        CanonicalSourceHeaderTiming.Mark(requestId, "before-reply-full-hash");
+                        reply["sha256"] = Sha256Utility.ComputeHex(bytes);
+                        CanonicalSourceHeaderTiming.Mark(requestId, "after-reply-full-hash");
                         reply["movieFrame"] = source.MovieFrame.ToString(CultureInfo.InvariantCulture); reply["nativeFrame"] = source.NativeFrame.ToString(CultureInfo.InvariantCulture);
                         Modding.Logger.Log("[HKTAS] Actual D sealed source header prepared: elapsedMilliseconds=" + exportElapsed.ElapsedMilliseconds
                             + ";sameBytesHashAndMetadataEqual=true;packetWrittenToDisk=false");

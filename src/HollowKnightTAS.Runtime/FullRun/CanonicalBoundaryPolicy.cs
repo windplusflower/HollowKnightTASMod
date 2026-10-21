@@ -16,6 +16,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         private readonly CanonicalHeroStartupWarmup startup;
         private readonly CanonicalHudStartupWarmup hudStartup = new CanonicalHudStartupWarmup();
+        private readonly CanonicalMenuFlashColdPolicy menuFlash = new CanonicalMenuFlashColdPolicy();
         private readonly CanonicalHudParticlePolicy hudParticles = new CanonicalHudParticlePolicy();
         private readonly CanonicalHudJournalPolicy journal = new CanonicalHudJournalPolicy();
         private readonly CanonicalHudCharmPolicy charms = new CanonicalHudCharmPolicy();
@@ -33,6 +34,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private LoadingGeoIncomingReferences? pendingMarkerIncoming;
         private LoadingGeoIncomingReferences? pendingMapKeyIncoming, pendingMapKeyParentIncoming;
         private readonly Dictionary<int, string> retiringGeo = new Dictionary<int, string>();
+        private int? retiringMenuFlash;
         internal string ActualTargetStage => carry?.ActualTargetStage ?? "no-carry";
         internal byte[]? ExperimentalSource { get; private set; }
         internal CanonicalSealedSource<CanonicalActualDExperiment> SealSourceSession(CanonicalActualDExperiment.SessionCarry session)
@@ -245,10 +247,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             CanonicalPhaseOneTrace.RequireContext(Environment.GetEnvironmentVariable);
             phaseOneTrace = CanonicalPhaseOneTrace.Enabled;
             retiredMeshes = new CanonicalRetiredMeshPolicy(id => pools.RetiredOwner(id) ?? journal.RetiringOwner(id) ?? charms.RetiringOwner(id)
-                ?? (retiringGeo.TryGetValue(id, out var geoOwner) ? geoOwner : null) ?? LoadingSerialSceneProbe.RetiringSourceOwner(id));
+                ?? (retiringGeo.TryGetValue(id, out var geoOwner) ? geoOwner : null)
+                ?? (retiringMenuFlash == id ? "canonical-menu-flash-retirement/Image" : null) ?? LoadingSerialSceneProbe.RetiringSourceOwner(id));
             startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart);
         }
-        internal bool AdvanceStartup() => startup.Advance() && hudStartup.Advance();
+        internal bool AdvanceStartup() => startup.Advance() && menuFlash.RequireStartup() && hudStartup.Advance()
+            && menuFlash.AdvanceNaturalMenuClose();
         internal void RebindProtectedClock(int ordinal, Action admission)
         {
             if (!phaseOneTrace || !CanonicalClockApplyExperiment.Enabled || observer == null)
@@ -347,6 +351,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Progress("R2-original-MapKeyText-common-cold-Canon", CanonicalMapKeyTextBoundaryPolicy.Reset(hudStartup.MapKeyTextColdDefinition, observer, keyDependency));
             else Progress("R2-MapKey-Canon-awaiting-actual-source-parent-D", new { mutationExecuted = false, activeWriteGuardUnchanged = true });
             Progress("R2-original-Marker-common-cold-Canon", CanonicalMarkerBoundaryPolicy.Reset(hudStartup.MarkerColdDefinition, observer));
+            Progress("R2-original-menu-Flash-common-cold-Canon", menuFlash.Reset(observer, image => {
+                if (retiringMenuFlash != null) throw new InvalidOperationException("Menu Flash retirement scope reentered.");
+                retiringMenuFlash = image.GetInstanceID();
+            }, () => {
+                retiredMeshes.Flush(owner => owner.StartsWith("canonical-menu-flash-retirement/", StringComparison.Ordinal));
+                retiringMenuFlash = null;
+            }));
             var identities = new BoundaryObjectIdentity();
             var carryFsmBindings = CanonicalHeroFsmBindings.Validate(identities);
             Progress("D-Hero-FSM-bindings-validated", new { carryFsmBindings, canonicalVisualBindings = 2 });
@@ -536,6 +547,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             observerInputOrigin = source.OriginNative;
             observer = LoadingGameplayOracle.CreateBoundaryObserver(observerSession, source.OriginNative!.Value);
         }
-        public void Dispose() { hudStartup.Dispose(); hudParticles.Dispose(); journal.Dispose(); observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
+        public void Dispose() { menuFlash.Dispose(); hudStartup.Dispose(); hudParticles.Dispose(); journal.Dispose(); observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
     }
 }

@@ -103,7 +103,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static LoadingGeoIncomingReferences ObserveIncoming(GeoCounter source,
             LoadingGeoIncomingReferences? markerIncoming = null, GameObject? markerRoot = null, bool retiringMarkerMeshes = false,
-            LoadingGeoIncomingReferences? mapKeyIncoming = null, Transform? mapKeyRoot = null, bool retiringMapKeyMeshes = false)
+            LoadingGeoIncomingReferences? mapKeyIncoming = null, Transform? mapKeyRoot = null, bool retiringMapKeyMeshes = false,
+            LoadingGeoIncomingReferences? menuFlashIncoming = null, GameObject? menuFlashRoot = null,
+            LoadingGeoIncomingReferences? frozenMenuFlashIncoming = null, GameObject? frozenMenuFlashRoot = null)
         {
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
             long observedNodes = 0, logicalCharacters = 0; var observedRoots = 0;
@@ -115,6 +117,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (mapKeyIncoming != null) mapKeyIncoming.BeginMapKeySample(identities.Get,
                 mapKeyRoot ?? throw new InvalidOperationException("Shared original incoming reader has no exact Map Key owner."));
             if (retiringMapKeyMeshes) (mapKeyIncoming ?? throw new InvalidOperationException("Retiring Map Key mesh reader is absent.")).ObserveRetiringMapKeyMeshes();
+            if (menuFlashIncoming != null) menuFlashIncoming.BeginMenuFlashSample(identities.Get,
+                menuFlashRoot ?? throw new InvalidOperationException("Menu Flash original incoming reader has no exact owner."));
+            if (frozenMenuFlashIncoming != null) frozenMenuFlashIncoming.BeginMenuFlashSample(identities.Get,
+                frozenMenuFlashRoot ?? throw new InvalidOperationException("Frozen menu Flash incoming reader has no exact owner."));
             var members = new Dictionary<object, string>(new ManagedReferences());
             var destroyed = new Dictionary<UnityEngine.Object, string>(new ObjectReferences());
             var memberRoots = new List<KeyValuePair<object, string>>();
@@ -145,6 +151,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     markerIncoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
                 if (reader.Capturing && mapKeyIncoming != null && mapKeyIncoming.Owns(value))
                     mapKeyIncoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
+                if (reader.Capturing && menuFlashIncoming != null && menuFlashIncoming.Owns(value))
+                    menuFlashIncoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
+                if (reader.Capturing && frozenMenuFlashIncoming != null && frozenMenuFlashIncoming.Owns(value))
+                    frozenMenuFlashIncoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
                 if (members.TryGetValue(value, out var member)) return member;
                 if (value is HutongGames.PlayMaker.FsmState || value is HutongGames.PlayMaker.FsmStateAction) {
                     if (reader.Read(value, "fsm") is HutongGames.PlayMaker.Fsm owner)
@@ -180,8 +190,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     incoming.ObserveSlot(owner, field, index, value, path, reader!.DiagnosticRoot);
                     markerIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
                     mapKeyIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
+                    menuFlashIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
+                    frozenMenuFlashIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
                 }, observeSlotValue: value => incoming.Owns(value) || markerIncoming != null && markerIncoming.Owns(value)
-                    || mapKeyIncoming != null && mapKeyIncoming.Owns(value))) {
+                    || mapKeyIncoming != null && mapKeyIncoming.Owns(value) || menuFlashIncoming != null && menuFlashIncoming.Owns(value)
+                    || frozenMenuFlashIncoming != null && frozenMenuFlashIncoming.Owns(value))) {
                 var owners = Resources.FindObjectsOfTypeAll<MonoBehaviour>().Where(owner => owner != null && owner.gameObject.scene.IsValid()
                     && owner.gameObject.scene.isLoaded && owner.GetType().Assembly != typeof(CanonicalGeoColdTemplate).Assembly).ToArray();
                 if (owners.Length > 16000) throw new InvalidOperationException("Original Geo incoming owner inventory exceeded its existing reader bound.");

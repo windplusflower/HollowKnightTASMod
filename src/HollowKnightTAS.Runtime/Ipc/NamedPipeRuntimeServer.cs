@@ -124,9 +124,13 @@ namespace HollowKnightTAS.Runtime.Ipc
             }
 
             byte[] payload;
+            var headerTiming = messageType == IpcMessageTypes.SceneCheckpointData
+                ? FullRun.CanonicalSourceHeaderTiming.Request(fields) : null;
             try
             {
+                FullRun.CanonicalSourceHeaderTiming.Mark(headerTiming, "before-reply-serialization");
                 payload = IpcPayloadCodec.Serialize(fields);
+                FullRun.CanonicalSourceHeaderTiming.Mark(headerTiming, "after-reply-serialization");
             }
             catch (Exception exception)
             {
@@ -137,12 +141,13 @@ namespace HollowKnightTAS.Runtime.Ipc
             }
 
             if (!outbound.TryEnqueue(
-                    new OutboundEvent(messageType, payload)))
+                    new OutboundEvent(messageType, payload, headerTiming)))
             {
                 return false;
             }
 
             outboundSignal.Release();
+            FullRun.CanonicalSourceHeaderTiming.Mark(headerTiming, "reply-enqueued");
             return true;
         }
 
@@ -422,11 +427,15 @@ namespace HollowKnightTAS.Runtime.Ipc
                                 + payload.Error);
                         }
 
-                        if (!commands.TryEnqueue(
+                        FullRun.CanonicalSourceHeaderTiming.Begin(payload.Fields);
+                        var accepted = commands.TryEnqueue(
                                 new ValidatedRuntimeCommand(
                                     envelope.Sequence,
                                     envelope.MessageType,
-                                    payload.Fields)))
+                                    payload.Fields));
+                        FullRun.CanonicalSourceHeaderTiming.Mark(FullRun.CanonicalSourceHeaderTiming.Request(payload.Fields),
+                            accepted ? "ipc-command-enqueued" : "ipc-command-queue-rejected");
+                        if (!accepted)
                         {
                             TryPublish(
                                 IpcMessageTypes.Backpressure,
@@ -484,6 +493,8 @@ namespace HollowKnightTAS.Runtime.Ipc
                     .ConfigureAwait(false);
                 while (outbound.TryDequeue(out var item))
                 {
+                    FullRun.CanonicalSourceHeaderTiming.Mark(item.HeaderTiming, "before-pipe-write");
+                    try {
                     await IpcCodec.WriteFrameAsync(
                             stream,
                             new IpcEnvelope(
@@ -494,6 +505,10 @@ namespace HollowKnightTAS.Runtime.Ipc
                                 item.Payload),
                             token)
                         .ConfigureAwait(false);
+                    FullRun.CanonicalSourceHeaderTiming.Mark(item.HeaderTiming, "after-pipe-write");
+                    } catch {
+                        FullRun.CanonicalSourceHeaderTiming.Mark(item.HeaderTiming, "pipe-write-failed"); throw;
+                    }
                 }
             }
         }
@@ -518,14 +533,16 @@ namespace HollowKnightTAS.Runtime.Ipc
         {
             public OutboundEvent(
                 string messageType,
-                byte[] payload)
+                byte[] payload, string? headerTiming = null)
             {
                 MessageType = messageType;
                 Payload = payload;
+                HeaderTiming = headerTiming;
             }
 
             public string MessageType { get; }
             public byte[] Payload { get; }
+            public string? HeaderTiming { get; }
         }
     }
 }

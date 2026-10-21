@@ -165,6 +165,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new ArgumentException("Full-run session directory is required.", nameof(sessionDirectory));
             this.sessionDirectory = Path.GetFullPath(sessionDirectory);
             Directory.CreateDirectory(this.sessionDirectory);
+            CanonicalSourceHeaderTiming.Initialize();
             observationQueue = new FrameObservationQueue(clock.RequestObservation);
             clock.RegisterObservation(observationQueue.Service);
             On.GameManager.Update += OnGameManagerTiming;
@@ -513,10 +514,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (CanonicalActualDExperiment.CaptureSource && LoadingSerialSceneProbe.ExperimentalSource != null)
                     {
                         var sealElapsed = System.Diagnostics.Stopwatch.StartNew();
+                        CanonicalSourceHeaderTiming.Lifecycle(20);
                         actualDExport = LoadingSerialSceneProbe.SealExperimentalSource(CaptureActualSessionCarry(completed));
+                        CanonicalSourceHeaderTiming.Lifecycle(21);
                         Modding.Logger.Log("[HKTAS] Actual D source sealing completed: elapsedMilliseconds=" + sealElapsed.ElapsedMilliseconds
                             + ";sameEncodedEnvelopeExport=true;packetWrittenToDisk=false");
-                        input.SetNativeFrameActive(false); mode = "DSourcePaused"; clock.RequestPause(); return;
+                        input.SetNativeFrameActive(false); mode = "DSourcePaused";
+                        CanonicalSourceHeaderTiming.Lifecycle(22); clock.RequestPause(); CanonicalSourceHeaderTiming.Lifecycle(23); return;
                     }
                     CaptureSceneCheckpointAtBoundary(completed);
                 }
@@ -988,6 +992,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         public void Dispose()
         {
+            CanonicalSourceHeaderTiming.Close();
             infoTiming.FlushTrace(sessionDirectory);
             if (disposed) return;
             disposed = true;

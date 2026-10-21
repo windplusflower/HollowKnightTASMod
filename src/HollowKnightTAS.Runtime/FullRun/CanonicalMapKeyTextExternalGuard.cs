@@ -28,6 +28,34 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool incomingRebindPrepared, incomingRebindVerified;
         private readonly Transform[] sourceParentPoseOwners;
         private readonly MonoBehaviour[] sourceManagedOwners;
+        private readonly KeyValuePair<string, object?>[]? explicitManagedRoots;
+        internal int ManagedRootCount => managed.Length;
+        // Reuse the exact original FSM/detached/native/fake-null/shared-alias
+        // reader for a finite set of non-Map owners. No second approximation
+        // of that partition or larger per-root budget is introduced.
+        internal CanonicalMapKeyTextExternalGuard(IReadOnlyList<KeyValuePair<string, object?>> roots,
+            IReadOnlyDictionary<string, object> originalOwned)
+        {
+            if (roots.Count > 16000) throw new InvalidOperationException("Explicit preservation roots exceed the existing owner bound.");
+            keys = null!; ancestors = Array.Empty<Transform>(); owners = Array.Empty<MonoBehaviour>();
+            subtreeNodes = Array.Empty<Transform>(); subtreeComponents = Array.Empty<Component>();
+            sourceParentPoseOwners = Array.Empty<Transform>(); sourceManagedOwners = Array.Empty<MonoBehaviour>();
+            native = Array.Empty<string>(); subtreeNative = Array.Empty<string>();
+            this.originalOwned = originalOwned; explicitManagedRoots = roots.ToArray();
+            foreach (var pair in originalOwned.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                if (!logicalOwned.ContainsKey(pair.Value)) logicalOwned.Add(pair.Value, "owned:" + pair.Key);
+            fields = new LoadingFieldDigest(Reference,
+                type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object));
+            for (var index = 0; index < explicitManagedRoots.Length; index++)
+                if (explicitManagedRoots[index].Value is PlayMakerFSM owner && fields.Read(owner, "fsm") is Fsm fsm)
+                    RegisterFsm(fsm, "explicit-root[" + index + "]");
+            managed = ReadAll();
+        }
+        internal void VerifyManagedRoots()
+        {
+            if (explicitManagedRoots == null || !managed.SequenceEqual(ReadAll()))
+                throw new InvalidOperationException("Complete explicit preservation graph or cross-root aliases changed.");
+        }
         internal CanonicalMapKeyTextExternalGuard(Transform keys, IReadOnlyDictionary<string, object>? sourceParentOwned = null,
             MonoBehaviour[]? sourceManagedOwners = null, Transform[]? sourcePoseOwners = null)
         {
@@ -154,12 +182,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             var hashes = new List<string>();
             fields.BeginSharedGraph();
             try {
-                void Read(object owner, string root) {
+                void Read(object? owner, string root) {
                     var result = fields.Capture(owner, root, expandRoot: true);
                     if (result.Unsupported.Count != 0) throw new InvalidOperationException("Map Key ancestor has unread fields: " + string.Join(";", result.Unsupported));
                     hashes.Add(result.Sha256);
                 }
-                for (var index = 0; index < owners.Length; index++) Read(owners[index], "ancestor[" + index + "]");
+                if (explicitManagedRoots != null)
+                    foreach (var root in explicitManagedRoots) Read(root.Value, root.Key);
+                else for (var index = 0; index < owners.Length; index++) Read(owners[index], "ancestor[" + index + "]");
                 for (var index = 0; index < memberRoots.Count; index++) Read(memberRoots[index].Key, memberRoots[index].Value);
             } finally { fields.EndSharedGraph(); }
             return hashes.ToArray();
