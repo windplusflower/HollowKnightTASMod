@@ -93,6 +93,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Reset();
             rootPath = root;
             sharedEvidenceSelectedRoot = sharedEvidence != null && LoadingSharedGraphEvidence.WantsTokens(root);
+            sharedEvidence?.BeginRoot(root);
             this.includeFieldDiagnostics = includeFieldDiagnostics;
             Capturing = true;
             try { Append(value, 0, expandRoot); return Finish(); }
@@ -142,7 +143,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             sharedEvidence = evidence ? new LoadingSharedGraphEvidence() : null;
         }
 
-        internal void EndSharedGraph() { sharedGraph?.Clear(); sharedGraph = null; sharedEvidence = null; }
+        internal void EndSharedGraph() { sharedGraph?.Clear(); sharedGraph = null; sharedEvidence?.Dispose(); sharedEvidence = null; }
 
         internal int BindSharedReference(object value)
         {
@@ -203,6 +204,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var result = new LoadingFieldDigestResult(Digest(text.ToString()),
                 nodes, unsupported.ToArray(), fieldDiagnostics.ToArray());
+            sharedEvidence?.EndRoot(result.Sha256);
             visited.Clear();
             return result;
         }
@@ -215,7 +217,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private void ObserveSharedReference(int id, bool first)
         {
             if (sharedEvidence != null) sharedEvidence.Reference(id, rootPath,
-                sharedEvidenceSelectedRoot ? CurrentPath : "", first);
+                sharedEvidenceSelectedRoot ? string.Concat(pathSegments) : null, first);
         }
         private void Token(string value)
         {
@@ -227,7 +229,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 referenceCharacters += digits + value.Length + 2;
                 return;
             }
-            if (sharedEvidence != null && sharedEvidenceSelectedRoot) sharedEvidence.Token(CurrentPath, value);
+            if (sharedEvidence != null && sharedEvidenceSelectedRoot) sharedEvidence.Token(rootPath, string.Concat(pathSegments), value);
             text.Append(value.Length).Append(':').Append(value).Append(';');
         }
 

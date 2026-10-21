@@ -10,7 +10,7 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
 [TestClass] public sealed class LoadingSharedGraphEvidenceTests
 {
     private sealed class Node { public Node? left; public Node? right; public int value; }
-    private const string Selected = "scene/root/Map Marker Action[0]|Node[0]";
+    private const string Selected = "scene/root/Map Marker Action[6]/Text[1]|TMPro.TextMeshPro[0]";
     private static LoadingFieldDigest New() => new(_ => null, _ => false);
     [TestMethod] public void EvidenceRetainsOriginalDigestSharedAliasesAndCycle()
     {
@@ -20,7 +20,7 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
         original.BeginSharedGraph(); observed.BeginSharedGraph(true);
         Assert.AreEqual(original.Capture(root, Selected, true).Sha256, observed.Capture(root, Selected, true).Sha256);
         var json = JsonSerializer.Serialize(observed.SharedGraphEvidence);
-        StringAssert.Contains(json, "reference"); StringAssert.Contains(json, Selected + ".left"); StringAssert.Contains(json, "ref:1");
+        StringAssert.Contains(json, "reference"); StringAssert.Contains(json, Selected); StringAssert.Contains(json, "\"path\":\".left\""); StringAssert.Contains(json, "canonicalSha256");
         var before = json; observed.CaptureFields(root, "local", "left");
         Assert.AreEqual(before, JsonSerializer.Serialize(observed.SharedGraphEvidence));
         observed.EndSharedGraph(); Assert.IsNull(observed.SharedGraphEvidence);
@@ -43,6 +43,44 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
         }
         var a = Capture(false); var b = Capture(true);
         Assert.AreNotEqual(a, b); StringAssert.Contains(a, "shared-owner"); StringAssert.Contains(b, "shared-owner");
+        using var x = JsonDocument.Parse(a); using var y = JsonDocument.Parse(b);
+        Assert.AreEqual(x.RootElement.GetProperty("digests")[0].GetProperty("canonicalSha256").GetString(),
+            y.RootElement.GetProperty("digests")[0].GetProperty("canonicalSha256").GetString());
+    }
+    [TestMethod] public void CanonicalRelationsDetectSameOwnerSwapSplitMergeAndCycles()
+    {
+        string Capture(int mode) {
+            using var d = New(); d.BeginSharedGraph(true);
+            var a = new Node { value = 1 }; var b = new Node { value = 1 };
+            a.left = a; b.left = mode == 4 ? a : b;
+            d.Capture(new Node { left = a, right = b }, "external-owner", true);
+            d.Capture(new Node { left = mode == 1 ? b : a, right = mode == 2 ? a : mode == 3 ? new Node { value = 1 } : b }, Selected, true);
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(d.SharedGraphEvidence));
+            return doc.RootElement.GetProperty("digests")[0].GetProperty("canonicalSha256").GetString()!;
+        }
+        var original = Capture(0);
+        foreach (var mode in new[] { 1, 2, 3 }) Assert.AreNotEqual(original, Capture(mode));
+        // External target content is deliberately outside this finite diagnostic.
+        Assert.AreEqual(original, Capture(4));
+    }
+    [TestMethod] public void CyclesAndLiteralReferenceSpellingsRemainDistinct()
+    {
+        string Capture(bool cycle) {
+            using var d = New(); d.BeginSharedGraph(true);
+            var a = new Node(); var b = new Node(); a.left = b; b.left = cycle ? a : b;
+            d.Capture(a, Selected, true);
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(d.SharedGraphEvidence));
+            return doc.RootElement.GetProperty("digests")[0].GetProperty("canonicalSha256").GetString()!;
+        }
+        Assert.AreNotEqual(Capture(true), Capture(false));
+        var e = new LoadingSharedGraphEvidence(); e.BeginRoot(Selected);
+        e.Token(Selected, "", "ref:0"); e.EndRoot("raw-a");
+        var f = new LoadingSharedGraphEvidence(); f.BeginRoot(Selected);
+        f.Reference(0, Selected, "", true); f.Token(Selected, "", "ref:0"); f.EndRoot("raw-b");
+        using var literal = JsonDocument.Parse(JsonSerializer.Serialize(e.Snapshot()));
+        using var reference = JsonDocument.Parse(JsonSerializer.Serialize(f.Snapshot()));
+        Assert.AreNotEqual(literal.RootElement.GetProperty("digests")[0].GetProperty("canonicalSha256").GetString(),
+            reference.RootElement.GetProperty("digests")[0].GetProperty("canonicalSha256").GetString());
     }
     [TestMethod] public void ActualRuntimeSuffixManagedEntryPublishesCompleteTargetEvidence()
     {
@@ -68,7 +106,8 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
         Assert.IsNotNull(snapshot);
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(snapshot));
         Assert.IsTrue(json.RootElement.GetProperty("complete").GetBoolean());
-        Assert.IsTrue(json.RootElement.GetProperty("events").EnumerateArray().Any(e => e.GetProperty("path").GetString()!.StartsWith(Selected, StringComparison.Ordinal)));
+        Assert.IsTrue(json.RootElement.GetProperty("selectedRoots").EnumerateArray().Any(e => e.GetString() == Selected));
+        Assert.IsTrue(json.RootElement.GetProperty("events").GetArrayLength() > 0);
         Assert.IsNull(digestType.GetProperty("SharedGraphEvidence", flags)!.GetValue(digest));
         ((IDisposable)digest).Dispose();
     }
