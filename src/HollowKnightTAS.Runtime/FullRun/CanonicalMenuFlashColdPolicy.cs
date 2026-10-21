@@ -28,6 +28,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private Coroutine? menuCloseRoutine;
         private Coroutine? menuFadeRoutine;
         private bool menuCloseCompleted;
+        private bool closingModal;
         private int menuCloseFirstFrame;
         private readonly HashSet<string> startupNativeStages = new HashSet<string>(StringComparer.Ordinal);
         private static readonly FieldInfo CachedMesh = Field(typeof(Graphic), "m_CachedMesh");
@@ -65,6 +66,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal bool AdvanceNaturalMenuClose()
         {
             var ui = UIManager.instance;
+            if (closingModal) return AdvanceNaturalModalClose(ui);
             var screen = ui.mainMenuScreen;
             if (screen == null || !Current().transform.IsChildOf(screen.transform))
                 throw new InvalidOperationException("Original Flash does not belong to the exact main-menu screen.");
@@ -78,9 +80,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || menuCloseRoutine != null)
                     throw new InvalidOperationException("Original main-menu fade did not complete its natural cold state.");
                 closingMenu = null; closingUi = null;
-                return true;
+                return AdvanceNaturalModalClose(ui);
             }
-            if (!screen.gameObject.activeSelf && !screen.gameObject.activeInHierarchy) return true;
+            if (!screen.gameObject.activeSelf && !screen.gameObject.activeInHierarchy) return AdvanceNaturalModalClose(ui);
             if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != "Menu_Title"
                 || ui.menuState != GlobalEnums.MainMenuState.MAIN_MENU || !screen.gameObject.activeInHierarchy
                 || ui.IsFadingMenu || ui.IsAnimatingMenus
@@ -93,13 +95,60 @@ namespace HollowKnightTAS.Runtime.FullRun
             Modding.Logger.Log("[HKTAS] Common original main-menu close scheduled before source unload; originalFade=true;MovieInputSynthesized=false.");
             return false;
         }
+        internal static void RequireTransparentModalState(bool activeInHierarchy, float alpha, bool interactable, bool blocksRaycasts)
+        {
+            if (!activeInHierarchy || alpha != 0f || interactable || blocksRaycasts)
+                throw new InvalidOperationException("Active original modal is not exact transparent noninteractive startup state.");
+        }
+        internal static void RequireTransparentModalAdmission(bool enabled, bool fading, bool animating, int uiState, int gameState)
+        {
+            if (!enabled || fading || animating || !Enum.IsDefined(typeof(GlobalEnums.UIState), uiState)
+                || !Enum.IsDefined(typeof(GlobalEnums.GameState), gameState)
+                || uiState == (int)GlobalEnums.UIState.PAUSED || uiState == (int)GlobalEnums.UIState.OPTIONS
+                || gameState == (int)GlobalEnums.GameState.PAUSED)
+                throw new InvalidOperationException("Original transparent modal has unsupported global activity/state.");
+        }
+        private bool AdvanceNaturalModalClose(UIManager ui)
+        {
+            var modal = ui.modalDimmer;
+            if (modal == null || ui.UICanvas == null || modal.transform.parent != ui.UICanvas.transform)
+                throw new InvalidOperationException("Original transparent modal field/hierarchy differs.");
+            if (closingModal) {
+                if (!ReferenceEquals(ui, closingUi) || !ReferenceEquals(modal, closingMenu)
+                    || Time.frameCount < menuCloseFirstFrame || Time.frameCount - menuCloseFirstFrame > 150)
+                    throw new InvalidOperationException("Original transparent modal close owner/frame bound differs.");
+                if (!menuCloseCompleted) return false;
+                if (menuCloseRoutine != null || modal.gameObject.activeSelf || modal.gameObject.activeInHierarchy
+                    || modal.alpha != 0f || modal.interactable || modal.blocksRaycasts)
+                    throw new InvalidOperationException("Original transparent modal did not finish its natural close.");
+                closingModal = false; closingMenu = null; closingUi = null; return true;
+            }
+            if (!modal.gameObject.activeSelf && !modal.gameObject.activeInHierarchy) return true;
+            try {
+                LoadingSerialSceneProbe.RequireCanonicalStartupAdmission();
+                RequireTransparentModalState(modal.gameObject.activeInHierarchy, modal.alpha, modal.interactable, modal.blocksRaycasts);
+                RequireTransparentModalAdmission(ui.isActiveAndEnabled, ui.IsFadingMenu, ui.IsAnimatingMenus,
+                    (int)ui.uiState, (int)GameManager.instance.gameState);
+            }
+            catch (InvalidOperationException error) {
+                throw new InvalidOperationException(error.Message + ";context=" + Newtonsoft.Json.JsonConvert.SerializeObject(new {
+                    scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name, menuState = ui.menuState.ToString(),
+                    uiState = ui.uiState.ToString(), gameState = GameManager.instance.gameState.ToString(),
+                    modal.gameObject.activeSelf, modal.gameObject.activeInHierarchy, modal.alpha, modal.interactable, modal.blocksRaycasts,
+                    uiEnabled = ui.isActiveAndEnabled, fading = ui.IsFadingMenu, animating = ui.IsAnimatingMenus }));
+            }
+            closingModal = true; closingUi = ui; closingMenu = modal; menuCloseFirstFrame = Time.frameCount; menuCloseCompleted = false;
+            menuCloseRoutine = ui.StartCoroutine(CloseOriginalMenu(ui, modal));
+            if (menuCloseRoutine == null) throw new InvalidOperationException("Original transparent modal close was not scheduled.");
+            return false;
+        }
         private IEnumerator CloseOriginalMenu(UIManager ui, CanvasGroup screen)
         {
             menuFadeRoutine = ui.StartCoroutine(ui.FadeOutCanvasGroup(screen));
             yield return menuFadeRoutine;
             menuFadeRoutine = null;
             menuCloseRoutine = null; menuCloseCompleted = true;
-            Modding.Logger.Log("[HKTAS] Common original main-menu fade completed naturally; nativeFrames=" + (Time.frameCount - menuCloseFirstFrame));
+            Modding.Logger.Log("[HKTAS] Common original " + (closingModal ? "transparent-modal" : "main-menu") + " fade completed naturally; nativeFrames=" + (Time.frameCount - menuCloseFirstFrame));
         }
         internal bool RequireStartup(bool boundary = false)
         {
@@ -393,20 +442,63 @@ namespace HollowKnightTAS.Runtime.FullRun
             var owners = ui.mainMenuButtons.startButton.flashEffect.GetComponentsInParent<Canvas>(true);
             if (owners.Length > 128) throw new InvalidOperationException("Original Flash Canvas observation exceeds the ancestor bound.");
             var identities = owners.ToDictionary(owner => ((IntPtr)Pointer.GetValue(owner)!).ToInt64(), owner => reference(owner));
+            var rendererHandles = new Dictionary<long, Tuple<CanvasRenderer, int>>();
+            foreach (var renderer in Resources.FindObjectsOfTypeAll<CanvasRenderer>()) {
+                if (renderer == null || !renderer.gameObject.scene.IsValid() || !renderer.gameObject.scene.isLoaded) continue;
+                var pointer = ((IntPtr)Pointer.GetValue(renderer)!).ToInt64();
+                if (pointer == 0) throw new InvalidOperationException("Observed CanvasRenderer has no native owner.");
+                rendererHandles.Add(checked(pointer + 256), Tuple.Create(renderer, 256));
+                rendererHandles.Add(checked(pointer + 280), Tuple.Create(renderer, 280));
+            }
+
             return owners.Select(owner => {
                 var bytes = Native(owner, 584); var parent = BitConverter.ToInt64(bytes, 448);
+                var count = BitConverter.ToUInt64(bytes, 224); var instructionCount = BitConverter.ToUInt64(bytes, 256);
+                if (count > 16000 || instructionCount > 16000) throw new InvalidOperationException("Observed fixed Canvas slot count exceeds pinned bounds.");
+                var slots = new List<object>(); var canvasPointer = ((IntPtr)Pointer.GetValue(owner)!).ToInt64();
+                for (ulong index = 0; index < count; index++) {
+                    var slot = BitConverter.ToInt64(NativeSlot(new IntPtr(checked(BitConverter.ToInt64(bytes, 208) + (long)index * 8)), 8), 0);
+                    if (slot == 0) { slots.Add(new { slot = index, occupied = false }); continue; }
+                    if (!rendererHandles.TryGetValue(slot, out var binding)) { slots.Add(new { slot = index, occupied = true, unsupported = "handle-owner-not-loaded" }); continue; }
+                    var renderer = binding.Item1; var offset = binding.Item2; var raw = Native(renderer, 304);
+                    var instruction = BitConverter.ToInt32(raw, offset + 8); var handleIndex = BitConverter.ToInt32(raw, offset + 12);
+                    RequireRetirementHandle(BitConverter.ToInt64(raw, offset), checked(canvasPointer + 144), slot,
+                        checked(((IntPtr)Pointer.GetValue(renderer)!).ToInt64() + offset), instruction, handleIndex, instructionCount, count);
+                    if (handleIndex != (long)index) throw new InvalidOperationException("Observed Canvas slot index differs from its original handle.");
+                    var instructionRaw = NativeSlot(new IntPtr(checked(BitConverter.ToInt64(bytes, 240) + instruction * 720L)), 720);
+                    slots.Add(new { slot = index, occupied = true, renderer = reference(renderer), handle = offset == 256 ? "push" : "pop",
+                        instruction, absoluteIndex = BitConverter.ToInt32(raw, offset + 16), sharedMeshDataPresent = BitConverter.ToInt64(instructionRaw, 512) != 0,
+                        isCurrentFlash = ReferenceEquals(renderer.gameObject, ui.mainMenuButtons.startButton.flashEffect),
+                        isFrozenFlash = ReferenceEquals(renderer.gameObject, FrozenRoot), renderer.gameObject.activeSelf, renderer.gameObject.activeInHierarchy });
+                }
+
                 return new { owner = reference(owner), parentCanvas = parent == 0 ? "null" : identities.TryGetValue(parent, out var identity) ? identity : "unsupported-native-parent",
                     owner.gameObject.activeSelf, owner.gameObject.activeInHierarchy, dirtyFlag = BitConverter.ToUInt16(bytes, 280),
                     handleCount = BitConverter.ToUInt64(bytes, 224), instructionCount = BitConverter.ToUInt64(bytes, 256),
                     handleDataPresent = BitConverter.ToInt64(bytes, 208) != 0, instructionDataPresent = BitConverter.ToInt64(bytes, 240) != 0,
                     vertices = BitConverter.ToUInt32(bytes, 272), indices = BitConverter.ToUInt32(bytes, 276),
                     jobsFencePresent = BitConverter.ToInt64(bytes, 424) != 0, cachedBoundsDirty = bytes[508],
-                    completeNativeCoverage = false };
+                    slots = slots.ToArray(), completeNativeCoverage = false };
             }).ToArray();
+        }
+        private static void ObserveModalDimmerAtBoundary(string stage)
+        {
+            var ui = UIManager.instance; var modal = ui.modalDimmer;
+            if (modal == null) throw new InvalidOperationException("Original modalDimmer field is absent.");
+            var renderer = modal.GetComponent<CanvasRenderer>();
+            if (renderer == null) throw new InvalidOperationException("Original modalDimmer renderer is absent.");
+            var raw = Native(renderer, 304);
+            Modding.Logger.Log("[HKTAS] Original ModalDimmer boundary observation: " + Newtonsoft.Json.JsonConvert.SerializeObject(new {
+                stage, identity = "UIManager.modalDimmer/CanvasRenderer.push", modal.gameObject.activeSelf, modal.gameObject.activeInHierarchy,
+                modal.alpha, modal.interactable, modal.blocksRaycasts, parentCanvasPresent = BitConverter.ToInt64(raw, 232) != 0,
+                handleCanvasDataPresent = BitConverter.ToInt64(raw, 256) != 0,
+                instruction = BitConverter.ToInt32(raw, 264), slot = BitConverter.ToInt32(raw, 268), absoluteIndex = BitConverter.ToInt32(raw, 272),
+                completeNativeCoverage = false }));
         }
         internal object Reset(LoadingGameplayOracle observer, Action<Image> beginRetirement, Action finishRetirement)
         {
             LoadingSerialSceneProbe.RequireCanonicalMutationBoundary(); RequireStartup(boundary: true);
+            ObserveModalDimmerAtBoundary("B-before-Flash-cold");
             var old = Current().gameObject; var parent = old.transform.parent; var sibling = old.transform.GetSiblingIndex();
             if (parent == null || parent.gameObject.activeInHierarchy || old.activeInHierarchy)
                 throw new InvalidOperationException("Active menu Flash needs explicit future natural-close support.");
@@ -440,6 +532,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             plan.VerifyReadback(); RequireCold(created, "B-final-after-original-retirement", parentCanvas); RequireOriginalSerialized(created); preservation.Verify();
             if (!ReferenceEquals(Current().gameObject, created) || old != null || mesh != null || !ReferenceEquals(created.transform.parent, parent)
                 || created.transform.GetSiblingIndex() != sibling) throw new InvalidOperationException("Original Flash retirement/entry/parent readback differs.");
+            ObserveModalDimmerAtBoundary("B-after-Flash-cold");
             return new { coldFourComponents = true, startupSerializedResourceDefinition = true, exactIncomingReadback = true,
                 originalDestroy = true, exactSerializedProvenance = true, menuEventsInvoked = false, completeNativeCoverage = false };
         }

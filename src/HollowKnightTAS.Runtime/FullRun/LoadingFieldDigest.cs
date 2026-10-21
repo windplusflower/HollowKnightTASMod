@@ -55,6 +55,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Func<FieldInfo, bool>? directFloatingField;
         private readonly Dictionary<object, int> visited = new Dictionary<object, int>(IdentityComparer.Instance);
         private Dictionary<object, int>? sharedGraph;
+        private LoadingSharedGraphEvidence? sharedEvidence;
+        private bool sharedEvidenceSelectedRoot;
+        internal object? SharedGraphEvidence => sharedEvidence?.Snapshot();
+        internal object? SharedGraphEvidenceSummary => sharedEvidence?.Summary();
         private readonly SortedSet<string> unsupported = new SortedSet<string>(StringComparer.Ordinal);
         private readonly StringBuilder text = new StringBuilder();
         private int nodes;
@@ -88,6 +92,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             Reset();
             rootPath = root;
+            sharedEvidenceSelectedRoot = sharedEvidence != null && LoadingSharedGraphEvidence.WantsTokens(root);
             this.includeFieldDiagnostics = includeFieldDiagnostics;
             Capturing = true;
             try { Append(value, 0, expandRoot); return Finish(); }
@@ -111,6 +116,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Extra field diagnostics must not change ownership/IDs in the main graph.
             var graph = sharedGraph;
             sharedGraph = null;
+            var evidence = sharedEvidence; var selected = sharedEvidenceSelectedRoot; sharedEvidence = null;
             Capturing = true;
             try
             {
@@ -126,25 +132,26 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             return Finish();
             }
-            finally { sharedGraph = graph; Capturing = false; }
+            finally { sharedGraph = graph; sharedEvidence = evidence; sharedEvidenceSelectedRoot = selected; Capturing = false; }
         }
 
-        internal void BeginSharedGraph()
+        internal void BeginSharedGraph(bool evidence = false)
         {
             if (sharedGraph != null) throw new InvalidOperationException("P0 shared field graph is already active.");
             sharedGraph = new Dictionary<object, int>(IdentityComparer.Instance);
+            sharedEvidence = evidence ? new LoadingSharedGraphEvidence() : null;
         }
 
-        internal void EndSharedGraph() { sharedGraph?.Clear(); sharedGraph = null; }
+        internal void EndSharedGraph() { sharedGraph?.Clear(); sharedGraph = null; sharedEvidence = null; }
 
         internal int BindSharedReference(object value)
         {
             if (sharedGraph == null || value.GetType().IsValueType)
                 throw new InvalidOperationException("Boundary reference binding needs its shared managed graph.");
-            if (sharedGraph.TryGetValue(value, out var id)) return id;
+            if (sharedGraph.TryGetValue(value, out var id)) { ObserveSharedReference(id, false); return id; }
             if (sharedGraph.Count >= 1048576)
                 throw new InvalidOperationException("P0 shared field graph reference budget exceeded at " + CurrentPath);
-            id = sharedGraph.Count; sharedGraph.Add(value, id); return id;
+            id = sharedGraph.Count; sharedGraph.Add(value, id); ObserveSharedReference(id, true); return id;
         }
 
         internal object? Read(object owner, string name)
@@ -205,6 +212,11 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         public void Dispose() { EndSharedGraph(); visited.Clear(); typeShapes.Clear(); packedArrays?.Dispose(); digestHash.Dispose(); typeIdentity.Dispose(); }
 
+        private void ObserveSharedReference(int id, bool first)
+        {
+            if (sharedEvidence != null) sharedEvidence.Reference(id, rootPath,
+                sharedEvidenceSelectedRoot ? CurrentPath : "", first);
+        }
         private void Token(string value)
         {
             if ((referenceOnly ? referenceCharacters : text.Length) + value.Length + 24 > MaximumCharacters)
@@ -215,6 +227,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 referenceCharacters += digits + value.Length + 2;
                 return;
             }
+            if (sharedEvidence != null && sharedEvidenceSelectedRoot) sharedEvidence.Token(CurrentPath, value);
             text.Append(value.Length).Append(':').Append(value).Append(';');
         }
 
@@ -278,11 +291,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!shape.ValueType)
             {
                 var graph = sharedGraph ?? visited;
-                if (graph.TryGetValue(value, out var id)) { Token("ref:" + id); return; }
+                if (graph.TryGetValue(value, out var id)) { ObserveSharedReference(id, false); Token("ref:" + id); return; }
                 // Full boundary inventories retain cross-root aliases for every
                 // dormant FSM too; this is independent of the per-root node cap.
                 if (graph.Count >= 1048576)
                     throw new InvalidOperationException("P0 shared field graph reference budget exceeded at " + CurrentPath);
+                if (sharedGraph != null) ObserveSharedReference(graph.Count, true);
                 graph.Add(value, graph.Count);
             }
             if (value is Array array)

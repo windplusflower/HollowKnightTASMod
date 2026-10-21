@@ -583,10 +583,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                 engineFrame = Time.frameCount, data }) + "\n");
         }
 
+        [ThreadStatic] private static bool canonicalStartupAdmission;
+        internal static void RequireCanonicalStartupAdmission()
+        {
+            if (!canonicalStartupAdmission) throw new InvalidOperationException("Canonical UI close is outside the admitted original pre-unload startup call.");
+        }
         private bool AdvanceCanonicalStartup()
         {
+            if (canonicalStartupAdmission || transition == null || sourceUnloaded || !transition.IsFetchAllowed || !transition.IsActivationAllowed)
+                throw Fail("Canonical startup has no exact pre-unload loader admission.");
+            canonicalStartupAdmission = true;
             try { return canonical == null || canonical.AdvanceStartup(); }
             catch (Exception error) { throw Fail("Canonical startup rejected: " + error.GetType().Name + ": " + error.Message); }
+            finally { canonicalStartupAdmission = false; }
         }
 
         private InvalidOperationException Fail(string message)

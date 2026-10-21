@@ -694,6 +694,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     nativePhysics = fullInventory ? nativePhysics?.Inventory : null,
                     nativePhysicsEntries = nativePhysics?.DiagnosticEntries,
                     nativeContactRawEvidence = nativePhysics?.ContactRawEvidence,
+                    markerSharedGraphEvidence,
                     menuFlashCanvasDomain = fullInventory ? CanonicalMenuFlashColdPolicy.ObserveCanvasDomain(Reference) : null,
                     captureMilliseconds = captureElapsed.ElapsedMilliseconds,
                     captureStages = captureStages.ToArray() });
@@ -712,14 +713,30 @@ namespace HollowKnightTAS.Runtime.FullRun
             Seal(complete, complete ? "window-complete" : "missing-gameplay-samples");
         }
 
+        // This is the actual suffix/non-boundary managed-root entry. Keep its
+        // graph lifetime and evidence snapshot together, including failure paths.
+        private void CaptureManagedSampleGraph(Action capture)
+        {
+            if (!boundaryCapture) fields.BeginSharedGraph(evidence: suffixCapture);
+            try { capture(); }
+            finally {
+                readingMapKeyManagedRoots = false;
+                if (!boundaryCapture) {
+                    markerSharedGraphEvidence = fields.SharedGraphEvidence;
+                    markerSharedGraphSummary = fields.SharedGraphEvidenceSummary;
+                    fields.EndSharedGraph();
+                }
+            }
+        }
+        private object? markerSharedGraphEvidence, markerSharedGraphSummary;
         private SortedDictionary<string, string> CaptureState(bool fullInventory)
         {
             if (!boundaryCapture) return CaptureStateCore(fullInventory);
             // Retain aliases from gameplay fields into resource elements and
             // between array element roots, not only aliases inside one root.
-            fields.BeginSharedGraph();
+            fields.BeginSharedGraph(evidence: suffixCapture);
             try { return CaptureStateCore(fullInventory); }
-            finally { fields.EndSharedGraph(); }
+            finally { markerSharedGraphEvidence = fields.SharedGraphEvidence; fields.EndSharedGraph(); }
         }
 
         private SortedDictionary<string, string> CaptureStateCore(bool fullInventory)
@@ -852,9 +869,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             readingMapKeyManagedRoots = true;
             var fieldDiagnostics = new List<object>();
             var mono = new StringBuilder(); var fsms = new StringBuilder(); var staticRoots = new StringBuilder();
-            if (!boundaryCapture) fields.BeginSharedGraph();
-            try
-            {
+            CaptureManagedSampleGraph(() => {
             foreach (var item in nativePhysicsOnly ? behaviours.Take(0) : behaviours)
             {
                 if (fullInventory && inventory.Count % 250 == 0)
@@ -971,8 +986,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 inventory.Add(new { id = entry.Item2, type = entry.Item1.GetType().FullName,
                     digest = digest.Sha256, nodes = digest.Nodes, unsupported = digest.Unsupported });
             }
-            }
-            finally { readingMapKeyManagedRoots = false; if (!boundaryCapture) fields.EndSharedGraph(); }
+            });
+            readingMapKeyManagedRoots = false;
+            if (suffixCapture) Modding.Logger.Log("[HKTAS] Marker selected shared-graph sample evidence: "
+                + JsonConvert.SerializeObject(markerSharedGraphSummary));
             CaptureProgress("native-physics");
             var allBodies = Resources.FindObjectsOfTypeAll<Rigidbody2D>().Where(body => body != null && Loaded(body.gameObject)).ToArray();
             var physicsDigest = nativePhysics == null ? "disabled" : nativePhysics.Capture(allBodies,
