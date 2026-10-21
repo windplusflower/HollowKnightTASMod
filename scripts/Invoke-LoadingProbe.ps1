@@ -38,6 +38,7 @@ param(
     [switch] $RecanonicalizeAppliedClock,
     [switch] $ActualDExperiment,
     [switch] $ActualDSuffix,
+    [switch] $PhysicsFollowOn,
     [ValidateSet('','Source','Target')][string] $ActualDStage = '',
     [hashtable] $ActualDRelayState,
     [switch] $BoundaryInventory,
@@ -61,6 +62,7 @@ if ($ActualDStage -and -not ('HollowKnightTAS.Diagnostics.ActualDMemoryRelay' -a
 }
 if ($ActualDExperiment -and (-not $CanonicalPhaseOneTrace -or -not $ClockCarryExperiment -or -not $S0ObservationTarget -or $ClockApplySource -or $RecordInputs)) { throw 'Actual D requires the protected in-memory source-to-zero-Movie scenario.' }
 if ($ActualDSuffix -and -not $ActualDExperiment) { throw 'Actual suffix requires the in-memory D transaction.' }
+if ($PhysicsFollowOn -and -not $ActualDSuffix) { throw 'Physics follow-on requires the independently checked original suffix.' }
 if ($ClockCarryExperiment -and (-not $CanonicalPhaseOneTrace -or (-not $RecordInputs -and -not $S0ObservationTarget))) { throw 'Clock experiment requires a protected source recording or zero-Movie target.' }
 if ($ClockApplySource -and (-not $ClockCarryExperiment -or -not $S0ObservationTarget -or -not (Test-Path -LiteralPath $ClockApplySource -PathType Leaf))) { throw 'Clock D application requires the bounded source and protected zero-Movie target.' }
 if ($RecanonicalizeAppliedClock -and -not $ClockApplySource) { throw 'Clock Canon requires actual clock D application.' }
@@ -337,6 +339,7 @@ try {
         if ($RecanonicalizeAppliedClock) { $arguments += '--probe-clock-recanon' }
         if ($ActualDExperiment) { $arguments += '--probe-actual-d-experiment' }
         if ($ActualDSuffix) { $arguments += '--probe-actual-d-suffix' }
+        if ($PhysicsFollowOn) { $arguments += '--probe-physics-follow-on' }
         if ($ActualDStage) {
             $relayName = 'HKTAS-ActualD-' + [Guid]::NewGuid().ToString('N')
             $relayPipe = [HollowKnightTAS.Diagnostics.ActualDMemoryRelay]::CreateServer($relayName)

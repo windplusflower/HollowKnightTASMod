@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory=$true)][string] $OutputDirectory,
     [Parameter(Mandatory=$true)][string] $Movie,
-    [Parameter(Mandatory=$true)][string] $ClockBridgePath
+    [Parameter(Mandatory=$true)][string] $ClockBridgePath,
+    [switch] $PhysicsFollowOn
 )
 $ErrorActionPreference = 'Stop'
 $taskRepo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -34,6 +35,7 @@ $taskOptions = @{
     CanonicalPhaseOneTrace=$true; S0ObservationTarget='Town'; ClockCarryExperiment=$true;
     ActualDExperiment=$true; ActualDSuffix=$true; ClockBridgePath=$ClockBridgePath; EvidencePhase='p3';
     ActualDRelayState=$taskRelayState
+    PhysicsFollowOn=$PhysicsFollowOn
 }
 try {
     & (Join-Path $PSScriptRoot 'Invoke-LoadingProbe.ps1') @taskOptions -ActualDStage Source -OutputDirectory (Join-Path $taskOutput 'source')

@@ -85,6 +85,34 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
         f=new Fixture();f.Hash=new byte[32];Assert.ThrowsExactly<InvalidDataException>(()=>f.Capture());
         f=new Fixture();Put(f.Cache,16,uint.MaxValue);Assert.ThrowsExactly<InvalidDataException>(()=>f.Capture());
     }
+    [TestMethod] public void ActiveManifoldValidatesBothDirectionsAndOnlyCountBoundedPointFields()
+    {
+        var f = new Fixture(); f.Value[97] = 0;
+        Put(f.Value, 0, 3000L); Put(f.Value, 16, 1L); Put(f.Value, 24, 3L);
+        Put(f.Contact, 296, 0); Put(f.Contact, 96, 4000L); Put(f.Contact, 104, 5000L);
+        Put(f.Contact, 112, 7); Put(f.Contact, 116, 8);
+        var m = Enumerable.Repeat((byte)0xab, 112).ToArray(); m[0] = 1;
+        Put(m, 8, 6000L); Put(m, 16, 4000L); Put(m, 24, 5000L);
+        Put(m, 32, 7); Put(m, 36, 8); Put(m, 40, 123); Put(m, 44, 1);
+        object Capture() => LoadingContactUserDataBindings.Capture(f.Cache, f.Hash, new[]{1000L}, new[]{f.Value},
+            new[]{new LoadingContactUserDataBindings.Contact { Binding="contact", Bytes=f.Contact, Pointer=6000, OwnerA=100, OwnerB=200 }},
+            p=>p==100?new(){Id="a",InstanceId=10}:p==200?new(){Id="b",InstanceId=20}:null,
+            _=>null, new[]{new[]{m}}, p=>p==4000?"fixture-a":p==5000?"fixture-b":null);
+        using var json=JsonDocument.Parse(JsonSerializer.Serialize(Capture()));
+        var record=json.RootElement.GetProperty("manifolds")[0];
+        Assert.AreEqual(224, record.GetProperty("pointerReboundRaw112Hex").GetString()!.Length);
+        Assert.AreEqual(16, record.GetProperty("pointsHex").GetString()!.Length);
+        Assert.AreEqual(8, record.GetProperty("normalImpulsesHex").GetString()!.Length);
+        Assert.IsFalse(json.RootElement.GetProperty("completeUserDataCoverage").GetBoolean());
+        foreach(var offset in new[]{8,16,24,32,36}) {
+            m[offset]^=1; Assert.ThrowsExactly<InvalidDataException>(()=>Capture()); m[offset]^=1;
+        }
+        Put(f.Contact,296,1); Assert.ThrowsExactly<InvalidDataException>(()=>Capture()); Put(f.Contact,296,0);
+        Put(m,44,3); Assert.ThrowsExactly<InvalidDataException>(()=>Capture());
+        Put(m,44,0);
+        using var empty=JsonDocument.Parse(JsonSerializer.Serialize(Capture()));
+        Assert.AreEqual("",empty.RootElement.GetProperty("manifolds")[0].GetProperty("normalHex").GetString());
+    }
     [TestMethod] public void BuiltRuntimeNativeReaderEntryValidatesStableAllocatedFixture()
     {
         var repo=new DirectoryInfo(AppContext.BaseDirectory);
@@ -121,6 +149,19 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
             Assert.IsTrue(json.RootElement.GetProperty("identityComplete").GetBoolean());
             Assert.IsFalse(json.RootElement.GetProperty("completeUserDataCoverage").GetBoolean());
             Assert.IsFalse(json.RootElement.GetRawText().Contains(objectPointer.ToInt64().ToString()));
+            // Exercise active dynamic storage through the actual built native reader.
+            var manifold=new byte[112]; manifold[0]=1;
+            Put(manifold,8,contactPointer.ToInt64());Put(manifold,16,10000L);Put(manifold,24,20000L);
+            Put(manifold,44,2);
+            var manifoldPointer=Allocate(manifold);
+            fixture.Value[97]=0;Put(fixture.Value,0,manifoldPointer.ToInt64());Put(fixture.Value,16,1L);Put(fixture.Value,24,3L);
+            Put(fixture.Contact,296,0);
+            Marshal.Copy(fixture.Value,0,objectPointer,104);Marshal.Copy(fixture.Contact,0,contactPointer,312);
+            Set("fixtureIds",new Dictionary<IntPtr,string>{{new(10000),"fixture-a"},{new(20000),"fixture-b"}});
+            result=method.Invoke(reader,new object[]{cachePointer,fixture.Cache,contacts});
+            using var active=JsonDocument.Parse(JsonSerializer.Serialize(result));
+            Assert.AreEqual(1,active.RootElement.GetProperty("manifolds").GetArrayLength());
+            Assert.AreEqual(2,active.RootElement.GetProperty("manifolds")[0].GetProperty("pointCount").GetInt32());
             // The actual native wrapper must reject a target outside its vector.
             Put(fixture.Contact,304,999L);Marshal.Copy(fixture.Contact,0,contactPointer,fixture.Contact.Length);
             var error=Assert.ThrowsExactly<TargetInvocationException>(()=>method.Invoke(reader,new object[]{cachePointer,fixture.Cache,contacts}));

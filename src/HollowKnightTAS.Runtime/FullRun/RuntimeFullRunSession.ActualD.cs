@@ -48,6 +48,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                 checkpointSaves!.AssertActive();
                 string Get(string key) => fields.TryGetValue(key, out var value) ? value : throw new InvalidDataException("Missing actual D field: " + key);
                 var reply = new Dictionary<string, string> { ["requestId"] = requestId, ["restoreQualified"] = "false" };
+                if (phase == "d-exp-arm-physics-follow-on") {
+                    // Admission only: playback remains the shared FullRunSeek/Run path.
+                    // The original +32 endpoint must already have succeeded independently.
+                    if (fields.Count != 2 || actualDSuffixOracle?.CompletedSuccessfully != true
+                        || physicsFollowOnOracle != null || mode != "Replay" || !clock.IsPaused || clock.IsFinished
+                        || movieFrame != 1453 || actualDSuffixEnd != movieFrame || replayLength != 3150
+                        || !movieInputNativeOrigin.HasValue || actualDSuffixRole == "")
+                        throw new InvalidOperationException("Physics follow-on requires the original successful 32-frame endpoint and unchanged 3150-frame Movie.");
+                    physicsFollowOnOracle = LoadingGameplayOracle.CreatePhysicsFollowOn(
+                        Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "actual-d-" + actualDSuffixRole + "-physics-follow-on"),
+                        sessionDirectory, movieInputNativeOrigin.Value, () => movieFrame, () => clock.CurrentFrameIndex);
+                    reply["status"] = "PhysicsFollowOnArmed"; return reply;
+                }
                 if (phase == "d-exp-source-info" || phase == "d-exp-source-chunk" || phase == "d-exp-source-resume") {
                     try {
                     var bytes = LoadingSerialSceneProbe.ExperimentalSource ?? throw new InvalidOperationException("No sealed in-memory source D.");
@@ -149,7 +162,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "actual-d-" + role + "-suffix-oracle"),
                 sessionDirectory, movieFrame, Math.Min(end, movieFrame + 3), movieInputNativeOrigin.Value, () => movieFrame, () => clock.CurrentFrameIndex,
                 () => rng.CaptureCurrent().Sha256);
+            actualDSuffixEnd = end; actualDSuffixRole = role;
         }
+        private long actualDSuffixEnd;
+        private string actualDSuffixRole = "";
         private void ApplyActualD(S0ObservationJob job, CanonicalActualDExperiment source, long targetNative)
         {
             var session = source.Session ?? throw new InvalidDataException("Actual D source has no TAS continuation.");

@@ -19,7 +19,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 {
     // P0's independent observation path. Native schedulers/physics internals,
     // arbitrary Mod statics and asset aliasing remain explicit coverage gaps.
-    internal sealed class LoadingGameplayOracle : IDisposable
+    internal sealed partial class LoadingGameplayOracle : IDisposable
     {
         private readonly string directory;
         private readonly long first, end;
@@ -116,8 +116,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool transitionSourceUnloaded, candidateCaptured;
 
         private LoadingGameplayOracle(string directory, long first, long end,
-            Func<long> movieFrame, Func<long> nativeFrame, Func<string> gameplayRng, bool boundaryCapture = false, long? inputNativeOrigin = null, bool suffixCapture = false, string? identitySessionDirectory = null)
+            Func<long> movieFrame, Func<long> nativeFrame, Func<string> gameplayRng, bool boundaryCapture = false, long? inputNativeOrigin = null, bool suffixCapture = false, string? identitySessionDirectory = null, bool physicsFollowOn = false)
         {
+            this.physicsFollowOn = physicsFollowOn;
             this.boundaryCapture = boundaryCapture; this.suffixCapture = suffixCapture;
             if (boundaryCapture) { canonicalIdentities = new BoundaryObjectIdentity(); coverageHeroBindings = CanonicalHeroFsmBindingRegistry.Snapshot(); }
             this.directory = directory; this.first = first; this.end = end;
@@ -153,9 +154,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (frozenGeoSample) frozenGeoIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (frozenMenuFlashSample) frozenMenuFlashIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                     }, observeSlotValue: value => geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || mapKeyParentIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value) || frozenMenuFlashSample && frozenMenuFlashIncoming.Owns(value));
-            if (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1")
+            if (!physicsFollowOn && (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1"))
                 nativeScheduler = new LoadingNativeSchedulerDigest();
-            if (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
+            if (physicsFollowOn || boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
                 nativePhysics = new LoadingNativePhysicsDigest();
             if (nativePhysicsOnly && nativePhysics == null)
                 throw new InvalidOperationException("Native-physics-only diagnostics require NativePhysics.");
@@ -163,6 +164,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 .FirstOrDefault(assembly => assembly.GetName().Name == "HollowKnightTAS.ClockPayload")
                 ?.GetType("HollowKnightTAS.ClockPayload.ClockController", false);
             if (boundaryCapture) return;
+            if (physicsFollowOn) {
+                Write(new { kind = "header", schema = "hktas-physics-follow-on-v1", first, end,
+                    samplingScope = "after-original-input-at-absolute-movie-frame", completeStateCoverage = false });
+                return;
+            }
             Write(new { kind = "header", schema = "hktas-loading-oracle-v1", first, end,
                 observerModuleId = typeof(LoadingGameplayOracle).Module.ModuleVersionId.ToString("D"),
                 nativeProfile = HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId,
@@ -632,6 +638,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal void Sample(string phase, string boundary)
         {
             if (sealedTrace || !samplingWindows.Contains(movieFrame()) || (suffixCapture && phase != "after")) return;
+            if (physicsFollowOn) { SamplePhysicsFollowOn(boundary); return; }
             if (serialBoundaryOnly && phase != "candidate") return;
             try
             {
@@ -709,6 +716,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal void Completed()
         {
             if (sealedTrace || movieFrame() != end) return;
+            if (physicsFollowOn) { SealPhysicsFollowOn(gameplaySamples == 3, "window-complete"); return; }
             var complete = serialBoundaryOnly || gameplaySamples == (suffixCapture ? 1 : 2) * samplingWindows.GameplayFrames;
             Seal(complete, complete ? "window-complete" : "missing-gameplay-samples");
         }
@@ -1607,6 +1615,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             catch (Exception exception) { success = false; detail += "; export failed: " + exception.Message; Modding.Logger.LogError("P0 gameplay oracle export failed: " + exception.Message); }
             finally { suffixTweenCausality?.Dispose(); suffixParticleCausality?.Dispose(); nativeScheduler?.Release(); nativeValues.Dispose(); fields.Dispose(); buffer.Dispose(); suffixRandomTimeline.Dispose(); }
             if (suffixCapture && !success) throw new InvalidOperationException("Actual D suffix observer failed: " + detail);
+            CompletedSuccessfully = success;
         }
 
         private static string Bits(float value) => "f32:" + BitConverter.ToInt32(BitConverter.GetBytes(value), 0).ToString("x8");
@@ -1649,6 +1658,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             => Sample("event", "active-scene:" + previous.name + "->" + current.name);
         public void Dispose()
         {
+            if (physicsFollowOn) { if (!sealedTrace) SealPhysicsFollowOn(false, "disposed-before-window-complete"); return; }
             if (boundaryCapture)
             {
                 nativeScheduler?.Release();

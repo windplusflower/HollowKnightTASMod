@@ -257,6 +257,25 @@ internal static partial class StudioScenarioHarness
                         new object[] { vm.SelectedSession!.Client, fields, CancellationToken.None })!;
                 }
                 IReadOnlyDictionary<string, string>? actualDHeader = null;
+                async Task PhysicsFollowOn()
+                {
+                    if (!args.Contains("--probe-physics-follow-on")) return;
+                    var arm = await Call(new Dictionary<string, string> { ["phase"] = "d-exp-arm-physics-follow-on" });
+                    Require(arm["status"] == "PhysicsFollowOnArmed", "finite physics follow-on admitted after independent +32 acceptance");
+                    boot.Refresh();
+                    var seek = await Field<AutomationBroker>(vm, "automationBroker").ExecuteHumanAsync(
+                        AutomationCommandIds.FullRunSeek, AutomationScope.ControlPlayback,
+                        new Dictionary<string, string> { ["targetFrame"] = "1706", ["expectedNativeFrame"] = boot.NativeCompletedFrames.ToString() },
+                        "Paused", null, CancellationToken.None);
+                    Require(seek.Success, "ordinary Replay follow-on seek accepted: " + seek.Detail);
+                    await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
+                    await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("physics follow-on native fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
+                        "ordinary original Movie reaches finite physics follow-on endpoint", 120);
+                    var state = await VideoRuntimeState(vm);
+                    Require(state["movieFrame"] == "1706" && state["mismatchCount"] == "0" && state["error"] == "",
+                        "original inputs reach exact 1706 without mismatch after independent +32 endpoint");
+                    await File.WriteAllTextAsync(Path.Combine(output, "physics-follow-on-state.json"), JsonSerializer.Serialize(state));
+                }
                 if (actualDExperiment && actualDStage != "target") {
                     await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
                     await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("actual source D fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
@@ -284,6 +303,7 @@ internal static partial class StudioScenarioHarness
                         Require(originalState["movieFrame"] == originalEnd.ToString() && originalState["mismatchCount"] == "0" && originalState["error"] == "",
                             "original source suffix has exact endpoint and no input mismatch");
                         await File.WriteAllTextAsync(Path.Combine(output, "actual-d-original-suffix-state.json"), JsonSerializer.Serialize(originalState));
+                        await PhysicsFollowOn();
                     }
                     if (actualDStage == "source") {
                         var packet = new ActualDRelayPacket { Data = actualDBytes, Sha256 = actualDHeader["sha256"],
@@ -357,6 +377,7 @@ internal static partial class StudioScenarioHarness
                         Require(suffixState["movieFrame"] == suffixEnd.ToString() && suffixState["mismatchCount"] == "0"
                             && suffixState["error"] == "", "actual D suffix has its exact Movie endpoint and no input mismatch");
                         await File.WriteAllTextAsync(Path.Combine(output, "actual-d-suffix-state.json"), JsonSerializer.Serialize(suffixState));
+                        await PhysicsFollowOn();
                     }
                 }
                 if (clockSourceArgument != null)

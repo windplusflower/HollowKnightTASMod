@@ -111,6 +111,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private LoadingBoundaryProbe? loadingBoundaryProbe;
         private LoadingGameplayOracle? loadingGameplayOracle;
         private LoadingGameplayOracle? actualDSuffixOracle;
+        private LoadingGameplayOracle? physicsFollowOnOracle;
         private long expectedNativeStart = -1;
         private long? movieInputNativeOrigin;
         private CanonicalInputEpoch? movieInputControlOrigin;
@@ -712,11 +713,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 loadingBoundaryProbe?.Sample("after", frameBoundary);
                 loadingGameplayOracle?.Sample("after", frameBoundary);
                 actualDSuffixOracle?.Sample("after", frameBoundary);
+                physicsFollowOnOracle?.Sample("after", frameBoundary);
                 if (mode == "Recording") journal!.CompleteFrame(movieFrame, activeFrameRate);
                 movieFrame++;
                 loadingBoundaryProbe?.Completed();
                 loadingGameplayOracle?.Completed();
                 actualDSuffixOracle?.Completed();
+                physicsFollowOnOracle?.Completed();
                 clock.ReportMovieFrameCompleted();
                 if (movieFrame == pauseAtMovieFrame)
                 {
@@ -1002,6 +1005,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             loadingBoundaryProbe?.Dispose();
             loadingGameplayOracle?.Dispose();
             actualDSuffixOracle?.Dispose();
+            physicsFollowOnOracle?.Dispose();
             restoreDrawing.Dispose();
             videoCapture?.Dispose();
             observationQueue.Dispose();

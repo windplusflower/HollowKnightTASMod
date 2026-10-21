@@ -18,7 +18,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             internal string Binding = "";
             internal byte[] Bytes = Array.Empty<byte>();
-            internal long OwnerA, OwnerB;
+            internal long OwnerA, OwnerB, Pointer;
         }
         internal static uint PairHash(int first, int second)
         {
@@ -41,7 +41,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             return checked(capacity * 32);
         }
         internal static object Capture(byte[] cache, byte[] hash, long[] pointers, byte[][] objects,
-            Contact[] contacts, Func<long, ColliderBinding?> collider, Func<long, string?> rigidbody)
+            Contact[] contacts, Func<long, ColliderBinding?> collider, Func<long, string?> rigidbody,
+            byte[][][]? manifolds = null, Func<long, string?>? fixture = null)
         {
             var hashBytes = HashBytes(cache);
             if (pointers.Length != objects.Length || pointers.Length > 262144
@@ -57,6 +58,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             var records = new List<object>();
             var contactBindings = new List<object>();
             var mapped = new bool[pointers.Length];
+            var manifoldRecords = new List<object>();
+            var contactPointers = new Dictionary<long, Contact>();
+            foreach (var contact in contacts) if (contact.Pointer != 0) {
+                if (contactPointers.ContainsKey(contact.Pointer)) throw new InvalidDataException("Duplicate original contact pointer.");
+                contactPointers.Add(contact.Pointer, contact);
+            }
+            if (manifolds != null && manifolds.Length != pointers.Length) throw new InvalidDataException("Manifold vector length differs.");
             for (var i = 0; i < pointers.Length; i++)
             {
                 if (pointers[i] == 0 || indices.ContainsKey(pointers[i]) || objects[i].Length != 104)
@@ -79,7 +87,50 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (manifoldCount > encodedCapacity >> 1 || encodedCapacity >> 1 > 262144
                     || (manifoldCount != 0 && I64(value, 0) == 0) || I32(value, 36) < 0)
                     throw new InvalidDataException("Collision manifold/count ABI differs.");
-                if (manifoldCount != 0) pointeeMissing.Add("collision-active-manifold-content-not-covered");
+                if (manifoldCount != 0 && manifolds == null) pointeeMissing.Add("collision-active-manifold-content-not-covered");
+                if (manifolds != null) {
+                    if ((ulong)manifolds[i].Length != manifoldCount) throw new InvalidDataException("Manifold count differs.");
+                    for (var j = 0; j < manifolds[i].Length; j++) {
+                        var m = manifolds[i][j];
+                        if (m.Length != 112 || m[0] > 1) throw new InvalidDataException("Manifold ABI differs.");
+                        var cp = I64(m, 8); var fa = I64(m, 16); var fb = I64(m, 24);
+                        var fixtureA = fixture?.Invoke(fa); var fixtureB = fixture?.Invoke(fb);
+                        if (fixtureA == null || fixtureB == null) missing.Add("manifold-fixture-unbound");
+                        Contact? live = null;
+                        if (cp != 0) {
+                            if (!contactPointers.TryGetValue(cp, out live) || I64(live.Bytes, 304) != pointers[i]
+                                || I32(live.Bytes, 296) != j || value[97] != 0)
+                                throw new InvalidDataException("Manifold contact/userdata/index reverse binding differs.");
+                            var forward = live.OwnerA == a && live.OwnerB == b;
+                            if (fa != I64(live.Bytes, forward ? 96 : 104) || fb != I64(live.Bytes, forward ? 104 : 96)
+                                || I32(m, 32) != I32(live.Bytes, forward ? 112 : 116)
+                                || I32(m, 36) != I32(live.Bytes, forward ? 116 : 112))
+                                throw new InvalidDataException("Manifold original ordered fixture/child pair differs.");
+                        } else pointeeMissing.Add("collision-retained-inactive-manifold-lifecycle-not-covered");
+                        var count = I32(m, 44);
+                        if (count < 0 || count > 2) throw new InvalidDataException("Manifold active point count differs.");
+                        // Preserve all 112 bytes with local pointer slots rebound to stable
+                        // targets. Padding/inactive bytes remain separate from initialized fields.
+                        var raw = (byte[])m.Clone(); System.Array.Clear(raw, 8, 24);
+                        var active = live != null && count != 0;
+                        // PostSolve consumes current manifold count, while the
+                        // callback producer writes only solver constraint count.
+                        // That count can reduce from two to one. Preserve both
+                        // slots without claiming their initialization is proved.
+                        if (active) pointeeMissing.Add("collision-impulse-producer-initialization-not-qualified");
+                        manifoldRecords.Add(new { collisionIndex = i, manifoldIndex = j, contact = live?.Binding,
+                            fixtureA, fixtureB, childIndexA = I32(m, 32), childIndexB = I32(m, 36), enabled = m[0] != 0,
+                            simulationId = I32(m, 40), pointCount = count, pointFieldsWithinManifoldCount = active,
+                            impulseInitializationQualified = false,
+                            normalHex = active ? Bits(m, 48, 8) : "",
+                            pointsHex = active ? Bits(m, 56, count * 8) : "",
+                            relativeVelocityHex = active ? Bits(m, 72, count * 8) : "",
+                            separationsHex = active ? Bits(m, 88, count * 4) : "",
+                            normalImpulsesHex = active ? Bits(m, 96, count * 4) : "",
+                            tangentImpulsesHex = active ? Bits(m, 104, count * 4) : "",
+                            pointerReboundRaw112Hex = Bits(raw, 0, 112), paddingHex = Bits(m, 1, 7), completeStateCoverage = false });
+                    }
+                }
                 records.Add(new { vectorIndex = i, colliderA = boundA?.Id, colliderB = boundB?.Id,
                     rigidbodyA = rigidA, rigidbodyB = rigidB, receivingCollider = receiving == 0 ? null : collider(receiving)?.Id,
                     contactState = I32(value, 32), contactCount = I32(value, 36), enabled = value[96] != 0,
@@ -118,7 +169,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 else if (!((contact.OwnerA == a && contact.OwnerB == b) || (contact.OwnerA == b && contact.OwnerB == a)))
                     throw new InvalidDataException("Contact userdata Collider pair is foreign.");
                 counts[index]++;
-                if (value[97] == 0) pointeeMissing.Add("contact-userdata-nontrigger-manifold-index-not-covered");
+                if (value[97] == 0) {
+                    var at = I32(contact.Bytes, 296);
+                    if (manifolds == null) pointeeMissing.Add("contact-userdata-nontrigger-manifold-index-not-covered");
+                    else if (at < 0 || at >= manifolds[index].Length || contact.Pointer == 0
+                        || I64(manifolds[index][at], 8) != contact.Pointer)
+                        throw new InvalidDataException("Contact original manifold forward index differs.");
+                }
                 else if (I32(contact.Bytes, 296) != -1) throw new InvalidDataException("Trigger contact original no-manifold index differs.");
                 contactBindings.Add(new { contact = contact.Binding, collisionIndex = index });
             }
@@ -126,7 +183,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (counts[i] != I32(objects[i], 36)) throw new InvalidDataException("Collision contact reference count differs.");
             return new { schema = "pinned-contact-userdata-bindings-v1", identityComplete = missing.Count == 0,
                 unsupported = missing.ToArray(), collisions = records.ToArray(), contacts = contactBindings.ToArray(),
-                pointeeUnsupported = pointeeMissing.ToArray(),
+                pointeeUnsupported = pointeeMissing.ToArray(), manifolds = manifoldRecords.ToArray(),
                 completeUserDataCoverage = false, completeStateCoverage = false,
                 unknownRanges = "Collision2D dynamic storage/allocator/padding and active manifold content remain unqualified; original raw groups retained" };
         }
@@ -143,6 +200,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             throw new InvalidDataException("Collision hash probe capacity exhausted.");
         }
         private static int I32(byte[] value, int at) => BitConverter.ToInt32(value, at);
+        private static string Bits(byte[] value, int at, int count) => BitConverter.ToString(value, at, count).Replace("-", "").ToLowerInvariant();
         private static uint U32(byte[] value, int at) => BitConverter.ToUInt32(value, at);
         private static long I64(byte[] value, int at) => BitConverter.ToInt64(value, at);
         private static ulong U64(byte[] value, int at) => BitConverter.ToUInt64(value, at);
