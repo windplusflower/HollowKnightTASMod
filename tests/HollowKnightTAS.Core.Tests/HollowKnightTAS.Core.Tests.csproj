@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/LoadingContactUserDataBindings.cs" Link="FullRun/LoadingContactUserDataBindings.cs" />
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalListEmptyArrayBindings.cs" Link="FullRun/CanonicalListEmptyArrayBindings.cs" />
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/LoadingSharedGraphEvidence.cs" Link="FullRun/LoadingSharedGraphEvidence.cs" />
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalGeoSourceQueueContract.cs" Link="FullRun/CanonicalGeoSourceQueueContract.cs" />

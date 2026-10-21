@@ -31,6 +31,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Dictionary<IntPtr, IntPtr> bodyOwners = new Dictionary<IntPtr, IntPtr>();
         private readonly Dictionary<IntPtr, IntPtr> fixtureOwners = new Dictionary<IntPtr, IntPtr>();
         private readonly Dictionary<IntPtr, string> rigidbodyIds = new Dictionary<IntPtr, string>();
+        private readonly Dictionary<IntPtr, LoadingContactUserDataBindings.ColliderBinding> colliderBindings = new Dictionary<IntPtr, LoadingContactUserDataBindings.ColliderBinding>();
         private readonly List<object> inventory = new List<object>();
         private readonly StringBuilder text = new StringBuilder();
         private readonly SortedDictionary<string, StringBuilder> groups = new SortedDictionary<string, StringBuilder>(StringComparer.Ordinal);
@@ -87,6 +88,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             contactRawEvidence.Clear();
             var scenes = new Dictionary<IntPtr, int>();
             rigidbodyIds.Clear();
+            colliderBindings.Clear();
             var orderedBodies = bodies.OrderBy(identity, StringComparer.Ordinal).ToArray();
             foreach (var body in orderedBodies) rigidbodyIds[Native(body)] = identity(body);
             foreach (var body in orderedBodies)
@@ -110,6 +112,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (scene != IntPtr.Zero) scenes[scene] = I32(Read(scene, 8), 4);
                 var shapes = Array(native, 88, 8, "collider-fixtures");
                 var id = identity(collider);
+                colliderBindings[pointer] = new LoadingContactUserDataBindings.ColliderBinding { Id = id, InstanceId = I32(native, 8) };
                 Line("collider", id, Hex(native, 120, 76), shapes.Length.ToString(CultureInfo.InvariantCulture));
                 for (var index = 0; index < shapes.Length / 8; index++)
                 { var fixture = Pointer(shapes, index * 8); Bind(fixtureIds, fixture, id + "/fixture[" + index + "]", "fixture"); fixtureOwners[fixture] = pointer; }
@@ -292,6 +295,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 contactIds.Add(contact.Key, id);
             }
             foreach (var contact in contacts) Line("world-contact-order", handle.ToString(), contactIds[contact.Key]);
+            if (contactCache != null) inventory.Add(new { kind = "contact-userdata-bindings", handle,
+                evidence = CaptureContactUserDataBindings(contactCachePointer, contactCache, contacts) });
             foreach (var contact in contacts.OrderBy(contact => contactIds[contact.Key], StringComparer.Ordinal))
             {
                 var bytes = contact.Value;
@@ -347,7 +352,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var polygon = Read(shape, 160); var vertices = Count(I32(polygon, 152), 8, "polygon-vertices");
                     Line("polygon", id, Hex(polygon, 16, 140));
                     Line("polygon-active", id, vertices.ToString(), Hex(polygon, 16, 8), Hex(polygon, 24, vertices * 8), Hex(polygon, 88, vertices * 8));
-                    Line("polygon-unused-capacity", id, Hex(polygon, 24 + vertices * 8, (8 - vertices) * 8), Hex(polygon, 88 + vertices * 8, (8 - vertices) * 8)); break;
+                    Line("polygon-unused-capacity", id, Hex(polygon, 24 + vertices * 8, (8 - vertices) * 8), Hex(polygon, 88 + vertices * 8, (8 - vertices) * 8));
+                    inventory.Add(new { kind = "polygon-storage-evidence", binding = id, vertexCount = vertices,
+                        radiusHex = Hex(header, 12, 4), centroidHex = Hex(polygon, 16, 8),
+                        activeVerticesHex = Hex(polygon, 24, vertices * 8), activeNormalsHex = Hex(polygon, 88, vertices * 8),
+                        unusedVerticesHex = Hex(polygon, 24 + vertices * 8, (8 - vertices) * 8),
+                        unusedNormalsHex = Hex(polygon, 88 + vertices * 8, (8 - vertices) * 8),
+                        suffixReadBeforeWriteQualified = false, completeStateCoverage = false });
+                    break;
                 case 3:
                     var chain = Read(shape, 48); var count = Count(I32(chain, 24), 100000, "chain-vertices");
                     Line("chain", id, Hex(chain, 24, 22), count == 0 ? "" : Hex(Read(Pointer(chain, 16), count * 8))); break;
