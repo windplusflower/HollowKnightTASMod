@@ -20,6 +20,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Dictionary<string, Type> types = new Dictionary<string, Type>(StringComparer.Ordinal);
         private readonly Dictionary<Type, string> typeIdentities = new Dictionary<Type, string>();
         private readonly string schema;
+        private readonly CanonicalListEmptyArrayBindings listEmptyArrays;
         private readonly Dictionary<Type, int> leafSizes = new Dictionary<Type, int>();
         private readonly Func<object, string?>? portability;
         private readonly Func<object, string?>? allocationPortability;
@@ -29,14 +30,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<object, string?>? allocationPortability = null, Action<CanonicalCarryGraphData>? importValidation = null)
         {
             if (string.IsNullOrEmpty(schema)) throw new ArgumentException("Carry schema identity is required.", nameof(schema));
-            this.schema = schema;
+            this.schema = schema + "\nframework-list-static-empty-v1";
+            var registeredTypes = registered.Distinct().ToArray();
+            listEmptyArrays = new CanonicalListEmptyArrayBindings(registeredTypes);
             this.portability = portability;
             this.allocationPortability = allocationPortability;
             this.importValidation = importValidation;
             foreach (var type in new[] { typeof(bool), typeof(byte), typeof(sbyte), typeof(char), typeof(short), typeof(ushort),
                 typeof(int), typeof(uint), typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(string), typeof(decimal) })
             { var id = Identity(type); types.Add(id, type); typeIdentities.Add(type, id); }
-            foreach (var type in registered.Distinct())
+            foreach (var type in registeredTypes)
             {
                 if (type.ContainsGenericParameters || type.IsPointer || type.IsByRef || type == typeof(IntPtr) || type == typeof(UIntPtr)
                     || typeof(Delegate).IsAssignableFrom(type) || typeof(MemberInfo).IsAssignableFrom(type)
@@ -62,6 +65,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static bool IsScalar(Type type) => type == typeof(string) || type == typeof(decimal)
             || type.IsEnum || (type.IsPrimitive && type != typeof(IntPtr) && type != typeof(UIntPtr));
 
+        internal object ResolveExternalBinding(string binding, Func<string, object> other) => listEmptyArrays.Resolve(binding, other);
         internal CanonicalCarryGraphData Capture(IReadOnlyDictionary<string, object> roots,
             Func<object, string?> externalBinding, Action<object, int>? capturedNode = null)
         {
@@ -115,7 +119,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (seen.TryGetValue(value, out var existing))
                     return new CanonicalCarryGraphData.Value { Kind = "node", Type = id, Reference = existing };
                 string? binding;
-                try { binding = externalBinding(value); }
+                try { binding = listEmptyArrays.Bind(value) ?? externalBinding(value); }
                 catch (InvalidDataException error)
                 { unsupported.Add(path + ":" + error.Message); return Unsupported(id, error.Message); }
                 if (binding != null)
@@ -152,6 +156,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 var entry = pending.Dequeue(); var owner = entry.Item1; var node = nodes[entry.Item2 - 1];
                 var path = "node[" + entry.Item2 + "]";
+                var frameworkEmpty = listEmptyArrays.ObserveList(owner);
+                if (frameworkEmpty != null && seen.ContainsKey(frameworkEmpty))
+                    unsupported.Add(path + ":framework-list-static-empty-was-allocated-before-original-list-provenance");
                 if (IsScalar(owner.GetType()))
                 { node.Kind = "boxed-scalar"; node.Text = EncodeScalar(owner, owner.GetType()); }
                 else if (owner is Array array)
@@ -260,7 +267,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var saved = value.Externals[i];
                 if (saved == null || string.IsNullOrEmpty(saved.Binding) || !externalKeys.Add(saved.Binding))
                     throw new InvalidDataException("Carry external identity is invalid or duplicated.");
-                var owner = resolveExternal(saved.Binding);
+                var owner = listEmptyArrays.Resolve(saved.Binding, resolveExternal);
                 if (owner == null || owner.GetType().IsValueType || TypeIdentity(owner.GetType()) != saved.Type
                     || !externalObjects.Add(owner) || boundObjects.ContainsKey(owner))
                     throw new InvalidDataException("Carry external type or alias binding differs: " + saved.Binding);

@@ -120,5 +120,3 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
         var json = JsonSerializer.Serialize(evidence.Snapshot()); StringAssert.Contains(json, "\"complete\":false"); StringAssert.Contains(json, "first-root-budget");
     }
 }
-
-

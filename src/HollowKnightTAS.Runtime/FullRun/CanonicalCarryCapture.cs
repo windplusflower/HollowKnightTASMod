@@ -371,8 +371,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                             }
                             return replacements;
                         }
-                        var mainChanges = Replacements(sourceMain, bindings.ResolveTarget);
-                        var sdkChanges = Replacements(sourceInput, inputExternal.ResolveTarget);
+                        var mainChanges = Replacements(sourceMain, binding => codec.ResolveExternalBinding(binding, bindings.ResolveTarget));
+                        var sdkChanges = Replacements(sourceInput, binding => inputCodec.ResolveExternalBinding(binding, inputExternal.ResolveTarget));
                         ActualTargetStage = "geo-main-input-external-rebind";
                         if (mainChanges.Count != 0) mainRebinding!.Prepare(mainChanges).Apply();
                         if (sdkChanges.Count != 0) sdkRebinding!.Prepare(sdkChanges).Apply();
@@ -419,8 +419,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                             }
                             return replacements;
                         }
-                        var mainChanges = Replacements(sourceMain, bindings.ResolveTarget);
-                        var sdkChanges = Replacements(sourceInput, inputExternal.ResolveTarget);
+                        var mainChanges = Replacements(sourceMain, binding => codec.ResolveExternalBinding(binding, bindings.ResolveTarget));
+                        var sdkChanges = Replacements(sourceInput, binding => inputCodec.ResolveExternalBinding(binding, inputExternal.ResolveTarget));
                         ActualTargetStage = "marker-main-input-external-rebind";
                         if (mainChanges.Count != 0) mainRebinding!.PrepareMarker(mainChanges).Apply();
                         if (sdkChanges.Count != 0) sdkRebinding!.PrepareMarker(sdkChanges).Apply();
@@ -462,8 +462,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                         mainView!, RequireMain, bindings.ResolveTarget, admitted);
                     // Resolve all old external identities while the old native
                     // leaves are still alive. No post-retirement name lookup.
-                    var mainOriginal = sourceMain.Externals.ToDictionary(item => item.Binding, item => bindings.ResolveTarget(item.Binding), StringComparer.Ordinal);
-                    var sdkOriginal = sourceInput.Externals.ToDictionary(item => item.Binding, item => inputExternal.ResolveTarget(item.Binding), StringComparer.Ordinal);
+                    var mainOriginal = sourceMain.Externals.ToDictionary(item => item.Binding, item => codec.ResolveExternalBinding(item.Binding, bindings.ResolveTarget), StringComparer.Ordinal);
+                    var sdkOriginal = sourceInput.Externals.ToDictionary(item => item.Binding, item => inputCodec.ResolveExternalBinding(item.Binding, inputExternal.ResolveTarget), StringComparer.Ordinal);
                     Dictionary<string, object> Replacements(IReadOnlyDictionary<string, object> current,
                         IReadOnlyDictionary<string, object> oldDirectory, IReadOnlyDictionary<string, object> finalDirectory) {
                         var changes = new Dictionary<string, object>(StringComparer.Ordinal);
