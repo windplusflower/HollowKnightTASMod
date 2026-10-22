@@ -8,13 +8,22 @@ namespace HollowKnightTAS.Runtime.FullRun
     // Native addresses stay in this process and are never serialized.
     internal sealed class LoadingContactImpulseProbe
     {
-        private const int Stride = 112, Capacity = 512;
+        private const int Stride = 136, Capacity = 512;
         [DllImport("HollowKnightTAS.ClockBridge.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern int HktasClockBridge_SetContactImpulseProbeFrame(int movie);
         [DllImport("HollowKnightTAS.ClockBridge.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern int HktasClockBridge_CopyContactImpulseProbe([Out] byte[] output, int bytes);
         [DllImport("HollowKnightTAS.ClockBridge.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern int HktasClockBridge_StopContactImpulseProbe();
+        [DllImport("HollowKnightTAS.ClockBridge.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int HktasClockBridge_GetContactImpulsePolicy();
+        [DllImport("HollowKnightTAS.ClockBridge.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int HktasClockBridge_GetContactImpulsePolicyCallbacks();
+        internal static object PolicyStatus() => new {
+            rule = HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalContactImpulsePolicyId,
+            active = HktasClockBridge_GetContactImpulsePolicy() == 1,
+            originalCallbacksInitialized = HktasClockBridge_GetContactImpulsePolicyCallbacks(),
+            completeStateCoverage = false };
         private readonly Dictionary<IntPtr, int> localContacts = new Dictionary<IntPtr, int>();
         private int delivered;
         private bool stopped;
@@ -49,6 +58,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         new IntPtr(BitConverter.ToInt64(bytes, at + 88)), new IntPtr(BitConverter.ToInt64(bytes, at + 96)),
                         BitConverter.ToInt32(bytes, at + 104), BitConverter.ToInt32(bytes, at + 108)), manifoldCount = manifold, impulseCount = impulse,
                     callbackImpulseHex = Hex(32), reportBeforeHex = Hex(48), reportAfterHex = Hex(64),
+                    passedImpulseHex = Hex(112), canonicalImpulsePolicyApplied = BitConverter.ToInt32(bytes, at + 128) == 1,
                     reportPresent = BitConverter.ToInt32(bytes, at + 84) == 1, originalInputUnchanged = unchanged,
                     uninitializedValueReproductionQualified = false, completeStateCoverage = false });
             }

@@ -12,11 +12,19 @@ static BOOL g_guard_required = TRUE;
 static BOOL g_v2_gate_enabled = TRUE;
 static BOOL g_fake_guard_armed = TRUE;
 static BOOL save_write_guard_is_armed(void) { return g_fake_guard_armed; }
+static volatile LONG finished_policy_count;
+static DWORD finished_policy_thread;
+static BOOL finish_contact_impulse_policy(void) {
+    finished_policy_thread = GetCurrentThreadId();
+    InterlockedIncrement(&finished_policy_count); return TRUE;
+}
+static BOOL install_contact_impulse_probe(BYTE *base) { (void)base; return TRUE; }
 
 #include "../../native/HollowKnightTAS.ClockBridge/full_run_frame_gate.h"
 static HANDLE g_boot_continue;
 static void advance_boot_frame_clock(void) { }
 static BOOL prepare_loading_startup_clock_probe(void) { return TRUE; }
+static BOOL prepare_early_mod_wall_clock(void) { return TRUE; }
 static void finish_loading_startup_clock_probe(void) { }
 #include "../../native/HollowKnightTAS.ClockBridge/startup_frame_hook.h"
 
@@ -100,6 +108,14 @@ static DWORD WINAPI game_loop(LPVOID ignored)
     UINT_PTR timer = SetTimer(NULL, 0, 10, title_bar_timer);
     for (int i = 0; i < 1000; i++)
     {
+        /* Current Unity enters the gate in TimeUpdate before PlayerLoop.
+         * Exercise the production gate directly so expected terminal faults
+         * return to this harness instead of entering Unity's fault park. */
+        g_boot_loop_active = TRUE;
+        if (!hktas_v2_before_frame()) {
+            g_boot_loop_active = FALSE; KillTimer(NULL, timer); return 0;
+        }
+        g_boot_frame_prepared = TRUE;
         boot_player_loop();
         if (g_v2_state->fault_code) { KillTimer(NULL, timer); return 0; }
     }
@@ -176,6 +192,8 @@ int main(void)
     InterlockedExchange(&state.mode, HKTAS_V2_MODE_FINISHED);
     check(observe_and_wait() && state.completed_frames == paused_frame
         && state.mode == HKTAS_V2_MODE_FINISHED, "finished_observation_remains_finished");
+    check(finished_policy_count > 0 && finished_policy_thread == game_thread_id
+        && before_count == completed_count, "finished_policy_runs_on_game_thread_after_last_completion");
     check(observed_wrong_boundary == 0, "observations_run_on_game_thread_between_loops");
     InterlockedExchange(&state.mode, HKTAS_V2_MODE_PAUSED);
     state.descriptor_sha256[0] ^= 1;

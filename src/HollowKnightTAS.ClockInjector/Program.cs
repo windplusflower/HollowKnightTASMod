@@ -651,6 +651,11 @@ namespace HollowKnightTAS.ClockInjector
             }
             values[StartupLatchEnvironment] = "1";
             values["HKTAS_CLOCK_RUN_ID"] = runId;
+            // Replace inherited policy intent with this launch's exact profile.
+            values.Remove("HKTAS_CANONICAL_CONTACT_IMPULSE");
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalContactImpulse(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
+                values["HKTAS_CANONICAL_CONTACT_IMPULSE"] = HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalContactImpulsePolicyId;
             values["SteamAppId"] = "367520";
             values["SteamGameId"] = "367520";
 

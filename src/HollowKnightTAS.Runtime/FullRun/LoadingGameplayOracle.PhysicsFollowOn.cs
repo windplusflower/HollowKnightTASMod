@@ -23,6 +23,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 inputNativeOrigin: inputOrigin, suffixCapture: true, identitySessionDirectory: sessionDirectory,
                 physicsFollowOn: true);
             oracle.contactImpulseProbe = LoadingContactImpulseProbe.Create();
+            if (oracle.contactImpulseProbe != null) oracle.Write(new { kind = "canonical-impulse-policy-at-follow-on-arm",
+                movieFrame = movie(), policy = LoadingContactImpulseProbe.PolicyStatus() });
             return oracle;
         }
 
@@ -41,6 +43,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     digest, nativePhysics = nativePhysics.Inventory, nativePhysicsGroups = nativePhysics.Groups,
                     nativeContactRawEvidence = nativePhysics.ContactRawEvidence, unsupported = nativePhysics.Unsupported,
                     contactImpulseCallbacks = impulses,
+                    canonicalImpulsePolicy = contactImpulseProbe == null ? null : LoadingContactImpulseProbe.PolicyStatus(),
                     completeStateCoverage = false, captureMilliseconds = elapsed.ElapsedMilliseconds });
                 gameplaySamples++;
             } catch (Exception error) { SealPhysicsFollowOn(false, error.GetType().Name + ": " + error.Message); throw; }
@@ -52,6 +55,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             sealedTrace = true;
             try {
                 contactImpulseProbe?.Stop();
+                if (contactImpulseProbe != null) Write(new { kind = "canonical-impulse-policy-after-diagnostic-stop",
+                    policy = LoadingContactImpulseProbe.PolicyStatus() });
                 Write(new { kind = "footer", success, detail, samples = gameplaySamples, first, end, completeStateCoverage = false });
                 var bytes = buffer.ToArray();
                 if (bytes.Length > 16 * 1024 * 1024) throw new InvalidOperationException("Physics follow-on output exceeds 16 MiB.");

@@ -30,7 +30,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<object, string?>? allocationPortability = null, Action<CanonicalCarryGraphData>? importValidation = null)
         {
             if (string.IsNullOrEmpty(schema)) throw new ArgumentException("Carry schema identity is required.", nameof(schema));
-            this.schema = schema + "\nframework-list-static-empty-v1";
+            this.schema = schema + "\nframework-list-static-empty-v1\ncanonical-contact-impulse-unused-zero-v1";
             var registeredTypes = registered.Distinct().ToArray();
             listEmptyArrays = new CanonicalListEmptyArrayBindings(registeredTypes);
             this.portability = portability;

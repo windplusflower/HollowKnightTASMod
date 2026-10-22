@@ -89,6 +89,7 @@ static void advance_boot_frame_clock(void)
     ReleaseSRWLockExclusive(&g_clock_lock);
 }
 
+static BOOL finish_contact_impulse_policy(void);
 #include "full_run_frame_gate.h"
 #include "loading_startup_clock_probe.h"
 #include "contact_impulse_probe.h"
@@ -1281,6 +1282,13 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         }
 
         CloseHandle(worker);
+    }
+    else if (reason == DLL_PROCESS_DETACH && reserved != NULL && g_impulse_installed)
+    {
+        /* Process termination has stopped other threads; never unpatch a
+         * running physics callback from an arbitrary managed finalizer. */
+        g_impulse_canonical = FALSE;
+        HktasClockBridge_StopContactImpulseProbe();
     }
 
     return TRUE;

@@ -202,6 +202,10 @@ static BOOL hktas_v2_before_frame(void)
         }
         hktas_v2_apply_command();
         LONG mode = InterlockedCompareExchange(&g_v2_state->mode, 0, 0);
+        if ((mode == HKTAS_V2_MODE_FINISHED || mode == HKTAS_V2_MODE_FAULT)
+            && !finish_contact_impulse_policy()) {
+            hktas_v2_fault(64); return FALSE;
+        }
         if (mode == HKTAS_V2_MODE_FAULT) return FALSE;
         /* Read-only work runs on the Unity thread at a completed-frame boundary.
            It does not consume input, acknowledge a command, or execute PlayerLoop. */

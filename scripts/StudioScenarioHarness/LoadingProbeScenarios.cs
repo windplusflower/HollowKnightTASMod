@@ -123,6 +123,13 @@ internal static partial class StudioScenarioHarness
         var source = Path.GetFullPath(Arg("--probe-movie"));
         var sourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(source)));
         var record = args.Contains("--probe-record-inputs");
+        var derivedArgument = args.SingleOrDefault(value => value.StartsWith("--probe-derived-fixture=", StringComparison.Ordinal));
+        if (derivedArgument != null) {
+            Require(!record && phaseOneTrace && args.Contains("--probe-actual-d-suffix") && args.Contains("--probe-physics-follow-on"),
+                "derived input fixture is only a finite diagnostic, not a new recording");
+            File.Copy(Arg("--probe-derived-fixture"), Path.Combine(output, "derived-fixture-provenance.json"));
+            Log("DERIVED DIAGNOSTIC ONLY: old input samples retained; old expectations are extra comparisons, not an authoritative new-profile recording.");
+        }
         var protectedSource = SequencePackage.Read(source);
         Require(protectedSource.InitialSaves != null, "loading probe binds protected initial saves from its source package");
         if (!record)
@@ -131,7 +138,8 @@ internal static partial class StudioScenarioHarness
                 ?? throw new InvalidDataException("Invalid recorded source inputs.");
             Require(replay.Runs.All(run => !run.Authored)
                 && replay.Header.NativeProfileId == MovieProtocolV2.SelectedNativeProfileId,
-                "cold baseline uses a strict recording with the selected execution profile");
+                derivedArgument == null ? "cold baseline uses a strict recording with the selected execution profile"
+                    : "derived diagnostic inputs are strict and explicitly bind the selected profile; not a new recording");
         }
         if (record)
         {

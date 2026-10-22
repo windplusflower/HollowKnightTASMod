@@ -13,7 +13,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal const int MaximumBytes = 32 * 1024 * 1024, ChunkBytes = 262144;
         internal static bool Enabled => Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_EXPERIMENT") == "1";
         internal static bool CaptureSource => Enabled && Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_SOURCE") == "1";
-        public int Schema = 7, Ordinal;
+        public int Schema = 8, Ordinal;
         public long MovieFrame, NativeFrame;
         public byte[] Main = Array.Empty<byte>(), Input = Array.Empty<byte>(), Geo = Array.Empty<byte>(), Map = Array.Empty<byte>(), Marker = Array.Empty<byte>(), MapKeyText = Array.Empty<byte>(), MapKeyParents = Array.Empty<byte>();
         public byte[] Physics = Array.Empty<byte>();
@@ -48,7 +48,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private void Validate()
         {
-            if (!Enabled || Schema != 7 || Ordinal != 1 || MovieFrame < 0 || NativeFrame < 0
+            if (!Enabled || Schema != 8 || !HollowKnightTAS.Core.Movie.NativeExecutionProfile.SupportsSceneCheckpoints(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) || Ordinal != 1 || MovieFrame < 0 || NativeFrame < 0
                 || Main == null || Input == null || Geo == null || Map == null || Map.Length == 0 || Main.Length == 0 || Input.Length == 0 || Geo.Length == 0
                 || Marker == null || Marker.Length == 0 || MapKeyText == null || MapKeyText.Length == 0 || MapKeyParents == null || MapKeyParents.Length == 0
                 || Physics == null || Physics.Length == 0

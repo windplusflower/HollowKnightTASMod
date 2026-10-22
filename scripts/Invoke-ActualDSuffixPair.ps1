@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory=$true)][string] $ClockBridgePath,
     [switch] $PhysicsFollowOn,
     [switch] $ContactImpulseProbe,
-    [switch] $DiscardInstallation
+    [switch] $DiscardInstallation,
+    [string] $DerivedFixtureManifest = ''
 )
 $ErrorActionPreference = 'Stop'
 if ($ContactImpulseProbe -and -not $PhysicsFollowOn) { throw 'Contact impulse diagnostics require the bounded follow-on.' }
@@ -40,6 +41,7 @@ $taskOptions = @{
     ActualDRelayState=$taskRelayState
     PhysicsFollowOn=$PhysicsFollowOn
     DiscardInstallation=$DiscardInstallation
+    DerivedFixtureManifest=$DerivedFixtureManifest
 }
 $taskPriorImpulse = $env:HKTAS_CONTACT_IMPULSE_PROBE
 try {

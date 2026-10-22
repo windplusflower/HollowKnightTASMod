@@ -106,6 +106,9 @@ namespace HollowKnightTAS.Runtime.Timing
             }
             if (Load<NativeInt>("HktasClockBridge_GetFullRunCapability")() != 2)
                 throw new InvalidOperationException("Native full-run frame capability is unavailable.");
+            if (NativeExecutionProfile.UsesCanonicalContactImpulse(expectedProfileId)
+                && Load<NativeInt>("HktasClockBridge_GetContactImpulsePolicy")() != 1)
+                throw new InvalidOperationException("Canonical impulse initialization policy is unavailable or faulted.");
             var clock = new NativeFullRunFrameClock(
                 Load<NativeFrame>("HktasClockBridge_GetCompletedPlayerLoops"),
                 Load<NativeInt>("HktasClockBridge_GetFullRunMode"),

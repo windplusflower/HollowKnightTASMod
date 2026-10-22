@@ -40,6 +40,7 @@ param(
     [switch] $ActualDSuffix,
     [switch] $PhysicsFollowOn,
     [switch] $DiscardInstallation,
+    [string] $DerivedFixtureManifest = '',
     [ValidateSet('','Source','Target')][string] $ActualDStage = '',
     [hashtable] $ActualDRelayState,
     [switch] $BoundaryInventory,
@@ -53,6 +54,17 @@ param(
     [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
 )
 $ErrorActionPreference = 'Stop'
+if ($DerivedFixtureManifest) {
+    if (-not $ActualDSuffix -or -not $PhysicsFollowOn) { throw 'A derived fixture is restricted to finite actual-D follow-on diagnostics.' }
+    $derivedFixture = Get-Content -LiteralPath $DerivedFixtureManifest -Raw | ConvertFrom-Json
+    if ($derivedFixture.schema -ne 'canonical-impulse-derived-diagnostic-v1' -or -not $derivedFixture.diagnosticOnly -or
+        $derivedFixture.newlyRecorded -or $derivedFixture.frames -ne 3150 -or
+        [IO.Path]::GetFullPath($Movie) -ne $derivedFixture.destination -or
+        (Get-FileHash -LiteralPath $Movie -Algorithm SHA256).Hash.ToLowerInvariant() -ne $derivedFixture.derivedPackSha256 -or
+        (Get-FileHash -LiteralPath $derivedFixture.source -Algorithm SHA256).Hash.ToLowerInvariant() -ne $derivedFixture.originalPackSha256) {
+        throw 'Derived diagnostic fixture provenance differs.'
+    }
+}
 if ($ActualDStage -and (-not $ActualDExperiment -or -not $ActualDSuffix -or $Runs -ne 1 -or $null -eq $ActualDRelayState)) { throw 'Actual D stages require one protected suffix run and caller-owned in-memory relay state.' }
 if ($ActualDStage -eq 'Source' -and $ActualDRelayState.ContainsKey('Packet')) { throw 'Source relay state must be fresh.' }
 if ($ActualDStage -eq 'Target' -and -not $ActualDRelayState.ContainsKey('Packet')) { throw 'Target requires its one source packet in memory.' }
@@ -343,6 +355,7 @@ try {
         if ($ActualDExperiment) { $arguments += '--probe-actual-d-experiment' }
         if ($ActualDSuffix) { $arguments += '--probe-actual-d-suffix' }
         if ($PhysicsFollowOn) { $arguments += '--probe-physics-follow-on' }
+        if ($DerivedFixtureManifest) { $arguments += ('--probe-derived-fixture="{0}"' -f ([IO.Path]::GetFullPath($DerivedFixtureManifest))) }
         if ($ActualDStage) {
             $relayName = 'HKTAS-ActualD-' + [Guid]::NewGuid().ToString('N')
             $relayPipe = [HollowKnightTAS.Diagnostics.ActualDMemoryRelay]::CreateServer($relayName)

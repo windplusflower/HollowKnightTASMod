@@ -1046,6 +1046,11 @@ namespace HollowKnightTAS.Companion.ViewModels
                 if (fullRunMovies?.IsPending == true)
                     await fullRunMovies.PauseForDocumentChangeAsync(CancellationToken.None);
                 await SaveCurrentBranchAsync(closing: true);
+                var replayProfileBefore = MovieProtocolV2.SelectedNativeProfileId;
+                if (candidate.V2Document != null)
+                    NativeExecutionProfile.ConfigureReplayEnvironment(candidate.V2Document.Header.NativeProfileId,
+                        Environment.SetEnvironmentVariable);
+                var replayProfileChanged = replayProfileBefore != MovieProtocolV2.SelectedNativeProfileId;
                 SetSequenceInitialSaves(sequence.InitialSaves);
                 ResetSequenceSaveTarget(path);
                 MovieText = gridSource = text;
@@ -1054,7 +1059,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                 draftRequiresRestart = candidate.V2Document != null;
                 RefreshInputGrid();
                 if (candidate.V2Document != null) StartTimeline(MovieText);
-                if (sequence.InitialSaves == null && fullRunMovies?.IsPending == true && fullRunMovies.Mode == "Unarmed"
+                if (!replayProfileChanged && sequence.InitialSaves == null && fullRunMovies?.IsPending == true && fullRunMovies.Mode == "Unarmed"
                     && startupBoot?.IsWaiting == true && startupBoot.NativeCompletedFrames == 0)
                 {
                     fullRunMovies.ArmReplay(candidate.V2Document!);
