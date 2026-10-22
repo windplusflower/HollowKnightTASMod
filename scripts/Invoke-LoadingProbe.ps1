@@ -39,6 +39,7 @@ param(
     [switch] $ActualDExperiment,
     [switch] $ActualDSuffix,
     [switch] $PhysicsFollowOn,
+    [switch] $DiscardInstallation,
     [ValidateSet('','Source','Target')][string] $ActualDStage = '',
     [hashtable] $ActualDRelayState,
     [switch] $BoundaryInventory,
@@ -199,6 +200,7 @@ if ($stageCompleteCandidate) {
 }
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $backup = Join-Path $outputRoot 'installation-backup'
+if (-not $DiscardInstallation) {
 New-Item -ItemType Directory -Path $backup | Out-Null
 foreach ($name in @('HollowKnightTAS.dll','companion.manifest.json')) { Copy-Item -LiteralPath (Join-Path $install $name) -Destination (Join-Path $backup $name) }
 foreach ($entry in $profileCandidateFiles) { Copy-Item -LiteralPath $entry.destination -Destination (Join-Path $backup $entry.name) }
@@ -209,6 +211,7 @@ if ($usesClockCandidate) {
     foreach ($name in $clockCandidateFiles) {
         Copy-Item -LiteralPath (Join-Path $clockRoot $name) -Destination (Join-Path $backup $name)
     }
+}
 }
 function Read-SaveAudit {
     @(Get-ChildItem -LiteralPath $saveRoot -File -Filter 'user*' | Sort-Object Name | ForEach-Object {
@@ -423,6 +426,7 @@ finally {
         Write-Warning 'Game remains running. Candidate installation retained; restore after identifying and closing the owned process.'
     } else {
         Restore-OtherMods
+        if (-not $DiscardInstallation) {
         foreach ($name in @('HollowKnightTAS.dll','companion.manifest.json')) {
             Copy-Item -LiteralPath (Join-Path $backup $name) -Destination (Join-Path $install $name)
         }
@@ -433,6 +437,7 @@ finally {
                 Copy-Item -LiteralPath (Join-Path $backup $name) -Destination (Join-Path $clockRoot $name)
             }
         }
+        }
         $withdrawn = Join-Path $outputRoot 'withdrawn-test-host'
         New-Item -ItemType Directory -Path $withdrawn | Out-Null
         foreach ($name in $hostFiles) {
@@ -440,8 +445,12 @@ finally {
             if (-not $source.StartsWith([IO.Path]::GetFullPath($companion) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Test-host path escaped installation.' }
             if (Test-Path -LiteralPath $source) { Move-Item -LiteralPath $source -Destination (Join-Path $withdrawn $name) }
         }
+        if ($DiscardInstallation) {
+            & dotnet $bundleTool sign (Join-Path $repo '.local/signing/companion-private.json') $install (Join-Path $install 'companion.manifest.json')
+            if ($LASTEXITCODE -ne 0) { throw 'Retained candidate signature failed.' }
+        }
         & dotnet $bundleTool verify (Join-Path $repo '.local/signing/companion-public.json') $install (Join-Path $install 'companion.manifest.json')
-        if ($LASTEXITCODE -ne 0) { throw 'Original installation verification failed.' }
+        if ($LASTEXITCODE -ne 0) { throw 'Final installation verification failed.' }
     }
     $after = Read-SaveAudit
     [IO.File]::WriteAllText((Join-Path $outputRoot 'saves-after.json'), $after)

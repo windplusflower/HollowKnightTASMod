@@ -91,6 +91,7 @@ static void advance_boot_frame_clock(void)
 
 #include "full_run_frame_gate.h"
 #include "loading_startup_clock_probe.h"
+#include "contact_impulse_probe.h"
 #include "startup_frame_hook.h"
 #include "full_run_continuation.h"
 

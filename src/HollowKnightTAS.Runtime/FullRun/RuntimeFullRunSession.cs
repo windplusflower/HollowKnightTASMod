@@ -589,6 +589,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 actualDSuffixOracle?.Sample(ready ? "before" : "loading", boundary);
                 if (ready) TraceMovieRng("before", replayMovie?.Runs[timingRunIndex].RngSeed);
                 frameInputEnabled = ready;
+                physicsFollowOnOracle?.PhysicsBeforeFrame(ready ? movieFrame : -1);
                 // Resume drawing before the target so temporal presentation can
                 // settle using only frames already belonging to the replay.
                 restoreDrawing.Active = ready && mode == "Replay" && !IsVideoExportActive

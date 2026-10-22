@@ -11,15 +11,19 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal sealed partial class LoadingGameplayOracle
     {
         private readonly bool physicsFollowOn;
+        private LoadingContactImpulseProbe? contactImpulseProbe;
+        internal void PhysicsBeforeFrame(long frame) => contactImpulseProbe?.BeforeFrame(frame);
         internal bool CompletedSuccessfully { get; private set; }
 
         internal static LoadingGameplayOracle CreatePhysicsFollowOn(string directory, string sessionDirectory,
             long inputOrigin, Func<long> movie, Func<long> native)
         {
             Directory.CreateDirectory(directory);
-            return new LoadingGameplayOracle(directory, 1703, 1706, movie, native, () => "not-observed",
+            var oracle = new LoadingGameplayOracle(directory, 1703, 1706, movie, native, () => "not-observed",
                 inputNativeOrigin: inputOrigin, suffixCapture: true, identitySessionDirectory: sessionDirectory,
                 physicsFollowOn: true);
+            oracle.contactImpulseProbe = LoadingContactImpulseProbe.Create();
+            return oracle;
         }
 
         private void SamplePhysicsFollowOn(string boundary)
@@ -32,9 +36,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var colliders = Resources.FindObjectsOfTypeAll<Collider2D>().Where(collider => collider != null && Loaded(collider.gameObject)).ToArray();
                 if (bodies.Length > 16000 || colliders.Length > 16000) throw new InvalidOperationException("Physics follow-on root budget exceeded.");
                 var digest = nativePhysics!.Capture(bodies, colliders, UnityId, fields);
+                var impulses = contactImpulseProbe?.Read(nativePhysics);
                 Write(new { kind = "sample", movieFrame = movieFrame(), nativeFrame = nativeFrame(), phase = "after", boundary,
                     digest, nativePhysics = nativePhysics.Inventory, nativePhysicsGroups = nativePhysics.Groups,
                     nativeContactRawEvidence = nativePhysics.ContactRawEvidence, unsupported = nativePhysics.Unsupported,
+                    contactImpulseCallbacks = impulses,
                     completeStateCoverage = false, captureMilliseconds = elapsed.ElapsedMilliseconds });
                 gameplaySamples++;
             } catch (Exception error) { SealPhysicsFollowOn(false, error.GetType().Name + ": " + error.Message); throw; }
@@ -45,6 +51,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (sealedTrace) return;
             sealedTrace = true;
             try {
+                contactImpulseProbe?.Stop();
                 Write(new { kind = "footer", success, detail, samples = gameplaySamples, first, end, completeStateCoverage = false });
                 var bytes = buffer.ToArray();
                 if (bytes.Length > 16 * 1024 * 1024) throw new InvalidOperationException("Physics follow-on output exceeds 16 MiB.");

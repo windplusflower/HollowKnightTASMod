@@ -158,6 +158,7 @@ static BOOL install_boot_frame_hook(void)
             && *(DWORD *)(cv + 20) == 1) matched = TRUE;
     }
     if (!matched) return FALSE;
+    if (!install_contact_impulse_probe(base)) return FALSE;
     BYTE *site = base + 0x5231e5;
     const BYTE expected_call[5] = {0xe8,0xd6,0x92,0x23,0x00};
     if (memcmp(site, expected_call, sizeof(expected_call)) != 0) return FALSE;

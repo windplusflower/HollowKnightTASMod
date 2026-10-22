@@ -2,9 +2,12 @@ param(
     [Parameter(Mandatory=$true)][string] $OutputDirectory,
     [Parameter(Mandatory=$true)][string] $Movie,
     [Parameter(Mandatory=$true)][string] $ClockBridgePath,
-    [switch] $PhysicsFollowOn
+    [switch] $PhysicsFollowOn,
+    [switch] $ContactImpulseProbe,
+    [switch] $DiscardInstallation
 )
 $ErrorActionPreference = 'Stop'
+if ($ContactImpulseProbe -and -not $PhysicsFollowOn) { throw 'Contact impulse diagnostics require the bounded follow-on.' }
 $taskRepo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $taskOutput = [IO.Path]::GetFullPath($OutputDirectory)
 $taskOwned = [IO.Path]::GetFullPath((Join-Path $taskRepo 'artifacts/scene-checkpoints/p3')) + [IO.Path]::DirectorySeparatorChar
@@ -36,8 +39,11 @@ $taskOptions = @{
     ActualDExperiment=$true; ActualDSuffix=$true; ClockBridgePath=$ClockBridgePath; EvidencePhase='p3';
     ActualDRelayState=$taskRelayState
     PhysicsFollowOn=$PhysicsFollowOn
+    DiscardInstallation=$DiscardInstallation
 }
+$taskPriorImpulse = $env:HKTAS_CONTACT_IMPULSE_PROBE
 try {
+    if ($ContactImpulseProbe) { $env:HKTAS_CONTACT_IMPULSE_PROBE = '1' }
     & (Join-Path $PSScriptRoot 'Invoke-LoadingProbe.ps1') @taskOptions -ActualDStage Source -OutputDirectory (Join-Path $taskOutput 'source')
     if (-not $taskRelayState.ContainsKey('Packet')) { throw 'Source did not hand off its packet in memory.' }
     foreach ($taskIdentity in $taskIdentities) {
@@ -55,6 +61,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'The strict suffix diagnostic comparison failed to validate its traces.' }
 }
 finally {
+    $env:HKTAS_CONTACT_IMPULSE_PROBE = $taskPriorImpulse
     if ($taskRelayState.ContainsKey('Packet')) { [Array]::Clear($taskRelayState.Packet.Data, 0, $taskRelayState.Packet.Data.Length) }
     $taskRelayState.Clear()
 }

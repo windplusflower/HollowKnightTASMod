@@ -79,6 +79,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal IReadOnlyDictionary<string, string> Groups => groupDigests;
         internal object[] DiagnosticEntries => diagnosticEntries.ToArray();
         internal object[] ContactRawEvidence => contactRawEvidence.ToArray();
+        internal string ContactProbeBinding(IntPtr contact, IntPtr fixtureA, IntPtr fixtureB, int childA, int childB)
+        {
+            if (!contactIds.TryGetValue(contact, out var binding)) return "not-present-at-after-sample";
+            var current = Read(contact, 120);
+            return Pointer(current, 96) == fixtureA && Pointer(current, 104) == fixtureB
+                && I32(current, 112) == childA && I32(current, 116) == childB ? binding : "contact-storage-reused-before-after-sample";
+        }
 
         internal string Capture(IEnumerable<Rigidbody2D> bodies, IEnumerable<Collider2D> colliders,
             Func<UnityEngine.Object, string> identity, LoadingFieldDigest fields)
