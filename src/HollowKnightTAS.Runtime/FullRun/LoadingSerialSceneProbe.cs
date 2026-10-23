@@ -413,7 +413,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             finally { self.protectedClockCanonScope = null; }
         }
-        internal static void ReapplyProtectedClockCanon(long movie, long native, string sessionDirectory, long origin,
+        internal static CanonicalS0ObservationSnapshot RecaptureRegisteredS0(Action admission)
+        {
+            GetProtectedObservationBoundary();
+            return (instance?.canonical ?? throw new InvalidOperationException("Original Canon is absent.")).RecaptureRegisteredS0(admission);
+        }
+
+        internal static CanonicalS0ObservationSnapshot ReapplyProtectedClockCanon(long movie, long native, string sessionDirectory, long origin,
             CanonicalInputEpoch controlOrigin, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input,
             HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse, Action requireAdmission)
         {
@@ -425,8 +431,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             scope.Enter(); self.protectedClockCanonScope = scope;
             try {
                 RequireCanonicalMutationBoundary();
-                (self.canonical ?? throw new InvalidOperationException("Original Canon is absent.")).RebindProtectedClock(boundary.Item1, requireAdmission);
+                var after = (self.canonical ?? throw new InvalidOperationException("Original Canon is absent.")).RebindProtectedClock(boundary.Item1, requireAdmission);
                 GetProtectedObservationBoundary(); requireAdmission();
+                return after;
             }
             finally { self.protectedClockCanonScope = null; }
         }

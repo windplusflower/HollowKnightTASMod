@@ -253,7 +253,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal bool AdvanceStartup() => startup.Advance() && menuFlash.RequireStartup() && hudStartup.Advance()
             && menuFlash.AdvanceNaturalMenuClose();
-        internal void RebindProtectedClock(int ordinal, Action admission)
+        internal CanonicalS0ObservationSnapshot RecaptureRegisteredS0(Action admission)
+        {
+            admission();
+            var snapshot = (observer ?? throw new InvalidOperationException("Original S0 observer is absent.")).RecaptureBoundaryS0();
+            admission(); return snapshot;
+        }
+
+        internal CanonicalS0ObservationSnapshot RebindProtectedClock(int ordinal, Action admission)
         {
             if (!phaseOneTrace || !CanonicalClockApplyExperiment.Enabled || observer == null)
                 throw new InvalidOperationException("Clock binding requires its actual observed Canon.");
@@ -280,6 +287,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!comparison.ObservedS0Equal || comparison.ClockDependencyDifferences.Length > 3
                 || after.Unclassified.Length != 0 || after.Unread.Length != 0 || after.InvariantFailures.Length != 0)
                 throw new InvalidOperationException("Clock binding changed another registered S0 field or its contract.");
+            return after;
         }
 
         internal void Apply(int ordinal, string source, string target, long movie, long native, string sessionDirectory, long movieInputNativeOrigin,
@@ -428,7 +436,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidOperationException("Actual D source has unread or unsupported managed data: "
                             + string.Join(", ", data.Unsupported));
                     ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, MovieFrame = movie, NativeFrame = native,
-                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, Physics = carry.PhysicsGraph, Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
+                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, Physics = carry.PhysicsGraph, RegisteredS0 = CanonicalRegisteredS0Contract.Capture(s0), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
                     Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,
                         blockingQualifications = carry.BlockingQualifications });
                 }

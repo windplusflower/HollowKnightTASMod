@@ -206,6 +206,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     && clock.CurrentFrameIndex == (imported ? source.NativeFrame : targetNative);
             }
             actualDApplicationStarted = true; job.Phase = "ApplyingActualD";
+            applicationStage = "verify-registered-S0-before-D";
+            var requireRegisteredS0AfterClock = source.RegisteredS0.Prepare(LoadingSerialSceneProbe.RecaptureRegisteredS0(
+                () => { if (!Admission()) throw new InvalidOperationException("Registered S0 pre-D admission was lost."); }));
             var apply = LoadingSerialSceneProbe.PrepareExperimentalTarget(source, replayMovie, targetNative,
                 job.Origin, movieInputControlOrigin!, input, mouse, Admission, epoch => {
                     LoadingSerialSceneProbe.RestoreExperimentalInputOrigin(epoch);
@@ -218,8 +221,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 (bytes, cursor) => CheckpointClockMethod("ImportCheckpointClockObserver").Invoke(null, new object[] { bytes, cursor }));
             imported = true; job.AppliedClock = source.Clock; job.Parked = job.Parked!.WithVerifiedImportedClock(source.NativeFrame);
             applicationStage = "clock-binding";
-            LoadingSerialSceneProbe.ReapplyProtectedClockCanon(0, source.NativeFrame, sessionDirectory, job.Origin,
+            var reboundS0 = LoadingSerialSceneProbe.ReapplyProtectedClockCanon(0, source.NativeFrame, sessionDirectory, job.Origin,
                 movieInputControlOrigin!, input, mouse, () => { if (!Admission()) throw new InvalidOperationException("Actual D clock binding lost paused admission."); });
+            source.Clock.RequireReadback(clock);
+            requireRegisteredS0AfterClock(reboundS0);
             applicationStage = "apply-D";
             apply(); source.Clock.RequireReadback(clock);
             // The source manager Rand is residual D. Keep the actual target owner,
@@ -252,6 +257,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 JsonConvert.SerializeObject(new { applicationExecuted = true, source.MovieFrame, source.NativeFrame,
                     consumedSamples = input.ConsumedSamples, sourcePrefix = session.MoviePrefixSha256, sourceDBytes = source.Main.Length + source.Input.Length + source.Geo.Length + source.Map.Length + source.Marker.Length + source.MapKeyText.Length + source.MapKeyParents.Length + source.Physics.Length,
                     applicationMilestones,
+                    registeredR2R6S0SourceContractSatisfied = true,
                     rawClockReadbackEqual = true, unityRandomRawReadbackEqual = true, particleManagerRandomRawReadbackEqual = true, particleComponentStateQualified = false, restoreQualified = false, completeStateCoverage = false, d2Passed = false, d3Passed = false }));
         }
     }
