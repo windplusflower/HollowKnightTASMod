@@ -188,7 +188,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     case "import-cancel":
                         Require("checkpointId");
                         if (checkpointRestore?.Packet.Header.CheckpointId == Get("checkpointId"))
-                        { checkpointRestore.Phase = "Cancelled"; checkpointRestore.Error = "Restore import cancelled; retire this process."; clock.Fault(47); }
+                        { checkpointRestore.Phase = "Cancelled"; checkpointRestore.Error = "Restore import cancelled; retire this process."; FaultCanonical(47); }
                         if (checkpointImport?.Header.CheckpointId == Get("checkpointId")) { checkpointImport.Dispose(); checkpointImport = null; }
                         if (stagedCheckpoint?.Header.CheckpointId == Get("checkpointId")) stagedCheckpoint = null;
                         reply["status"] = "ImportCancelled"; break;
@@ -277,10 +277,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal void DiscardCheckpointTransfersOnDisconnect()
         {
             if (s0Observation != null && s0Observation.Phase != "Failed")
-            { s0Observation.Phase = "Failed"; s0Observation.Error = "S0 observer disconnected; retire process."; clock.Fault(47); }
+            { s0Observation.Phase = "Failed"; s0Observation.Error = "S0 observer disconnected; retire process."; FaultCanonical(47); }
             lock (checkpointSync)
                 if (checkpointRestore != null && checkpointRestore.Phase != "Failed" && checkpointRestore.Phase != "Cancelled")
-                { checkpointRestore.Phase = "Cancelled"; checkpointRestore.Error = "Restore session disconnected; retire this process."; clock.Fault(47); }
+                { checkpointRestore.Phase = "Cancelled"; checkpointRestore.Error = "Restore session disconnected; retire this process."; FaultCanonical(47); }
             DisposeSceneCheckpoints();
         }
         private sealed class CheckpointArm

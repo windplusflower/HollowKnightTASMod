@@ -66,6 +66,23 @@ namespace HollowKnightTAS.Core.Tests.Movie
         }
 
         [TestMethod]
+        public void RetiredUiRevisionKeepsV13ReplayAndNativeImpulseWithoutUiRule()
+        {
+            var old=NativeExecutionProfile.ContactCanonicalBoundaryProfileId;
+            Assert.IsTrue(NativeExecutionProfile.UsesCanonicalBoundary(old));
+            Assert.IsTrue(NativeExecutionProfile.UsesCanonicalContactImpulse(old));
+            Assert.IsFalse(NativeExecutionProfile.UsesCanonicalRetiredUiCallbacks(old));
+            Assert.IsFalse(NativeExecutionProfile.SupportsSceneCheckpoints(old));
+            Assert.IsTrue(NativeExecutionProfile.UsesCanonicalRetiredUiCallbacks(NativeExecutionProfile.CanonicalBoundaryProfileId));
+            Assert.AreEqual(old,NativeExecutionProfile.Select(true,true,true,true,true,true,true,true,true,false,true));
+            var variables=new System.Collections.Generic.Dictionary<string,string?>();
+            foreach(var profile in new[]{old,NativeExecutionProfile.CanonicalBoundaryProfileId,NativeExecutionProfile.LegacyCanonicalBoundaryProfileId,NativeExecutionProfile.ProfileId}) {
+                NativeExecutionProfile.ConfigureReplayEnvironment(profile,(key,value)=>variables[key]=value);
+                Assert.AreEqual(profile==old?"1":null,variables["HKTAS_LOADING_CANONICAL_BOUNDARY_V13"]);
+            }
+            Assert.ThrowsExactly<InvalidOperationException>(()=>NativeExecutionProfile.Select(true,true,true,true,true,true,true,true,true,true,true));
+        }
+        [TestMethod]
         public void CanonicalImpulseRevisionKeepsLegacyReplayButRejectsOldCheckpointPolicy()
         {
             var current = NativeExecutionProfile.CanonicalBoundaryProfileId;

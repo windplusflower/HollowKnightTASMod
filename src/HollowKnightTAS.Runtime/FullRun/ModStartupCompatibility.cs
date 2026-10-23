@@ -28,6 +28,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         public ModStartupCompatibility()
         {
+            try {
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_SYNCHRONOUS_FETCH") == "1")
                 experimentalFetch = new LoadingSynchronousFetchProbe();
             else synchronousFetch = new DeterministicSceneFetch();
@@ -50,6 +51,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             });
             On.InControl.InputManager.UpdateInternal += OnInputUpdate;
             Modding.Logger.Log("[HKTAS] Early mod input and random guards installed.");
+            } catch { LoadingSerialSceneProbe.EndCanonicalUiCallbacks(); throw; }
         }
 
         private void OnInputUpdate(On.InControl.InputManager.orig_UpdateInternal original)

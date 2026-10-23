@@ -461,7 +461,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         stream.Write(bytes, 0, bytes.Length);
                         stream.Flush(true);
                     }
-                    clock.Finish();
+                    FinishCanonical();
                     mode = "Stopped";
                     return new FullRunResult(true, string.Empty, expectedFrame, id);
                 }
@@ -473,7 +473,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (mode == "Replay" || mode == "Completed")
             {
-                if (!clock.IsFinished) clock.Finish();
+                if (!clock.IsFinished) FinishCanonical();
                 mode = "Stopped";
                 return new FullRunResult(true, string.Empty, expectedFrame,
                     replayMovie == null ? string.Empty
@@ -758,7 +758,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         File.WriteAllText(Path.Combine(sessionDirectory, "boss-trace.csv"),
                             bossTrace.ToString(), new UTF8Encoding(false));
                     mode = "Completed";
-                    clock.Finish();
+                    FinishCanonical();
                     return;
                 }
                 if (mode == "Replay" && movieFrame > replayLength)
@@ -951,6 +951,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             boundBossController = null;
         }
 
+        private void FinishCanonical() { LoadingSerialSceneProbe.EndCanonicalUiCallbacks(); clock.Finish(); }
+        private void FaultCanonical(int code) { LoadingSerialSceneProbe.EndCanonicalUiCallbacks(); clock.Fault(code); }
         private void Fail(string detail)
         {
             if (mode == "Failed") return;
@@ -973,7 +975,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 catch { }
             }
-            try { clock.Fault(41); } catch { }
+            try { FaultCanonical(41); } catch { }
             try
             {
                 File.WriteAllText(Path.Combine(sessionDirectory, "full-run-fault.txt"),
@@ -1000,6 +1002,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             infoTiming.FlushTrace(sessionDirectory);
             if (disposed) return;
             disposed = true;
+            LoadingSerialSceneProbe.EndCanonicalUiCallbacks();
             DisposeSceneCheckpoints();
             On.GameManager.Update -= OnGameManagerTiming;
             replayStateTrace?.Dispose();

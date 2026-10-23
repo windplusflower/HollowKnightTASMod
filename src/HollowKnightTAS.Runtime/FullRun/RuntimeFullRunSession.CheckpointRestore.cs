@@ -104,7 +104,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 lock (checkpointSync)
                 {
                     if (checkpointRestore?.Packet.Header.CheckpointId == id)
-                    { checkpointRestore.Phase = "Cancelled"; checkpointRestore.Error = "Restore cancelled; retire this process."; clock.Fault(47); }
+                    { checkpointRestore.Phase = "Cancelled"; checkpointRestore.Error = "Restore cancelled; retire this process."; FaultCanonical(47); }
                 }
                 return new Dictionary<string, string> { ["requestId"] = fields["requestId"], ["checkpointId"] = id, ["status"] = "Cancelled" };
             }
@@ -115,7 +115,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var job = checkpointRestore;
                     if (job == null || job.Packet.Header.CheckpointId != id) throw new InvalidDataException("Restore checkpoint ID differs.");
                     if (!job.Applied && job.Elapsed.ElapsedMilliseconds > 240000 && job.Phase != "Failed" && job.Phase != "Cancelled")
-                    { job.Phase = "Failed"; job.Error = "Checkpoint reconstruction exceeded the four-minute deadline."; clock.Fault(47); }
+                    { job.Phase = "Failed"; job.Error = "Checkpoint reconstruction exceeded the four-minute deadline."; FaultCanonical(47); }
                     return new Dictionary<string, string>
                     {
                         ["requestId"] = fields["requestId"], ["checkpointId"] = id, ["status"] = job.Phase,

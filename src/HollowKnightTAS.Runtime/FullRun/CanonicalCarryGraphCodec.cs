@@ -38,6 +38,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (string.IsNullOrEmpty(schema)) throw new ArgumentException("Carry schema identity is required.", nameof(schema));
             this.schema = schema + "\nframework-list-static-empty-v1\ncanonical-contact-impulse-unused-zero-v1";
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalRetiredUiCallbacks(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
+                this.schema += "\n" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalRetiredUiCallbackPolicyId;
             var registeredTypes = registered.Distinct().ToArray();
             listEmptyArrays = new CanonicalListEmptyArrayBindings(registeredTypes);
             this.portability = portability;

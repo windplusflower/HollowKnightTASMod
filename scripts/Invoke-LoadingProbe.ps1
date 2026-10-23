@@ -39,6 +39,7 @@ param(
     [switch] $RecanonicalizeAppliedClock,
     [switch] $ActualDExperiment,
     [switch] $ActualDSuffix,
+    [ValidateRange(1,64)][int] $SourceBoundaryOrdinal = 1,
     [switch] $PhysicsFollowOn,
     [switch] $DiscardInstallation,
     [string] $DerivedFixtureManifest = '',
@@ -59,9 +60,17 @@ if ($CanonicalD0Route -and (-not $CanonicalPhaseOneTrace -or $S0ObservationTarge
     throw 'D0 route requires complete Phase 1 recording/cold evidence and excludes S0 preparation, D transactions and derived fixtures.'
 }
 if ($DerivedFixtureManifest) {
-    if (-not $ActualDSuffix -or -not $PhysicsFollowOn) { throw 'A derived fixture is restricted to finite actual-D follow-on diagnostics.' }
     $derivedFixture = Get-Content -LiteralPath $DerivedFixtureManifest -Raw | ConvertFrom-Json
-    if ($derivedFixture.schema -ne 'canonical-impulse-derived-diagnostic-v1' -or -not $derivedFixture.diagnosticOnly -or
+    $derivedImpulse = $derivedFixture.schema -eq 'canonical-impulse-derived-diagnostic-v1'
+    $derivedUi = $derivedFixture.schema -eq 'canonical-retired-ui-derived-diagnostic-v1'
+    if (-not $ActualDExperiment -or -not $ActualDSuffix -or
+        ($derivedImpulse -and (-not $PhysicsFollowOn -or $SourceBoundaryOrdinal -ne 1)) -or
+        ($derivedUi -and ($SourceBoundaryOrdinal -le 1 -or $derivedFixture.sourceBoundaryOrdinal -ne $SourceBoundaryOrdinal -or $PhysicsFollowOn -or
+            $derivedFixture.originalProfile -ne 'hktas-unity-input-playerloop-serial-scene-canonical-boundary-2026-v13-experimental' -or
+            $derivedFixture.derivedProfile -ne 'hktas-unity-input-playerloop-serial-scene-canonical-boundary-2026-v14-experimental'))) {
+        throw 'Derived fixtures require their explicit finite actual-D diagnostic route.'
+    }
+    if ((-not $derivedImpulse -and -not $derivedUi) -or -not $derivedFixture.diagnosticOnly -or
         $derivedFixture.newlyRecorded -or $derivedFixture.frames -ne 3150 -or
         [IO.Path]::GetFullPath($Movie) -ne $derivedFixture.destination -or
         (Get-FileHash -LiteralPath $Movie -Algorithm SHA256).Hash.ToLowerInvariant() -ne $derivedFixture.derivedPackSha256 -or
@@ -79,6 +88,7 @@ if ($ActualDStage -and -not ('HollowKnightTAS.Diagnostics.ActualDMemoryRelay' -a
 }
 if ($ActualDExperiment -and (-not $CanonicalPhaseOneTrace -or -not $ClockCarryExperiment -or -not $S0ObservationTarget -or $ClockApplySource -or $RecordInputs)) { throw 'Actual D requires the protected in-memory source-to-zero-Movie scenario.' }
 if ($ActualDSuffix -and -not $ActualDExperiment) { throw 'Actual suffix requires the in-memory D transaction.' }
+if ($SourceBoundaryOrdinal -ne 1 -and (-not $ActualDExperiment -or $PhysicsFollowOn)) { throw 'Source boundary selection requires actual D and excludes first-boundary physics follow-on.' }
 if ($PhysicsFollowOn -and -not $ActualDSuffix) { throw 'Physics follow-on requires the independently checked original suffix.' }
 if ($ClockCarryExperiment -and (-not $CanonicalPhaseOneTrace -or (-not $RecordInputs -and -not $S0ObservationTarget))) { throw 'Clock experiment requires a protected source recording or zero-Movie target.' }
 if ($ClockApplySource -and (-not $ClockCarryExperiment -or -not $S0ObservationTarget -or -not (Test-Path -LiteralPath $ClockApplySource -PathType Leaf))) { throw 'Clock D application requires the bounded source and protected zero-Movie target.' }
@@ -358,6 +368,7 @@ try {
         if ($ClockApplySource) { $arguments += ('--probe-clock-apply-source={0}' -f [IO.Path]::GetFullPath($ClockApplySource)) }
         if ($RecanonicalizeAppliedClock) { $arguments += '--probe-clock-recanon' }
         if ($ActualDExperiment) { $arguments += '--probe-actual-d-experiment' }
+        if ($ActualDExperiment) { $arguments += ('--probe-actual-d-ordinal=' + $SourceBoundaryOrdinal) }
         if ($ActualDSuffix) { $arguments += '--probe-actual-d-suffix' }
         if ($PhysicsFollowOn) { $arguments += '--probe-physics-follow-on' }
         if ($DerivedFixtureManifest) { $arguments += ('--probe-derived-fixture="{0}"' -f ([IO.Path]::GetFullPath($DerivedFixtureManifest))) }

@@ -95,6 +95,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         reply["sha256"] = Sha256Utility.ComputeHex(bytes);
                         CanonicalSourceHeaderTiming.Mark(requestId, "after-reply-full-hash");
                         reply["movieFrame"] = source.MovieFrame.ToString(CultureInfo.InvariantCulture); reply["nativeFrame"] = source.NativeFrame.ToString(CultureInfo.InvariantCulture);
+                        reply["sourceOrdinal"] = source.Ordinal.ToString(CultureInfo.InvariantCulture);
                         Modding.Logger.Log("[HKTAS] Actual D sealed source header prepared: elapsedMilliseconds=" + exportElapsed.ElapsedMilliseconds
                             + ";sameBytesHashAndMetadataEqual=true;packetWrittenToDisk=false");
                     } else {
@@ -255,7 +256,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Actual D TAS continuation complete raw readback differs.");
             job.Phase = "ActualDAppliedPaused";
             File.WriteAllText(Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "actual-d-application.json"),
-                JsonConvert.SerializeObject(new { applicationExecuted = true, source.MovieFrame, source.NativeFrame,
+                JsonConvert.SerializeObject(new { applicationExecuted = true, source.Ordinal, source.Route, source.MovieFrame, source.NativeFrame,
                     consumedSamples = input.ConsumedSamples, sourcePrefix = session.MoviePrefixSha256, sourceDBytes = source.Main.Length + source.Input.Length + source.Geo.Length + source.Map.Length + source.Marker.Length + source.MapKeyText.Length + source.MapKeyParents.Length + source.Physics.Length,
                     applicationMilestones,
                     codecReadbackMetrics = LoadingSerialSceneProbe.ExperimentalReadbackMetrics,

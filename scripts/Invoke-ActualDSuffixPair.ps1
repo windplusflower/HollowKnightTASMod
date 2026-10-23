@@ -5,10 +5,12 @@ param(
     [switch] $PhysicsFollowOn,
     [switch] $ContactImpulseProbe,
     [switch] $DiscardInstallation,
+    [ValidateRange(1,64)][int] $SourceBoundaryOrdinal = 1,
     [string] $DerivedFixtureManifest = ''
 )
 $ErrorActionPreference = 'Stop'
 if ($ContactImpulseProbe -and -not $PhysicsFollowOn) { throw 'Contact impulse diagnostics require the bounded follow-on.' }
+if ($SourceBoundaryOrdinal -ne 1 -and $PhysicsFollowOn) { throw 'The existing physics follow-on belongs only to its first-boundary route.' }
 $taskRepo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $taskOutput = [IO.Path]::GetFullPath($OutputDirectory)
 $taskOwned = [IO.Path]::GetFullPath((Join-Path $taskRepo 'artifacts/scene-checkpoints/p3')) + [IO.Path]::DirectorySeparatorChar
@@ -39,6 +41,7 @@ $taskOptions = @{
     CanonicalPhaseOneTrace=$true; S0ObservationTarget='Town'; ClockCarryExperiment=$true;
     ActualDExperiment=$true; ActualDSuffix=$true; ClockBridgePath=$ClockBridgePath; EvidencePhase='p3';
     ActualDRelayState=$taskRelayState
+    SourceBoundaryOrdinal=$SourceBoundaryOrdinal
     PhysicsFollowOn=$PhysicsFollowOn
     DiscardInstallation=$DiscardInstallation
     DerivedFixtureManifest=$DerivedFixtureManifest

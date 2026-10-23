@@ -24,10 +24,13 @@ namespace HollowKnightTAS.Core.Movie
         public const string CanonicalParticleProfileId =
             "hktas-unity-input-playerloop-serial-scene-canonical-particles-2026-v12-experimental";
         public const string CanonicalBoundaryProfileId =
+            "hktas-unity-input-playerloop-serial-scene-canonical-boundary-2026-v14-experimental";
+        public const string ContactCanonicalBoundaryProfileId =
             "hktas-unity-input-playerloop-serial-scene-canonical-boundary-2026-v13-experimental";
         public const string LegacyCanonicalBoundaryProfileId =
             "hktas-unity-input-playerloop-serial-scene-canonical-boundary-2026-v12-experimental";
         public const string CanonicalContactImpulsePolicyId = "zero-unused-impulse-slots-v1";
+        public const string CanonicalRetiredUiCallbackPolicyId = "retire-registered-destroyed-boss-ui-animation-slots:10-Challenge-1:11-Challenge-Audio-1:v1";
 
         public static string SelectedProfileId => Select(
             Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_STARTUP_CLOCK") == "1",
@@ -39,15 +42,18 @@ namespace HollowKnightTAS.Core.Movie
             Environment.GetEnvironmentVariable("HKTAS_LOADING_ISOLATED_ONLINE") == "1",
             Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_PARTICLES") == "1",
             Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_BOUNDARY") == "1",
-            Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_BOUNDARY_LEGACY") == "1");
+            Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_BOUNDARY_LEGACY") == "1",
+            Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_BOUNDARY_V13") == "1");
 
         public static string Select(bool canonicalStartupClock,
             bool synchronousFetch, bool disableLegacyCalibration, bool modWallClock = false, bool serialScenes = false,
             bool virtualAudio = false, bool isolatedOnline = false, bool canonicalParticles = false,
-            bool canonicalBoundary = false, bool legacyCanonicalBoundary = false)
+            bool canonicalBoundary = false, bool legacyCanonicalBoundary = false, bool contactCanonicalBoundary = false)
         {
             if (legacyCanonicalBoundary && !canonicalBoundary)
                 throw new InvalidOperationException("Legacy canonical replay requires the explicit canonical profile.");
+            if (contactCanonicalBoundary && (!canonicalBoundary || legacyCanonicalBoundary))
+                throw new InvalidOperationException("Historical v13 replay requires its exclusive canonical profile.");
             if (canonicalBoundary && !canonicalParticles)
                 throw new InvalidOperationException("Canonical boundaries require the complete canonical particle profile.");
             if (canonicalParticles && !isolatedOnline)
@@ -64,7 +70,7 @@ namespace HollowKnightTAS.Core.Movie
             if (!synchronousFetch || !disableLegacyCalibration)
                 throw new InvalidOperationException(
                     "Canonical startup clocks require synchronous scene fetch and disabled legacy calibration.");
-            return canonicalBoundary ? (legacyCanonicalBoundary ? LegacyCanonicalBoundaryProfileId : CanonicalBoundaryProfileId) : canonicalParticles ? CanonicalParticleProfileId : isolatedOnline ? IsolatedOnlineProfileId : virtualAudio ? VirtualAudioSerialProfileId : serialScenes ? SerialSceneProfileId
+            return canonicalBoundary ? (legacyCanonicalBoundary ? LegacyCanonicalBoundaryProfileId : contactCanonicalBoundary ? ContactCanonicalBoundaryProfileId : CanonicalBoundaryProfileId) : canonicalParticles ? CanonicalParticleProfileId : isolatedOnline ? IsolatedOnlineProfileId : virtualAudio ? VirtualAudioSerialProfileId : serialScenes ? SerialSceneProfileId
                 : modWallClock ? CanonicalModClockProfileId : CanonicalStartupProfileId;
         }
 
@@ -94,10 +100,11 @@ namespace HollowKnightTAS.Core.Movie
             => profile == CanonicalParticleProfileId || UsesCanonicalBoundary(profile);
 
         public static bool UsesCanonicalBoundary(string profile)
-            => profile == CanonicalBoundaryProfileId || profile == LegacyCanonicalBoundaryProfileId;
+            => profile == CanonicalBoundaryProfileId || profile == ContactCanonicalBoundaryProfileId || profile == LegacyCanonicalBoundaryProfileId;
 
         public static bool UsesCanonicalContactImpulse(string profile)
-            => profile == CanonicalBoundaryProfileId;
+            => profile == CanonicalBoundaryProfileId || profile == ContactCanonicalBoundaryProfileId;
+        public static bool UsesCanonicalRetiredUiCallbacks(string profile) => profile == CanonicalBoundaryProfileId;
 
         // Opening an existing sequence routes its next protected launch; this
         // changes no header/inputs and never upgrades an old snapshot binding.
@@ -111,11 +118,12 @@ namespace HollowKnightTAS.Core.Movie
                 "HKTAS_LOADING_VIRTUAL_AUDIO", "HKTAS_LOADING_ISOLATED_ONLINE", "HKTAS_LOADING_CANONICAL_PARTICLES",
                 "HKTAS_LOADING_CANONICAL_BOUNDARY" }) write(variable, canonical ? "1" : null);
             write("HKTAS_LOADING_CANONICAL_BOUNDARY_LEGACY", profile == LegacyCanonicalBoundaryProfileId ? "1" : null);
+            write("HKTAS_LOADING_CANONICAL_BOUNDARY_V13", profile == ContactCanonicalBoundaryProfileId ? "1" : null);
         }
 
         // Execution-policy admission only; restoration qualification still
         // requires the separate D0-D3 and P4/P5 acceptance gates.
         public static bool SupportsSceneCheckpoints(string profile)
-            => UsesCanonicalContactImpulse(profile);
+            => UsesCanonicalRetiredUiCallbacks(profile);
     }
 }

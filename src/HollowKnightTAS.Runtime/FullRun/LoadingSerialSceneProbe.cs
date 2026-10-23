@@ -65,6 +65,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal LoadingSerialSceneProbe()
         {
+            try {
             if (!NativeExecutionProfile.UsesSerialScenes(NativeExecutionProfile.SelectedProfileId))
                 throw new InvalidOperationException("Serial scenes require their own V6 execution profile.");
             if (NativeExecutionProfile.UsesCanonicalBoundary(NativeExecutionProfile.SelectedProfileId))
@@ -94,7 +95,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             instance = this;
             Write("installed", null);
             Modding.Logger.Log("[HKTAS] V6 serial scene experiment installed.");
+            } catch { canonical?.EndUiCallbackPolicy(); throw; }
         }
+        internal static void EndCanonicalUiCallbacks() => instance?.canonical?.EndUiCallbackPolicy();
 
         private IEnumerator Start(OriginalTransition original, GameManager manager, GameManager.SceneLoadInfo info)
         {

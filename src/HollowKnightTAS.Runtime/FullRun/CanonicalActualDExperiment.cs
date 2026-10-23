@@ -13,7 +13,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal const int MaximumBytes = 32 * 1024 * 1024, ChunkBytes = 262144;
         internal static bool Enabled => Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_EXPERIMENT") == "1";
         internal static bool CaptureSource => Enabled && Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_SOURCE") == "1";
-        public int Schema = 9, Ordinal;
+        internal static int SelectedOrdinal {
+            get {
+                var text = Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_ORDINAL");
+                return CanonicalActualDRoute.SelectOrdinal(text, Enabled);
+            }
+        }
+        public int Schema = 10, Ordinal;
+        public CanonicalActualDRoute Route = new CanonicalActualDRoute();
         public long MovieFrame, NativeFrame;
         public byte[] Main = Array.Empty<byte>(), Input = Array.Empty<byte>(), Geo = Array.Empty<byte>(), Map = Array.Empty<byte>(), Marker = Array.Empty<byte>(), MapKeyText = Array.Empty<byte>(), MapKeyParents = Array.Empty<byte>();
         public byte[] Physics = Array.Empty<byte>();
@@ -49,13 +56,15 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private void Validate()
         {
-            if (!Enabled || Schema != 9 || !HollowKnightTAS.Core.Movie.NativeExecutionProfile.SupportsSceneCheckpoints(
-                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) || Ordinal != 1 || MovieFrame < 0 || NativeFrame < 0
+            if (!Enabled || Schema != 10 || !HollowKnightTAS.Core.Movie.NativeExecutionProfile.SupportsSceneCheckpoints(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) || Ordinal != SelectedOrdinal || MovieFrame < 0 || NativeFrame < 0
                 || Main == null || Input == null || Geo == null || Map == null || Map.Length == 0 || Main.Length == 0 || Input.Length == 0 || Geo.Length == 0
                 || Marker == null || Marker.Length == 0 || MapKeyText == null || MapKeyText.Length == 0 || MapKeyParents == null || MapKeyParents.Length == 0
                 || Physics == null || Physics.Length == 0
                 || (long)Main.Length + Input.Length + Geo.Length + Map.Length + Marker.Length + MapKeyText.Length + MapKeyParents.Length + Physics.Length > MaximumBytes || Clock == null || Clock.NativeFrame != NativeFrame)
                 throw new InvalidDataException("Actual D source schema, epoch or graph bounds differ.");
+            if (Route == null) throw new InvalidDataException("Source boundary route is absent.");
+            Route.Validate(SelectedOrdinal, MovieFrame);
             if (RegisteredS0 == null) throw new InvalidDataException("Registered S0 source contract is absent.");
             RegisteredS0.Validate();
             Clock.Clock.Validate(NativeFrame); CanonicalFsmTimeCarry.Validate(Clock.FsmTime);

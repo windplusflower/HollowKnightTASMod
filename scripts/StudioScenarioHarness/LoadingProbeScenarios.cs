@@ -58,6 +58,11 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_EXPERIMENT", clockExperiment ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_SOURCE", clockSourceArgument == null ? null : Arg("--probe-clock-apply-source"));
         var actualDExperiment = args.Contains("--probe-actual-d-experiment");
+        var ordinalArgument = args.SingleOrDefault(value => value.StartsWith("--probe-actual-d-ordinal=", StringComparison.Ordinal));
+        var sourceBoundaryOrdinal = ordinalArgument == null ? 1 : int.Parse(Arg("--probe-actual-d-ordinal"), System.Globalization.CultureInfo.InvariantCulture);
+        Require(sourceBoundaryOrdinal >= 1 && sourceBoundaryOrdinal <= 64 && (actualDExperiment || ordinalArgument == null)
+            && (sourceBoundaryOrdinal == 1 || !args.Contains("--probe-physics-follow-on")), "explicit bounded actual D source ordinal");
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_ORDINAL", actualDExperiment ? sourceBoundaryOrdinal.ToString() : null);
         var d0Route = args.Contains("--probe-canonical-d0-route");
         Require(!d0Route || phaseOneTrace && s0TargetArgument == null && !actualDExperiment && !clockExperiment
             && !args.Any(value => value.StartsWith("--probe-derived-fixture=", StringComparison.Ordinal)),
@@ -130,7 +135,8 @@ internal static partial class StudioScenarioHarness
         var record = args.Contains("--probe-record-inputs");
         var derivedArgument = args.SingleOrDefault(value => value.StartsWith("--probe-derived-fixture=", StringComparison.Ordinal));
         if (derivedArgument != null) {
-            Require(!record && phaseOneTrace && args.Contains("--probe-actual-d-suffix") && args.Contains("--probe-physics-follow-on"),
+            Require(!record && phaseOneTrace && actualDExperiment && args.Contains("--probe-actual-d-suffix")
+                && (args.Contains("--probe-physics-follow-on") || sourceBoundaryOrdinal > 1),
                 "derived input fixture is only a finite diagnostic, not a new recording");
             File.Copy(Arg("--probe-derived-fixture"), Path.Combine(output, "derived-fixture-provenance.json"));
             Log("DERIVED DIAGNOSTIC ONLY: old input samples retained; old expectations are extra comparisons, not an authoritative new-profile recording.");
@@ -334,6 +340,7 @@ internal static partial class StudioScenarioHarness
                     await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("actual source D fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
                         "actual source B captures both graphs and parks without executing target load", 180);
                     actualDHeader = await Call(new Dictionary<string, string> { ["phase"] = "d-exp-source-info" });
+                    Require(actualDHeader["sourceOrdinal"] == sourceBoundaryOrdinal.ToString(), "source packet is sealed at the selected actual ordinal");
                     await File.WriteAllTextAsync(Path.Combine(output, "actual-d-source-header.json"), JsonSerializer.Serialize(actualDHeader));
                     var length = int.Parse(actualDHeader["length"], System.Globalization.CultureInfo.InvariantCulture);
                     Require(length > 0 && length <= 32 * 1024 * 1024, "in-memory D packet obeys its fixed bound");

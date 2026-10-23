@@ -21,6 +21,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalHudJournalPolicy journal = new CanonicalHudJournalPolicy();
         private readonly CanonicalHudCharmPolicy charms = new CanonicalHudCharmPolicy();
         private readonly CanonicalBoundaryPoolPolicy pools = new CanonicalBoundaryPoolPolicy();
+        private readonly CanonicalBossUiAnimationPolicy retiredUiAnimations;
         private readonly CanonicalVisualFsmTemplates visualTemplates = new CanonicalVisualFsmTemplates();
         private readonly CanonicalHeroAssetTemplates assetTemplates = new CanonicalHeroAssetTemplates();
         private LoadingGameplayOracle? observer;
@@ -44,7 +45,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (source.Session != null) throw new InvalidOperationException("Actual D source was already sealed.");
             source.Session = session;
             var sealedSource = new CanonicalSealedSource<CanonicalActualDExperiment>(source, value => value.Encode(), value =>
-                JsonConvert.SerializeObject(new { value.Schema, value.Ordinal, value.MovieFrame, value.NativeFrame, value.Clock, value.Session }));
+                JsonConvert.SerializeObject(new { value.Schema, value.Ordinal, value.Route, value.MovieFrame, value.NativeFrame, value.Clock, value.Session }));
             ExperimentalSource = sealedSource.Bytes;
             return sealedSource;
         }
@@ -251,6 +252,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 ?? (retiringGeo.TryGetValue(id, out var geoOwner) ? geoOwner : null)
                 ?? (retiringMenuFlash == id ? "canonical-menu-flash-retirement/Image" : null) ?? LoadingSerialSceneProbe.RetiringSourceOwner(id));
             startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart);
+            retiredUiAnimations = new CanonicalBossUiAnimationPolicy();
         }
         internal bool AdvanceStartup() => startup.Advance() && menuFlash.RequireStartup() && hudStartup.Advance()
             && menuFlash.AdvanceNaturalMenuClose();
@@ -383,6 +385,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var metadataAudit = CanonicalBoundaryStaticPolicy.ResetActionMetadata();
             Progress("R6-action-metadata-caches-reset", metadataAudit);
             Progress("R6-SDK-device-type-table-reset", CanonicalBoundaryInputTablePolicy.Reset());
+            Progress("R2-registered-destroyed-boss-UI-animation-callbacks", retiredUiAnimations.Reset());
             try { preservation.Verify(); }
             catch (Exception error) {
                 Progress("D-preservation-readback-rejected", new { type = error.GetType().FullName, detail = error.Message });
@@ -391,6 +394,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("D-gameplay-preserved-by-Canon", new { playerData = true, sceneData = true, heroState = true,
                 heroScalarsPoseBodyAndHistory = true, fullNativeStateQualified = false });
             var canonMilliseconds = elapsed.Elapsed.TotalMilliseconds;
+            if (CanonicalActualDExperiment.CaptureSource && ordinal < CanonicalActualDExperiment.SelectedOrdinal) {
+                Progress("actual-D-prior-boundary-diagnostic-not-run", new { selectedOrdinal = CanonicalActualDExperiment.SelectedOrdinal,
+                    canonAndPreservationCompleted = true, fullBoundaryObserverNotRun = true, completeStateCoverage = false });
+                return;
+            }
             if (observer == null)
             {
                 observer = LoadingGameplayOracle.CreateBoundaryObserver(sessionDirectory, movieInputNativeOrigin);
@@ -429,14 +437,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 JsonConvert.SerializeObject(CanonicalBoundaryEpochObservation.Project(digest, inputEpoch)));
             if (phaseOneTrace)
             {
-                if (CanonicalActualDExperiment.CaptureSource && ordinal == 1)
+                if (CanonicalActualDExperiment.CaptureSource && ordinal == CanonicalActualDExperiment.SelectedOrdinal)
                 {
                     var data = carry.Capture(identities, inputEpoch, input, mouse,
                         observer.BoundarySchedulerCarry(inputEpoch), observer.BoundaryHeroInvulnerabilityCarry(inputEpoch));
                     if (data.Unsupported.Length != 0 || carry.InputGraph!.Unsupported.Length != 0)
                         throw new InvalidOperationException("Actual D source has unread or unsupported managed data: "
                             + string.Join(", ", data.Unsupported));
-                    ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, MovieFrame = movie, NativeFrame = native,
+                    var route = carry.CapturedRoute ?? throw new InvalidOperationException("Original source route was not captured.");
+                    route.Ordinal = ordinal; route.MovieFrame = movie; route.Validate(CanonicalActualDExperiment.SelectedOrdinal, movie);
+                    if (route.SourceScene != source || route.TargetScene != target)
+                        throw new InvalidOperationException("Actual source route disagrees with its observed boundary.");
+                    ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, Route = route, MovieFrame = movie, NativeFrame = native,
                         Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, Physics = carry.PhysicsGraph, RegisteredS0 = CanonicalRegisteredS0Contract.Capture(s0), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
                     Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,
                         blockingQualifications = carry.BlockingQualifications });
@@ -560,6 +572,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             observerInputOrigin = source.OriginNative;
             observer = LoadingGameplayOracle.CreateBoundaryObserver(observerSession, source.OriginNative!.Value);
         }
-        public void Dispose() { menuFlash.Dispose(); hudStartup.Dispose(); hudParticles.Dispose(); journal.Dispose(); observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
+        internal void EndUiCallbackPolicy() => retiredUiAnimations.Dispose();
+        public void Dispose() { EndUiCallbackPolicy(); menuFlash.Dispose(); hudStartup.Dispose(); hudParticles.Dispose(); journal.Dispose(); observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
     }
 }

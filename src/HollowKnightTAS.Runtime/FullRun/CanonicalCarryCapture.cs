@@ -15,6 +15,18 @@ namespace HollowKnightTAS.Runtime.FullRun
     // inferred from a digest. Native/asset/R6 closure remains a separate gate.
     internal sealed class CanonicalCarryCapture
     {
+        internal CanonicalActualDRoute? CapturedRoute { get; private set; }
+        private static CanonicalActualDRoute RouteIdentity(int ordinal, long movie, CanonicalSceneLoadCarry.Data continuation,
+            Func<FieldInfo, object?> read)
+        {
+            var result = new CanonicalActualDRoute { Ordinal = ordinal, MovieFrame = movie,
+                SourceScene = continuation.SourceScene, TargetScene = continuation.TargetScene,
+                ContinuationSha256 = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(System.Text.Encoding.UTF8.GetBytes(
+                    Newtonsoft.Json.JsonConvert.SerializeObject(continuation))) };
+            foreach (var field in CanonicalCarryGraphCodec.Fields(typeof(GameManager.SceneLoadInfo)))
+                result.LoadFields.Add(field.Name, CanonicalParkedBoundaryGuard.EncodeScalarValue(read(field), field.FieldType));
+            result.Validate(ordinal, movie); return result;
+        }
         private readonly CanonicalCarryGraphCodec codec = CanonicalCarryFieldRegistry.Create();
         private readonly CanonicalCarryGraphCodec inputCodec = CanonicalCarryFieldRegistry.Create(inputDomain: true);
         private readonly CanonicalHeroAssetTemplates assetTemplates;
@@ -150,6 +162,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             roots.Add(CanonicalHeroTriggerCallbacks.Root, heroTriggerCallbacks);
             HeroAnimationCallbackAudit = new { diagnosticOnly = true, sourceCaptured = !targetDirectoryOnly,
                 completeCount = heroAnimationCallbacks.Complete.Length, eventCount = heroAnimationCallbacks.Event.Length,
+                orderedCompleteBindings = heroAnimationCallbacks.Complete, orderedEventBindings = heroAnimationCallbacks.Event,
                 triggerSlotCount = heroTriggerCallbacks.Slots.Length, triggerInvocationCount = heroTriggerCallbacks.Slots.Sum(slot => slot.Items.Length),
                 completeStateCoverage = false };
             inputEpoch.Validate(inputEpoch.SourceNative);
@@ -159,6 +172,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             scheduler.RequireEpoch(inputEpoch); roots.Add(CanonicalSchedulerCarry.Root, scheduler);
             roots.Add("D/HeroInvulnerability", invulnerability);
             LoadingSerialSceneProbe.AddCanonicalLoadInfo(roots);
+            if (!targetDirectoryOnly && CanonicalActualDExperiment.CaptureSource) {
+                var info = roots["D/SceneLoadInfo"];
+                CapturedRoute = RouteIdentity(CanonicalActualDExperiment.SelectedOrdinal, 0,
+                    (CanonicalSceneLoadCarry.Data)roots[CanonicalSceneLoadCarry.Root], field => field.GetValue(info));
+            }
             LoadingSerialSceneProbe.PrepareCanonicalLoadScalars((CanonicalSceneLoadCarry.Data)roots[CanonicalSceneLoadCarry.Root]);
             SceneLoadScalarsPrepared = true;
             var loadCallbacks = LoadingSerialSceneProbe.ReadCanonicalCallbackBindings();
@@ -282,6 +300,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var main = codec.PrepareOwnedGraph(sourceMain, targetMainRoots, bindings.ResolveTarget, view => {
                     mainView = view;
                     continuation = CanonicalCarryContinuationContract.Read(view);
+                    if (actualSourceValidation != null) {
+                        var info = view.Root("D/SceneLoadInfo");
+                        actualSourceValidation.Route.RequireSame(RouteIdentity(actualSourceValidation.Ordinal, actualSourceValidation.MovieFrame,
+                            continuation.SceneLoad, field => view.Field(info, typeof(GameManager.SceneLoadInfo), field.Name)),
+                            CanonicalActualDExperiment.SelectedOrdinal, actualSourceValidation.MovieFrame);
+                    }
                     PreparedRestoreEpoch = continuation.Epoch.Copy();
                     var source = continuation;
                     if (actualSourceValidation != null && (source.Epoch.SourceNative != actualSourceValidation.NativeFrame
