@@ -200,7 +200,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (applicationBudget.ElapsedMilliseconds >= 9000)
                     throw new TimeoutException("Actual D transaction exceeded its original bounded command budget at " + applicationStage
                         + "/" + LoadingSerialSceneProbe.ExperimentalTargetStage + ";elapsedMilliseconds=" + applicationBudget.ElapsedMilliseconds
-                        + ";milestones=" + string.Join(",", applicationMilestones) + "; retire process.");
+                        + ";milestones=" + string.Join(",", applicationMilestones)
+                        + ";readbackMetrics=" + JsonConvert.SerializeObject(LoadingSerialSceneProbe.ExperimentalReadbackMetrics) + "; retire process.");
                 return job.Phase == "ApplyingActualD" && clock.IsPaused && !clock.IsFinished && movieFrame == 0
                     && input.ConsumedSamples == 0 && movieInputNativeOrigin == expectedOrigin
                     && clock.CurrentFrameIndex == (imported ? source.NativeFrame : targetNative);
@@ -257,6 +258,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 JsonConvert.SerializeObject(new { applicationExecuted = true, source.MovieFrame, source.NativeFrame,
                     consumedSamples = input.ConsumedSamples, sourcePrefix = session.MoviePrefixSha256, sourceDBytes = source.Main.Length + source.Input.Length + source.Geo.Length + source.Map.Length + source.Marker.Length + source.MapKeyText.Length + source.MapKeyParents.Length + source.Physics.Length,
                     applicationMilestones,
+                    codecReadbackMetrics = LoadingSerialSceneProbe.ExperimentalReadbackMetrics,
                     registeredR2R6S0SourceContractSatisfied = true,
                     rawClockReadbackEqual = true, unityRandomRawReadbackEqual = true, particleManagerRandomRawReadbackEqual = true, particleComponentStateQualified = false, restoreQualified = false, completeStateCoverage = false, d2Passed = false, d3Passed = false }));
         }

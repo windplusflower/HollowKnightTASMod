@@ -77,6 +77,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private Func<CanonicalCarryGraphData, CanonicalCarryGraphData, MovieV2Document, Func<bool>, Func<CanonicalSchedulerCarry, Action>, Action>? prepareTargetRestore;
         internal CanonicalInputEpoch? PreparedRestoreEpoch { get; private set; }
         internal string ActualTargetStage { get; set; } = "not-prepared";
+        internal object ActualReadbackMetrics => new { main = codec.ReadbackMetrics, input = inputCodec.ReadbackMetrics,
+            otherDomainPlansCounted = false };
         private bool targetRestorePrepared;
         private CanonicalActualDExperiment? actualSourceValidation;
         private CanonicalActualDExperiment? decodedActualEnvelope;

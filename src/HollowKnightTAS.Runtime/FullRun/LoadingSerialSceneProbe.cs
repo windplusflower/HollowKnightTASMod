@@ -311,6 +311,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Require(); return Require;
         }
         internal static string ExperimentalTargetStage => instance?.canonical?.ActualTargetStage ?? "no-canon";
+        internal static object? ExperimentalReadbackMetrics => instance?.canonical?.ActualReadbackMetrics;
         internal static Action PrepareExperimentalTarget(CanonicalActualDExperiment source, HollowKnightTAS.Core.Movie.MovieV2Document movie,
             long targetNative, long origin, CanonicalInputEpoch controlOrigin,
             HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse,

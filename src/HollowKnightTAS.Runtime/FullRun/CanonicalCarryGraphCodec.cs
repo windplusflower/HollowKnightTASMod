@@ -25,9 +25,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Func<object, string?>? portability;
         private readonly Func<object, string?>? allocationPortability;
         private readonly Action<CanonicalCarryGraphData>? importValidation;
+        private sealed class ReadbackMeasurement { internal int FieldSlots; internal long Calls, Ticks; }
+        private readonly List<ReadbackMeasurement> readbackMeasurements = new List<ReadbackMeasurement>();
+        internal object ReadbackMetrics => new { runtime = Type.GetType("Mono.Runtime") == null ? "CoreCLR" : "Mono",
+            nestedValueFieldReadsCounted = false, includesApplyReadback = true, plans = readbackMeasurements.Select(item => new {
+                fixedFieldSlots = item.FieldSlots, calls = item.Calls,
+                elapsedMilliseconds = 1000d * item.Ticks / System.Diagnostics.Stopwatch.Frequency }).ToArray() };
 
         internal CanonicalCarryGraphCodec(IEnumerable<Type> registered, string schema, Func<object, string?>? portability = null,
-            Func<object, string?>? allocationPortability = null, Action<CanonicalCarryGraphData>? importValidation = null)
+            Func<object, string?>? allocationPortability = null, Action<CanonicalCarryGraphData>? importValidation = null,
+            bool compiledReadbackFields = true)
         {
             if (string.IsNullOrEmpty(schema)) throw new ArgumentException("Carry schema identity is required.", nameof(schema));
             this.schema = schema + "\nframework-list-static-empty-v1\ncanonical-contact-impulse-unused-zero-v1";
@@ -36,6 +43,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             this.portability = portability;
             this.allocationPortability = allocationPortability;
             this.importValidation = importValidation;
+            Func<FieldInfo, Func<object, object?>> prepareReadback = compiledReadbackFields
+                ? LoadingFieldReader.PrepareSharedReadback : field => field.GetValue;
             foreach (var type in new[] { typeof(bool), typeof(byte), typeof(sbyte), typeof(char), typeof(short), typeof(ushort),
                 typeof(int), typeof(uint), typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(string), typeof(decimal) })
             { var id = Identity(type); types.Add(id, type); typeIdentities.Add(type, id); }
@@ -50,7 +59,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 types[id] = type;
                 typeIdentities[type] = id;
                 if (!IsScalar(type) && !type.IsArray)
-                    layouts.Add(id, new Layout(type, Fields(type)));
+                    layouts.Add(id, new Layout(type, Fields(type), prepareReadback));
             }
         }
 
@@ -175,7 +184,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     for (var index = 0; index < layout.Fields.Length; index++) {
                         var field = layout.Fields[index]; var identity = layout.FieldIdentities[index];
                         node.Fields[index] = new CanonicalCarryGraphData.Field { Name = identity,
-                            Value = Visit(field.GetValue(owner), field.FieldType, path + "/" + identity, entry.Item3 + 1) };
+                            Value = Visit(layout.Readers[index](owner), field.FieldType, path + "/" + identity, entry.Item3 + 1) };
                     }
                 }
             }
@@ -363,29 +372,29 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (preparedFields != null) preparedFields[index] = new object?[layout.Fields.Length];
                     for (var i = 0; i < layout.Fields.Length; i++)
                     {
-                        var field = layout.Fields[i]; var fieldValue = Prepared(node.Fields![i].Value, field.FieldType);
+                        var field = layout.Fields[i]; var readField = layout.Readers[i]; var fieldValue = Prepared(node.Fields![i].Value, field.FieldType);
                         var externalIndex = node.Fields[i].Value.Kind == "external" ? node.Fields[i].Value.Reference - 1 : -1;
                         if (externalIndex >= 0) {
                             if (nodeTypes[index].IsValueType) copiedExternal.Add(externalIndex);
                             var at = i;
-                            externalSlots.Add(Tuple.Create(externalIndex, (Func<object?>)(() => field.GetValue(owner)),
+                            externalSlots.Add(Tuple.Create(externalIndex, (Func<object?>)(() => readField(owner)),
                                 (Action<object>)(next => { field.SetValue(owner, next); if (preparedFields != null) preparedFields[index][at] = next; })));
                         }
                         if (preparedFields != null) preparedFields[index][i] = fieldValue;
                         if (boundNodes.Contains(index + 1)) {
-                            var previous = field.GetValue(owner);
+                            var previous = readField(owner);
                             var fieldIdentity = layout.FieldIdentities[i];
-                            Action InitialCheck = () => CheckSlot(previous, field.GetValue(owner), field.FieldType, fieldIdentity + "/initial");
+                            Action InitialCheck = () => CheckSlot(previous, readField(owner), field.FieldType, fieldIdentity + "/initial");
                             if (lifecycleNodes.Contains(index + 1)) {
                                 lifecycleInitial.Add(InitialCheck);
                                 lifecycleFreeze.Add(() => {
-                                    var before = field.GetValue(owner);
-                                    beforeChecks.Add(() => CheckSlot(before, field.GetValue(owner), field.FieldType, fieldIdentity + "/post-lifecycle"));
+                                    var before = readField(owner);
+                                    beforeChecks.Add(() => CheckSlot(before, readField(owner), field.FieldType, fieldIdentity + "/post-lifecycle"));
                                 });
                             } else beforeChecks.Add(InitialCheck);
                             writes.Add(() => field.SetValue(owner, fieldValue));
                             afterChecks.Add(() => CheckSlot(externalIndex >= 0 ? external[externalIndex] : fieldValue,
-                                field.GetValue(owner), field.FieldType, fieldIdentity));
+                                readField(owner), field.FieldType, fieldIdentity));
                         }
                         else field.SetValue(owner, fieldValue);
                     }
@@ -415,10 +424,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (lifecycle == null) { GuardOwnersAndFields(); return; }
                 lifecycle.GuardReady(GuardOwnersAndFields);
             }
+            var measurement = new ReadbackMeasurement { FieldSlots = afterChecks.Count }; readbackMeasurements.Add(measurement);
             var plan = new CanonicalPreparedWritePlan(Guard, () => { foreach (var write in writes) write(); },
                 () => {
-                    void Verify() { foreach (var check in afterChecks) check(); }
-                    if (lifecycle == null) Verify(); else lifecycle.GuardReady(Verify);
+                    var started = System.Diagnostics.Stopwatch.GetTimestamp();
+                    try {
+                        void Verify() { foreach (var check in afterChecks) check(); }
+                        if (lifecycle == null) Verify(); else lifecycle.GuardReady(Verify);
+                    } finally { measurement.Calls++; measurement.Ticks += System.Diagnostics.Stopwatch.GetTimestamp() - started; }
                 }, rootOwners.Values.ToArray());
             if (lifecycle != null) exposeLifecycleWrites!(lifecycle);
             exposeExternalRebinding?.Invoke(new ExternalRebinding(value.Externals, external, externalSlots, copiedExternal,
@@ -590,7 +603,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             var type = Nullable.GetUnderlyingType(declared) ?? declared;
             if (IsScalar(type)) return SameScalarBits(expected, current, type);
             if (!layouts.TryGetValue(TypeIdentity(type), out var layout)) throw new InvalidDataException("Carry stale-check value layout is absent.");
-            return layout.Fields.All(field => SameRawSlot(field.GetValue(expected), field.GetValue(current), field.FieldType, depth + 1));
+            for (var index = 0; index < layout.Fields.Length; index++)
+                if (!SameRawSlot(layout.Readers[index](expected), layout.Readers[index](current), layout.Fields[index].FieldType, depth + 1)) return false;
+            return true;
         }
         [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit)]
         private struct SingleBits
@@ -681,7 +696,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             void Append(object owner, Type current)
             {
                 if (IsScalar(current)) { parts.Add(EncodeScalar(owner, current)); return; }
-                foreach (var field in layouts[TypeIdentity(current)].Fields) Append(field.GetValue(owner)!, field.FieldType);
+                var layout = layouts[TypeIdentity(current)];
+                for (var index = 0; index < layout.Fields.Length; index++)
+                    Append(layout.Readers[index](owner)!, layout.Fields[index].FieldType);
             }
             Append(value, type); return string.Join("|", parts);
         }
@@ -733,7 +750,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private sealed class Layout
         {
-            internal Layout(Type type, FieldInfo[] fields) { Type = type; Fields = fields; FieldIdentities = fields.Select(FieldIdentity).ToArray(); }
+            internal Layout(Type type, FieldInfo[] fields, Func<FieldInfo, Func<object, object?>> prepareReadback) {
+                Type = type; Fields = fields; FieldIdentities = fields.Select(FieldIdentity).ToArray();
+                Readers = fields.Select(prepareReadback).ToArray();
+            }
+            internal readonly Func<object, object?>[] Readers;
             internal Type Type { get; }
             internal FieldInfo[] Fields { get; }
             internal string[] FieldIdentities { get; }

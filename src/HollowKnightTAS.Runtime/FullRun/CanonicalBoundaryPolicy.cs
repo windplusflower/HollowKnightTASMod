@@ -36,6 +36,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Dictionary<int, string> retiringGeo = new Dictionary<int, string>();
         private int? retiringMenuFlash;
         internal string ActualTargetStage => carry?.ActualTargetStage ?? "no-carry";
+        internal object? ActualReadbackMetrics => carry?.ActualReadbackMetrics;
         internal byte[]? ExperimentalSource { get; private set; }
         internal CanonicalSealedSource<CanonicalActualDExperiment> SealSourceSession(CanonicalActualDExperiment.SessionCarry session)
         {
