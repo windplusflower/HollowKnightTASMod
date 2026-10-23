@@ -66,6 +66,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             return bindings.TryGetValue(binding, out var asset) ? asset.Value
                 : throw new InvalidDataException("Original asset origin is absent or its aliases differ: " + binding);
         }
+        internal void RequireOrigin(string origin, object? value)
+        {
+            RequireSealed();
+            if (!slots.TryGetValue(origin, out var original) || !ReferenceEquals(original, value))
+                throw new InvalidDataException("Original serialized asset slot was replaced: " + origin);
+        }
 
         internal Entry[] Snapshot()
         {

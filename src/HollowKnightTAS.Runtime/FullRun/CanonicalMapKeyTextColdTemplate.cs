@@ -9,11 +9,80 @@ namespace HollowKnightTAS.Runtime.FullRun
     // Key parents and original Control FSM remain outside this owner domain.
     internal sealed class CanonicalMapKeyTextColdTemplate : IDisposable
     {
+        internal const string AssetBindingPrefix = "MapKeyOriginalSerializedAsset/v1/";
         private GameObject? holder;
         private Transform? keys;
         private Transform[] parents = Array.Empty<Transform>();
         private GameObject[] templates = Array.Empty<GameObject>();
         private int[] siblings = Array.Empty<int>();
+        private readonly CanonicalAssetOriginRegistry assetOrigins = new CanonicalAssetOriginRegistry();
+        private readonly Dictionary<string, Tuple<string, System.Reflection.FieldInfo, UnityEngine.Object?>> assetSlots
+            = new Dictionary<string, Tuple<string, System.Reflection.FieldInfo, UnityEngine.Object?>>(StringComparer.Ordinal);
+        private bool assetsCaptured;
+        private string assetManifest = "";
+        internal string OriginalAssetManifest => assetsCaptured ? assetManifest : throw new InvalidOperationException("Map Key asset origins are absent.");
+        private static readonly System.Reflection.FieldInfo FontMaterial = typeof(TMPro.TMP_Asset).GetField("material",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)!;
+        private readonly Dictionary<string, Tuple<TMPro.TMP_FontAsset, Material?>> fontMaterialSlots
+            = new Dictionary<string, Tuple<TMPro.TMP_FontAsset, Material?>>(StringComparer.Ordinal);
+        private void CaptureOriginalAssets(IReadOnlyDictionary<string, UnityEngine.Object> directory)
+        {
+            if (assetsCaptured) throw new InvalidOperationException("Map Key original assets were already captured.");
+            foreach (var pair in directory.Where(pair => pair.Value is TMPro.TextMeshPro))
+                foreach (var name in new[] { "m_fontAsset", "m_sharedMaterial" }) {
+                    var field = CanonicalMapKeyTextCarry.ManagedFields(pair.Value.GetType()).Single(item => item.Name == name);
+                    var origin = pair.Key + "/" + field.DeclaringType!.FullName + "/" + field.Name;
+                    var value = (UnityEngine.Object?)field.GetValue(pair.Value);
+                    if (!ReferenceEquals(value, null)) {
+                        if (value == null || !(value is Material) && !(value is TMPro.TMP_FontAsset))
+                            throw new InvalidOperationException("Map Key original font/material asset is absent or has another type.");
+                        assetOrigins.Add(origin, value, CanonicalCarryGraphCodec.Identity(value.GetType()), value.name);
+                        if (value is TMPro.TMP_FontAsset font) {
+                            var material = (Material?)FontMaterial.GetValue(font);
+                            var fontOrigin = pair.Key + "/TMPro.TMP_FontAsset/material";
+                            if (!ReferenceEquals(material, null)) {
+                                if (material == null) throw new InvalidOperationException("Original Map Key font material was destroyed.");
+                                assetOrigins.Add(fontOrigin, material, CanonicalCarryGraphCodec.Identity(material.GetType()), material.name);
+                            }
+                            fontMaterialSlots.Add(fontOrigin, Tuple.Create(font, material));
+                        }
+                    }
+                    assetSlots.Add(origin, Tuple.Create(pair.Key, field, value));
+                }
+            if (assetSlots.Count != 18) throw new InvalidOperationException("Map Key original font/material owner coverage differs.");
+            assetOrigins.Seal(); assetManifest = assetOrigins.ManifestHash(); assetsCaptured = true;
+        }
+        internal void RequireOriginalAssets(IReadOnlyDictionary<string, UnityEngine.Object> directory)
+        {
+            if (!assetsCaptured) throw new InvalidOperationException("Map Key original asset provenance is absent.");
+            foreach (var pair in assetSlots) {
+                if (!directory.TryGetValue(pair.Value.Item1, out var owner)) throw new InvalidOperationException("Map Key original asset owner is absent.");
+                var current = pair.Value.Item2.GetValue(owner);
+                if (ReferenceEquals(pair.Value.Item3, null)) {
+                    if (!ReferenceEquals(current, null)) throw new InvalidOperationException("Map Key original null asset slot was replaced.");
+                } else assetOrigins.RequireOrigin(pair.Key, current);
+            }
+            foreach (var pair in fontMaterialSlots) {
+                var current = FontMaterial.GetValue(pair.Value.Item1);
+                if (ReferenceEquals(pair.Value.Item2, null)) {
+                    if (!ReferenceEquals(current, null)) throw new InvalidOperationException("Map Key font's original null material changed.");
+                } else assetOrigins.RequireOrigin(pair.Key, current);
+            }
+        }
+        internal string? BindOriginalAsset(object value)
+        {
+            if (!(value is Material) && !(value is TMPro.TMP_FontAsset)) return null;
+            var native = (UnityEngine.Object)value;
+            if (native == null) throw new InvalidOperationException("Map Key original asset was destroyed.");
+            return assetOrigins.Bind(value, CanonicalCarryGraphCodec.Identity(value.GetType()), native.name);
+        }
+        internal object ResolveOriginalAsset(string binding)
+        {
+            var value = (UnityEngine.Object)assetOrigins.Resolve(binding);
+            if (value == null || assetOrigins.Bind(value, CanonicalCarryGraphCodec.Identity(value.GetType()), value.name) != binding)
+                throw new InvalidOperationException("Map Key original asset metadata or identity changed.");
+            return value;
+        }
         internal static Transform? FrozenKeys { get; private set; }
         internal static bool IsOriginalParentCacheTransition(string owner, System.Reflection.FieldInfo field,
             object? before, object? after, object expectedRect, bool firstFreeze)
@@ -25,6 +94,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (holder != null || source == null) throw new InvalidOperationException("Map Key Text original cold capture is absent or repeated.");
             var directory = CanonicalMapKeyTextDirectory.Build(source); RequireCold(directory);
+            CaptureOriginalAssets(directory);
             keys = source;
             using var externalGuard = new CanonicalMapKeyTextExternalGuard(source);
             templates = CanonicalMapKeyTextDirectory.Keys.Select(key => source.Find(key + "/Text").gameObject).ToArray();

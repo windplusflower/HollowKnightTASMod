@@ -13,6 +13,15 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         private const string MainNode = "MapKeyText/MainNode/", Owner = "MapKeyText/Owner/";
         private readonly CanonicalCarryGraphCodec codec = CanonicalCarryFieldRegistry.Create(mapKeyTextDomain: true);
+        private readonly CanonicalMapKeyTextColdTemplate template;
+        internal CanonicalMapKeyTextSourceDomain(CanonicalMapKeyTextColdTemplate template) { this.template = template; }
+        private CanonicalMapKeyTextCarry.Data CaptureOriginalAssets(IReadOnlyDictionary<string, UnityEngine.Object> directory)
+        {
+            template.RequireOriginalAssets(directory);
+            var data = CanonicalMapKeyTextCarry.Capture(directory);
+            data.OriginalAssetOrigins = template.OriginalAssetManifest;
+            return data;
+        }
         internal static void RequireCold(Transform keys)
         {
             LoadingSerialSceneProbe.RequireCanonicalMutationBoundary();
@@ -44,7 +53,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 foreach (var pair in readOnly) if (ReferenceEquals(pair.Value, value)) return Owner + pair.Key;
                 return bindOther(value);
             }
-            var graph = codec.Capture(CanonicalMapKeyTextCarry.Roots(CanonicalMapKeyTextCarry.Capture(directory)), Bind);
+            var graph = codec.Capture(CanonicalMapKeyTextCarry.Roots(CaptureOriginalAssets(directory)), Bind);
             if (graph.Unsupported.Length != 0)
                 throw new InvalidDataException("Map Key complete source graph has unsupported fields: " + string.Join(";", graph.Unsupported));
             auditAssets(graph);
@@ -58,7 +67,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             RequireCold(keys);
             var directory = CanonicalMapKeyTextDirectory.Build(keys);
             var readOnly = CanonicalMarkerReadonlyCarry.MapKeyDirectory(directory);
-            var actual = CanonicalMapKeyTextCarry.Capture(directory);
+            var actual = CaptureOriginalAssets(directory);
             object Resolve(string binding) {
                 if (binding.StartsWith(MainNode, StringComparison.Ordinal)) {
                     if (!int.TryParse(binding.Substring(MainNode.Length), out var id)) throw new InvalidDataException("Map Key source main-node binding differs.");
@@ -77,6 +86,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var sourceRoot = view.Root(CanonicalMapKeyTextCarry.Root);
                 foreach (var field in CanonicalCarryGraphCodec.Fields(typeof(CanonicalMapKeyTextCarry.Data)))
                     field.SetValue(saved, view.Field(sourceRoot, field.DeclaringType!, field.Name));
+                if (saved.OriginalAssetOrigins != template.OriginalAssetManifest)
+                    throw new InvalidDataException("Map Key source original asset provenance or shared aliases differ.");
                 CanonicalMapKeyTextCarry.Roots(saved);
                 for (var owner = 0; owner < saved.NativeOwners.Length; owner++)
                     if (saved.Lifecycle[owner * 5] != 0 || saved.Lifecycle[owner * 5 + 1] != 0

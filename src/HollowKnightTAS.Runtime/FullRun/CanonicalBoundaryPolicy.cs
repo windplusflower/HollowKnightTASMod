@@ -45,7 +45,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (source.Session != null) throw new InvalidOperationException("Actual D source was already sealed.");
             source.Session = session;
             var sealedSource = new CanonicalSealedSource<CanonicalActualDExperiment>(source, value => value.Encode(), value =>
-                JsonConvert.SerializeObject(new { value.Schema, value.Ordinal, value.Route, value.MovieFrame, value.NativeFrame, value.Clock, value.Session }));
+                JsonConvert.SerializeObject(new { value.Schema, value.Ordinal, value.Route, value.OriginalUiAssetOrigins, value.MovieFrame, value.NativeFrame, value.Clock, value.Session }));
             ExperimentalSource = sealedSource.Bytes;
             return sealedSource;
         }
@@ -57,6 +57,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (!CanonicalActualDExperiment.Enabled || observer == null || carry == null || !admission())
                 throw new InvalidOperationException("Actual D target has no completed original Canon.");
+            if (source.OriginalUiAssetOrigins != hudStartup.MapKeyTextColdDefinition.OriginalAssetManifest)
+                throw new InvalidOperationException("Source/target original UI asset provenance or aliases differ before D preparation.");
             var prepareTimer = Stopwatch.StartNew();
             long prepareMark = 0;
             void PreparedPhase(string phase) {
@@ -324,7 +326,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }, () => (observer ?? throw new InvalidOperationException("Map Key source snapshot has no original observer.")).FreezeMapKeyParentIncoming(),
                 RestoreMapKeyParentDependencies, (dependency, incoming, lifecycle, readback) =>
                     CanonicalMapKeyTextBoundaryPolicy.Reset(hudStartup.MapKeyTextColdDefinition,
-                        observer ?? throw new InvalidOperationException("Map Key deferred Canon has no observer."), dependency, incoming, lifecycle, readback)); }
+                        observer ?? throw new InvalidOperationException("Map Key deferred Canon has no observer."), dependency, incoming, lifecycle, readback), hudStartup.MapKeyTextColdDefinition); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
@@ -448,7 +450,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     route.Ordinal = ordinal; route.MovieFrame = movie; route.Validate(CanonicalActualDExperiment.SelectedOrdinal, movie);
                     if (route.SourceScene != source || route.TargetScene != target)
                         throw new InvalidOperationException("Actual source route disagrees with its observed boundary.");
-                    ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, Route = route, MovieFrame = movie, NativeFrame = native,
+                    ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, Route = route,
+                        OriginalUiAssetOrigins = hudStartup.MapKeyTextColdDefinition.OriginalAssetManifest, MovieFrame = movie, NativeFrame = native,
                         Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, Physics = carry.PhysicsGraph, RegisteredS0 = CanonicalRegisteredS0Contract.Capture(s0), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
                     Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,
                         blockingQualifications = carry.BlockingQualifications });

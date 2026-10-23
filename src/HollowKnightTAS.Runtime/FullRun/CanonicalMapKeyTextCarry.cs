@@ -17,13 +17,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         // read/write and owner/MVID guard, without sorting reflection metadata
         // and rebuilding the same complete schema for every source readback.
         private static readonly FieldInfo[][] Layouts = Types.Select(BuildFields).ToArray();
-        private static readonly string Schema = "original-map-key-nine-text-all-managed-v1-common-cold:" + Module + ":"
+        private static readonly string Schema = "original-map-key-nine-text-all-managed-v2-common-cold-original-assets:" + Module + ":"
             + CanonicalMarkerReadonlyCarry.SchemaIdentity + ":" + string.Join(";", Layouts.SelectMany(fields => fields
                 .Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName)));
         internal static readonly Type[] DataTypes = { typeof(Data), typeof(object[]), typeof(object[][]), typeof(string[]), typeof(bool[]), typeof(byte[]) };
         internal sealed class Data
         {
             public string Schema = "";
+            public string OriginalAssetOrigins = "";
             public string[] NativeOwners = Array.Empty<string>();
             public string[] FieldOwners = Array.Empty<string>();
             public object?[][] FieldValues = Array.Empty<object?[]>();
@@ -72,7 +73,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static SortedDictionary<string, object> Roots(Data data)
         {
-            if (data.Schema != SchemaIdentity || data.NativeOwners.Length != 36 || data.NativeOwners.Distinct(StringComparer.Ordinal).Count() != 36
+            if (data.Schema != SchemaIdentity || data.OriginalAssetOrigins == null || data.OriginalAssetOrigins.Length != 64
+                || data.OriginalAssetOrigins.Any(value => !Uri.IsHexDigit(value))
+                || data.NativeOwners.Length != 36 || data.NativeOwners.Distinct(StringComparer.Ordinal).Count() != 36
                 || data.FieldValues.Length != 36 || data.FieldValues.Any(row => row == null) || data.FieldValues.Sum(row => row.Length) != 2268
                 || data.FieldOwners.Length != 2268 || data.FieldOwners.Distinct(StringComparer.Ordinal).Count() != 2268
                 || data.Lifecycle.Length != 180 || data.Lifecycle.Any(value => value > 1)

@@ -44,7 +44,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Action<Action, LoadingGeoIncomingReferences, Tuple<Action, Action>, Action<Action>> normalizeMapKey;
         private readonly CanonicalMapKeyParentSourceDomain mapKeyParentDomain = new CanonicalMapKeyParentSourceDomain();
         internal byte[] MapKeyParentGraph { get; private set; } = Array.Empty<byte>();
-        private readonly CanonicalMapKeyTextSourceDomain mapKeyDomain = new CanonicalMapKeyTextSourceDomain();
+        private readonly CanonicalMapKeyTextSourceDomain mapKeyDomain;
+        private readonly CanonicalMapKeyTextColdTemplate mapKeyTemplate;
         internal byte[] MapKeyTextGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] MarkerGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] MapGraph { get; private set; } = Array.Empty<byte>();
@@ -56,11 +57,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             Action<CanonicalSchedulerCarry, Func<bool>, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>>, Action<Action>, Action, Action> restoreMarkerSourceDependencies, Func<LoadingGeoIncomingReferences> consumeMapKeyIncoming,
             Func<LoadingGeoIncomingReferences> consumeMapKeyParentIncoming, Func<LoadingGeoIncomingReferences> snapshotMapKeyParentIncoming,
             Action<Action, Action<Tuple<Action, Action>>> restoreMapKeyParentDependencies,
-            Action<Action, LoadingGeoIncomingReferences, Tuple<Action, Action>, Action<Action>> normalizeMapKey)
+            Action<Action, LoadingGeoIncomingReferences, Tuple<Action, Action>, Action<Action>> normalizeMapKey,
+            CanonicalMapKeyTextColdTemplate mapKeyTemplate)
         { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; this.journal = journal;
             this.restoreHudSourceDependencies = restoreHudSourceDependencies; this.restoreGeoSourceDependencies = restoreGeoSourceDependencies; this.restoreMarkerSourceDependencies = restoreMarkerSourceDependencies; this.consumeMapKeyIncoming = consumeMapKeyIncoming;
             this.consumeMapKeyParentIncoming = consumeMapKeyParentIncoming; this.snapshotMapKeyParentIncoming = snapshotMapKeyParentIncoming;
-            this.restoreMapKeyParentDependencies = restoreMapKeyParentDependencies; this.normalizeMapKey = normalizeMapKey; }
+            this.restoreMapKeyParentDependencies = restoreMapKeyParentDependencies; this.normalizeMapKey = normalizeMapKey;
+            this.mapKeyTemplate = mapKeyTemplate; mapKeyDomain = new CanonicalMapKeyTextSourceDomain(mapKeyTemplate); }
         internal EventAudit[] EventBindingAudit { get; private set; } = Array.Empty<EventAudit>();
         internal CanonicalEventCarryRoots.Audit? EventGlobalsAudit { get; private set; }
         internal CanonicalEventGraphContract.Audit? EventGraphAudit { get; private set; }
@@ -135,6 +138,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             PlayerData? originalBootstrapPlayer = null, bool sourceRequiresDetachedPlayer = false,
             GameManager.EnterSceneEvent? retainedTargetTitleCallback = null)
         {
+            mapKeyTemplate.RequireOriginalAssets(CanonicalMapKeyTextDirectory.Build(CanonicalMapKeyTextDirectory.Current()));
             InputPreparedLeaseActions = 0; InputPreparedCursor = false; InputPreparedManagerScalars = false; InputPreparedCallbacks = false;
             SceneLoadScalarsPrepared = false; MainGraphPrepared = false; GameplayPrepared = false; EventStaticSlotsGuarded = false;
             InvulnerabilityPrepared = false;
@@ -218,7 +222,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var guardEventSlots = CanonicalEventStaticSlots.PrepareGuard(roots);
             var inputBindings = CanonicalCarryRootBindings.Merge(InputCarryAudit.FixedBindings, inputRoots);
             var captureEpoch = new object();
-            var bindings = new ExternalBindings(identities, assetTemplates, canonicalSenders, inputBindings, captureEpoch);
+            var bindings = new ExternalBindings(identities, assetTemplates, mapKeyTemplate, canonicalSenders, inputBindings, captureEpoch);
             CanonicalCarryGraphData Empty() => new CanonicalCarryGraphData { Roots = Array.Empty<CanonicalCarryGraphData.Root>(),
                 Nodes = Array.Empty<CanonicalCarryGraphData.Node>(), Externals = Array.Empty<CanonicalCarryGraphData.External>(), Unsupported = Array.Empty<string>() };
             var mainNodes = new Dictionary<object, int>(new References());
@@ -232,7 +236,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             MarkerGraph = targetDirectoryOnly ? Array.Empty<byte>() : markerDomain.Capture(CanonicalMarkerDirectory.Current(), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             var mainBindings = new SortedDictionary<string, object>(InputCarryAudit.FixedBindings.ToDictionary(pair => pair.Key, pair => pair.Value), StringComparer.Ordinal);
             foreach (var pair in roots) mainBindings.Add("canonical-main-root/" + pair.Key, pair.Value);
-            var inputExternal = new ExternalBindings(identities, assetTemplates, canonicalSenders, mainBindings, captureEpoch, bindings.ownerDirectory);
+            var inputExternal = new ExternalBindings(identities, assetTemplates, mapKeyTemplate, canonicalSenders, mainBindings, captureEpoch, bindings.ownerDirectory);
             InputGraph = targetDirectoryOnly ? Empty() : inputCodec.Capture(inputRoots, inputExternal.Bind);
             var sourceEpoch = inputEpoch.Copy();
             CanonicalPreparedWritePlan? mainPlan = null, inputPlan = null;
@@ -637,6 +641,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly IReadOnlyDictionary<string, object> nativeDirectory;
             private readonly CanonicalCarryReflectionBindings metadata;
             private readonly CanonicalHeroAssetTemplates assetTemplates;
+            private readonly CanonicalMapKeyTextColdTemplate mapKeyTemplate;
             private readonly CanonicalVisualSenderBindings canonicalSenders;
             internal readonly List<EventAudit> Events = new List<EventAudit>();
             internal bool HasEvents { get; private set; }
@@ -651,7 +656,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (ambiguousKnown.Contains(binding)) throw new InvalidDataException("Target external directory is ambiguous: " + binding);
                 if (reverseKnown.TryGetValue(binding, out var cached)) return cached;
                 object value;
-                if (binding.StartsWith("HeroAssetOrigin/v1/", StringComparison.Ordinal)) value = assetTemplates.Resolve(binding);
+                if (binding.StartsWith(CanonicalMapKeyTextColdTemplate.AssetBindingPrefix, StringComparison.Ordinal))
+                    value = mapKeyTemplate.ResolveOriginalAsset(binding.Substring(CanonicalMapKeyTextColdTemplate.AssetBindingPrefix.Length));
+                else if (binding.StartsWith("HeroAssetOrigin/v1/", StringComparison.Ordinal)) value = assetTemplates.Resolve(binding);
                 else if (binding.StartsWith("asset:", StringComparison.Ordinal)) {
                     // Source Bind admits an asset only when its exact concrete
                     // type/name identifies one loaded original. Use that same
@@ -689,11 +696,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Modding.Logger.Log("[HKTAS] Geo source asset external audit: count=" + count + ";typeSchemas="
                     + string.Join(";", schemas) + ";allUniqueOriginalAssets=true;completeStateCoverage=false");
             }
-            internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualSenderBindings canonicalSenders,
+            internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates,
+                CanonicalMapKeyTextColdTemplate mapKeyTemplate, CanonicalVisualSenderBindings canonicalSenders,
                 IReadOnlyDictionary<string, object> fixedInputBindings, object captureEpoch, CanonicalCaptureOwnerDirectory? sharedDirectory = null)
             {
                 this.identities = identities;
                 this.assetTemplates = assetTemplates;
+                this.mapKeyTemplate = mapKeyTemplate;
                 this.canonicalSenders = canonicalSenders;
                 IReadOnlyDictionary<string, object> CaptureNativeDirectory() {
                 var elapsed = System.Diagnostics.Stopwatch.StartNew();
@@ -770,6 +779,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     {
                         var originalOrigin = assetTemplates.Bind(native);
                         if (originalOrigin != null) { Remember(value, originalOrigin); return originalOrigin; }
+                        var mapKeyOrigin = mapKeyTemplate.BindOriginalAsset(value);
+                        if (mapKeyOrigin != null) {
+                            var originKey = CanonicalMapKeyTextColdTemplate.AssetBindingPrefix + mapKeyOrigin;
+                            Remember(value, originKey); return originKey;
+                        }
                         var type = native.GetType();
                         var candidates = AssetCandidates(type);
                         var same = candidates.Where(owner => owner.name == native.name).ToArray();

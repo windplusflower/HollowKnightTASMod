@@ -9,6 +9,31 @@ namespace HollowKnightTAS.Core.Tests.FullRun
     public sealed class CanonicalAssetOriginRegistryTests
     {
         [TestMethod]
+        public void MapKeySerializedFontMaterialRelationsRejectRuntimeReplacementAndAliasChanges()
+        {
+            var source = new CanonicalAssetOriginRegistry(); var target = new CanonicalAssetOriginRegistry();
+            var original = new object(); var cold = new object(); var sameNameOther = new object();
+            foreach (var slot in new[] { "Key/Text/TMP_Text/m_sharedMaterial", "Key/Text/TMP_FontAsset/material" }) {
+                source.Add(slot, original, "Material", "perpetua_tmpro Material");
+                target.Add(slot, cold, "Material", "perpetua_tmpro Material");
+            }
+            source.Add("unrelated", sameNameOther, "Material", "perpetua_tmpro Material");
+            source.Seal(); target.Seal();
+            source.RequireOrigin("Key/Text/TMP_Text/m_sharedMaterial", original);
+            var key = source.Bind(original, "Material", "perpetua_tmpro Material")!;
+            Assert.AreSame(cold, target.Resolve(key));
+            var mapKeyConsumer = target.Resolve(key); var markerConsumer = target.Resolve(key);
+            Assert.AreSame(mapKeyConsumer, markerConsumer); // Shared native external, never a material copy.
+            Assert.IsFalse(source.ManifestHash() == target.ManifestHash()); // Source has an additional unrelated origin.
+            Assert.ThrowsExactly<InvalidDataException>(() => source.RequireOrigin("Key/Text/TMP_Text/m_sharedMaterial", sameNameOther));
+            Assert.ThrowsExactly<InvalidDataException>(() => source.RequireOrigin("Key/Text/TMP_Text/m_sharedMaterial", new object()));
+            Assert.ThrowsExactly<InvalidDataException>(() => source.RequireOrigin("unknown", original));
+            var split = new CanonicalAssetOriginRegistry();
+            split.Add("Key/Text/TMP_Text/m_sharedMaterial", new object(), "Material", "perpetua_tmpro Material");
+            split.Add("Key/Text/TMP_FontAsset/material", new object(), "Material", "perpetua_tmpro Material"); split.Seal();
+            Assert.ThrowsExactly<InvalidDataException>(() => split.Resolve(key));
+        }
+        [TestMethod]
         public void ColdObjectsBindByOriginalSlotsAndRetainSharedAliases()
         {
             var source = new CanonicalAssetOriginRegistry(); var target = new CanonicalAssetOriginRegistry();
