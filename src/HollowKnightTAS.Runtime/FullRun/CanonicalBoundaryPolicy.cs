@@ -443,7 +443,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // Keep all observed coverage gaps. This permits route discovery,
                 // never a full-state PASS, a payload application or a snapshot.
                 // Actual Canon/preservation/wait/readback failures still throw.
-                if (ordinal == 1)
+                if (ordinal == 1 && !CanonicalPhaseOneTrace.D0RouteEnabled)
                 {
                     var repeated = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, RetiredOwner);
                     var repeatedS0 = observer.BoundaryS0Observation();
@@ -456,6 +456,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     File.WriteAllText(Path.Combine(directory, "boundary-observer-audit.json"), JsonConvert.SerializeObject(comparison));
                     if (!comparison.ObservedEqual) throw new InvalidOperationException("Boundary reader changed frozen observed state: " + comparison.FirstDifference);
                 }
+                if (CanonicalPhaseOneTrace.D0RouteEnabled)
+                    Progress("D0-route-observation-scope", new { fullBoundaryDigestCaptured = true, repeatNotRun = true,
+                        frozenReaderPreservationAsserted = false, p0CandidateObserverNotRun = true,
+                        repeatabilityEvidence = "fresh-recording-and-two-independent-cold-routes", d0Passed = false });
                 Progress("phase1-route-observed-unqualified", new { canonMilliseconds, observerMilliseconds = elapsed.Elapsed.TotalMilliseconds - canonMilliseconds,
                     diagnosticOnly = true, phase2PreparationExecuted = false, d0Passed = false, restoreQualified = false,
                     coverageUnsupported = digest.Unsupported, pending = new[] { "R2-remaining-visual-FSM-fields", "R6-static-canonical-or-carry-fields",

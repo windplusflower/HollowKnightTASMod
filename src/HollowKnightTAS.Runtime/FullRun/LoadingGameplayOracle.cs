@@ -640,6 +640,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (sealedTrace || !samplingWindows.Contains(movieFrame()) || (suffixCapture && phase != "after")) return;
             if (physicsFollowOn) { SamplePhysicsFollowOn(boundary); return; }
             if (serialBoundaryOnly && phase != "candidate") return;
+            if (CanonicalPhaseOneTrace.D0RouteEnabled && phase == "candidate" && boundary == "serial-source-unloaded") {
+                CanonicalPhaseOneTrace.RequireContext(Environment.GetEnvironmentVariable);
+                if (!serialBoundaryOnly || boundaryCapture || suffixCapture)
+                    throw new InvalidOperationException("D0 route duplicate observation scope differs.");
+                Write(new { kind = "observation-not-run", phase, boundary, movieFrame = movieFrame(), nativeFrame = nativeFrame(),
+                    reason = "D0-route-has-complete-Canon-boundary-digest", p0CandidateObserved = false, completeStateCoverage = false });
+                return;
+            }
             try
             {
                 var captureElapsed = Stopwatch.StartNew();

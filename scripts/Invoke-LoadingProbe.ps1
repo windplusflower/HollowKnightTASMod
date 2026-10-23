@@ -31,6 +31,7 @@ param(
     [switch] $CanonicalParticles,
     [switch] $CanonicalBoundary,
     [switch] $CanonicalPhaseOneTrace,
+    [switch] $CanonicalD0Route,
     [string] $S0ObservationTarget = '',
     [ValidateRange(1,4)][int] $S0ObservationSlot = 1,
     [switch] $ClockCarryExperiment,
@@ -54,6 +55,9 @@ param(
     [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
 )
 $ErrorActionPreference = 'Stop'
+if ($CanonicalD0Route -and (-not $CanonicalPhaseOneTrace -or $S0ObservationTarget -or $ActualDExperiment -or $ClockCarryExperiment -or $ClockApplySource -or $DerivedFixtureManifest)) {
+    throw 'D0 route requires complete Phase 1 recording/cold evidence and excludes S0 preparation, D transactions and derived fixtures.'
+}
 if ($DerivedFixtureManifest) {
     if (-not $ActualDSuffix -or -not $PhysicsFollowOn) { throw 'A derived fixture is restricted to finite actual-D follow-on diagnostics.' }
     $derivedFixture = Get-Content -LiteralPath $DerivedFixtureManifest -Raw | ConvertFrom-Json
@@ -348,6 +352,7 @@ try {
         if ($CanonicalParticles) { $arguments += '--probe-canonical-particles' }
         if ($CanonicalBoundary) { $arguments += '--probe-canonical-boundary' }
         if ($CanonicalPhaseOneTrace) { $arguments += '--probe-canonical-phase1-trace' }
+        if ($CanonicalD0Route) { $arguments += '--probe-canonical-d0-route' }
         if ($S0ObservationTarget) { $arguments += ('--probe-s0-target={0}' -f $S0ObservationTarget); $arguments += ('--probe-s0-slot={0}' -f $S0ObservationSlot) }
         if ($ClockCarryExperiment) { $arguments += '--probe-clock-carry-experiment' }
         if ($ClockApplySource) { $arguments += ('--probe-clock-apply-source={0}' -f [IO.Path]::GetFullPath($ClockApplySource)) }

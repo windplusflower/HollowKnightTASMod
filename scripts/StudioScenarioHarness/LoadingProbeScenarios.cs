@@ -58,6 +58,11 @@ internal static partial class StudioScenarioHarness
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_EXPERIMENT", clockExperiment ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_SOURCE", clockSourceArgument == null ? null : Arg("--probe-clock-apply-source"));
         var actualDExperiment = args.Contains("--probe-actual-d-experiment");
+        var d0Route = args.Contains("--probe-canonical-d0-route");
+        Require(!d0Route || phaseOneTrace && s0TargetArgument == null && !actualDExperiment && !clockExperiment
+            && !args.Any(value => value.StartsWith("--probe-derived-fixture=", StringComparison.Ordinal)),
+            "D0 route uses complete boundary digests without S0 preparation, D transactions or derived fixtures");
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_CANONICAL_D0_ROUTE", d0Route ? "1" : null);
         var actualDStageArgument = args.SingleOrDefault(value => value.StartsWith("--probe-actual-d-stage=", StringComparison.Ordinal));
         var actualDStage = actualDStageArgument == null ? "" : Arg("--probe-actual-d-stage");
         var actualDRelayArgument = args.SingleOrDefault(value => value.StartsWith("--probe-actual-d-relay=", StringComparison.Ordinal));
@@ -185,17 +190,35 @@ internal static partial class StudioScenarioHarness
                         return boot.IsWaiting;
                     },
                     "recording bootstrap reaches a paused native boundary", 120);
-                var seek = await Field<AutomationBroker>(vm, "automationBroker").ExecuteHumanAsync(
-                    AutomationCommandIds.FullRunSeek, AutomationScope.ControlPlayback,
-                    new System.Collections.Generic.Dictionary<string, string>
-                    {
-                        ["targetFrame"] = (serialScenes ? end - 2 : end).ToString(),
-                        ["expectedNativeFrame"] = boot.NativeCompletedFrames.ToString()
-                    }, "Paused", null, CancellationToken.None);
-                Require(seek.Success, "normal recording seek accepted: " + seek.Detail);
-                await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
-                await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("recording native fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
-                    "scripted recording exact endpoint", 180);
+                async Task RunRecordingTo(long target) {
+                    var seek = await Field<AutomationBroker>(vm, "automationBroker").ExecuteHumanAsync(
+                        AutomationCommandIds.FullRunSeek, AutomationScope.ControlPlayback,
+                        new System.Collections.Generic.Dictionary<string, string> {
+                            ["targetFrame"] = target.ToString(), ["expectedNativeFrame"] = boot.NativeCompletedFrames.ToString()
+                        }, "Paused", null, CancellationToken.None);
+                    Require(seek.Success, "normal recording seek accepted: " + seek.Detail);
+                    await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
+                    await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("recording native fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
+                        "scripted recording exact endpoint", 180);
+                }
+                MovieV2Document? segmentPrefix = null;
+                Dictionary<string, string>? segmentPauseBefore = null, segmentPauseAfter = null;
+                var recordingStartNative = boot.NativeCompletedFrames;
+                if (d0Route) {
+                    Require(first == 0 && end == 3150 && serialScenes, "segmented D0 recording uses the fixed original 3150-frame route");
+                    await RunRecordingTo(1575);
+                    segmentPauseBefore = await VideoRuntimeState(vm);
+                    Require(Number(segmentPauseBefore, "movieFrame") == 1575 && segmentPauseBefore["sceneName"] == "GG_Workshop"
+                        && segmentPauseBefore["mode"] == "Recording", "D0 intermediate pause is the original stable gameplay boundary");
+                    await CheckSerialPauseAsync(vm, boot);
+                    segmentPauseAfter = await VideoRuntimeState(vm);
+                    var prefix = await VideoRuntimeMovie(vm, movies);
+                    Require(prefix.Frame == 1575, "same recording session exports its exact intermediate prefix");
+                    segmentPrefix = new MovieV2Codec().Parse(new StringReader(prefix.Movie), "<D0-recording-prefix>").Document
+                        ?? throw new InvalidDataException("Invalid actual intermediate recording.");
+                    await File.WriteAllTextAsync(Path.Combine(output, "recording-segment-prefix.hktas"), prefix.Movie);
+                }
+                await RunRecordingTo(serialScenes ? end - 2 : end);
                 if (serialScenes)
                 {
                     var pausedRuntime = await VideoRuntimeState(vm);
@@ -220,6 +243,28 @@ internal static partial class StudioScenarioHarness
                     && strict.Runs.All(run => !run.Authored)
                     && strict.Header.NativeProfileId == MovieProtocolV2.SelectedNativeProfileId,
                     "fresh strict native recording has exact length and selected profile identity");
+                if (segmentPrefix != null) {
+                    var remaining = 1575L; var prefixRuns = new List<NativeFrameRun>();
+                    foreach (var run in strict.Runs) {
+                        var take = Math.Min(remaining, run.RepeatCount);
+                        if (take == 0) break;
+                        prefixRuns.Add(new NativeFrameRun(take, run.Samples, run.Span, run.FramesPerSecond, run.Authored, run.RngSeed));
+                        remaining -= take;
+                    }
+                    var codec = new MovieV2Codec();
+                    var prefixEqual = remaining == 0 && codec.WriteCanonical(segmentPrefix)
+                        == codec.WriteCanonical(new MovieV2Document("<D0-final-prefix>", strict.Header, prefixRuns));
+                    Require(prefixEqual && strict.Runs.All(run => run.FramesPerSecond == 50 && run.RngSeed == null)
+                        && Number(segmentPauseBefore!, "nativeFrame") == Number(segmentPauseAfter!, "nativeFrame")
+                        && Number(segmentPauseBefore!, "movieFrame") == Number(segmentPauseAfter!, "movieFrame")
+                        && recordingStartNative < Number(segmentPauseBefore!, "nativeFrame") && Number(segmentPauseAfter!, "nativeFrame") < boot.NativeCompletedFrames,
+                        "same-session native recording preserves every prefix input/FPS and the intermediate frozen boundary");
+                    await File.WriteAllTextAsync(Path.Combine(output, "recording-segment-proof.json"), JsonSerializer.Serialize(new {
+                        diagnosticOnly = true, firstTarget = 1575, secondTarget = end - 2, finalFrame = actual.Frame,
+                        recordingStartNative, segmentPauseBefore, segmentPauseAfter, finalNative = boot.NativeCompletedFrames,
+                        prefixInputAndFpsEqual = prefixEqual, sameRecordingSession = true, perCommandWaitSeconds = 180,
+                        phaseWatchdogSeconds = 240, hostDeadlineSeconds = 270, deadlineReset = false, d0Passed = false }));
+                }
                 var recordingName = MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.CanonicalBoundaryProfileId
                     ? "serial-scenes-canonical-boundary-recording.hktaspack"
                     : MovieProtocolV2.SelectedNativeProfileId == NativeExecutionProfile.CanonicalParticleProfileId
