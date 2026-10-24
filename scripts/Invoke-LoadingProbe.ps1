@@ -181,7 +181,7 @@ $clockBridge = if ($ClockBridgePath) { [IO.Path]::GetFullPath($ClockBridgePath) 
     else { Join-Path $repo 'artifacts/scene-checkpoints/p0/native-clock-build/HollowKnightTAS.ClockBridge.dll' }
 if ($CanonicalBoundary -or $CheckpointPrototype) {
     . (Join-Path $PSScriptRoot 'Assert-ClockBridgeExports.ps1')
-    Assert-ClockBridgeExports -Path $clockBridge
+    Assert-ClockBridgeExports -Path $clockBridge -RequireContactImpulsePolicy:$CanonicalBoundary
 }
 $injectorBuild = Join-Path $repo 'src/HollowKnightTAS.ClockInjector/bin/Release/net8.0-windows/win-x64'
 $injectorFiles = @('HollowKnightTAS.ClockInjector.exe','HollowKnightTAS.ClockInjector.dll','HollowKnightTAS.ClockInjector.deps.json','HollowKnightTAS.ClockInjector.runtimeconfig.json')

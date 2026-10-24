@@ -191,7 +191,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     else if (graph.Roots == null || graph.Roots.Length == 0 || graph.Roots.Any(root =>
                         root.Binding == null || !root.Binding.StartsWith("R6/Input", StringComparison.Ordinal)))
                         throw new InvalidDataException("Input carry domain contains foreign roots.");
-                });
+                }, fieldFailureDetails: (owner, field) => owner is FsmStateAction action
+                    && field.DeclaringType?.FullName == "HutongGames.PlayMaker.Actions.iTweenFsmAction" && field.Name == "itweenEvents"
+                    ? CanonicalHeroAnimationCallbacks.UnboundProvenance(action, new Dictionary<string, PlayMakerFSM>()) : null);
         }
         // Only the original empty placeholder can be allocated as local data.
         // Named/global/system events must retain their shared external identity.

@@ -31,6 +31,7 @@ namespace HollowKnightTAS.Core.Movie
             "hktas-unity-input-playerloop-serial-scene-canonical-boundary-2026-v12-experimental";
         public const string CanonicalContactImpulsePolicyId = "zero-unused-impulse-slots-v1";
         public const string CanonicalRetiredUiCallbackPolicyId = "retire-registered-destroyed-boss-ui-animation-slots:10-Challenge-1:11-Challenge-Audio-1:v1";
+        public const string CanonicalRetiredFallTrailTweenPolicyId = "original-Hero-Fall-Trail:Trail-Control:Playing-0-action-2:Idle-2:destroyed-iTweenFSMEvents-null-v1";
 
         public static string SelectedProfileId => Select(
             Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_STARTUP_CLOCK") == "1",

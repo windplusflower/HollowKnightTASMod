@@ -1,5 +1,5 @@
 function Assert-ClockBridgeExports {
-    param([Parameter(Mandatory=$true)][string]$Path)
+    param([Parameter(Mandatory=$true)][string]$Path, [switch]$RequireContactImpulsePolicy)
     $bytes = [IO.File]::ReadAllBytes([IO.Path]::GetFullPath($Path))
     if ($bytes.Length -lt 256 -or $bytes.Length -gt 32MB -or [BitConverter]::ToUInt16($bytes,0) -ne 0x5a4d) { throw 'Clock bridge PE size or signature differs.' }
     function Read-U32([int]$Offset) {
@@ -44,5 +44,8 @@ function Assert-ClockBridgeExports {
     }
     foreach ($name in @('HktasClockBridge_GetContinuationBytes','HktasClockBridge_ExportContinuation','HktasClockBridge_ImportContinuation')) {
         if (-not $names.Contains($name)) { throw ('Clock bridge continuation export is missing before installation: '+$name) }
+    }
+    if ($RequireContactImpulsePolicy -and -not $names.Contains('HktasClockBridge_GetContactImpulsePolicy')) {
+        throw 'Clock bridge canonical contact impulse policy export is missing before installation.'
     }
 }

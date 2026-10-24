@@ -63,7 +63,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             throw new InvalidDataException("Source Hero animation callback target has no existing Hero FSM action binding;provenance="
                 + UnboundProvenance(target, fsms));
         }
-        private static string UnboundProvenance(FsmStateAction target, IReadOnlyDictionary<string, PlayMakerFSM> fsms)
+        internal static string UnboundProvenance(FsmStateAction target, IReadOnlyDictionary<string, PlayMakerFSM> fsms)
         {
             // Error branch only: inspect this closed action's own existing
             // fields and the already-captured retirement directory. No world
@@ -85,11 +85,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 var states = fsm == null ? Array.Empty<FsmState>() : States(fsm);
                 var actions = state == null ? Array.Empty<FsmStateAction>() : Actions(state);
+                var activeState = fsm == null ? null : typeof(Fsm).GetField("activeState", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(fsm) as FsmState;
                 var heroOwners = fsms.Where(pair => ReferenceEquals(Raw.GetValue(pair.Value), fsm)).Select(pair => pair.Key).Take(2).ToArray();
                 return Newtonsoft.Json.JsonConvert.SerializeObject(new {
                     actionType = target.GetType().FullName, fsmName = fsm?.Name, stateName = state?.Name,
                     ownStateIndex = states.Length <= 4096 ? Array.IndexOf(states, state) : -2,
                     ownActionIndex = actions.Length <= 4096 ? Array.IndexOf(actions, target) : -2,
+                    activeStateIndex = states.Length <= 4096 ? Array.IndexOf(states, activeState) : -2,
+                    activeStateName = activeState?.Name,
                     states = states.Length, actions = actions.Length, heroFsmOwners = heroOwners,
                     fsmComponent = Owner(Field("fsmComponent")), owner = Owner(Field("owner")) });
             } catch (Exception error) {

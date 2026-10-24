@@ -25,6 +25,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Func<object, string?>? portability;
         private readonly Func<object, string?>? allocationPortability;
         private readonly Action<CanonicalCarryGraphData>? importValidation;
+        private readonly bool easeCallbacks;
+        private readonly Func<object, FieldInfo, string?>? fieldFailureDetails;
         private sealed class ReadbackMeasurement { internal int FieldSlots; internal long Calls, Ticks; }
         private readonly List<ReadbackMeasurement> readbackMeasurements = new List<ReadbackMeasurement>();
         internal object ReadbackMetrics => new { runtime = Type.GetType("Mono.Runtime") == null ? "CoreCLR" : "Mono",
@@ -34,14 +36,20 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal CanonicalCarryGraphCodec(IEnumerable<Type> registered, string schema, Func<object, string?>? portability = null,
             Func<object, string?>? allocationPortability = null, Action<CanonicalCarryGraphData>? importValidation = null,
-            bool compiledReadbackFields = true)
+            bool compiledReadbackFields = true, Func<object, FieldInfo, string?>? fieldFailureDetails = null)
         {
+            this.fieldFailureDetails = fieldFailureDetails;
             if (string.IsNullOrEmpty(schema)) throw new ArgumentException("Carry schema identity is required.", nameof(schema));
             this.schema = schema + "\nframework-list-static-empty-v1\ncanonical-contact-impulse-unused-zero-v1";
             if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalRetiredUiCallbacks(
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
-                this.schema += "\n" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalRetiredUiCallbackPolicyId;
+                this.schema += "\n" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalRetiredUiCallbackPolicyId
+                    + "\n" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalRetiredFallTrailTweenPolicyId;
             var registeredTypes = registered.Distinct().ToArray();
+            easeCallbacks = HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalRetiredUiCallbacks(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)
+                && CanonicalEaseCallback.OwnerType != null && registeredTypes.Any(type => CanonicalEaseCallback.OwnerType.IsAssignableFrom(type));
+            if (easeCallbacks) this.schema += "\noriginal-easing-closed-graph-node-v1";
             listEmptyArrays = new CanonicalListEmptyArrayBindings(registeredTypes);
             this.portability = portability;
             this.allocationPortability = allocationPortability;
@@ -63,6 +71,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 typeIdentities[type] = id;
                 if (!IsScalar(type) && !type.IsArray)
                     layouts.Add(id, new Layout(type, Fields(type), prepareReadback));
+            }
+            if (easeCallbacks) {
+                var type = CanonicalEaseCallback.CallbackType ?? throw new InvalidDataException("Original Ease callback type is absent."); var id = Identity(type);
+                types.Add(id, type); typeIdentities.Add(type, id);
             }
         }
 
@@ -101,7 +113,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 pending.Enqueue(Tuple.Create(value, id, depth));
                 return id;
             }
-            CanonicalCarryGraphData.Value Visit(object? value, Type declared, string path, int depth)
+            CanonicalCarryGraphData.Value Visit(object? value, Type declared, string path, int depth,
+                object? fieldOwner = null, FieldInfo? sourceField = null)
             {
                 if (++count > MaximumValues || depth > 128) throw new InvalidDataException("Carry field graph exceeds its bound at " + path
                     + ";values=" + count + ";depth=" + depth);
@@ -128,12 +141,22 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 // Root references remain inside the graph, even if the caller
                 // also has an external binding for the same singleton.
+                if (easeCallbacks && type == CanonicalEaseCallback.CallbackType) {
+                    try {
+                        if (fieldOwner == null || sourceField == null || !CanonicalEaseCallback.IsSlot(fieldOwner, sourceField)
+                            || !seen.ContainsKey(fieldOwner)) throw new InvalidDataException("Ease callback has no owned field binding.");
+                        CanonicalEaseCallback.Describe((Delegate)value, fieldOwner);
+                        return new CanonicalCarryGraphData.Value { Kind = "node", Type = id, Reference = AddNode(value, depth, path) };
+                    } catch (InvalidDataException error) { unsupported.Add(path + ":" + error.Message); return Unsupported(id, error.Message); }
+                }
                 if (seen.TryGetValue(value, out var existing))
                     return new CanonicalCarryGraphData.Value { Kind = "node", Type = id, Reference = existing };
                 string? binding;
                 try { binding = listEmptyArrays.Bind(value) ?? externalBinding(value); }
                 catch (InvalidDataException error)
-                { unsupported.Add(path + ":" + error.Message); return Unsupported(id, error.Message); }
+                { var details = fieldOwner == null || sourceField == null ? null : fieldFailureDetails?.Invoke(fieldOwner, sourceField);
+                    var reason = error.Message + (details == null ? "" : ";provenance=" + details);
+                    unsupported.Add(path + ":" + reason); return Unsupported(id, reason); }
                 if (binding != null)
                 {
                     if (type.IsValueType || binding.Length == 0) throw new InvalidDataException("Carry external binding is invalid.");
@@ -171,7 +194,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var frameworkEmpty = listEmptyArrays.ObserveList(owner);
                 if (frameworkEmpty != null && seen.ContainsKey(frameworkEmpty))
                     unsupported.Add(path + ":framework-list-static-empty-was-allocated-before-original-list-provenance");
-                if (IsScalar(owner.GetType()))
+                if (easeCallbacks && owner.GetType() == CanonicalEaseCallback.CallbackType) {
+                    var callback = (Delegate)owner;
+                    if (callback.Target == null || !seen.TryGetValue(callback.Target, out var target))
+                        throw new InvalidDataException("Ease callback target is outside the captured graph.");
+                    node.Kind = "ease-callback"; node.Text = CanonicalEaseCallback.Describe(callback, callback.Target);
+                    node.Items = new[] { new CanonicalCarryGraphData.Value { Kind = "node", Type = TypeIdentity(callback.Target.GetType()), Reference = target } };
+                }
+                else if (IsScalar(owner.GetType()))
                 { node.Kind = "boxed-scalar"; node.Text = EncodeScalar(owner, owner.GetType()); }
                 else if (owner is Array array)
                 {
@@ -187,7 +217,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     for (var index = 0; index < layout.Fields.Length; index++) {
                         var field = layout.Fields[index]; var identity = layout.FieldIdentities[index];
                         node.Fields[index] = new CanonicalCarryGraphData.Field { Name = identity,
-                            Value = Visit(layout.Readers[index](owner), field.FieldType, path + "/" + identity, entry.Item3 + 1) };
+                            Value = Visit(layout.Readers[index](owner), field.FieldType, path + "/" + identity, entry.Item3 + 1, owner, field) };
                     }
                 }
             }
@@ -231,13 +261,50 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 var node = value.Nodes[i];
                 if (node == null || node.Id != i + 1 || node.Type == null || !types.TryGetValue(node.Type, out var type)
-                    || node.Kind != (type.IsArray ? "array" : IsScalar(type) ? "boxed-scalar" : "object")
-                    || (IsScalar(type) ? node.Text == null || node.Items != null || node.Fields != null || !type.IsValueType
+                    || node.Kind != (easeCallbacks && type == CanonicalEaseCallback.CallbackType ? "ease-callback" : type.IsArray ? "array" : IsScalar(type) ? "boxed-scalar" : "object")
+                    || (easeCallbacks && type == CanonicalEaseCallback.CallbackType ? node.Text == null || node.Items == null || node.Items.Length != 1 || node.Fields != null
+                        : IsScalar(type) ? node.Text == null || node.Items != null || node.Fields != null || !type.IsValueType
                         : type.IsArray ? node.Items == null || node.Items.Length > MaximumNodes || node.Fields != null || node.Text != null
                         : node.Items != null || node.Text != null || node.Fields == null || !layouts.ContainsKey(node.Type)
                         || !node.Fields.Select(f => f.Name).SequenceEqual(layouts[node.Type].FieldIdentities)))
                     throw new InvalidDataException("Carry node type or field layout differs: " + (i + 1));
                 nodeTypes[i] = type;
+            }
+            // Validate every callback identity and incoming slot before allocating
+            // a callback or resolving any external object. A known alias must
+            // never turn a foreign action/array slot into an admitted callback.
+            if (easeCallbacks) {
+            var callbackIncoming = new HashSet<int>();
+            for (var i = 0; i < value.Nodes.Length; i++) {
+                var node = value.Nodes[i];
+                if (node.Kind == "ease-callback") {
+                    CanonicalEaseCallback.ValidateIdentity(node.Text!);
+                    var target = node.Items![0];
+                    if (target.Kind != "node" || target.Text != null || target.Reference < 1 || target.Reference > nodeTypes.Length
+                        || target.Type != value.Nodes[target.Reference - 1].Type
+                        || !CanonicalEaseCallback.OwnerType!.IsAssignableFrom(nodeTypes[target.Reference - 1]))
+                        throw new InvalidDataException("Ease callback target graph identity differs.");
+                }
+                var edgeCount = node.Items?.Length ?? node.Fields?.Length ?? 0;
+                for (var edge = 0; edge < edgeCount; edge++) {
+                    var item = node.Items != null ? node.Items[edge] : node.Fields![edge].Value;
+                    if (item.Kind != "node" || item.Reference < 1 || item.Reference > nodeTypes.Length
+                        || nodeTypes[item.Reference - 1] != CanonicalEaseCallback.CallbackType) continue;
+                    if (item.Type != value.Nodes[item.Reference - 1].Type || item.Text != null
+                        || node.Fields == null || !layouts.TryGetValue(node.Type, out var layout)
+                        || !CanonicalEaseCallback.OwnerType!.IsAssignableFrom(nodeTypes[i])
+                        || layout.Fields[edge].DeclaringType != CanonicalEaseCallback.OwnerType
+                        || layout.Fields[edge].Name != CanonicalEaseCallback.Field!.Name
+                        || layout.Fields[edge].FieldType != CanonicalEaseCallback.CallbackType
+                        || value.Nodes[item.Reference - 1].Items![0].Reference != i + 1)
+                        throw new InvalidDataException("Ease callback incoming field owner differs.");
+                    callbackIncoming.Add(item.Reference);
+                }
+            }
+            for (var i = 0; i < nodeTypes.Length; i++)
+                if (nodeTypes[i] == CanonicalEaseCallback.CallbackType && (!callbackIncoming.Contains(i + 1)
+                    || value.Roots.Any(root => root.Node == i + 1)))
+                    throw new InvalidDataException("Ease callback has no exclusive original action field provenance.");
             }
             if ((lifecycleWriteRoots == null) != (exposeLifecycleWrites == null))
                 throw new InvalidDataException("Lifecycle roots and controller must be paired.");
@@ -263,7 +330,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 objects[root.Node - 1] = owner; boundNodes.Add(root.Node); boundObjects[owner] = root.Node;
             }
             for (var i = 0; i < objects.Length; i++)
-                if (objects[i] == null)
+                if (objects[i] == null && nodeTypes[i] != CanonicalEaseCallback.CallbackType)
                 {
                     var type = nodeTypes[i];
 #pragma warning disable SYSLIB0050
@@ -272,6 +339,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                         : FormatterServices.GetUninitializedObject(type);
 #pragma warning restore SYSLIB0050
                 }
+            for (var i = 0; i < objects.Length; i++) if (nodeTypes[i] == CanonicalEaseCallback.CallbackType) {
+                var item = value.Nodes[i].Items![0];
+                if (item.Kind != "node" || item.Text != null || item.Reference < 1 || item.Reference > objects.Length
+                    || item.Type != value.Nodes[item.Reference - 1].Type || objects[item.Reference - 1] == null)
+                    throw new InvalidDataException("Ease callback target graph reference differs.");
+                objects[i] = CanonicalEaseCallback.Bind(value.Nodes[i].Text!, objects[item.Reference - 1]);
+            }
             var external = new object[value.Externals.Length];
             var externalKeys = new HashSet<string>(StringComparer.Ordinal); var externalObjects = new HashSet<object>(new References());
             for (var i = 0; i < external.Length; i++)
@@ -353,7 +427,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (item.Kind == "node") Fill(item.Reference - 1, depth + 1);
                     return result;
                 }
-                if (node.Kind == "boxed-scalar") { }
+                if (node.Kind == "ease-callback") {
+                    var target = Read(node.Items![0], CanonicalEaseCallback.OwnerType!);
+                    if (!ReferenceEquals(((Delegate)owner).Target, target)) throw new InvalidDataException("Ease callback prepared target alias differs.");
+                }
+                else if (node.Kind == "boxed-scalar") { }
                 else if (node.Kind == "array")
                 {
                     var array = (Array)owner; var element = nodeTypes[index].GetElementType()!;
@@ -376,6 +454,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     for (var i = 0; i < layout.Fields.Length; i++)
                     {
                         var field = layout.Fields[i]; var readField = layout.Readers[i]; var fieldValue = Prepared(node.Fields![i].Value, field.FieldType);
+                        if (fieldValue is Delegate callback && callback.GetType() == CanonicalEaseCallback.CallbackType
+                            && (!CanonicalEaseCallback.IsSlot(owner, field) || !ReferenceEquals(callback.Target, owner)))
+                            throw new InvalidDataException("Ease callback field owner alias differs.");
                         var externalIndex = node.Fields[i].Value.Kind == "external" ? node.Fields[i].Value.Reference - 1 : -1;
                         if (externalIndex >= 0) {
                             if (nodeTypes[index].IsValueType) copiedExternal.Add(externalIndex);
