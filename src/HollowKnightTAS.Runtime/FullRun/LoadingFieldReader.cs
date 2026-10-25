@@ -35,12 +35,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private readonly bool compiled;
         private readonly bool preserveReflectionFailures;
+        private readonly bool sharedAccessors;
         private readonly Dictionary<FieldInfo, Func<object, object?>> readers = new Dictionary<FieldInfo, Func<object, object?>>();
         private delegate void FloatingWriter(LoadingFieldDigest digest, object owner, int depth);
+        private static readonly Dictionary<Tuple<Module, Type, int, Type>, FloatingWriter> sharedFloatingWriters = new Dictionary<Tuple<Module, Type, int, Type>, FloatingWriter>();
         private readonly Dictionary<FieldInfo, FloatingWriter> floatingWriters = new Dictionary<FieldInfo, FloatingWriter>();
 
-        internal LoadingFieldReader(bool compiled, bool preserveReflectionFailures = false)
-        { this.compiled = compiled; this.preserveReflectionFailures = preserveReflectionFailures; }
+        internal LoadingFieldReader(bool compiled, bool preserveReflectionFailures = false, bool sharedAccessors = false)
+        { this.compiled = compiled; this.preserveReflectionFailures = preserveReflectionFailures; this.sharedAccessors = sharedAccessors; }
 
         internal bool AppendFloating(FieldInfo field, object owner, LoadingFieldDigest digest, int depth)
         {
@@ -49,24 +51,36 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (field.IsStatic || field.DeclaringType == null || field.DeclaringType.ContainsGenericParameters)
                     throw new InvalidOperationException("P0 direct floating reader requires a closed managed instance field.");
-                var method = new DynamicMethod("hktas_p0_append_float", typeof(void),
-                    new[] { typeof(LoadingFieldDigest), typeof(object), typeof(int) }, typeof(LoadingFieldReader).Module, true);
-                var il = method.GetILGenerator();
-                il.Emit(OpCodes.Ldarg_0);
-                il.Emit(OpCodes.Ldarg_1);
-                il.Emit(field.DeclaringType.IsValueType ? OpCodes.Unbox : OpCodes.Castclass, field.DeclaringType);
-                if (field.GetRequiredCustomModifiers().Contains(typeof(IsVolatile))) il.Emit(OpCodes.Volatile);
-                il.Emit(OpCodes.Ldfld, field);
-                il.Emit(OpCodes.Ldarg_2);
-                il.Emit(OpCodes.Call, typeof(LoadingFieldDigest).GetMethod(field.FieldType == typeof(float)
-                    ? nameof(LoadingFieldDigest.AppendSingleBits) : nameof(LoadingFieldDigest.AppendDoubleBits),
-                    BindingFlags.Instance | BindingFlags.NonPublic)!);
-                il.Emit(OpCodes.Ret);
-                writer = (FloatingWriter)method.CreateDelegate(typeof(FloatingWriter));
+                if (sharedAccessors) {
+                    var key = Tuple.Create(field.Module, field.DeclaringType, field.MetadataToken, field.FieldType);
+                    lock (sharedReadbackGate) {
+                        if (!sharedFloatingWriters.TryGetValue(key, out writer)) {
+                            writer = new LoadingFieldReader(true).PrepareFloating(field);
+                            if (sharedFloatingWriters.Count < MaximumSharedReadbackAccessors) sharedFloatingWriters.Add(key, writer);
+                        }
+                    }
+                } else writer = PrepareFloating(field);
                 floatingWriters.Add(field, writer);
             }
             writer(digest, owner, depth);
             return true;
+        }
+        private FloatingWriter PrepareFloating(FieldInfo field)
+        {
+            var method = new DynamicMethod("hktas_p0_append_float", typeof(void),
+                new[] { typeof(LoadingFieldDigest), typeof(object), typeof(int) }, typeof(LoadingFieldReader).Module, true);
+            var il = method.GetILGenerator();
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldarg_1);
+            il.Emit(field.DeclaringType!.IsValueType ? OpCodes.Unbox : OpCodes.Castclass, field.DeclaringType);
+            if (field.GetRequiredCustomModifiers().Contains(typeof(IsVolatile))) il.Emit(OpCodes.Volatile);
+            il.Emit(OpCodes.Ldfld, field);
+            il.Emit(OpCodes.Ldarg_2);
+            il.Emit(OpCodes.Call, typeof(LoadingFieldDigest).GetMethod(field.FieldType == typeof(float)
+                ? nameof(LoadingFieldDigest.AppendSingleBits) : nameof(LoadingFieldDigest.AppendDoubleBits),
+                BindingFlags.Instance | BindingFlags.NonPublic)!);
+            il.Emit(OpCodes.Ret);
+            return (FloatingWriter)method.CreateDelegate(typeof(FloatingWriter));
         }
 
         internal object? Read(FieldInfo field, object owner)
@@ -83,6 +97,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || field.FieldType.IsByRef || field.FieldType.IsPointer) {
                     if (preserveReflectionFailures) return field.GetValue;
                     throw new InvalidOperationException("P0 direct field reader requires a closed managed instance field.");
+                }
+                if (sharedAccessors) {
+                    reader = PrepareSharedReadback(field); readers.Add(field, reader); return reader;
                 }
                 var arguments = preserveReflectionFailures ? new[] { typeof(FieldInfo), typeof(object) } : new[] { typeof(object) };
                 var method = new DynamicMethod("hktas_p0_read_field", typeof(object), arguments,

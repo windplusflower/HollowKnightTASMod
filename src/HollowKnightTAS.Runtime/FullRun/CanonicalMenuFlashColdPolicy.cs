@@ -497,6 +497,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal object Reset(LoadingGameplayOracle observer, Action<Image> beginRetirement, Action finishRetirement)
         {
+            var phaseClock = System.Diagnostics.Stopwatch.StartNew();
+            var phaseTimings = new List<object>(17);
+            long phaseStart = 0;
+            void Phase(string name) { var now = phaseClock.ElapsedTicks; phaseTimings.Add(new { name, elapsedMilliseconds = (now - phaseStart) * 1000d / System.Diagnostics.Stopwatch.Frequency }); phaseStart = now; }
             LoadingSerialSceneProbe.RequireCanonicalMutationBoundary(); RequireStartup(boundary: true);
             ObserveModalDimmerAtBoundary("B-before-Flash-cold");
             var old = Current().gameObject; var parent = old.transform.parent; var sibling = old.transform.GetSiblingIndex();
@@ -508,32 +512,47 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!ReferenceEquals(CachedMesh.GetValue(image), null) && mesh == null)
                 throw new InvalidOperationException("Original Flash cached mesh wrapper is already dead.");
             RequireNoExternalMeshConsumers(image, mesh);
+            Phase("initial-guard");
             using var preservation = new Preservation(UIManager.instance, old, preserveSource: false);
+            Phase("preservation-capture");
             var incoming = new LoadingGeoIncomingReferences();
             var frozen = new LoadingGeoIncomingReferences();
             CanonicalGeoColdTemplate.ObserveIncoming(GameCameras.instance.geoCounter, menuFlashIncoming: incoming, menuFlashRoot: old,
                 frozenMenuFlashIncoming: frozen, frozenMenuFlashRoot: template!);
             frozen.RequireNoExternalConsumers();
+            Phase("incoming-fullwalk");
             var owners = new Dictionary<int, MonoBehaviour> { [image.GetInstanceID()] = image };
             observer.RecaptureOwnedHudScheduler(LoadingSerialSceneProbe.RequireCanonicalMutationBoundary, () => { });
             var transition = observer.PrepareOwnedHudLifecycle(owners, _ => false, out var retireStarts);
+            Phase("scheduler-prepare");
             var created = UnityEngine.Object.Instantiate(template!, holder!.transform, false); created.name = template!.name;
+            Phase("original-factory");
             RequireCold(created, "B-new-clone-before-parent"); RequireOriginalSerialized(created);
             RequireCold(created, "B-new-clone-immediately-before-parent");
+            Phase("template-native-before-parent");
             preservation.PrepareParentCanvasCallback(parentCanvas);
+            Phase("canvas-before-parent");
             created.transform.SetParent(parent, false); preservation.VerifyNativeCanvases("B-after-original-parent-callback");
+            Phase("original-parent-callback");
             RequireCold(created, "B-new-clone-after-parent", parentCanvas);
             created.transform.SetSiblingIndex(sibling); RequireCold(created, "B-new-clone-after-sibling", parentCanvas);
+            Phase("template-native-after-parent");
             preservation.BindReplacement(created);
             var plan = incoming.Prepare(IncomingDirectory(created), witness => Modding.Logger.Log("[HKTAS] Flash original incoming exact slots: " + Newtonsoft.Json.JsonConvert.SerializeObject(witness)));
+            Phase("incoming-plan");
             beginRetirement(image); plan.Apply(); preservation.PrepareOriginalRendererRetirement(image);
-            UnityEngine.Object.DestroyImmediate(old); preservation.CompleteOriginalRendererRetirement(); retireStarts(); finishRetirement();
+            Phase("renderer-before-destroy");
+            UnityEngine.Object.DestroyImmediate(old); Phase("original-destroy"); preservation.CompleteOriginalRendererRetirement(); retireStarts(); finishRetirement();
+            Phase("renderer-after-destroy");
             observer.RecaptureOwnedHudScheduler(LoadingSerialSceneProbe.RequireCanonicalMutationBoundary, transition);
-            plan.VerifyReadback(); RequireCold(created, "B-final-after-original-retirement", parentCanvas); RequireOriginalSerialized(created); preservation.Verify();
+            Phase("scheduler-readback");
+            plan.VerifyReadback(); RequireCold(created, "B-final-after-original-retirement", parentCanvas); RequireOriginalSerialized(created); Phase("template-final-native"); preservation.Verify();
+            Phase("preservation-readback");
             if (!ReferenceEquals(Current().gameObject, created) || old != null || mesh != null || !ReferenceEquals(created.transform.parent, parent)
                 || created.transform.GetSiblingIndex() != sibling) throw new InvalidOperationException("Original Flash retirement/entry/parent readback differs.");
             ObserveModalDimmerAtBoundary("B-after-Flash-cold");
-            return new { coldFourComponents = true, startupSerializedResourceDefinition = true, exactIncomingReadback = true,
+            Phase("final-alias-modal");
+            return new { phaseTimings = phaseTimings.ToArray(), coldFourComponents = true, startupSerializedResourceDefinition = true, exactIncomingReadback = true,
                 originalDestroy = true, exactSerializedProvenance = true, menuEventsInvoked = false, completeNativeCoverage = false };
         }
         private static void RequireNoExternalMeshConsumers(Image image, Mesh? mesh)

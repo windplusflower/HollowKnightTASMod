@@ -194,7 +194,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     frozenMenuFlashIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
                 }, observeSlotValue: value => incoming.Owns(value) || markerIncoming != null && markerIncoming.Owns(value)
                     || mapKeyIncoming != null && mapKeyIncoming.Owns(value) || menuFlashIncoming != null && menuFlashIncoming.Owns(value)
-                    || frozenMenuFlashIncoming != null && frozenMenuFlashIncoming.Owns(value))) {
+                    || frozenMenuFlashIncoming != null && frozenMenuFlashIncoming.Owns(value), sharedFieldReaders: true)) {
                 var owners = Resources.FindObjectsOfTypeAll<MonoBehaviour>().Where(owner => owner != null && owner.gameObject.scene.IsValid()
                     && owner.gameObject.scene.isLoaded && owner.GetType().Assembly != typeof(CanonicalGeoColdTemplate).Assembly).ToArray();
                 if (owners.Length > 16000) throw new InvalidOperationException("Original Geo incoming owner inventory exceeded its existing reader bound.");

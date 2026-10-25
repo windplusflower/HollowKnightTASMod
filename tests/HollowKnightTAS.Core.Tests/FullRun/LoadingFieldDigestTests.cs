@@ -60,7 +60,8 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             var fullRefs = new List<object>(); var onlyRefs = new List<object>();
             LoadingFieldDigest Reader(List<(object, string?, int, object?, string)> slots, List<object> refs)
                 => new LoadingFieldDigest(value => { refs.Add(value); return value is GameplayListener ? "actual-listener" : null; }, _ => false,
-                    slotObservation: (owner, field, index, value, path) => slots.Add((owner, field?.Name, index, value, path)));
+                    slotObservation: (owner, field, index, value, path) => slots.Add((owner, field?.Name, index, value, path)),
+                    sharedFieldReaders: ReferenceEquals(slots, onlySlots));
             using var full = Reader(fullSlots, fullRefs); using var only = Reader(onlySlots, onlyRefs);
             full.BeginSharedGraph(); only.BeginSharedGraph();
             try {
@@ -132,6 +133,51 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             var hashed = Measure(false); var slots = Measure(true);
             Console.WriteLine($"Equivalent 400-root workload: hashTicks={hashed.Ticks}; referenceTicks={slots.Ticks}; hashAllocated={hashed.Bytes}; referenceAllocated={slots.Bytes}");
             Assert.IsTrue(slots.Bytes < hashed.Bytes / 2, "The reference-only reader still allocated the unused token/hash buffers.");
+        }
+
+        [TestMethod]
+        public void SharedReferenceReaderKeepsLegacyScalarLengthsAndFreshValues()
+        {
+            var scalars = new ScalarCell { Single = BitConverter.Int32BitsToSingle(unchecked((int)0xffc12345)),
+                Double = BitConverter.Int64BitsToDouble(unchecked((long)0xfff8123456789abc)), Decimal = -123.4500m };
+            var aliases = Enumerable.Range(0, 1200).Select(_ => new Node()).ToArray();
+            var root = new object[] { scalars, aliases, aliases.Reverse().ToArray(),
+                -0f, -0d, decimal.MinValue, decimal.MaxValue, new decimal(0, 0, 0, true, 28), "中文\0\ud800" };
+            var text = typeof(LoadingFieldDigest).GetField("text", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            using var legacy = NewDigest();
+            for (var round = 0; round < 3; round++) {
+                using var cached = new LoadingFieldDigest(_ => null, _ => false, sharedFieldReaders: true);
+                var full = legacy.Capture(root, "scalar-width", true);
+                var expectedCharacters = ((System.Text.StringBuilder)text.GetValue(legacy)!).Length;
+                var actual = cached.CaptureReferences(root, "scalar-width", true);
+                Assert.AreEqual(expectedCharacters, actual.Characters);
+                Assert.AreEqual(full.Nodes, actual.Nodes);
+                CollectionAssert.AreEqual(full.Unsupported.ToArray(), actual.Unsupported.ToArray());
+                Assert.AreEqual(full.Sha256, cached.Capture(root, "scalar-width", true).Sha256);
+                scalars.Single = round; scalars.Double = -round; scalars.Decimal += 1m;
+            }
+        }
+        private sealed class ScalarCell { internal float Single; internal double Double; internal decimal Decimal; }
+
+        [TestMethod]
+        public void IncomingReaderMetadataReuseReportsEquivalentRepeatedWalkCost()
+        {
+            var root = Enumerable.Range(0, 500).Select(i => new object[] {
+                new ScalarCell { Single = i / 7f, Double = i / 11d, Decimal = i / 13m },
+                new Value<int>(i), new Value<long>(-i), new PathCell { Number = i, Text = "entry" + i } }).ToArray();
+            (long Ticks, long Bytes, int Characters) Measure(bool shared) {
+                var before = GC.GetAllocatedBytesForCurrentThread(); var timer = System.Diagnostics.Stopwatch.StartNew();
+                var characters = 0;
+                for (var i = 0; i < 40; i++) {
+                    using var reader = new LoadingFieldDigest(_ => null, _ => false, sharedFieldReaders: shared);
+                    characters = reader.CaptureReferences(root, "complete-incoming", true).Characters;
+                }
+                timer.Stop(); return (timer.ElapsedTicks, GC.GetAllocatedBytesForCurrentThread() - before, characters);
+            }
+            Measure(false); Measure(true);
+            var original = Measure(false); var cached = Measure(true);
+            Assert.AreEqual(original.Characters, cached.Characters);
+            Console.WriteLine($"40 fresh-reader complete incoming walks: perReaderTicks={original.Ticks}; sharedMetadataTicks={cached.Ticks}; perReaderBytes={original.Bytes}; sharedMetadataBytes={cached.Bytes}");
         }
 
         [TestMethod]

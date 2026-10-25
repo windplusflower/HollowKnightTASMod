@@ -75,7 +75,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<Delegate, bool>? observerCallback = null, bool? compiledFieldReaders = null,
             Func<Type, bool>? packedArrayElement = null, Func<FieldInfo, bool>? directFloatingField = null,
             Action<object, FieldInfo?, int, object?, string>? slotObservation = null,
-            Func<object?, bool>? observeSlotValue = null)
+            Func<object?, bool>? observeSlotValue = null, bool sharedFieldReaders = false)
         {
             this.reference = reference; this.nativeBase = nativeBase;
             this.fieldIdentity = fieldIdentity; this.observerCallback = observerCallback;
@@ -83,7 +83,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             this.slotObservation = slotObservation;
             this.observeSlotValue = observeSlotValue;
             fieldReader = new LoadingFieldReader(compiledFieldReaders
-                ?? Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_REFLECTION_FIELDS") != "1");
+                ?? Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_REFLECTION_FIELDS") != "1", sharedAccessors: sharedFieldReaders);
             if (packedArrayElement != null) packedArrays = new LoadingPackedArrayDigest(packedArrayElement, Fields, typeIdentity.Bind);
         }
 
@@ -221,17 +221,23 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private void Token(string value)
         {
+            if (referenceOnly) { ReferenceTokenLength(value.Length); return; }
             if ((referenceOnly ? referenceCharacters : text.Length) + value.Length + 24 > MaximumCharacters)
                 throw new InvalidOperationException("P0 field digest character budget exceeded at " + CurrentPath);
-            if (referenceOnly) {
-                var digits = 1;
-                for (var length = value.Length; length >= 10; length /= 10) digits++;
-                referenceCharacters += digits + value.Length + 2;
-                return;
-            }
             if (sharedEvidence != null && sharedEvidenceSelectedRoot) sharedEvidence.Token(rootPath, string.Concat(pathSegments), value);
             text.Append(value.Length).Append(':').Append(value).Append(';');
         }
+        // Count the exact legacy UTF16 token encoding without formatting values
+        // whose representation has a fixed width. All original field reads and
+        // traversal/alias observations still happen before reaching this point.
+        private void ReferenceTokenLength(int length)
+        {
+            if (referenceCharacters + length + 24 > MaximumCharacters)
+                throw new InvalidOperationException("P0 field digest character budget exceeded at " + CurrentPath);
+            referenceCharacters += DecimalDigits(length) + length + 2;
+        }
+        private static int DecimalDigits(int value)
+        { var digits = 1; for (; value >= 10; value /= 10) digits++; return digits; }
 
         internal string DiagnosticPath => CurrentPath;
         internal string DiagnosticRoot => rootPath;
@@ -261,9 +267,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             { if (pointer == IntPtr.Zero) Token("0"); else Omit("native-pointer"); return; }
             if (value is UIntPtr unsignedPointer)
             { if (unsignedPointer == UIntPtr.Zero) Token("0"); else Omit("native-pointer"); return; }
-            if (value is float f) { Token(new SingleBits { Value = f }.Bits.ToString("x8")); return; }
-            if (value is double d) { Token(BitConverter.DoubleToInt64Bits(d).ToString("x16")); return; }
-            if (value is decimal m) { foreach (var part in decimal.GetBits(m)) Token(part.ToString("x8")); return; }
+            if (value is float f) { if (referenceOnly) ReferenceTokenLength(8); else Token(new SingleBits { Value = f }.Bits.ToString("x8")); return; }
+            if (value is double d) { if (referenceOnly) ReferenceTokenLength(16); else Token(BitConverter.DoubleToInt64Bits(d).ToString("x16")); return; }
+            if (value is decimal m) {
+                if (referenceOnly) { for (var part = 0; part < 4; part++) ReferenceTokenLength(8); }
+                else foreach (var part in decimal.GetBits(m)) Token(part.ToString("x8"));
+                return;
+            }
             var shape = Shape(type);
             if (shape.Enum)
             {
@@ -293,7 +303,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!shape.ValueType)
             {
                 var graph = sharedGraph ?? visited;
-                if (graph.TryGetValue(value, out var id)) { ObserveSharedReference(id, false); Token("ref:" + id); return; }
+                if (graph.TryGetValue(value, out var id)) {
+                    ObserveSharedReference(id, false);
+                    if (referenceOnly) ReferenceTokenLength(4 + DecimalDigits(id)); else Token("ref:" + id);
+                    return;
+                }
                 // Full boundary inventories retain cross-root aliases for every
                 // dormant FSM too; this is independent of the per-root node cap.
                 if (graph.Count >= 1048576)
@@ -489,7 +503,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (++nodes > MaximumNodes || depth > MaximumDepth)
                 throw new InvalidOperationException("P0 field digest graph budget exceeded at " + CurrentPath);
             Token("System.Single");
-            Token(new SingleBits { Value = value }.Bits.ToString("x8"));
+            if (referenceOnly) ReferenceTokenLength(8); else Token(new SingleBits { Value = value }.Bits.ToString("x8"));
         }
 
         internal void AppendDoubleBits(double value, int depth)
@@ -497,7 +511,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (++nodes > MaximumNodes || depth > MaximumDepth)
                 throw new InvalidOperationException("P0 field digest graph budget exceeded at " + CurrentPath);
             Token("System.Double");
-            Token(BitConverter.DoubleToInt64Bits(value).ToString("x16"));
+            if (referenceOnly) ReferenceTokenLength(16); else Token(BitConverter.DoubleToInt64Bits(value).ToString("x16"));
         }
 
         private string IndexPath(int index)
