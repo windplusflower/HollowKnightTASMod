@@ -75,6 +75,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             PreparedPhase("frozen-owner-context");
             var sourceGraph = carry.DecodeActualMainForOwnerContext(source);
             PreparedPhase("decode-source-main");
+            // Already inside the single-use nine-second ApplyingActualD
+            // transaction, after its full registered-S0 check. Interning changes
+            // D cache state; any later failure must retire this target process.
+            carry.ActualTargetStage = "prepare-original-event-D-identities";
+            var preparedEvents = CanonicalEventCarryRoots.PrepareMissingOriginalOwners(sourceGraph, admission);
+            PreparedPhase("original-shared-event-owners");
+            Modding.Logger.Log("[HKTAS] Actual D original event factory identities prepared: missing=" + preparedEvents
+                + ";existingOwnersAndFieldsPreserved=true;sourceFlagsAndCacheOrderStillRequireCompleteDGraph=true.");
             var detached = Array.Exists(sourceGraph.Roots, root => root.Binding == CanonicalSceneMappingCarry.DetachedPlayerRoot);
             carry.Capture(identities, epoch, input, mouse, observer.BoundarySchedulerCarry(epoch), observer.BoundaryHeroInvulnerabilityCarry(epoch),
                 targetDirectoryOnly: true, originalBootstrapPlayer: originalBootstrapPlayer, sourceRequiresDetachedPlayer: detached,
