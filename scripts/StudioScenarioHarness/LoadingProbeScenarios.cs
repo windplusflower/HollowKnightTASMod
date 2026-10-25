@@ -178,14 +178,38 @@ internal static partial class StudioScenarioHarness
             Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_RECORD_INPUTS", script);
         }
         else Environment.SetEnvironmentVariable("HKTAS_LOADING_PROBE_RECORD_INPUTS", null);
+        var directProtectedCold = !record && s0TargetArgument != null;
+        if (directProtectedCold)
+        {
+            // Open the strict bound package before the ordinary verified
+            // launcher prepares its protected shadow. An initial recording
+            // process would be discarded in full by the old restart below.
+            Require(Field<Process?>(app, "startupGame") == null && !boot.IsPending && !movies.IsPending,
+                "protected cold launch starts without an owned game or active save session");
+            await vm.OpenMovieFileAsync(source);
+            Require(movies.SequenceInitialSaves?.Id == protectedSource.InitialSaves!.Id,
+                "ordinary document open binds the exact source initial saves before cold launch");
+        }
         await Field<Func<string, Task>>(vm, "launchGame")(@"D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight.exe");
         byte[]? actualDBytes = null;
         try
         {
-            Execute(vm.NewFullRunMovieCommand);
-            await Command(vm.StepCommand);
-            await Until(() => vm.SelectedSession?.Client.IsConnected == true, "loading probe Runtime connected", 120);
-            var oldPid = Field<Process>(app, "startupGame").Id;
+            var oldPid = 0;
+            if (!directProtectedCold)
+            {
+                Execute(vm.NewFullRunMovieCommand);
+                await Command(vm.StepCommand);
+                await Until(() => vm.SelectedSession?.Client.IsConnected == true, "loading probe Runtime connected", 120);
+                oldPid = Field<Process>(app, "startupGame").Id;
+            }
+            else
+            {
+                Require(movies.IsPending && movies.Mode == "Unarmed" && boot.FullRunFaultCode == 0
+                    && !Field<Process>(app, "startupGame").HasExited
+                    && movies.SessionInitialSaves?.Id == protectedSource.InitialSaves!.Id,
+                    "independent protected cold process uses the exact package baseline and original unarmed gate");
+                movies.VerifyOriginalSavesUnchanged();
+            }
             if (record)
             {
                 await Until(() =>
@@ -290,14 +314,17 @@ internal static partial class StudioScenarioHarness
             }
             else
             {
-                await vm.OpenMovieFileAsync(source);
-                if (s0TargetArgument != null) await Field<Func<Task>>(vm, "restartProtectedGame")();
-                else await vm.FrameMenuAsync("rebuild", end);
-                Require(Field<Process>(app, "startupGame").Id != oldPid, "independent cold replacement process");
+                if (!directProtectedCold)
+                {
+                    await vm.OpenMovieFileAsync(source);
+                    if (s0TargetArgument != null) await Field<Func<Task>>(vm, "restartProtectedGame")();
+                    else await vm.FrameMenuAsync("rebuild", end);
+                    Require(Field<Process>(app, "startupGame").Id != oldPid, "independent cold replacement process");
+                }
             }
             if (s0TargetArgument != null)
             {
-                // The protected restart parks before Runtime is bootstrapped.
+                // The protected launcher parks before Runtime is bootstrapped.
                 // Arm the real protected replay, then execute only its original
                 // bootstrap PlayerLoop; StartInputAt pauses before Movie zero.
                 var zeroMovie = new MovieV2Codec().Parse(new StringReader(protectedSource.Movie), source).Document
