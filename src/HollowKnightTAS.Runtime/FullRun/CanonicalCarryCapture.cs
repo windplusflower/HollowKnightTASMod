@@ -138,7 +138,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             PlayerData? originalBootstrapPlayer = null, bool sourceRequiresDetachedPlayer = false,
             GameManager.EnterSceneEvent? retainedTargetTitleCallback = null)
         {
-            mapKeyTemplate.RequireOriginalAssets(CanonicalMapKeyTextDirectory.Build(CanonicalMapKeyTextDirectory.Current()));
+            // The arbitrary target's outgoing live leaves have not yet received
+            // source parent D or been replaced by the original cold producer.
+            // Directory-only preparation serializes none of those live slots;
+            // validate only the immutable original producer in this phase.
+            if (targetDirectoryOnly) mapKeyTemplate.RequireFrozenOriginalAssets();
+            else mapKeyTemplate.RequireOriginalAssets(CanonicalMapKeyTextDirectory.Build(CanonicalMapKeyTextDirectory.Current()));
             InputPreparedLeaseActions = 0; InputPreparedCursor = false; InputPreparedManagerScalars = false; InputPreparedCallbacks = false;
             SceneLoadScalarsPrepared = false; MainGraphPrepared = false; GameplayPrepared = false; EventStaticSlotsGuarded = false;
             InvulnerabilityPrepared = false;

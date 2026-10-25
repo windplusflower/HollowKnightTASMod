@@ -23,13 +23,27 @@ namespace HollowKnightTAS.Runtime.FullRun
         // actual compressed artifact rather than a separate selector audit.
         internal object EncodeSuffix(object metadata)
         {
-            var payload = new JObject { ["format"] = Format, ["names"] = JArray.FromObject(Names),
-                ["types"] = JArray.FromObject(Types), ["roots"] = Roots.DeepClone() };
-            foreach (var property in JObject.FromObject(metadata).Properties()) {
-                if (payload.Property(property.Name) != null) throw new InvalidOperationException("Suffix diagnostic metadata overlaps the original inventory.");
-                payload.Add(property.Name, property.Value.DeepClone());
+            // All tokens belong to this synchronous sample, already detached
+            // from live game owners by the constructor/FromObject. Write them
+            // without reparenting, mutating or cloning the complete inventory.
+            var extra = JObject.FromObject(metadata);
+            foreach (var property in extra.Properties())
+                if (property.Name == "format" || property.Name == "names" || property.Name == "types" || property.Name == "roots")
+                    throw new InvalidOperationException("Suffix diagnostic metadata overlaps the original inventory.");
+            byte[] content;
+            using (var raw = new MemoryStream()) {
+                using (var text = new StreamWriter(raw, new UTF8Encoding(false), 4096, true))
+                using (var writer = new JsonTextWriter(text) { Formatting = Formatting.None }) {
+                    writer.WriteStartObject();
+                    writer.WritePropertyName("format"); writer.WriteValue(Format);
+                    writer.WritePropertyName("names"); JArray.FromObject(Names).WriteTo(writer);
+                    writer.WritePropertyName("types"); JArray.FromObject(Types).WriteTo(writer);
+                    writer.WritePropertyName("roots"); Roots.WriteTo(writer);
+                    foreach (var property in extra.Properties()) property.WriteTo(writer);
+                    writer.WriteEndObject(); writer.Flush();
+                }
+                content = raw.ToArray();
             }
-            var content = Encoding.UTF8.GetBytes(payload.ToString(Formatting.None));
             if (content.Length > 16 * 1024 * 1024)
                 throw new InvalidOperationException("Actual D suffix inventory exceeds the original 16 MiB diagnostic bound.");
             using var compressed = new MemoryStream();

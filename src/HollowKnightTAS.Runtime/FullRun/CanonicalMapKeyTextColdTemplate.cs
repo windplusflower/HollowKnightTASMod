@@ -69,6 +69,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 } else assetOrigins.RequireOrigin(pair.Key, current);
             }
         }
+        internal void RequireFrozenOriginalAssets()
+        {
+            if (holder == null || holder.activeSelf || FrozenKeys == null || templates.Length != 9)
+                throw new InvalidOperationException("Map Key original frozen asset producer is absent.");
+            var directory = CanonicalMapKeyTextDirectory.Build(FrozenKeys);
+            RequireCold(directory);
+            RequireOriginalAssets(directory);
+        }
         internal string? BindOriginalAsset(object value)
         {
             if (!(value is Material) && !(value is TMPro.TMP_FontAsset)) return null;

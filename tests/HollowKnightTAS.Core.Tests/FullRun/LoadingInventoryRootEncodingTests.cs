@@ -68,6 +68,32 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         }
 
         [TestMethod]
+        public void StreamingSuffixIsByteIdenticalAndDoesNotReparentReusableTokens()
+        {
+            var metadata = new { text = "中文🧵\n\"\\\t", negativeZero = -0.0d,
+                number = double.NaN, nested = new { empty = (string?)null, values = new[] { -1, 0, 3 } } };
+            var encoded = new LoadingInventoryRootEncoding(new object[] {
+                new { id = "场景/🧵[0]", type = "类型", digest = "\"\\\n", bits = -0.0f },
+                new { id = "场景/🧵[0]", type = "类型", digest = "duplicate", flags = new[] { true, false } } });
+            var legacy = new JObject { ["format"] = LoadingInventoryRootEncoding.Format,
+                ["names"] = JArray.FromObject(encoded.Names), ["types"] = JArray.FromObject(encoded.Types), ["roots"] = encoded.Roots.DeepClone() };
+            foreach (var property in JObject.FromObject(metadata).Properties()) legacy.Add(property.Name, property.Value.DeepClone());
+            var expected = Encoding.UTF8.GetBytes(legacy.ToString(Formatting.None));
+            var before = encoded.Roots.ToString(Formatting.None);
+            for (var pass = 0; pass < 2; pass++) {
+                var payload = JObject.FromObject(encoded.EncodeSuffix(metadata));
+                using var input = new MemoryStream(Convert.FromBase64String((string)payload["gzipBase64"]!));
+                using var gzip = new GZipStream(input, CompressionMode.Decompress);
+                using var output = new MemoryStream(); gzip.CopyTo(output);
+                CollectionAssert.AreEqual(expected, output.ToArray());
+                Assert.AreEqual(Sha256Utility.ComputeHex(expected), (string)payload["sha256"]!);
+                Assert.IsNull(encoded.Roots.Parent);
+                Assert.AreEqual(before, encoded.Roots.ToString(Formatting.None));
+            }
+            Assert.ThrowsExactly<InvalidOperationException>(() => encoded.EncodeSuffix(new { huge = new string('x', 16 * 1024 * 1024) }));
+        }
+
+        [TestMethod]
         public void InvalidDiagnosticRootFailsRatherThanDroppingIt()
         {
             Assert.ThrowsExactly<InvalidOperationException>(() => new LoadingInventoryRootEncoding(
