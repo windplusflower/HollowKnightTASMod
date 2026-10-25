@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
@@ -21,6 +22,31 @@ namespace HollowKnightTAS.Runtime.FullRun
             public int Order, MethodToken, MapZone;
             public bool ManualMapTrigger;
             public bool UsesCurrentPlayerData;
+        }
+        internal static bool IsEmptySourceGraph(CanonicalCarryGraphData graph)
+        {
+            InvalidDataException Invalid() => new InvalidDataException("Source empty scene mapping owner contract differs.");
+            var roots = graph.Roots.Where(root => root.Binding == Root).ToArray();
+            if (roots.Length != 1) throw Invalid();
+            CanonicalCarryGraphData.Node Node(int id, Type type, string kind) {
+                if (id < 1 || id > graph.Nodes.Length) throw Invalid();
+                var node = graph.Nodes[id - 1];
+                if (node == null || node.Id != id || node.Type != CanonicalCarryGraphCodec.Identity(type) || node.Kind != kind || node.Text != null)
+                    throw Invalid();
+                return node;
+            }
+            var dataType = CanonicalCarryGraphCodec.Identity(typeof(Data));
+            var node = Node(roots[0].Node, typeof(Data), "object");
+            if (node.Items != null || node.Fields == null || node.Fields.Length != 2
+                || node.Fields[0].Name != dataType + "/Items" || node.Fields[1].Name != dataType + "/Version") throw Invalid();
+            var version = node.Fields[1].Value; var items = node.Fields[0].Value;
+            if (version.Kind != "scalar" || version.Type != CanonicalCarryGraphCodec.Identity(typeof(int)) || version.Text != "1" || version.Reference != 0
+                || items.Kind != "node" || items.Type != CanonicalCarryGraphCodec.Identity(typeof(Mapping[])) || items.Text != null) throw Invalid();
+            var array = Node(items.Reference, typeof(Mapping[]), "array");
+            if (array.Fields != null || array.Items == null || array.Items.Length > 1) throw Invalid();
+            if (array.Items.Length != 0) return false; // Preserve the original pending/B1 binding path.
+            if (graph.Roots.Any(root => root.Binding == DetachedPlayerRoot)) throw Invalid();
+            return true;
         }
         internal static Data Copy(Data data)
         {

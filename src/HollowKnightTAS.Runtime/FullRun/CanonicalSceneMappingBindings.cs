@@ -42,7 +42,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Retained callback is not the actual original live title SceneManager.");
             return callback;
         }
-        internal CanonicalSceneMappingBindings(GameManager.EnterSceneEvent? retainedTitleCallback = null)
+        internal CanonicalSceneMappingBindings(GameManager.EnterSceneEvent? retainedTitleCallback = null, bool useCurrentEmptySlot = false)
         {
             manager = GameManager.instance ?? throw new InvalidDataException("Scene entry mapping GameManager is absent.");
             currentPlayer = PlayerData.instance ?? throw new InvalidDataException("Scene entry mapping current PlayerData is absent.");
@@ -53,6 +53,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Scene entry mapping original field types differ.");
             originalSlot = Slot.GetValue(manager);
             var selected = retainedTitleCallback ?? originalSlot as GameManager.EnterSceneEvent;
+            if (useCurrentEmptySlot) {
+                if (originalSlot != null) throw new InvalidDataException("Empty source mapping requires the target's actual original event slot to be empty.");
+                // The diagnostic job retains the original title callback for
+                // source boundaries that still need it. Validate that exact
+                // retired binding, but do not turn a tool-only backup into a
+                // live world root after its original one-shot unsubscribe.
+                if (retainedTitleCallback != null) new CanonicalSceneMappingBindings(retainedTitleCallback).Guard();
+                selected = null;
+                Modding.Logger.Log("[HKTAS] Source empty mapping uses actual empty target event slot;retainedTitleBackupIsNotWorldRoot=true;liveFieldsWritten=false.");
+            }
             var chain = selected?.GetInvocationList() ?? Array.Empty<Delegate>();
             if (chain.Length > 1) throw new InvalidDataException("Multiple scene entry mapping callbacks are not registered.");
             callbacks = new GameManager.EnterSceneEvent[chain.Length]; ghosts = new global::SceneManager[chain.Length];

@@ -39,6 +39,37 @@ public sealed class CanonicalSceneMappingCarryTests
         Assert.AreEqual(0, copy.Items.Length);
     }
     [TestMethod]
+    public void Empty_source_owner_selection_uses_the_real_saved_graph_and_keeps_pending_binding_path()
+    {
+        var codec = new CanonicalCarryGraphCodec(CanonicalSceneMappingCarry.DataTypes, "mapping-v1");
+        foreach (var pending in new[] { false, true }) {
+            var graph = codec.Capture(new Dictionary<string, object> { [CanonicalSceneMappingCarry.Root] = pending ? Source() : new CanonicalSceneMappingCarry.Data() }, _ => null);
+            var before = CanonicalCarryGraphWire.Encode(graph);
+            Assert.AreEqual(!pending, CanonicalSceneMappingCarry.IsEmptySourceGraph(graph));
+            CollectionAssert.AreEqual(before, CanonicalCarryGraphWire.Encode(graph));
+        }
+    }
+    [TestMethod]
+    [DataRow("version")]
+    [DataRow("missing-root")]
+    [DataRow("extra-detached-root")]
+    [DataRow("array-type")]
+    [DataRow("array-reference")]
+    [DataRow("field-registry")]
+    public void Empty_source_owner_selection_rejects_unproven_or_inconsistent_saved_layout(string fault)
+    {
+        var codec = new CanonicalCarryGraphCodec(CanonicalSceneMappingCarry.DataTypes, "mapping-v1");
+        var graph = codec.Capture(new Dictionary<string, object> { [CanonicalSceneMappingCarry.Root] = new CanonicalSceneMappingCarry.Data() }, _ => null);
+        var node = graph.Nodes[graph.Roots[0].Node - 1];
+        if (fault == "version") node.Fields![1].Value.Text = "2";
+        if (fault == "missing-root") graph.Roots = Array.Empty<CanonicalCarryGraphData.Root>();
+        if (fault == "extra-detached-root") graph.Roots = new[] { graph.Roots[0], new CanonicalCarryGraphData.Root { Binding = CanonicalSceneMappingCarry.DetachedPlayerRoot, Node = node.Id } };
+        if (fault == "array-type") node.Fields![0].Value.Type = CanonicalCarryGraphCodec.Identity(typeof(object[]));
+        if (fault == "array-reference") node.Fields![0].Value.Reference = 0;
+        if (fault == "field-registry") node.Fields![1].Name += "-foreign";
+        Assert.ThrowsExactly<InvalidDataException>(() => CanonicalSceneMappingCarry.IsEmptySourceGraph(graph));
+    }
+    [TestMethod]
     [DataRow("module")]
     [DataRow("method")]
     [DataRow("type")]

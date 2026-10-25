@@ -64,7 +64,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidOperationException("Inactive Map Key Text retains a TMP rebuild entry; natural queue retirement is required.");
             }
             using var fields = new LoadingFieldDigest(value => value is UnityEngine.Object native ? "marker-canon-native:" + native.GetInstanceID() : null,
-                type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object));
+                type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object), sharedFieldReaders: true);
             string Tmp() {
                 var result = fields.Capture(tmp, "original-TMP-queues", expandRoot: true);
                 if (result.Unsupported.Count != 0) throw new InvalidOperationException("Map Key Text TMP queue preservation has unread fields.");

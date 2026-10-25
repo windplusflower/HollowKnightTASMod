@@ -160,6 +160,38 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         private sealed class ScalarCell { internal float Single; internal double Double; internal decimal Decimal; }
 
         [TestMethod]
+        public void FullHashMetadataReuseKeepsCompleteTokenBytesAliasesDiagnosticsAndFailures()
+        {
+            var cycle = new Node(); cycle.A = cycle; cycle.B = cycle;
+            var listener = new GameplayListener(13);
+            var root = new object[] { cycle, cycle, new EventOwner(listener.First),
+                new ScalarCell { Single = BitConverter.Int32BitsToSingle(unchecked((int)0xffc12345)), Double = -0d, Decimal = -123.4500m },
+                new Dictionary<string, object> { ["中文\0"] = cycle, ["listener"] = listener }, new IntPtr(123) };
+            var text = typeof(LoadingFieldDigest).GetField("text", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            using var original = new LoadingFieldDigest(_ => null, _ => false, sharedFieldReaders: false);
+            using var cached = new LoadingFieldDigest(_ => null, _ => false, sharedFieldReaders: true);
+            original.BeginSharedGraph(); cached.BeginSharedGraph();
+            try {
+                foreach (var path in new[] { "root", "second-shared-root" }) {
+                    var expected = original.Capture(root, path, true, includeFieldDiagnostics: true);
+                    var expectedBytes = System.Text.Encoding.UTF8.GetBytes(text.GetValue(original)!.ToString()!);
+                    var actual = cached.Capture(root, path, true, includeFieldDiagnostics: true);
+                    CollectionAssert.AreEqual(expectedBytes, System.Text.Encoding.UTF8.GetBytes(text.GetValue(cached)!.ToString()!));
+                    Assert.AreEqual(expected.Sha256, actual.Sha256); Assert.AreEqual(expected.Nodes, actual.Nodes);
+                    CollectionAssert.AreEqual(expected.Unsupported.ToArray(), actual.Unsupported.ToArray());
+                    CollectionAssert.AreEqual(expected.FieldDigests, actual.FieldDigests);
+                }
+            } finally { original.EndSharedGraph(); cached.EndSharedGraph(); }
+            var chain = new Node(); var tail = chain;
+            for (var i = 0; i < 45; i++) { tail.A = new Node(); tail = tail.A; }
+            foreach (var rejected in new object[] { chain, new object[50001], new string('x', 2097152) }) {
+                var first = Assert.ThrowsExactly<InvalidOperationException>(() => original.Capture(rejected, "same-budget", true));
+                var second = Assert.ThrowsExactly<InvalidOperationException>(() => cached.Capture(rejected, "same-budget", true));
+                Assert.AreEqual(first.Message, second.Message);
+            }
+        }
+
+        [TestMethod]
         public void IncomingReaderMetadataReuseReportsEquivalentRepeatedWalkCost()
         {
             var root = Enumerable.Range(0, 500).Select(i => new object[] {

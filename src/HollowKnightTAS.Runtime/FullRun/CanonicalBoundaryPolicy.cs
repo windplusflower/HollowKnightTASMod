@@ -74,6 +74,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var identities = new BoundaryObjectIdentity();
             PreparedPhase("frozen-owner-context");
             var sourceGraph = carry.DecodeActualMainForOwnerContext(source);
+            var emptyMapping = CanonicalSceneMappingCarry.IsEmptySourceGraph(sourceGraph);
             PreparedPhase("decode-source-main");
             // Already inside the single-use nine-second ApplyingActualD
             // transaction, after its full registered-S0 check. Interning changes
@@ -86,7 +87,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var detached = Array.Exists(sourceGraph.Roots, root => root.Binding == CanonicalSceneMappingCarry.DetachedPlayerRoot);
             carry.Capture(identities, epoch, input, mouse, observer.BoundarySchedulerCarry(epoch), observer.BoundaryHeroInvulnerabilityCarry(epoch),
                 targetDirectoryOnly: true, originalBootstrapPlayer: originalBootstrapPlayer, sourceRequiresDetachedPlayer: detached,
-                retainedTargetTitleCallback: originalTitleCallback);
+                retainedTargetTitleCallback: originalTitleCallback, sourceHasEmptyMapping: emptyMapping);
             PreparedPhase("target-owner-bindings");
             var apply = carry.PrepareActualRestore(source, movie, admission, data => observer.PrepareActualSchedulerVerification(data, admission));
             PreparedPhase("prepare-main-and-input");
@@ -232,7 +233,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidOperationException("Source parent OnDisable needs an unsupported live TMP queue continuation.");
             }
             using var fields = new LoadingFieldDigest(value => value is UnityEngine.Object native ? "map-key-parent-native:" + native.GetInstanceID() : null,
-                type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object));
+                type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object), sharedFieldReaders: true);
             string ReadTmp() {
                 var result = fields.Capture(tmp, "map-key-parent-original-TMP-queues", expandRoot: true);
                 if (result.Unsupported.Count != 0) throw new InvalidOperationException("Map Key parent TMP queue graph has unread fields.");

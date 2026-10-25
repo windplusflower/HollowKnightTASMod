@@ -136,7 +136,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse,
             CanonicalSchedulerCarry scheduler, CheckpointHeroInvulnerability invulnerability, bool targetDirectoryOnly = false,
             PlayerData? originalBootstrapPlayer = null, bool sourceRequiresDetachedPlayer = false,
-            GameManager.EnterSceneEvent? retainedTargetTitleCallback = null)
+            GameManager.EnterSceneEvent? retainedTargetTitleCallback = null, bool sourceHasEmptyMapping = false)
         {
             // The arbitrary target's outgoing live leaves have not yet received
             // source parent D or been replaced by the original cold producer.
@@ -190,7 +190,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             SceneLoadScalarsPrepared = true;
             var loadCallbacks = LoadingSerialSceneProbe.ReadCanonicalCallbackBindings();
             roots.Add(CanonicalSceneLoadCallbacks.Root, loadCallbacks.Data);
-            var sceneMapping = new CanonicalSceneMappingBindings(retainedTargetTitleCallback);
+            var sceneMapping = new CanonicalSceneMappingBindings(retainedTargetTitleCallback, targetDirectoryOnly && sourceHasEmptyMapping);
             roots.Add(CanonicalSceneMappingCarry.Root, sceneMapping.Data);
             if (sceneMapping.HasDetachedPlayer) roots.Add(CanonicalSceneMappingCarry.DetachedPlayerRoot, sceneMapping.OwnedPlayer);
             else if (targetDirectoryOnly && sourceRequiresDetachedPlayer) {

@@ -45,7 +45,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var pair in originalOwned.OrderBy(pair => pair.Key, StringComparer.Ordinal))
                 if (!logicalOwned.ContainsKey(pair.Value)) logicalOwned.Add(pair.Value, "owned:" + pair.Key);
             fields = new LoadingFieldDigest(Reference,
-                type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object));
+                type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object), sharedFieldReaders: true);
             for (var index = 0; index < explicitManagedRoots.Length; index++)
                 if (explicitManagedRoots[index].Value is PlayMakerFSM owner && fields.Read(owner, "fsm") is Fsm fsm)
                     RegisterFsm(fsm, "explicit-root[" + index + "]");
@@ -87,7 +87,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (owners.Any(owner => ReferenceEquals(owner, null) || owner == null))
                 throw new InvalidOperationException("Map Key ancestor contains a missing native script.");
             fields = new LoadingFieldDigest(Reference,
-                type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object));
+                type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object), sharedFieldReaders: true);
             for (var index = 0; index < owners.Length; index++)
                 if (owners[index] is PlayMakerFSM && fields.Read(owners[index], "fsm") is Fsm fsm)
                     RegisterFsm(fsm, "ancestor[" + index + "]");
