@@ -208,6 +208,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     && clock.CurrentFrameIndex == (imported ? source.NativeFrame : targetNative);
             }
             actualDApplicationStarted = true; job.Phase = "ApplyingActualD";
+            using var poolDiagnosticPhase = CanonicalPoolFlukeDiagnostic.EnterPhase("actual-D-transaction");
             applicationStage = "verify-registered-S0-before-D";
             var requireRegisteredS0AfterClock = source.RegisteredS0.Prepare(LoadingSerialSceneProbe.RecaptureRegisteredS0(
                 () => { if (!Admission()) throw new InvalidOperationException("Registered S0 pre-D admission was lost."); }));

@@ -22,6 +22,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalHudCharmPolicy charms = new CanonicalHudCharmPolicy();
         private readonly CanonicalBoundaryPoolPolicy pools = new CanonicalBoundaryPoolPolicy();
         private readonly CanonicalBossUiAnimationPolicy retiredUiAnimations;
+        private readonly CanonicalPoolFlukeDiagnostic poolFlukes;
         private readonly CanonicalVisualFsmTemplates visualTemplates = new CanonicalVisualFsmTemplates();
         private readonly CanonicalHeroAssetTemplates assetTemplates = new CanonicalHeroAssetTemplates();
         private LoadingGameplayOracle? observer;
@@ -264,6 +265,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 ?? (retiringMenuFlash == id ? "canonical-menu-flash-retirement/Image" : null) ?? LoadingSerialSceneProbe.RetiringSourceOwner(id));
             startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart);
             retiredUiAnimations = new CanonicalBossUiAnimationPolicy();
+            poolFlukes = new CanonicalPoolFlukeDiagnostic();
         }
         internal bool AdvanceStartup() => startup.Advance() && menuFlash.RequireStartup() && hudStartup.Advance()
             && menuFlash.AdvanceNaturalMenuClose();
@@ -308,6 +310,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             CanonicalInputEpoch inputControlOrigin, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse,
             string? evidenceStage = null)
         {
+            using var poolDiagnosticPhase = CanonicalPoolFlukeDiagnostic.EnterPhase("common-Canon/B" + ordinal);
             if (movieInputNativeOrigin < 0 || native < movieInputNativeOrigin || observerInputOrigin.HasValue && observerInputOrigin.Value != movieInputNativeOrigin)
                 throw new InvalidOperationException("Canonical boundary input frame origin is absent, changed or ahead of the native cursor.");
             observerInputOrigin = movieInputNativeOrigin;
@@ -584,7 +587,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             observerInputOrigin = source.OriginNative;
             observer = LoadingGameplayOracle.CreateBoundaryObserver(observerSession, source.OriginNative!.Value);
         }
-        internal void EndUiCallbackPolicy() => retiredUiAnimations.Dispose();
+        internal void EndPoolDiagnostic() => poolFlukes.Dispose();
+        internal void EndUiCallbackPolicy() { retiredUiAnimations.Dispose(); EndPoolDiagnostic(); }
         public void Dispose() { EndUiCallbackPolicy(); menuFlash.Dispose(); hudStartup.Dispose(); hudParticles.Dispose(); journal.Dispose(); observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
     }
 }

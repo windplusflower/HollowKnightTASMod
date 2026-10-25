@@ -98,6 +98,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             } catch { canonical?.EndUiCallbackPolicy(); throw; }
         }
         internal static void EndCanonicalUiCallbacks() => instance?.canonical?.EndUiCallbackPolicy();
+        internal static void EndPoolDiagnostic() => instance?.canonical?.EndPoolDiagnostic();
 
         private IEnumerator Start(OriginalTransition original, GameManager manager, GameManager.SceneLoadInfo info)
         {

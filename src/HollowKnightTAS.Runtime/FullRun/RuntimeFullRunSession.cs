@@ -724,6 +724,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 clock.ReportMovieFrameCompleted();
                 if (movieFrame == pauseAtMovieFrame)
                 {
+                    if (actualDSuffixOracle?.CompletedSuccessfully == true && movieFrame == actualDSuffixEnd)
+                        LoadingSerialSceneProbe.EndPoolDiagnostic();
                     infoTiming.FlushTrace(sessionDirectory);
                     // The hidden-launch environment survives after the window is
                     // revealed. Retire these hooks so later visible seeks never
