@@ -46,6 +46,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             && instance.sourceUnloaded && instance.retiredSourceOwners.TryGetValue(instanceId, out var identity) ? identity : null;
         internal static string? RetiringSourceOwner(int instanceId) => instance != null && instance.transition != null
             && instance.retiredSourceOwners.TryGetValue(instanceId, out var identity) ? identity : null;
+        internal static bool TryCachedSourceOwner(UnityEngine.Object owner, out string? provenance)
+        {
+            // Some pinned Unity versions do not retain a managed instance ID.
+            // Preserve the oracle's optional metadata rule; never infer an ID
+            // from m_CachedPtr or emit a native pointer.
+            var field = typeof(UnityEngine.Object).GetField("m_InstanceID", BindingFlags.Instance | BindingFlags.NonPublic);
+            var cached = field == null ? 0 : field.FieldType == typeof(int) ? (int)field.GetValue(owner)!
+                : throw new InvalidOperationException("Optional Unity cached instance identity type differs.");
+            provenance = cached == 0 ? null : RetiringSourceOwner(cached);
+            return cached != 0;
+        }
         internal static void RequireCanonicalMutationBoundary()
         {
             var self = instance;

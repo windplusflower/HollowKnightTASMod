@@ -1377,12 +1377,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             fsmIds.Add(fsm, id);
             var owner = fields.Read(fsm, "owner") as MonoBehaviour;
             var hasOwner = !ReferenceEquals(owner, null);
-            var instanceField = typeof(UnityEngine.Object).GetField("m_InstanceID", BindingFlags.Instance | BindingFlags.NonPublic);
-            var cachedInstance = hasOwner && instanceField != null ? (int)instanceField.GetValue(owner)! : 0;
+            string? retiredSourceOwner = null;
+            var cachedInstanceAvailable = hasOwner && LoadingSerialSceneProbe.TryCachedSourceOwner(owner!, out retiredSourceOwner);
             detachedFsmMetadata.Add(new { id, name = fields.Read(fsm, "name"),
                 ownerReference = hasOwner ? UnityId(owner!) : null, ownerNativeLive = owner != null,
-                retiredSourceOwner = cachedInstance != 0 ? LoadingSerialSceneProbe.RetiringSourceOwner(cachedInstance) : null,
-                cachedInstanceAvailable = cachedInstance != 0 });
+                retiredSourceOwner, cachedInstanceAvailable });
             QueueDetachedFsm(fsm, id);
             if (fields.Read(fsm, "states") is Array states)
                 for (var stateIndex = 0; stateIndex < states.Length; stateIndex++)

@@ -451,10 +451,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 JsonConvert.SerializeObject(CanonicalBoundaryEpochObservation.Project(digest, inputEpoch)));
             if (phaseOneTrace)
             {
-                if (CanonicalActualDExperiment.CaptureSource && ordinal == CanonicalActualDExperiment.SelectedOrdinal)
+                if (CanonicalBossSetupDiagnostic.TryCapture(phaseOneTrace, CanonicalActualDExperiment.Enabled,
+                    CanonicalActualDExperiment.CaptureSource, ordinal, CanonicalActualDExperiment.SelectedOrdinal,
+                    Environment.GetEnvironmentVariable(CanonicalBossSetupDiagnostic.Flag) == "1",
+                    () => CanonicalBossSetupDiagnostic.Write(ordinal, identities, directory),
+                    () => carry.Capture(identities, inputEpoch, input, mouse,
+                        observer.BoundarySchedulerCarry(inputEpoch), observer.BoundaryHeroInvulnerabilityCarry(inputEpoch)), out var data))
                 {
-                    var data = carry.Capture(identities, inputEpoch, input, mouse,
-                        observer.BoundarySchedulerCarry(inputEpoch), observer.BoundaryHeroInvulnerabilityCarry(inputEpoch));
                     if (data.Unsupported.Length != 0 || carry.InputGraph!.Unsupported.Length != 0)
                         throw new InvalidOperationException("Actual D source has unread or unsupported managed data: "
                             + string.Join(", ", data.Unsupported));
