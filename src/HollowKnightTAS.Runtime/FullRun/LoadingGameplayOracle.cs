@@ -79,6 +79,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly LoadingGeoIncomingReferences hudPresentationIncoming = new LoadingGeoIncomingReferences();
         private readonly LoadingGeoIncomingReferences frozenHudPresentationIncoming = new LoadingGeoIncomingReferences();
         private bool hudPresentationSample;
+        private CanonicalHudBorderQueuePartition? hudBorderQueues;
+        private string? hudBorderQueueFailure;
         private readonly LoadingGeoIncomingReferences frozenMenuFlashIncoming = new LoadingGeoIncomingReferences();
         private bool frozenMenuFlashSample;
         private readonly LoadingGeoIncomingReferences mapKeyIncoming = new LoadingGeoIncomingReferences();
@@ -153,6 +155,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                             mapKeyParentIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                             if (frozenMapKeySample) frozenMapKeyIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         }
+                        hudBorderQueues?.ObserveSlot(owner, field, index, value, path);
                         if (hudPresentationSample) {
                             hudPresentationIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                             frozenHudPresentationIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
@@ -160,7 +163,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (frozenMarkerSample) frozenMarkerIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (frozenGeoSample) frozenGeoIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (frozenMenuFlashSample) frozenMenuFlashIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
-                    }, observeSlotValue: value => hudPresentationSample && (hudPresentationIncoming.Owns(value) || frozenHudPresentationIncoming.Owns(value)) || geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || mapKeyParentIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value) || frozenMenuFlashSample && frozenMenuFlashIncoming.Owns(value));
+                    }, observeSlotValue: value => hudBorderQueues != null && hudBorderQueues.Owns(value) || hudPresentationSample && (hudPresentationIncoming.Owns(value) || frozenHudPresentationIncoming.Owns(value)) || geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || mapKeyParentIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value) || frozenMenuFlashSample && frozenMenuFlashIncoming.Owns(value));
             if (!physicsFollowOn && (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1"))
                 nativeScheduler = new LoadingNativeSchedulerDigest();
             if (physicsFollowOn || boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
@@ -295,6 +298,11 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal Action RequireFrozenS0Scheduler() => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).RequireFrozenCapturedQueue();
         internal LoadingGeoIncomingReferences FreezeGeoIncoming() => geoIncoming.Freeze();
+        internal CanonicalHudBorderQueuePartition FreezeHudBorderQueues()
+        {
+            if (hudBorderQueues == null || hudBorderQueueFailure != null) throw new InvalidOperationException("HUD Border queue snapshot is unavailable: " + hudBorderQueueFailure);
+            hudBorderQueues.RequireBeforeMutation(); return hudBorderQueues;
+        }
         internal LoadingGeoIncomingReferences FreezeHudPresentationIncoming() => hudPresentationIncoming.Freeze();
         internal LoadingGeoIncomingReferences FreezeMarkerIncoming() => markerIncoming.Freeze();
         internal LoadingGeoIncomingReferences FreezeMapKeyIncoming() => mapKeyIncoming.Freeze();
@@ -793,9 +801,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             var frozenPresentation = CanonicalHudPresentationColdTemplate.FrozenInventory;
             hudPresentationSample = frozenPresentation != null;
             if (hudPresentationSample) {
-                hudPresentationIncoming.BeginHudPresentationSample(UnityId, CanonicalHudPresentationDirectory.Current(), allowGenerated: true);
+                hudPresentationIncoming.BeginHudPresentationSample(UnityId, CanonicalHudPresentationDirectory.Current(), allowGenerated: true, includeBorderMeshes: true);
                 hudPresentationIncoming.ObserveRetiringHudPresentationMeshes(CanonicalHudPresentationDirectory.Current(), UnityId);
                 frozenHudPresentationIncoming.BeginHudPresentationSample(UnityId, frozenPresentation!);
+                hudBorderQueues?.Dispose(); hudBorderQueues = null; hudBorderQueueFailure = null;
+                try { hudBorderQueues = new CanonicalHudBorderQueuePartition(CanonicalHudBorderInputs.Paths.Select(path => CanonicalHudPresentationDirectory.Current().Find(path).GetComponent<TMPro.TextMeshPro>()).ToArray()); }
+                catch (Exception error) { hudBorderQueueFailure = error.GetType().Name + ": " + error.Message; }
             }
             markerIncoming.BeginMarkerSample(UnityId);
             var frozenMarker = CanonicalMarkerColdTemplate.FrozenOwner;
@@ -1008,6 +1019,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                         digest = digest.Sha256, nodes = digest.Nodes, unsupported = digest.Unsupported,
                         fieldDigests = digest.FieldDigests });
                 }
+            if (!nativePhysicsOnly && hudBorderQueues != null) hudBorderQueues.ReadFiniteRoots((owner, name, expand) => {
+                var digest = fields.Capture(owner, name, expandRoot: expand);
+                staticRoots.Append(name).Append(':').Append(digest.Sha256).Append('\n');
+                foreach (var omitted in digest.Unsupported) omissions.Add(omitted);
+                inventory.Add(new { id = name, type = owner.GetType().FullName, digest = digest.Sha256, nodes = digest.Nodes, unsupported = digest.Unsupported });
+            });
             for (var i = 0; i < detachedFsmRoots.Count; i++)
             {
                 var entry = detachedFsmRoots[i];
@@ -1066,6 +1083,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             };
             CaptureProgress("asset-values");
             result["assetValues"] = nativePhysicsOnly || !fullInventory ? "not-observed" : CaptureAssetValues(inventory);
+            if (hudBorderQueues != null) {
+                try { hudBorderQueues.RequireIncomingClosed(); }
+                catch (Exception error) { hudBorderQueueFailure = error.Message; omissions.Add("HUD-Border-queue:" + error.Message); }
+            }
             if (frozenGeoSample) frozenGeoIncoming.RequireNoExternalConsumers();
             if (hudPresentationSample) frozenHudPresentationIncoming.RequireNoExternalConsumers();
             if (frozenMarkerSample) frozenMarkerIncoming.RequireNoExternalConsumers();
@@ -1344,6 +1365,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private string? ReferenceCore(object value)
         {
+            if (fields.Capturing) hudBorderQueues?.ObserveReference(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && geoIncoming.Owns(value)) geoIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && readingMapKeyManagedRoots && mapKeyParentIncoming.Owns(value)) mapKeyParentIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && readingMapKeyManagedRoots && mapKeyIncoming.Owns(value)) mapKeyIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
@@ -1685,6 +1707,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             => Sample("event", "active-scene:" + previous.name + "->" + current.name);
         public void Dispose()
         {
+            hudBorderQueues?.Dispose(); hudBorderQueues = null;
             if (physicsFollowOn) { if (!sealedTrace) SealPhysicsFollowOn(false, "disposed-before-window-complete"); return; }
             if (boundaryCapture)
             {

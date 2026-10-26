@@ -22,6 +22,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             new KeyValuePair<string, string>("globalgamemanagers.assets", "094a137c257826aca23e4ba78b12d639c9f6b5f32f92b43fdb99a0348306bc01"),
             new KeyValuePair<string, string>("resources.assets", "f2a9851f0424d94c0231b2689aeb51327fc7054f284bd77db2e3293d80b9386c"),
             new KeyValuePair<string, string>("level470", "a2298edcdfa6888997f39a436ac0a2f1a97d66d3589e7a5b25473401845be6b5"),
+            new KeyValuePair<string, string>("Managed/mscorlib.dll", "356e3b1f103313773263feb40e505403bf93f17a86d646d395717f19399ab819"),
             new KeyValuePair<string, string>("level1", CanonicalHudPresentationDirectory.OriginalLevel1Sha256),
             new KeyValuePair<string, string>("Managed/Assembly-CSharp.dll", "5944411bd93830369390a4b51766ee68c4ab26195b299e25a07b5e7d0e00086d")
         };

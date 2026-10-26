@@ -6,9 +6,8 @@ using UnityEngine;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
-    // The source graph contains every managed field of the nine Text leaves.
-    // Key parents and their Control FSM are external, never canonical inputs
-    // inferred from hasPin or mapKeyPref.
+    // Actual forty-owner source graph after the common ten-cold/three-active producer.
+    // The three native meshes are bound only through their exact original TMP Awake owners.
     internal sealed class CanonicalHudPresentationSourceDomain
     {
         private const string MainNode = "HudPresentation/MainNode/", Owner = "HudPresentation/Owner/";
@@ -27,30 +26,21 @@ namespace HollowKnightTAS.Runtime.FullRun
             LoadingSerialSceneProbe.RequireCanonicalMutationBoundary();
             ObserveCold(keys);
         }
-        private static void ObserveCold(Transform keys)
-        {
-            var directory = CanonicalHudPresentationDirectory.Build(keys);
-            using var validation = new LoadingEngineClockProbe.CheckpointValidation();
-            foreach (var owner in directory.Values.OfType<MonoBehaviour>()) {
-                var parent = owner.transform.parent;
-                if (parent == null || parent.gameObject.activeInHierarchy || owner.gameObject.activeInHierarchy)
-                    throw new InvalidOperationException("Active HUD presentation needs its original natural-close continuation.");
-                var flags = BoundaryMonoLifecycle.ObserveUnstartedUi(owner);
-                if (flags[0] != 0 || flags[1] != 0 || flags[3] != 0 || flags[4] != 0)
-                    throw new InvalidOperationException("HUD presentation canonical owner is not a real never-awakened inactive instance.");
-            }
-        }
+        private static void ObserveCold(Transform keys, IReadOnlyList<GameObject>? roots = null)
+        { CanonicalHudPresentationColdTemplate.RequireProduced(CanonicalHudPresentationDirectory.Build(keys, roots)); }
         internal byte[] Capture(Transform keys, IReadOnlyDictionary<object, int> mainNodes,
             Func<object, string?> bindOther, Action<CanonicalCarryGraphData> auditAssets)
         {
             RequireCold(keys);
             var directory = CanonicalHudPresentationDirectory.Build(keys);
             CanonicalMarkerEventCarry.RequireEmpty(directory);
+            var meshes = CanonicalHudPresentationColdTemplate.FreshBorderMeshes(directory);
             var readOnly = CanonicalMarkerReadonlyCarry.MapKeyDirectory(directory);
             string? Bind(object value) {
                 if (mainNodes.TryGetValue(value, out var id)) return MainNode + id;
                 foreach (var pair in directory) if (ReferenceEquals(pair.Value, value)) return Owner + pair.Key;
                 foreach (var pair in readOnly) if (ReferenceEquals(pair.Value, value)) return Owner + pair.Key;
+                foreach (var pair in meshes) if (ReferenceEquals(pair.Value, value)) return Owner + pair.Key;
                 return bindOther(value);
             }
             var graph = codec.Capture(CanonicalHudPresentationCarry.Roots(CaptureOriginalAssets(directory)), Bind);
@@ -60,12 +50,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             return codec.Encode(graph);
         }
         internal Action Prepare(byte[] source, Transform keys, CanonicalCarryGraphCodec.PreparedView main,
-            Action requireMainApplied, Func<string, object> resolveOther, Func<bool> admitted, Action<IReadOnlyDictionary<string, object>> exposeDirectory, out Action verifySource)
+            Action requireMainApplied, Func<string, object> resolveOther, Func<bool> admitted, Action<IReadOnlyDictionary<string, object>> exposeDirectory, out Action verifySource, IReadOnlyList<GameObject>? producedRoots = null)
         {
             requireMainApplied();
             if (!admitted()) throw new InvalidOperationException("HUD presentation preparation lost post-main paused admission.");
-            RequireCold(keys);
-            var directory = CanonicalHudPresentationDirectory.Build(keys);
+            ObserveCold(keys, producedRoots);
+            var directory = CanonicalHudPresentationDirectory.Build(keys, producedRoots);
+            var meshes = CanonicalHudPresentationColdTemplate.FreshBorderMeshes(directory);
             var readOnly = CanonicalMarkerReadonlyCarry.MapKeyDirectory(directory);
             var actual = CaptureOriginalAssets(directory);
             object Resolve(string binding) {
@@ -76,6 +67,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (binding.StartsWith(Owner, StringComparison.Ordinal))
                     return directory.TryGetValue(binding.Substring(Owner.Length), out var value) ? value
                         : readOnly.TryGetValue(binding.Substring(Owner.Length), out var preserved) ? preserved
+                        : meshes.TryGetValue(binding.Substring(Owner.Length), out var mesh) ? mesh
                         : throw new InvalidDataException("HUD presentation source original owner binding is absent.");
                 return resolveOther(binding);
             }
@@ -90,11 +82,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidDataException("HUD presentation source original asset provenance or shared aliases differ.");
                 CanonicalHudPresentationCarry.Roots(saved);
                 for (var owner = 0; owner < saved.NativeOwners.Length; owner++)
-                    if (saved.Lifecycle[owner * 5] != 0 || saved.Lifecycle[owner * 5 + 1] != 0
-                        || saved.Lifecycle[owner * 5 + 3] != 0 || saved.Lifecycle[owner * 5 + 4] != 0)
+                    if (CanonicalHudPresentationDirectory.IsBorderMember(saved.NativeOwners[owner])
+                        ? saved.Lifecycle[owner * 5] != 1 || directory[saved.NativeOwners[owner]] is ChangeFontByLanguage && saved.Lifecycle[owner * 5 + 1] != 0 || saved.Lifecycle[owner * 5 + 2] != 1 || saved.Lifecycle[owner * 5 + 3] != 0
+                        : saved.Lifecycle[owner * 5] != 0 || saved.Lifecycle[owner * 5 + 1] != 0 || saved.Lifecycle[owner * 5 + 3] != 0 || saved.Lifecycle[owner * 5 + 4] != 0)
                         throw new InvalidDataException("HUD presentation source packet predates the common real cold Canon.");
                 var final = directory.ToDictionary(pair => pair.Key, pair => (object)pair.Value, StringComparer.Ordinal);
                 foreach (var pair in readOnly) final.Add(pair.Key, pair.Value);
+                foreach (var pair in meshes) final.Add(pair.Key, pair.Value);
                 for (var owner = 0; owner < saved.NativeOwners.Length; owner++) {
                     var native = directory[saved.NativeOwners[owner]];
                     if (!(native is TMPro.TextMeshPro)) continue;

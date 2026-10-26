@@ -20,8 +20,23 @@ namespace HollowKnightTAS.Runtime.FullRun
             var generated = CanonicalHudPresentationDirectory.GeneratedSubmeshes(directory);
             var old = CanonicalHudPresentationDirectory.RootPaths.Select(path => keys.Find(path).gameObject).ToArray();
             var parents = old.Select(root => root.transform.parent).ToArray();
-            if (parents.Any(parent => parent == null || parent.gameObject.activeInHierarchy) || old.Any(root => root.activeInHierarchy))
-                throw new InvalidOperationException("Active HUD presentation requires its original natural-close continuation.");
+            CanonicalHudBorderInputs.Data inputs;
+            CanonicalHudBorderQueuePartition queues;
+            try {
+                var paths = CanonicalHudPresentationDirectory.RootPaths;
+                if (Enumerable.Range(0, 13).Any(index => parents[index] == null
+                    || parents[index].gameObject.activeInHierarchy != CanonicalHudBorderInputs.IsBorderPath(paths[index])
+                    || old[index].activeInHierarchy != CanonicalHudBorderInputs.IsBorderPath(paths[index])))
+                    throw new InvalidOperationException("Original HUD mixed active Border/cold Charms parent phase is not ready.");
+                inputs = CanonicalHudBorderInputs.Capture(keys, directory, template.BindOriginalAsset);
+                queues = new CanonicalHudBorderQueuePartition(CanonicalHudBorderInputs.Paths.Select(path => keys.Find(path).GetComponent<TMPro.TextMeshPro>()).ToArray());
+            } catch (Exception error) {
+                // Snapshot admission only: preserve an ordinary in-progress menu without injecting a close event or time.
+                template.MarkUnsupported(error.GetType().Name + ": " + error.Message);
+                return new { snapshotSupported = false, commonHudMutationExecuted = false, sourceInputsPreserved = true,
+                    reason = template.SnapshotUnsupportedReason, completeStateCoverage = false };
+            }
+            using var queueScope = queues;
             var native = directory.ToDictionary(pair => pair.Key, pair => (object)pair.Value, StringComparer.Ordinal);
             var poseOwners = parents.SelectMany(Ancestors).Distinct().ToArray();
             var parentRoots = poseOwners.SelectMany(parent => parent.GetComponents<MonoBehaviour>()).Distinct()
@@ -83,7 +98,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var queueNames = new[] { "m_GraphicQueueLookup", "m_GraphicRebuildQueue", "m_LayoutQueueLookup", "m_LayoutRebuildQueue" };
             if (!tmpType.GetFields(Instance).Select(field => field.Name).OrderBy(name => name, StringComparer.Ordinal).SequenceEqual(queueNames))
                 throw new InvalidOperationException("Original TMP queue field ABI differs.");
-            var textIds = new HashSet<int>(texts.Select(owner => owner.GetInstanceID()));
+            var textIds = new HashSet<int>(directory.Where(pair => pair.Value is TMPro.TextMeshPro && !CanonicalHudPresentationDirectory.IsBorderMember(pair.Key)).Select(pair => pair.Value.GetInstanceID()));
             foreach (var name in queueNames) {
                 var value = tmpType.GetField(name, Instance)!.GetValue(tmp);
                 if (value is IDictionary lookup && lookup.Keys.Cast<object>().Any(key => key is int id && textIds.Contains(id))
@@ -101,12 +116,22 @@ namespace HollowKnightTAS.Runtime.FullRun
             var rng = UnityEngine.Random.state; var particles = LoadingGameplayOracle.CaptureParticleRandomState();
             var incoming = new LoadingGeoIncomingReferences();
             CanonicalGeoColdTemplate.ObserveIncoming(GameCameras.instance.geoCounter, presentationIncoming: incoming,
-                presentationRoot: keys, retiringPresentationMeshes: true);
+                presentationRoot: keys, retiringPresentationMeshes: true, borderQueues: queues);
+            try { incoming.Prepare(LoadingGeoIncomingReferences.BuildHudPresentationDirectory(CanonicalHudPresentationColdTemplate.FrozenInventory!)); }
+            catch (Exception error) {
+                template.MarkUnsupported("Original HUD incoming replacement preflight: " + error.Message);
+                return new { snapshotSupported = false, commonHudMutationExecuted = false, sourceInputsPreserved = true, reason = template.SnapshotUnsupportedReason };
+            }
             var owners = directory.Values.Concat(generated.Values).OfType<MonoBehaviour>().ToDictionary(owner => owner.GetInstanceID());
             observer.RecaptureOwnedHudScheduler(Require, () => { });
-            var transition = observer.PrepareOwnedHudLifecycle(owners, _ => false, out var retireStarts);
-            var created = template.ProduceInactive();
-            void RequireCreated() => CanonicalHudPresentationColdTemplate.RequireCold(CanonicalHudPresentationDirectory.Build(keys, created));
+            var born = new HashSet<int>();
+            var transition = observer.PrepareOwnedHudLifecycle(owners, id => born.Contains(id), out var retireStarts);
+            queues.RequireBeforeMutation();
+            var created = template.ProduceMixed(inputs);
+            foreach (var owner in CanonicalHudPresentationDirectory.Build(keys, created).Values.OfType<MonoBehaviour>()) born.Add(owner.GetInstanceID());
+            var borderCreated = CanonicalHudBorderInputs.Paths.Select(path => (TMPro.TextMeshPro)CanonicalHudPresentationDirectory.Build(keys, created)["$/" + path + ":TMPro.TextMeshPro[0]"]).ToArray();
+            var verifyQueues = queues.ExpectOriginalEnableThenRetirement(borderCreated);
+            void RequireCreated() => CanonicalHudPresentationColdTemplate.RequireProduced(CanonicalHudPresentationDirectory.Build(keys, created));
             RequireCreated();
             externalGuard.PrepareExplicitIncomingRebind(CanonicalHudPresentationDirectory.Build(keys, created)
                 .ToDictionary(pair => pair.Key, pair => (object)pair.Value, StringComparer.Ordinal));
@@ -115,18 +140,18 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var text in old) UnityEngine.Object.DestroyImmediate(text);
             retireStarts();
             observer.RecaptureOwnedHudScheduler(Require, transition);
-            plan.VerifyReadback(); RequireCreated(); Require(); externalGuard.VerifyManagedRoots(); template.RequireFrozenAssets();
+            plan.VerifyReadback(); RequireCreated(); Require(); externalGuard.VerifyManagedRoots(); template.RequireFrozenAssets(); verifyQueues();
             if (created.Where((text, index) => !ReferenceEquals(text.transform.parent, parents[index])).Any()
                 || parents.Any(parent => parent.gameObject.activeInHierarchy) || old.Any(text => text != null)
                 || !CanonicalHudPresentationDirectory.Build(keys).Keys.SequenceEqual(directory.Keys) || meshes.Any(mesh => mesh != null)
                 || !ReferenceEquals(fsmList, fsmListField.GetValue(null)) || fsmList.Count != retainedFsms.Length
                 || fsmList.Cast<object>().Where((item, index) => !ReferenceEquals(item, retainedFsms[index])).Any()
                 || !ReferenceEquals(selectedBefore, selectedField.GetValue(null)) || !ReferenceEquals(raycasts, raycastField.GetValue(null))
-                || !ReferenceEquals(controllerBefore, controllerEvent.GetValue(input)) || !ReferenceEquals(tmp, tmpField.GetValue(null)) || tmpBefore != Tmp()
+                || !ReferenceEquals(controllerBefore, controllerEvent.GetValue(input)) || !ReferenceEquals(tmp, tmpField.GetValue(null))
                 || !rng.Equals(UnityEngine.Random.state) || !particles.SequenceEqual(LoadingGameplayOracle.CaptureParticleRandomState()))
                 throw new InvalidOperationException("HUD presentation cold Canon changed an external callback, queue, RNG, registration or retired native mesh contract.");
-            return new { originalRoots = 13, originalObjects = 18, originalMonoOwners = 40, realColdNative = true,
-                fullIncomingReadback = true, retiredOwnedMeshes = meshes.Length, controllerAndTmpQueuesPreserved = true,
+            return new { originalRoots = 13, originalObjects = 18, originalMonoOwners = 40, coldCharmsRoots = 10, activeBorderRoots = 3, originalAwakeAndQueuedStart = true,
+                fullIncomingReadback = true, retiredOwnedMeshes = meshes.Length, controllerAndUnrelatedTmpStoragePreserved = true,
                 gameplayParentDataTouched = false, sourceHistoryReplayed = false, completeStateCoverage = false };
         }
         private static IEnumerable<Transform> Ancestors(Transform node)

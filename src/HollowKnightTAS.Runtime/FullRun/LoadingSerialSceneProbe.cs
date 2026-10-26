@@ -412,6 +412,24 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             finally { self.protectedClockCanonScope = null; }
         }
+        private bool protectedSourceBorderDerivationConsumed;
+        internal static void DeriveProtectedSourceBorderDirectory(Action deriveAndApplySource, Action requireAdmission)
+        {
+            GetProtectedObservationBoundary();
+            var self = instance!;
+            if (!CanonicalActualDExperiment.Enabled || !CanonicalClockApplyExperiment.Enabled || self.protectedClockCanonScope != null
+                || self.protectedSourceBorderDerivationConsumed)
+                throw new InvalidOperationException("Source Border derivation requires its single protected actual D mutation scope.");
+            self.protectedSourceBorderDerivationConsumed = true;
+            using var scope = new CanonicalBoundaryMutationScope(requireAdmission);
+            scope.Enter(); self.protectedClockCanonScope = scope;
+            try {
+                RequireCanonicalMutationBoundary();
+                deriveAndApplySource(); requireAdmission();
+                GetProtectedObservationBoundary(); requireAdmission();
+            }
+            finally { self.protectedClockCanonScope = null; }
+        }
         internal static void DeriveProtectedSourceMapKeyDirectory(Action deriveAndApplySource, Action requireAdmission)
         {
             GetProtectedObservationBoundary();

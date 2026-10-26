@@ -131,8 +131,9 @@ internal static class Program
         catch (TargetInvocationException error) when (error.InnerException is FixtureFault) { return "fault"; }
         catch (FixtureFault) { return "fault"; }
     }
-    public static void Main()
+    public static void Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--font") { FontContract.Run(args[1]); return; }
         Require(typeof(BossChallengeUI).Module.ModuleVersionId.ToString("D") == CanonicalSceneMappingCarry.ModuleMvid, "Original module drift");
         CanonicalBossChallengeOriginal.Validate();
         State = OriginalIL.Copy(typeof(BossStatue).GetMethod("get_StatueState", Flags)!, Replace);

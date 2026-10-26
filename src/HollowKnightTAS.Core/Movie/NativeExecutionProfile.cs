@@ -36,7 +36,7 @@ namespace HollowKnightTAS.Core.Movie
         public const string CanonicalRetiredFallTrailTweenPolicyId = "original-Hero-Fall-Trail:Trail-Control:Playing-0-action-2:Idle-2:destroyed-iTweenFSMEvents-null-v1";
         public const string CanonicalBossChallengeContextPolicyId = "explicit-original-statue-challenge-context:dead-ui:original-b0-b1-api-order:original-b2:sealed-Marmu-origin:v1";
 
-        public const string CanonicalHudPresentationPolicyId = "original-level1-13roots18objects40mono9TMP7FSM:never-awake-factory:full-incoming-and-source-fields:v1";
+        public const string CanonicalHudPresentationPolicyId = "original-level1-10cold-3active-18objects40mono9TMP7FSM:original-preAwake-inputs-and-Start:owned-mesh-and-queue-partition:full-source-fields:v2";
 
         public static string SelectedProfileId => Select(
             Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_STARTUP_CLOCK") == "1",

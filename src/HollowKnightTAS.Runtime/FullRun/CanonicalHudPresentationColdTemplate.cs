@@ -29,6 +29,43 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal string AssetManifest { get; private set; } = "";
         internal bool Captured => holder != null;
 
+        internal CanonicalHudBorderInputs.Data? LastBorderInputs { get; private set; }
+        private readonly HashSet<int> producedBorderStarts = new HashSet<int>();
+        internal bool OwnsNewStart(int instance) => producedBorderStarts.Contains(instance);
+        internal string? SnapshotUnsupportedReason { get; private set; }
+        internal void MarkUnsupported(string reason) { LastBorderInputs = null; SnapshotUnsupportedReason = reason; }
+        internal void RequireSnapshotReady()
+        { if (LastBorderInputs == null || SnapshotUnsupportedReason != null) throw new InvalidOperationException("HUD snapshot has no complete original mixed producer: " + SnapshotUnsupportedReason); }
+        internal static void RequireProduced(IReadOnlyDictionary<string, UnityEngine.Object> directory)
+        {
+            if (directory.Count != 110) throw new InvalidDataException("Original mixed HUD owner directory differs.");
+            using var validation = new LoadingEngineClockProbe.CheckpointValidation();
+            foreach (var pair in directory.Where(pair => pair.Value is MonoBehaviour)) {
+                var owner = (MonoBehaviour)pair.Value; var flags = BoundaryMonoLifecycle.ObserveUnstartedUi(owner);
+                if (CanonicalHudPresentationDirectory.IsBorderMember(pair.Key)) {
+                    if (!owner.gameObject.activeInHierarchy || flags[0] != 1 || owner is ChangeFontByLanguage && flags[1] != 0 || flags[2] != 1 || flags[3] != 0)
+                        throw new InvalidOperationException("Original active Border producer has an unsupported native Awake/Start/enabled phase.");
+                } else if (owner.gameObject.activeInHierarchy || flags[0] != 0 || flags[1] != 0 || flags[3] != 0 || flags[4] != 0)
+                    throw new InvalidOperationException("Original Charms cold producer has an unsupported native phase.");
+            }
+            CanonicalMarkerEventCarry.RequireEmpty(directory); CanonicalMarkerReadonlyCarry.CaptureMapKey(directory);
+            FreshBorderMeshes(directory);
+        }
+        internal static IReadOnlyDictionary<string, object> FreshBorderMeshes(IReadOnlyDictionary<string, UnityEngine.Object> directory, bool requireFresh = true)
+        {
+            var result = new SortedDictionary<string, object>(StringComparer.Ordinal);
+            foreach (var pair in directory.Where(pair => pair.Value is TextMeshPro && CanonicalHudPresentationDirectory.IsBorderMember(pair.Key))) {
+                var text = (TextMeshPro)pair.Value;
+                var mesh = typeof(TextMeshPro).GetField("m_mesh", Flags)!.GetValue(text) as Mesh;
+                if (mesh == null || !ReferenceEquals(text.GetComponent<MeshFilter>().sharedMesh, mesh)
+                    || requireFresh && (mesh.vertexCount != 0 || mesh.triangles.Length != 0) || mesh.hideFlags != HideFlags.HideAndDontSave
+                    || result.Values.Any(value => ReferenceEquals(value, mesh)))
+                    throw new InvalidOperationException("Original active TMP Awake did not produce its distinct fresh empty owned mesh.");
+                result.Add(pair.Key + "/original-Awake-mesh", mesh);
+            }
+            if (result.Count != 3) throw new InvalidDataException("Original active Border mesh producer directory differs.");
+            return result;
+        }
         internal static void RequireCold(IReadOnlyDictionary<string, UnityEngine.Object> directory)
         {
             if (directory.Count != 110 || directory.Values.OfType<MonoBehaviour>().Count() != 40)
@@ -229,6 +266,43 @@ namespace HollowKnightTAS.Runtime.FullRun
                 clone.transform.SetParent(parents[index], false); clone.transform.SetSiblingIndex(siblings[index]); result[index] = clone;
             }
             RequireCold(CanonicalHudPresentationDirectory.Build(inventory!, result));
+            return result;
+        }
+        internal GameObject[] ProduceMixed(CanonicalHudBorderInputs.Data source, bool borderOnly = false)
+        {
+            RequireFrozenAssets(); CanonicalHudBorderInputs.Validate(source);
+            var paths = CanonicalHudPresentationDirectory.RootPaths;
+            if (parents.Length != 13 || Enumerable.Range(0, 13).Any(index => parents[index] == null
+                || parents[index].gameObject.activeInHierarchy != CanonicalHudBorderInputs.IsBorderPath(paths[index])))
+                throw new InvalidOperationException("Original mixed HUD producer parent lifecycle differs.");
+            var result = new GameObject[13];
+            for (var index = 0; index < result.Length; index++) {
+                if (borderOnly && !CanonicalHudBorderInputs.IsBorderPath(paths[index])) { result[index] = inventory!.Find(paths[index]).gameObject; continue; }
+                result[index] = UnityEngine.Object.Instantiate(templates[index], holder!.transform, false);
+                result[index].name = templates[index].name;
+            }
+            var inactive = CanonicalHudPresentationDirectory.Build(inventory!, result); RequireCold(inactive);
+            CanonicalHudBorderInputs.ApplyBeforeOriginalAwake(source, inactive);
+            for (var index = 0; index < result.Length; index++) {
+                if (borderOnly && !CanonicalHudBorderInputs.IsBorderPath(paths[index])) continue;
+                result[index].transform.SetParent(parents[index], false); result[index].transform.SetSiblingIndex(siblings[index]);
+            }
+            var produced = CanonicalHudPresentationDirectory.Build(inventory!, result); RequireProduced(produced);
+            var floatCodec = CanonicalCarryFieldRegistry.Create(hudPresentationDomain: true);
+            for (var index = 0; index < 3; index++) {
+                var key = "$/" + CanonicalHudBorderInputs.Paths[index] + ":TMPro.TextMeshPro[0]";
+                var text = (TextMeshPro)produced[key];
+                var sourceOwner = Array.IndexOf(source.Owners, key);
+                var fontSize = Array.FindIndex(CanonicalHudBorderInputs.Fields(typeof(TextMeshPro)), field => field.Name == "m_fontSize");
+                var actual = typeof(TMP_Text).GetField("m_fontSize", Flags)!.GetValue(text);
+                if (sourceOwner < 0 || fontSize < 0 || !floatCodec.SameRawSlot(source.Values[sourceOwner][fontSize], actual, typeof(float), 0)
+                    || !floatCodec.SameRawSlot(source.BaseFontSizes[index], typeof(ChangeFontByLanguage).GetField("startFontSize", Flags)!.GetValue(text.GetComponent<ChangeFontByLanguage>()), typeof(float), 0))
+                    throw new InvalidOperationException("Original Border language OnEnable reapplied a scale or lost its pre-language baseline.");
+            }
+            producedBorderStarts.Clear();
+            foreach (var pair in produced.Where(pair => pair.Value is MonoBehaviour && CanonicalHudPresentationDirectory.IsBorderMember(pair.Key)))
+                producedBorderStarts.Add(pair.Value.GetInstanceID());
+            LastBorderInputs = source; SnapshotUnsupportedReason = null;
             return result;
         }
         public void Dispose() { if (holder != null) UnityEngine.Object.DestroyImmediate(holder); holder = null; FrozenInventory = null; inventory = null; }

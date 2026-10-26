@@ -49,6 +49,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             new Definition("Charms/Text Desc",1038,Text(typeof(ChangeFontByLanguage))),
             new Definition("Charms/Text Name",1048,Text(typeof(ChangeFontByLanguage)))
         };
+        internal static bool IsBorderMember(string key) => Nodes.Take(3).Any(node => key == "$/" + node.Path || key.StartsWith("$/" + node.Path + ":", StringComparison.Ordinal));
         internal static Definition[] Definitions => (Definition[])Nodes.Clone();
         private static readonly Type[] ManagedTypes = { typeof(TextContainer), typeof(TextMeshPro), typeof(UnboldIfCJK), typeof(ChangeFontByLanguage),
             typeof(PlayMakerFSM), typeof(MenuButtonIcon), typeof(SetTextMeshProGameText), typeof(WaveEffectControl), typeof(SimpleFadeOut) };

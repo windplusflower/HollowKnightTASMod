@@ -45,6 +45,19 @@ try {
  if((Calls $reset Object DestroyImmediate).Count-ne1-or(Calls $reset CanonicalGeoColdTemplate ObserveIncoming).Count-ne1){throw 'HUD original destruction or full incoming proof absent'}
  $factoryCapture=(FindMethod (FindType $runtime CanonicalHudPresentationColdTemplate) Capture)[0]
  if((Calls $factoryCapture CanonicalCarryFieldRegistry Create).Count-ne1-or(Calls $factoryCapture CanonicalCarryGraphCodec '.ctor').Count-ne0){throw 'HUD raw slots require full original value-type registry'}
+ $borderPolicy=(FindMethod $policy RestoreBorderSourceDependencies)[0]
+ if((Calls $borderPolicy LoadingSerialSceneProbe DeriveProtectedSourceBorderDirectory).Count-ne1){throw 'Border target producer lacks single protected native mutation scope'}
+ $policyNested=@($policy.NestedTypes|ForEach-Object {$_.Methods}|Where-Object HasBody)
+ if(@($policyNested|ForEach-Object{Calls $_ CanonicalHudPresentationColdTemplate ProduceMixed}).Count-ne1){throw 'Border target original factory missing'}
+ if(@($nested|ForEach-Object{Calls $_ CanonicalHudBorderInputDomain Decode}).Count-ne1){throw 'Independent Border pre-Awake D decode missing'}
+ if((Calls $reset CanonicalHudPresentationColdTemplate ProduceMixed).Count-ne1-or(Calls $reset CanonicalHudBorderQueuePartition ExpectOriginalEnableThenRetirement).Count-ne1){throw 'Common mixed original factory/queue prediction missing'}
+ if((Calls $walker CanonicalHudBorderQueuePartition ReadFiniteRoots).Count-ne1-or(Calls $walker CanonicalHudBorderQueuePartition RequireIncomingClosed).Count-ne1){throw 'Queue complete incoming proof not wired into existing walk'}
+ $actualD=FindType $runtime CanonicalActualDExperiment
+ $actualCtor=(FindMethod $actualD '.ctor')[0]
+ $schemaStore=@($actualCtor.Body.Instructions|Where-Object{$_.OpCode.Name-eq'stfld'-and$_.Operand.Name-eq'Schema'})
+ if($schemaStore.Count-ne1-or$schemaStore[0].Previous.Operand-ne14){throw 'Actual D schema14 isolation missing'}
+ $schemaReads=@((FindMethod $actualD Validate)[0].Body.Instructions|Where-Object{$_.OpCode.Name-eq'ldfld'-and$_.Operand.Name-eq'Schema'})
+ if($schemaReads.Count-ne1-or$schemaReads[0].Next.Operand-ne14){throw 'Old D schema is not rejected before source writes'}
  $hudCarry=FindType $runtime CanonicalHudPresentationCarry
  if((Calls (FindMethod $hudCarry Capture)[0] BoundaryMonoLifecycle ObserveUnstartedUi).Count-gt1){throw 'Unexpected HUD lifecycle observation route'}
  [ordered]@{commonStartupAssetLoadOnce=$true;commonBoundaryCanon=$true;oneOriginalIncomingInventory=$true;threeFiniteRetiredRoots=$true;sourceAuditAndTargetDApply=$true;originalAwakeClearBeforeInvoke=$true;noAssetSearchOrRngRewrite=$true;fileHashesOnlyAtStartup=$true;hudCommonBoundaryAndSourceTargetDomain=$true;hudCurrentAndFrozenIncoming=$true;nativeMonoExecutionNotTested=$true}|ConvertTo-Json|Set-Content -LiteralPath $OutputPath

@@ -90,7 +90,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return directory.OwnedDirectory();
         }
         internal void BeginHudPresentationSample(Func<UnityEngine.Object, string> identity, Transform inventory, IReadOnlyList<GameObject>? roots = null,
-            bool allowGenerated = false)
+            bool allowGenerated = false, bool includeBorderMeshes = false)
         {
             owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear(); ownedRoots = Array.Empty<string>();
             counter = null; marker = null; mapKey = null; menuFlash = false; hudPresentation = true;
@@ -101,12 +101,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             foreach (var pair in CanonicalMarkerReadonlyCarry.MapKeyDirectory(directory)) if (!owned.ContainsKey(pair.Value)) owned.Add(pair.Value, pair.Key);
             foreach (var pair in CanonicalMarkerEventCarry.Directory(directory)) if (!owned.ContainsKey(pair.Value)) owned.Add(pair.Value, pair.Key);
+            if (includeBorderMeshes) foreach (var pair in CanonicalHudPresentationColdTemplate.FreshBorderMeshes(directory, requireFresh: false)) owned.Add(pair.Value, pair.Key);
             ownedRoots = directory.Values.OfType<MonoBehaviour>().Select(identity).ToArray();
         }
-        internal static IReadOnlyDictionary<string, object> BuildHudPresentationDirectory(Transform inventory, IReadOnlyList<GameObject>? roots = null)
+        internal static IReadOnlyDictionary<string, object> BuildHudPresentationDirectory(Transform inventory, IReadOnlyList<GameObject>? roots = null, bool includeBorderMeshes = false)
         {
             var directory = new LoadingGeoIncomingReferences();
-            directory.BeginHudPresentationSample(_ => "unused-presentation-local-root", inventory, roots);
+            directory.BeginHudPresentationSample(_ => "unused-presentation-local-root", inventory, roots, includeBorderMeshes: includeBorderMeshes);
             return directory.OwnedDirectory();
         }
         internal void ObserveRetiringHudPresentationMeshes(Transform inventory, Func<UnityEngine.Object, string> identity)
@@ -114,13 +115,38 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!hudPresentation) throw new InvalidOperationException("HUD retiring mesh observation has no exact owner domain.");
             var directory = CanonicalHudPresentationDirectory.Build(inventory, allowGeneratedSubmeshes: true);
             var generated = CanonicalHudPresentationDirectory.GeneratedSubmeshes(directory);
+            // These exact mutable render caches disappear with the old TMP owners.
+            // Shared font glyph classes/assets are not owned and are never retired.
+            var cacheNodes = 0;
+            void OwnCache(object? value, string path, int depth)
+            {
+                if (value == null || value is UnityEngine.Object || value is string || value.GetType().IsPrimitive || value.GetType().IsEnum) return;
+                if (depth > 8 || ++cacheNodes > 20000) throw new InvalidOperationException("HUD old render-cache graph exceeds its finite bound.");
+                if (value is Array array) {
+                    if (array.Length == 0 || owned.ContainsKey(array)) return;
+                    owned.Add(array, path);
+                    for (var index = 0; index < array.Length; index++) OwnCache(array.GetValue(index), path + "[" + index + "]", depth + 1);
+                } else if (value.GetType().IsValueType) {
+                    foreach (var field in CanonicalCarryGraphCodec.Fields(value.GetType())) OwnCache(field.GetValue(value), path + "/" + field.Name, depth + 1);
+                } else if (value.GetType() == typeof(TMPro.TMP_TextInfo)) {
+                    if (owned.ContainsKey(value)) return;
+                    owned.Add(value, path);
+                    foreach (var field in CanonicalCarryGraphCodec.Fields(value.GetType())) OwnCache(field.GetValue(value), path + "/" + field.Name, depth + 1);
+                }
+            }
+            foreach (var pair in directory.Where(pair => pair.Value is TMPro.TextMeshPro))
+                foreach (var field in CanonicalHudPresentationDirectory.ManagedFields(pair.Value.GetType()).Where(field => !field.IsInitOnly))
+                    OwnCache(field.GetValue(pair.Value), pair.Key + "/retired-render-cache/" + field.DeclaringType!.FullName + "/" + field.Name, 0);
             foreach (var pair in generated) owned.Add(pair.Value, pair.Key);
             ownedRoots = ownedRoots.Concat(generated.Values.OfType<MonoBehaviour>().Select(identity)).ToArray();
             foreach (var pair in directory.Concat(generated).Where(pair => pair.Value is TMPro.TextMeshPro || pair.Value is TMPro.TMP_SubMesh)) {
                 var mesh = pair.Value.GetType().GetField("m_mesh", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(pair.Value);
                 if (ReferenceEquals(mesh, null)) continue;
-                if (!(mesh is Mesh native) || native == null || owned.ContainsKey(native))
-                    throw new InvalidOperationException("HUD retiring mesh has a dead/shared/unknown original owner.");
+                if (!(mesh is Mesh native) || native == null) throw new InvalidOperationException("HUD retiring mesh is dead or unknown.");
+                if (owned.TryGetValue(native, out var existing)) {
+                    if (existing == pair.Key + "/original-Awake-mesh") continue;
+                    throw new InvalidOperationException("HUD retiring mesh has a shared/foreign original owner.");
+                }
                 owned.Add(native, pair.Key + "/retired-owned-mesh");
             }
         }
@@ -241,7 +267,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         // not a consumer alias. Replacing its array entry before OnDestroy
         // would prevent the original Remove(this) from retiring the old FSM.
         // Source membership is carried and checked after the real lifecycle.
-        private static bool LifecycleRoot(string root) => root == "static:PlayMaker:PlayMakerFSM.fsmList";
+        private bool LifecycleRoot(string root) => root == "static:PlayMaker:PlayMakerFSM.fsmList"
+            || hudPresentation && root == "hud-Border3/original-TMP-manager";
         internal void Observe(object value, string path, string root)
         {
             if (!owned.TryGetValue(value, out var identity)) return;

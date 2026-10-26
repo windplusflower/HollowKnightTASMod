@@ -110,7 +110,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             LoadingGeoIncomingReferences? mapKeyIncoming = null, Transform? mapKeyRoot = null, bool retiringMapKeyMeshes = false,
             LoadingGeoIncomingReferences? menuFlashIncoming = null, GameObject? menuFlashRoot = null,
             LoadingGeoIncomingReferences? frozenMenuFlashIncoming = null, GameObject? frozenMenuFlashRoot = null,
-            LoadingGeoIncomingReferences? presentationIncoming = null, Transform? presentationRoot = null, bool retiringPresentationMeshes = false)
+            LoadingGeoIncomingReferences? presentationIncoming = null, Transform? presentationRoot = null, bool retiringPresentationMeshes = false, CanonicalHudBorderQueuePartition? borderQueues = null)
         {
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
             var challengeIncoming = CanonicalBossChallengePolicy.Incoming;
@@ -157,6 +157,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
             }
             string? Reference(object value) {
+                if (reader!.Capturing) borderQueues?.ObserveReference(value, reader.DiagnosticPath, reader.DiagnosticRoot);
                 if (reader!.Capturing) challengeIncoming?.ObserveReference(value, reader.DiagnosticRoot);
                 if (reader.Capturing && presentationIncoming != null && presentationIncoming.Owns(value))
                     presentationIncoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
@@ -201,6 +202,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             using (reader = new LoadingFieldDigest(Reference, type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object),
                 slotObservation: (owner, field, index, value, path) => {
+                    borderQueues?.ObserveSlot(owner, field, index, value, path);
                     challengeIncoming?.ObserveSlot(owner, field, value);
                     presentationIncoming?.ObserveSlot(owner, field, index, value, path, reader!.DiagnosticRoot);
                     incoming.ObserveSlot(owner, field, index, value, path, reader!.DiagnosticRoot);
@@ -212,7 +214,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || mapKeyIncoming != null && mapKeyIncoming.Owns(value) || menuFlashIncoming != null && menuFlashIncoming.Owns(value)
                     || frozenMenuFlashIncoming != null && frozenMenuFlashIncoming.Owns(value)
                     || challengeIncoming != null && challengeIncoming.Owns(value)
-                    || presentationIncoming != null && presentationIncoming.Owns(value), sharedFieldReaders: true)) {
+                    || presentationIncoming != null && presentationIncoming.Owns(value) || borderQueues != null && borderQueues.Owns(value), sharedFieldReaders: true)) {
                 var owners = Resources.FindObjectsOfTypeAll<MonoBehaviour>().Where(owner => owner != null && owner.gameObject.scene.IsValid()
                     && owner.gameObject.scene.isLoaded && owner.GetType().Assembly != typeof(CanonicalGeoColdTemplate).Assembly).ToArray();
                 if (owners.Length > 16000) throw new InvalidOperationException("Original Geo incoming owner inventory exceeded its existing reader bound.");
@@ -238,9 +240,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     foreach (var root in LoadingRegisteredStaticRoots.ReadCanonical()) CaptureRoot(root.Item2, root.Item1, false);
                     for (var member = 0; member < memberRoots.Count; member++) CaptureRoot(memberRoots[member].Key, memberRoots[member].Value, true);
                     challengeIncoming?.ReadFiniteRoots((value, name, expand) => CaptureRoot(value, name, expand));
+                    borderQueues?.ReadFiniteRoots((value, name, expand) => CaptureRoot(value, name, expand));
                 } finally { reader.EndSharedGraph(); }
             }
             challengeIncoming?.CompleteWalk();
+            borderQueues?.RequireIncomingClosed();
             Modding.Logger.Log("[HKTAS] Original Geo incoming full field walk completed: roots=" + observedRoots + ";nodes=" + observedNodes
                 + ";logicalTokenCharacters=" + logicalCharacters + ";elapsedMilliseconds=" + elapsed.ElapsedMilliseconds + ";unusedRootHashProduced=false");
             return incoming;

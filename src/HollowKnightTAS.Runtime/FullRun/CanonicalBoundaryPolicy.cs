@@ -34,7 +34,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly bool phaseOneTrace;
         private readonly CanonicalRetiredMeshPolicy retiredMeshes;
         private LoadingGeoIncomingReferences? pendingGeoIncoming;
-        private LoadingGeoIncomingReferences? pendingMarkerIncoming;
+        private LoadingGeoIncomingReferences? pendingMarkerIncoming, pendingHudPresentationIncoming;
+        private CanonicalHudBorderQueuePartition? pendingBorderQueues;
         private LoadingGeoIncomingReferences? pendingMapKeyIncoming, pendingMapKeyParentIncoming;
         private readonly Dictionary<int, string> retiringGeo = new Dictionary<int, string>();
         private int? retiringMenuFlash;
@@ -74,6 +75,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             pendingGeoIncoming = observer.FreezeGeoIncoming();
             pendingMarkerIncoming = observer.FreezeMarkerIncoming();
+            pendingHudPresentationIncoming = observer.FreezeHudPresentationIncoming();
+            pendingBorderQueues = observer.FreezeHudBorderQueues();
             pendingMapKeyIncoming = observer.FreezeMapKeyIncoming();
             pendingMapKeyParentIncoming = observer.FreezeMapKeyParentIncoming();
             var epoch = CanonicalInputEpochRuntime.Capture(origin, targetNative, controlOrigin);
@@ -180,6 +183,58 @@ namespace HollowKnightTAS.Runtime.FullRun
             Modding.Logger.Log("[HKTAS] Geo post-main source installation readback passed: finalPreparedIncomingAliases=true;"
                 + "originalLifecycleSchedulerRetirement=true;metadataRecomputedEqual=" + metadata.RecomputedEqual
                 + ";metadataAssembliesEqual=" + metadata.LoadedAssembliesEqual + ";completeStateCoverage=false");
+            }, Require);
+        }
+        private void RestoreBorderSourceDependencies(CanonicalHudBorderInputs.Data sourceInputs,
+            Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, UnityEngine.GameObject[], IReadOnlyDictionary<string, object>> rebindGraphs,
+            Action<Action> applySource, Func<bool> admitted)
+        {
+            void Require() { if (!admitted()) throw new InvalidOperationException("Original Border source producer lost parked admission."); }
+            LoadingSerialSceneProbe.DeriveProtectedSourceBorderDirectory(() => {
+                Require();
+                var current = observer ?? throw new InvalidOperationException("Border source producer observer absent.");
+                var template = hudStartup.HudPresentationColdDefinition ?? throw new InvalidOperationException("Original Border cold definition absent.");
+                var incoming = pendingHudPresentationIncoming ?? throw new InvalidOperationException("Border full frozen incoming proof absent.");
+                var queues = pendingBorderQueues ?? throw new InvalidOperationException("Border full frozen TMP queue proof absent.");
+                pendingHudPresentationIncoming = null; pendingBorderQueues = null; queues.RequireBeforeMutation();
+                var inventory = CanonicalHudPresentationDirectory.Current();
+                var oldDirectory = LoadingGeoIncomingReferences.BuildHudPresentationDirectory(inventory, includeBorderMeshes: true);
+                var old = CanonicalHudBorderInputs.Paths.Select(path => inventory.Find(path).gameObject).ToArray();
+                var oldTexts = old.Select(root => root.GetComponent<TMPro.TextMeshPro>()).ToArray();
+                var oldOwners = old.SelectMany(root => root.GetComponents<MonoBehaviour>()).ToDictionary(owner => owner.GetInstanceID());
+                var oldMeshes = oldTexts.Select(text => (UnityEngine.Mesh)typeof(TMPro.TextMeshPro).GetField("m_mesh", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(text)).ToArray();
+                var native = CanonicalHudPresentationDirectory.Build(inventory).ToDictionary(pair => pair.Key, pair => (object)pair.Value, StringComparer.Ordinal);
+                var paneBindings = CanonicalHudBorderInputs.PaneStringBindings(inventory);
+                foreach (var pair in paneBindings) native.Add(pair.Key, pair.Value);
+                var ancestors = new List<UnityEngine.Transform>();
+                foreach (var root in old) for (var parent = root.transform.parent; parent != null; parent = parent.parent) {
+                    if (ancestors.Count > 128) throw new InvalidOperationException("Border parent closure exceeds its fixed bound.");
+                    if (!ancestors.Contains(parent)) ancestors.Add(parent);
+                }
+                var parentRoots = ancestors.SelectMany(parent => parent.GetComponents<MonoBehaviour>()).Distinct()
+                    .Select((owner, index) => new KeyValuePair<string, object?>("border-parent[" + index + "]", owner)).ToArray();
+                using var guard = new CanonicalMapKeyTextExternalGuard(parentRoots, native, ancestors.ToArray());
+                var born = new HashSet<int>(); current.RecaptureOwnedHudScheduler(Require, () => { });
+                var transition = current.PrepareOwnedHudLifecycle(oldOwners, id => born.Contains(id), out var retireStarts);
+                var created = template.ProduceMixed(sourceInputs, borderOnly: true);
+                var producedNative = CanonicalHudPresentationDirectory.Build(inventory, created);
+                foreach (var pair in producedNative.Where(pair => pair.Value is MonoBehaviour && CanonicalHudPresentationDirectory.IsBorderMember(pair.Key))) born.Add(pair.Value.GetInstanceID());
+                var produced = LoadingGeoIncomingReferences.BuildHudPresentationDirectory(inventory, created, includeBorderMeshes: true);
+                var final = rebindGraphs(oldDirectory, produced, created);
+                var nativeRebind = producedNative.ToDictionary(pair => pair.Key, pair => (object)pair.Value, StringComparer.Ordinal);
+                foreach (var pair in paneBindings) nativeRebind.Add(pair.Key, pair.Value);
+                guard.PrepareExplicitIncomingRebind(nativeRebind);
+                var plan = incoming.Prepare(final); plan.Apply();
+                var newTexts = CanonicalHudBorderInputs.Paths.Select(path => (TMPro.TextMeshPro)producedNative["$/" + path + ":TMPro.TextMeshPro[0]"]).ToArray();
+                var verifyQueues = queues.ExpectOriginalEnableThenRetirement(newTexts);
+                foreach (var root in old) UnityEngine.Object.DestroyImmediate(root);
+                retireStarts(); current.RecaptureOwnedHudScheduler(Require, transition);
+                plan.VerifyReadback(); guard.VerifyManagedRoots(); verifyQueues();
+                var paneApply = CanonicalHudBorderInputs.PreparePaneStringsAfterRebind(inventory, sourceInputs, admitted);
+                paneApply(); applySource(plan.VerifyReadback); guard.VerifyManagedRoots(); verifyQueues(); Require();
+                if (old.Any(root => root != null) || oldMeshes.Any(mesh => mesh != null))
+                    throw new InvalidOperationException("Original Border old owners or owned meshes survived native retirement.");
+                CanonicalHudPresentationColdTemplate.RequireProduced(CanonicalHudPresentationDirectory.Build(inventory));
             }, Require);
         }
         private void RestoreMarkerSourceDependencies(CanonicalSchedulerCarry sourceScheduler, Func<bool> admitted,
@@ -345,7 +400,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }, () => (observer ?? throw new InvalidOperationException("Map Key source snapshot has no original observer.")).FreezeMapKeyParentIncoming(),
                 RestoreMapKeyParentDependencies, (dependency, incoming, lifecycle, readback) =>
                     CanonicalMapKeyTextBoundaryPolicy.Reset(hudStartup.MapKeyTextColdDefinition,
-                        observer ?? throw new InvalidOperationException("Map Key deferred Canon has no observer."), dependency, incoming, lifecycle, readback), hudStartup.MapKeyTextColdDefinition, bossAssets, hudStartup.HudPresentationColdDefinition, () => (observer ?? throw new InvalidOperationException("HUD presentation observer absent.")).FreezeHudPresentationIncoming()); }
+                        observer ?? throw new InvalidOperationException("Map Key deferred Canon has no observer."), dependency, incoming, lifecycle, readback), hudStartup.MapKeyTextColdDefinition, bossAssets, hudStartup.HudPresentationColdDefinition, () => (observer ?? throw new InvalidOperationException("HUD presentation observer absent.")).FreezeHudPresentationIncoming(), RestoreBorderSourceDependencies); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
@@ -421,6 +476,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("D-gameplay-preserved-by-Canon", new { playerData = true, sceneData = true, heroState = true,
                 heroScalarsPoseBodyAndHistory = true, fullNativeStateQualified = false });
             var canonMilliseconds = elapsed.Elapsed.TotalMilliseconds;
+            if (hudStartup.HudPresentationColdDefinition?.SnapshotUnsupportedReason != null) {
+                var reason = hudStartup.HudPresentationColdDefinition.SnapshotUnsupportedReason;
+                Progress("D-HUD-mixed-producer-snapshot-not-admitted", new { reason, ordinaryReplayContinues = true, sourceInputsUnchanged = true });
+                if (CanonicalActualDExperiment.CaptureSource && ordinal == CanonicalActualDExperiment.SelectedOrdinal)
+                    throw new InvalidOperationException("Actual D HUD snapshot not admitted: " + reason);
+                return;
+            }
             if (CanonicalActualDExperiment.CaptureSource && ordinal < CanonicalActualDExperiment.SelectedOrdinal) {
                 Progress("actual-D-prior-boundary-diagnostic-not-run", new { selectedOrdinal = CanonicalActualDExperiment.SelectedOrdinal,
                     canonAndPreservationCompleted = true, fullBoundaryObserverNotRun = true, completeStateCoverage = false });
@@ -433,7 +495,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (!StringComparer.Ordinal.Equals(observerSession, sessionDirectory))
                 throw new InvalidOperationException("Canonical observer cannot change its protected session binding.");
-            bool OwnsCanonicalStart(int instance) => pools.OwnsNewPoolStart(instance) || visualTemplates.OwnsResetStart(instance) || journal.OwnsNewStart(instance) || charms.OwnsNewStart(instance);
+            bool OwnsCanonicalStart(int instance) => pools.OwnsNewPoolStart(instance) || visualTemplates.OwnsResetStart(instance) || journal.OwnsNewStart(instance) || charms.OwnsNewStart(instance) || hudStartup.HudPresentationColdDefinition?.OwnsNewStart(instance) == true;
             string? RetiredOwner(int instance) => pools.RetiredOwner(instance) ?? LoadingSerialSceneProbe.RetiredSourceOwner(instance);
             var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
             inputEpoch.RequireControlOrigin();
@@ -481,7 +543,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, Route = route,
                         OriginalBossAssetOrigins = bossAssets?.Manifest ?? throw new InvalidOperationException("New-profile challenge asset startup is absent."),
                         OriginalHudPresentationAssetOrigins = hudStartup.HudPresentationColdDefinition!.AssetManifest, OriginalUiAssetOrigins = hudStartup.MapKeyTextColdDefinition.OriginalAssetManifest, MovieFrame = movie, NativeFrame = native,
-                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, HudPresentation = carry.HudPresentationGraph, Physics = carry.PhysicsGraph, RegisteredS0 = CanonicalRegisteredS0Contract.Capture(s0), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
+                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, HudPresentation = carry.HudPresentationGraph, BorderInputs = carry.BorderInputGraph, Physics = carry.PhysicsGraph, RegisteredS0 = CanonicalRegisteredS0Contract.Capture(s0), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
                     Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,
                         blockingQualifications = carry.BlockingQualifications });
                 }
