@@ -20,6 +20,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var generated = CanonicalHudPresentationDirectory.GeneratedSubmeshes(directory);
             var old = CanonicalHudPresentationDirectory.RootPaths.Select(path => keys.Find(path).gameObject).ToArray();
             var parents = old.Select(root => root.transform.parent).ToArray();
+            var parentActive = parents.Select(parent => parent != null && parent.gameObject.activeInHierarchy).ToArray();
             CanonicalHudBorderInputs.Data inputs;
             CanonicalHudBorderQueuePartition queues;
             try {
@@ -141,15 +142,23 @@ namespace HollowKnightTAS.Runtime.FullRun
             retireStarts();
             observer.RecaptureOwnedHudScheduler(Require, transition);
             plan.VerifyReadback(); RequireCreated(); Require(); externalGuard.VerifyManagedRoots(); template.RequireFrozenAssets(); verifyQueues();
-            if (created.Where((text, index) => !ReferenceEquals(text.transform.parent, parents[index])).Any()
-                || parents.Any(parent => parent.gameObject.activeInHierarchy) || old.Any(text => text != null)
-                || !CanonicalHudPresentationDirectory.Build(keys).Keys.SequenceEqual(directory.Keys) || meshes.Any(mesh => mesh != null)
-                || !ReferenceEquals(fsmList, fsmListField.GetValue(null)) || fsmList.Count != retainedFsms.Length
-                || fsmList.Cast<object>().Where((item, index) => !ReferenceEquals(item, retainedFsms[index])).Any()
-                || !ReferenceEquals(selectedBefore, selectedField.GetValue(null)) || !ReferenceEquals(raycasts, raycastField.GetValue(null))
-                || !ReferenceEquals(controllerBefore, controllerEvent.GetValue(input)) || !ReferenceEquals(tmp, tmpField.GetValue(null))
-                || !rng.Equals(UnityEngine.Random.state) || !particles.SequenceEqual(LoadingGameplayOracle.CaptureParticleRandomState()))
-                throw new InvalidOperationException("HUD presentation cold Canon changed an external callback, queue, RNG, registration or retired native mesh contract.");
+            void Preserve(bool valid, string contract) {
+                if (!valid) throw new InvalidOperationException("HUD presentation mixed Canon preservation failed: " + contract);
+            }
+            Preserve(!created.Where((text, index) => !ReferenceEquals(text.transform.parent, parents[index])).Any(), "original parent identities");
+            Preserve(!parents.Where((parent, index) => parent.gameObject.activeInHierarchy != parentActive[index]).Any(), "original parent activation");
+            Preserve(!old.Any(text => text != null), "retired original roots");
+            Preserve(CanonicalHudPresentationDirectory.Build(keys).Keys.SequenceEqual(directory.Keys), "complete replacement directory");
+            Preserve(!meshes.Any(mesh => mesh != null), "retired owned native meshes");
+            Preserve(ReferenceEquals(fsmList, fsmListField.GetValue(null)), "original FSM registry identity");
+            Preserve(fsmList.Count == retainedFsms.Length, "retained FSM registry count");
+            Preserve(!fsmList.Cast<object>().Where((item, index) => !ReferenceEquals(item, retainedFsms[index])).Any(), "retained FSM registry order and aliases");
+            Preserve(ReferenceEquals(selectedBefore, selectedField.GetValue(null)), "selected FSM identity");
+            Preserve(ReferenceEquals(raycasts, raycastField.GetValue(null)), "raycast registry identity");
+            Preserve(ReferenceEquals(controllerBefore, controllerEvent.GetValue(input)), "controller callback identity");
+            Preserve(ReferenceEquals(tmp, tmpField.GetValue(null)), "TMP manager identity");
+            Preserve(rng.Equals(UnityEngine.Random.state), "Unity RNG");
+            Preserve(particles.SequenceEqual(LoadingGameplayOracle.CaptureParticleRandomState()), "particle RNG");
             return new { originalRoots = 13, originalObjects = 18, originalMonoOwners = 40, coldCharmsRoots = 10, activeBorderRoots = 3, originalAwakeAndQueuedStart = true,
                 fullIncomingReadback = true, retiredOwnedMeshes = meshes.Length, controllerAndUnrelatedTmpStoragePreserved = true,
                 gameplayParentDataTouched = false, sourceHistoryReplayed = false, completeStateCoverage = false };
