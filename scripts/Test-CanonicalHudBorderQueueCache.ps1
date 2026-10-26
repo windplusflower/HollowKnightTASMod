@@ -44,6 +44,30 @@ try {
   elseif(-not[object]::ReferenceEquals($expected,$actual)){throw 'Raw storage reference omitted'}
  }
  $passed++
- [ordered]@{passed=$passed;failed=0;productionStaticMethods=$true;dictionaryFields=10;listFields=4;sourceCacheUnchanged=$true;copyBackReferenceExact=$true;foreignOwnerRejected=$true;nativeMonoLifecycleTested=$false;hostCorlibMvid=[string][System.Collections.Generic.Dictionary[int,int]].Module.ModuleVersionId}|ConvertTo-Json|Set-Content -LiteralPath $OutputPath -Encoding utf8
+ foreach($alreadyCached in @($false,$true)){
+  $dict=New-Object 'System.Collections.Generic.Dictionary[int,int]';$dict.Add(7,7)
+  if($alreadyCached){$null=([Collections.IDictionary]$dict).Keys}
+  $layout=@($dict.GetType().GetFields([Reflection.BindingFlags]'Instance,NonPublic,Public')|Sort-Object Name)
+  $prior=[object[]]::new($layout.Count);for($i=0;$i-lt$layout.Count;$i++){$prior[$i]=$layout[$i].GetValue($dict)}
+  $null=([Collections.IDictionary]$dict).Keys
+  $frozen=[object[]]::new($layout.Count);for($i=0;$i-lt$layout.Count;$i++){$frozen[$i]=$layout[$i].GetValue($dict)}
+  $null=([Collections.IDictionary]$dict).Keys
+  for($i=0;$i-lt$layout.Count;$i++){
+   $now=$layout[$i].GetValue($dict)
+   if(-not[object]::Equals($frozen[$i],$now)){throw 'Repeated Keys getter changed frozen raw storage'}
+   if($layout[$i].Name-ne'keys'-and-not[object]::Equals($prior[$i],$frozen[$i])){throw 'Keys getter changed unrelated raw field'}
+  }
+  $passed++
+ }
+ [Reflection.Assembly]::LoadFrom((Join-Path $managed 'Mono.Cecil.dll'))|Out-Null
+ $module=[Mono.Cecil.ModuleDefinition]::ReadModule((Join-Path $bin 'HollowKnightTAS.dll'))
+ try{
+  $reset=($module.Types|Where-Object Name -eq CanonicalHudPresentationBoundaryPolicy).Methods|Where-Object Name -eq Reset
+  $keysCalls=@($reset.Body.Instructions|Where-Object {$_.Operand-is[Mono.Cecil.MethodReference]-and$_.Operand.DeclaringType.FullName-eq'System.Collections.IDictionary'-and$_.Operand.Name-eq'get_Keys'})
+  $snapshot=@($reset.Body.Instructions|Where-Object {$_.OpCode.Name-eq'newobj'-and$_.Operand.DeclaringType.Name-eq'CanonicalHudBorderQueuePartition'})
+  if($keysCalls.Count-ne1-or$snapshot.Count-ne1-or$keysCalls[0].Offset-ge$snapshot[0].Offset){throw 'Production cold inspection no longer precedes queue snapshot'}
+  $passed++
+ }finally{$module.Dispose()}
+ [ordered]@{passed=$passed;failed=0;productionStaticMethods=$true;dictionaryFields=10;listFields=4;sourceCacheUnchanged=$true;copyBackReferenceExact=$true;foreignOwnerRejected=$true;cachedAndUncachedFreezeOrderingTested=$true;productionInspectionBeforeSnapshot=$true;nativeMonoLifecycleTested=$false;hostCorlibMvid=[string][System.Collections.Generic.Dictionary[int,int]].Module.ModuleVersionId}|ConvertTo-Json|Set-Content -LiteralPath $OutputPath -Encoding utf8
  Write-Output "Queue cache contracts passed: $passed"
 } finally {[AppDomain]::CurrentDomain.remove_AssemblyResolve($resolve)}

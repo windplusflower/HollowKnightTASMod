@@ -30,14 +30,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || old[index].activeInHierarchy != CanonicalHudBorderInputs.IsBorderPath(paths[index])))
                     throw new InvalidOperationException("Original HUD mixed active Border/cold Charms parent phase is not ready.");
                 inputs = CanonicalHudBorderInputs.Capture(keys, directory, template.BindOriginalAsset);
-                queues = new CanonicalHudBorderQueuePartition(CanonicalHudBorderInputs.Paths.Select(path => keys.Find(path).GetComponent<TMPro.TextMeshPro>()).ToArray());
             } catch (Exception error) {
                 // Snapshot admission only: preserve an ordinary in-progress menu without injecting a close event or time.
                 template.MarkUnsupported(error.GetType().Name + ": " + error.Message);
                 return new { snapshotSupported = false, commonHudMutationExecuted = false, sourceInputsPreserved = true,
                     reason = template.SnapshotUnsupportedReason, completeStateCoverage = false };
             }
-            using var queueScope = queues;
             var native = directory.ToDictionary(pair => pair.Key, pair => (object)pair.Value, StringComparer.Ordinal);
             var poseOwners = parents.SelectMany(Ancestors).Distinct().ToArray();
             var parentRoots = poseOwners.SelectMany(parent => parent.GetComponents<MonoBehaviour>()).Distinct()
@@ -107,6 +105,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || value is IList queue && queue.Cast<object>().Any(item => coldTexts.Any(owner => ReferenceEquals(owner, item))))
                     throw new InvalidOperationException("Inactive HUD presentation retains a TMP rebuild entry; natural queue retirement is required.");
             }
+            // The original IDictionary.Keys getter may create its own internal
+            // KeyCollection. Finish our existing inspection before freezing all
+            // raw storage; a later creation would correctly fail the guard.
+            try {
+                queues = new CanonicalHudBorderQueuePartition(CanonicalHudBorderInputs.Paths.Select(path => keys.Find(path).GetComponent<TMPro.TextMeshPro>()).ToArray());
+            } catch (Exception error) {
+                template.MarkUnsupported(error.GetType().Name + ": " + error.Message);
+                return new { snapshotSupported = false, commonHudMutationExecuted = false, sourceInputsPreserved = true,
+                    reason = template.SnapshotUnsupportedReason, completeStateCoverage = false };
+            }
+            using var queueScope = queues;
             using var fields = new LoadingFieldDigest(value => value is UnityEngine.Object native ? "marker-canon-native:" + native.GetInstanceID() : null,
                 type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object), sharedFieldReaders: true);
             string Tmp() {
