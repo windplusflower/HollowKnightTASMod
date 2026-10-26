@@ -8,6 +8,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengeContext.cs" Link="FullRun/CanonicalBossChallengeContext.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengeCallback.cs" Link="FullRun/CanonicalBossChallengeCallback.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengeCarry.cs" Link="FullRun/CanonicalBossChallengeCarry.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengeAssets.cs" Link="FullRun/CanonicalBossChallengeAssets.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengePolicy.cs" Link="FullRun/CanonicalBossChallengePolicy.cs" />
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/LoadingContactUserDataBindings.cs" Link="FullRun/LoadingContactUserDataBindings.cs" />
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalListEmptyArrayBindings.cs" Link="FullRun/CanonicalListEmptyArrayBindings.cs" />
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/LoadingSharedGraphEvidence.cs" Link="FullRun/LoadingSharedGraphEvidence.cs" />

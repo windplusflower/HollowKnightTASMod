@@ -23,6 +23,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalBoundaryPoolPolicy pools = new CanonicalBoundaryPoolPolicy();
         private readonly CanonicalBossUiAnimationPolicy retiredUiAnimations;
         private readonly CanonicalPoolFlukeDiagnostic poolFlukes;
+        private readonly CanonicalBossChallengeAssets? bossAssets;
         private readonly CanonicalVisualFsmTemplates visualTemplates = new CanonicalVisualFsmTemplates();
         private readonly CanonicalHeroAssetTemplates assetTemplates = new CanonicalHeroAssetTemplates();
         private LoadingGameplayOracle? observer;
@@ -46,7 +47,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (source.Session != null) throw new InvalidOperationException("Actual D source was already sealed.");
             source.Session = session;
             var sealedSource = new CanonicalSealedSource<CanonicalActualDExperiment>(source, value => value.Encode(), value =>
-                JsonConvert.SerializeObject(new { value.Schema, value.Ordinal, value.Route, value.OriginalUiAssetOrigins, value.MovieFrame, value.NativeFrame, value.Clock, value.Session }));
+                JsonConvert.SerializeObject(new { value.Schema, value.Ordinal, value.Route, value.OriginalUiAssetOrigins, value.OriginalBossAssetOrigins, value.MovieFrame, value.NativeFrame, value.Clock, value.Session }));
             ExperimentalSource = sealedSource.Bytes;
             return sealedSource;
         }
@@ -60,6 +61,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Actual D target has no completed original Canon.");
             if (source.OriginalUiAssetOrigins != hudStartup.MapKeyTextColdDefinition.OriginalAssetManifest)
                 throw new InvalidOperationException("Source/target original UI asset provenance or aliases differ before D preparation.");
+            if (source.OriginalBossAssetOrigins != bossAssets?.Manifest)
+                throw new InvalidOperationException("Source/target original boss serialized asset provenance or fields differ before D preparation.");
             var prepareTimer = Stopwatch.StartNew();
             long prepareMark = 0;
             void PreparedPhase(string phase) {
@@ -266,6 +269,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             startup = new CanonicalHeroStartupWarmup(assetTemplates.BeforeHeroStart);
             retiredUiAnimations = new CanonicalBossUiAnimationPolicy();
             poolFlukes = new CanonicalPoolFlukeDiagnostic();
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)) bossAssets = new CanonicalBossChallengeAssets();
         }
         internal bool AdvanceStartup() => startup.Advance() && menuFlash.RequireStartup() && hudStartup.Advance()
             && menuFlash.AdvanceNaturalMenuClose();
@@ -338,7 +343,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }, () => (observer ?? throw new InvalidOperationException("Map Key source snapshot has no original observer.")).FreezeMapKeyParentIncoming(),
                 RestoreMapKeyParentDependencies, (dependency, incoming, lifecycle, readback) =>
                     CanonicalMapKeyTextBoundaryPolicy.Reset(hudStartup.MapKeyTextColdDefinition,
-                        observer ?? throw new InvalidOperationException("Map Key deferred Canon has no observer."), dependency, incoming, lifecycle, readback), hudStartup.MapKeyTextColdDefinition); }
+                        observer ?? throw new InvalidOperationException("Map Key deferred Canon has no observer."), dependency, incoming, lifecycle, readback), hudStartup.MapKeyTextColdDefinition, bossAssets); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
@@ -349,6 +354,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Progress("D-preservation-preparation-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
             }
+            using var bossContext = bossAssets == null ? null : new CanonicalBossChallengePolicy(bossAssets);
             var destroyed = pools.Reset();
             Progress("R1-pools-rebuilt", new { destroyed });
             Progress("R1-original-journal-directory-rebuilt", journal.Reset());
@@ -400,6 +406,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("R6-action-metadata-caches-reset", metadataAudit);
             Progress("R6-SDK-device-type-table-reset", CanonicalBoundaryInputTablePolicy.Reset());
             Progress("R2-registered-destroyed-boss-UI-animation-callbacks", retiredUiAnimations.Reset());
+            if (bossContext != null) Progress("gameplay-explicit-challenge-context-common-Canon", bossContext.Apply());
             try { preservation.Verify(); }
             catch (Exception error) {
                 Progress("D-preservation-readback-rejected", new { type = error.GetType().FullName, detail = error.Message });
@@ -466,6 +473,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (route.SourceScene != source || route.TargetScene != target)
                         throw new InvalidOperationException("Actual source route disagrees with its observed boundary.");
                     ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, Route = route,
+                        OriginalBossAssetOrigins = bossAssets?.Manifest ?? throw new InvalidOperationException("New-profile challenge asset startup is absent."),
                         OriginalUiAssetOrigins = hudStartup.MapKeyTextColdDefinition.OriginalAssetManifest, MovieFrame = movie, NativeFrame = native,
                         Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, Physics = carry.PhysicsGraph, RegisteredS0 = CanonicalRegisteredS0Contract.Capture(s0), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
                     Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,

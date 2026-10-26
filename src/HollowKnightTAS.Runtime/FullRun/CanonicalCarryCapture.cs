@@ -46,6 +46,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal byte[] MapKeyParentGraph { get; private set; } = Array.Empty<byte>();
         private readonly CanonicalMapKeyTextSourceDomain mapKeyDomain;
         private readonly CanonicalMapKeyTextColdTemplate mapKeyTemplate;
+        private readonly CanonicalBossChallengeAssets? bossAssets;
         internal byte[] MapKeyTextGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] MarkerGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] MapGraph { get; private set; } = Array.Empty<byte>();
@@ -58,8 +59,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<LoadingGeoIncomingReferences> consumeMapKeyParentIncoming, Func<LoadingGeoIncomingReferences> snapshotMapKeyParentIncoming,
             Action<Action, Action<Tuple<Action, Action>>> restoreMapKeyParentDependencies,
             Action<Action, LoadingGeoIncomingReferences, Tuple<Action, Action>, Action<Action>> normalizeMapKey,
-            CanonicalMapKeyTextColdTemplate mapKeyTemplate)
+            CanonicalMapKeyTextColdTemplate mapKeyTemplate, CanonicalBossChallengeAssets? bossAssets = null)
         { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; this.journal = journal;
+            this.bossAssets = bossAssets;
             this.restoreHudSourceDependencies = restoreHudSourceDependencies; this.restoreGeoSourceDependencies = restoreGeoSourceDependencies; this.restoreMarkerSourceDependencies = restoreMarkerSourceDependencies; this.consumeMapKeyIncoming = consumeMapKeyIncoming;
             this.consumeMapKeyParentIncoming = consumeMapKeyParentIncoming; this.snapshotMapKeyParentIncoming = snapshotMapKeyParentIncoming;
             this.restoreMapKeyParentDependencies = restoreMapKeyParentDependencies; this.normalizeMapKey = normalizeMapKey;
@@ -161,6 +163,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 ["PlayerData"] = player, ["SceneData"] = manager.sceneData };
             if (hero.cState == null) throw new InvalidDataException("Carry Hero state root is absent.");
             roots.Add("D/HeroControllerStates", hero.cState);
+            if (bossAssets != null) roots.Add(CanonicalBossChallengeCarry.Root, CanonicalBossChallengeCarry.Capture(bossAssets, targetDirectoryOnly));
             roots.Add(CanonicalGameplayCarry.Root, CanonicalGameplayCarry.Capture(identities));
             PhysicsGraph = targetDirectoryOnly ? Array.Empty<byte>() : CheckpointPhysicsBroadphaseState.CaptureCanonical(identities).EncodeCompact();
             var heroAnimationCallbacks = targetDirectoryOnly ? new CanonicalHeroAnimationCallbacks.Data()
@@ -227,7 +230,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var guardEventSlots = CanonicalEventStaticSlots.PrepareGuard(roots);
             var inputBindings = CanonicalCarryRootBindings.Merge(InputCarryAudit.FixedBindings, inputRoots);
             var captureEpoch = new object();
-            var bindings = new ExternalBindings(identities, assetTemplates, mapKeyTemplate, canonicalSenders, inputBindings, captureEpoch);
+            var bindings = new ExternalBindings(identities, assetTemplates, mapKeyTemplate, canonicalSenders, inputBindings, captureEpoch, bossAssets: bossAssets);
             CanonicalCarryGraphData Empty() => new CanonicalCarryGraphData { Roots = Array.Empty<CanonicalCarryGraphData.Root>(),
                 Nodes = Array.Empty<CanonicalCarryGraphData.Node>(), Externals = Array.Empty<CanonicalCarryGraphData.External>(), Unsupported = Array.Empty<string>() };
             var mainNodes = new Dictionary<object, int>(new References());
@@ -241,13 +244,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             MarkerGraph = targetDirectoryOnly ? Array.Empty<byte>() : markerDomain.Capture(CanonicalMarkerDirectory.Current(), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             var mainBindings = new SortedDictionary<string, object>(InputCarryAudit.FixedBindings.ToDictionary(pair => pair.Key, pair => pair.Value), StringComparer.Ordinal);
             foreach (var pair in roots) mainBindings.Add("canonical-main-root/" + pair.Key, pair.Value);
-            var inputExternal = new ExternalBindings(identities, assetTemplates, mapKeyTemplate, canonicalSenders, mainBindings, captureEpoch, bindings.ownerDirectory);
+            var inputExternal = new ExternalBindings(identities, assetTemplates, mapKeyTemplate, canonicalSenders, mainBindings, captureEpoch, bindings.ownerDirectory, bossAssets);
             InputGraph = targetDirectoryOnly ? Empty() : inputCodec.Capture(inputRoots, inputExternal.Bind);
             var sourceEpoch = inputEpoch.Copy();
             CanonicalPreparedWritePlan? mainPlan = null, inputPlan = null;
             if (!targetDirectoryOnly && result.Unsupported.Length == 0)
                 mainPlan = codec.PrepareGraph(result, roots, bindings.ResolveCaptured, view => {
                     var source = CanonicalCarryContinuationContract.Read(view);
+                    if (bossAssets != null) CanonicalBossChallengeCarry.PrepareApply(CanonicalBossChallengeCarry.FromPrepared(view), bossAssets, () => true);
                     inputEpoch.RequireReadback(source.Epoch, inputEpoch.SourceNative);
                     CanonicalSchedulerRestorePlan.Prepare(source.Scheduler, scheduler);
                     LoadingSerialSceneProbe.PrepareCanonicalLoadScalars(source.SceneLoad);
@@ -308,6 +312,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 ActualTargetStage = "prepare-main";
                 var main = codec.PrepareOwnedGraph(sourceMain, targetMainRoots, bindings.ResolveTarget, view => {
                     mainView = view;
+                    if (bossAssets != null) domainActions.Add(CanonicalBossChallengeCarry.PrepareApply(CanonicalBossChallengeCarry.FromPrepared(view), bossAssets, admitted));
                     continuation = CanonicalCarryContinuationContract.Read(view);
                     if (actualSourceValidation != null) {
                         var info = view.Root("D/SceneLoadInfo");
@@ -647,6 +652,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly CanonicalCarryReflectionBindings metadata;
             private readonly CanonicalHeroAssetTemplates assetTemplates;
             private readonly CanonicalMapKeyTextColdTemplate mapKeyTemplate;
+            private readonly CanonicalBossChallengeAssets? bossAssets;
             private readonly CanonicalVisualSenderBindings canonicalSenders;
             internal readonly List<EventAudit> Events = new List<EventAudit>();
             internal bool HasEvents { get; private set; }
@@ -663,6 +669,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 object value;
                 if (binding.StartsWith(CanonicalMapKeyTextColdTemplate.AssetBindingPrefix, StringComparison.Ordinal))
                     value = mapKeyTemplate.ResolveOriginalAsset(binding.Substring(CanonicalMapKeyTextColdTemplate.AssetBindingPrefix.Length));
+                else if (binding.StartsWith(CanonicalBossChallengeAssets.BindingPrefix, StringComparison.Ordinal))
+                    value = (bossAssets ?? throw new InvalidDataException("Challenge asset directory is absent.")).Resolve(binding);
                 else if (binding.StartsWith("HeroAssetOrigin/v1/", StringComparison.Ordinal)) value = assetTemplates.Resolve(binding);
                 else if (binding.StartsWith("asset:", StringComparison.Ordinal)) {
                     // Source Bind admits an asset only when its exact concrete
@@ -703,10 +711,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates,
                 CanonicalMapKeyTextColdTemplate mapKeyTemplate, CanonicalVisualSenderBindings canonicalSenders,
-                IReadOnlyDictionary<string, object> fixedInputBindings, object captureEpoch, CanonicalCaptureOwnerDirectory? sharedDirectory = null)
+                IReadOnlyDictionary<string, object> fixedInputBindings, object captureEpoch, CanonicalCaptureOwnerDirectory? sharedDirectory = null,
+                CanonicalBossChallengeAssets? bossAssets = null)
             {
                 this.identities = identities;
                 this.assetTemplates = assetTemplates;
+                this.bossAssets = bossAssets;
                 this.mapKeyTemplate = mapKeyTemplate;
                 this.canonicalSenders = canonicalSenders;
                 IReadOnlyDictionary<string, object> CaptureNativeDirectory() {
@@ -774,6 +784,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal string? Bind(object value)
             {
                 if (known.TryGetValue(value, out var bound)) return bound;
+                var challengeAsset = bossAssets?.Bind(value);
+                if (challengeAsset != null) { Remember(value, challengeAsset); return challengeAsset; }
                 var canonicalSlot = canonicalSenders.Bind(value);
                 if (canonicalSlot != null) { Remember(value, canonicalSlot); return canonicalSlot; }
                 if (value is UnityEngine.Object native)

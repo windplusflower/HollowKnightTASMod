@@ -101,6 +101,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 typeof(CheckpointHeroInvulnerability.WaitData[]), typeof(float[]) };
             types.AddRange(invulnerabilityTypes);
             types.AddRange(CanonicalSceneMappingCarry.DataTypes);
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)) types.AddRange(CanonicalBossChallengeCarry.DataTypes);
             types.AddRange(CanonicalMouseCarry.DataTypes);
             types.AddRange(CanonicalDeviceManagerCarry.DataTypes);
             types.AddRange(CanonicalSceneLoadCallbacks.DataTypes);

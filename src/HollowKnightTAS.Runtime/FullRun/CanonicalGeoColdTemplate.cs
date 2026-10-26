@@ -108,6 +108,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             LoadingGeoIncomingReferences? frozenMenuFlashIncoming = null, GameObject? frozenMenuFlashRoot = null)
         {
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            var challengeIncoming = CanonicalBossChallengePolicy.Incoming;
+            challengeIncoming?.BeginWalk();
             long observedNodes = 0, logicalCharacters = 0; var observedRoots = 0;
             var identities = new BoundaryObjectIdentity();
             var incoming = new LoadingGeoIncomingReferences(); incoming.BeginSample(identities.Get, source);
@@ -146,6 +148,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
             }
             string? Reference(object value) {
+                if (reader!.Capturing) challengeIncoming?.ObserveReference(value, reader.DiagnosticRoot);
                 if (reader!.Capturing && incoming.Owns(value)) incoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
                 if (reader.Capturing && markerIncoming != null && markerIncoming.Owns(value))
                     markerIncoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
@@ -187,6 +190,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             using (reader = new LoadingFieldDigest(Reference, type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object),
                 slotObservation: (owner, field, index, value, path) => {
+                    challengeIncoming?.ObserveSlot(owner, field, value);
                     incoming.ObserveSlot(owner, field, index, value, path, reader!.DiagnosticRoot);
                     markerIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
                     mapKeyIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
@@ -194,7 +198,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     frozenMenuFlashIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
                 }, observeSlotValue: value => incoming.Owns(value) || markerIncoming != null && markerIncoming.Owns(value)
                     || mapKeyIncoming != null && mapKeyIncoming.Owns(value) || menuFlashIncoming != null && menuFlashIncoming.Owns(value)
-                    || frozenMenuFlashIncoming != null && frozenMenuFlashIncoming.Owns(value), sharedFieldReaders: true)) {
+                    || frozenMenuFlashIncoming != null && frozenMenuFlashIncoming.Owns(value)
+                    || challengeIncoming != null && challengeIncoming.Owns(value), sharedFieldReaders: true)) {
                 var owners = Resources.FindObjectsOfTypeAll<MonoBehaviour>().Where(owner => owner != null && owner.gameObject.scene.IsValid()
                     && owner.gameObject.scene.isLoaded && owner.GetType().Assembly != typeof(CanonicalGeoColdTemplate).Assembly).ToArray();
                 if (owners.Length > 16000) throw new InvalidOperationException("Original Geo incoming owner inventory exceeded its existing reader bound.");
@@ -219,8 +224,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     foreach (var owner in owners) CaptureRoot(owner, identities.Get(owner), true);
                     foreach (var root in LoadingRegisteredStaticRoots.ReadCanonical()) CaptureRoot(root.Item2, root.Item1, false);
                     for (var member = 0; member < memberRoots.Count; member++) CaptureRoot(memberRoots[member].Key, memberRoots[member].Value, true);
+                    challengeIncoming?.ReadFiniteRoots((value, name, expand) => CaptureRoot(value, name, expand));
                 } finally { reader.EndSharedGraph(); }
             }
+            challengeIncoming?.CompleteWalk();
             Modding.Logger.Log("[HKTAS] Original Geo incoming full field walk completed: roots=" + observedRoots + ";nodes=" + observedNodes
                 + ";logicalTokenCharacters=" + logicalCharacters + ";elapsedMilliseconds=" + elapsed.ElapsedMilliseconds + ";unusedRootHashProduced=false");
             return incoming;

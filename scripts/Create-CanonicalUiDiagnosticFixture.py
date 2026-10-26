@@ -16,7 +16,9 @@ def main():
     parser.add_argument("source")
     parser.add_argument("destination")
     parser.add_argument('--source-boundary-ordinal', type=int, required=True, choices=range(2, 65))
+    parser.add_argument('--target-profile', choices=('v14', 'v15'), default='v14')
     args = parser.parse_args()
+    new_profile = NEW if args.target_profile == 'v14' else NEW.replace('-v14-', '-v15-')
     source, destination = Path(args.source).resolve(), Path(args.destination).resolve()
     owned = Path(__file__).resolve().parent.parent / "artifacts/scene-checkpoints/p3"
     if not destination.is_relative_to(owned) or destination == source or destination.exists():
@@ -30,8 +32,8 @@ def main():
             raise ValueError("Source is not the explicit v13 diagnostic source")
         if sum(json.loads(line)["repeatCount"] for line in body.splitlines() if line.strip()) != 3150:
             raise ValueError("Expected the unchanged 3150 input frames")
-        new_header_line = header_line.replace(OLD.encode(), NEW.encode())
-        if json.loads(new_header_line) != dict(header, nativeProfileId=NEW):
+        new_header_line = header_line.replace(OLD.encode(), new_profile.encode())
+        if json.loads(new_header_line) != dict(header, nativeProfileId=new_profile):
             raise ValueError("Header replacement changed unrelated metadata")
         derived_movie = new_header_line + b"\n" + body
         manifest = json.loads(archive.read("manifest.json"))
@@ -49,9 +51,9 @@ def main():
                 output.writestr(entry, data)
     if source.read_bytes() != original_pack:
         raise ValueError("Original sequence changed")
-    evidence = dict(schema="canonical-retired-ui-derived-diagnostic-v1", diagnosticOnly=True,
+    evidence = dict(schema="canonical-retired-ui-derived-diagnostic-v1" if args.target_profile == 'v14' else "canonical-boss-context-derived-diagnostic-v1", diagnosticOnly=True,
         newlyRecorded=False, authoritativeNewProfileExpectations=False, frames=3150, sourceBoundaryOrdinal=args.source_boundary_ordinal,
-        source=str(source), destination=str(destination), originalProfile=OLD, derivedProfile=NEW,
+        source=str(source), destination=str(destination), originalProfile=OLD, derivedProfile=new_profile,
         originalPackSha256=sha(original_pack), derivedPackSha256=sha(destination.read_bytes()),
         originalMovieSha256=sha(original_movie), derivedMovieSha256=sha(derived_movie),
         unchangedInputBodySha256=sha(body), initialSavesUnchanged=True,

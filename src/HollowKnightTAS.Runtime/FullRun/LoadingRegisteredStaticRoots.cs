@@ -60,6 +60,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     yield return Tuple.Create<string, object?>("static:" + type.Assembly.GetName().Name + ":" + type.FullName + "." + field.Name,
                         field.GetValue(null));
                 }
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
+                foreach (var type in new[] { typeof(BossSceneController), typeof(BossSequenceController), typeof(BossChallengeUI), typeof(BossStatue) }) {
+                    CanonicalBossChallengeOriginal.RequireStaticInventory(type);
+                    foreach (var field in type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+                        .Where(field => !field.IsLiteral).OrderBy(field => field.Name, StringComparer.Ordinal))
+                        yield return Tuple.Create<string, object?>("static:" + type.Assembly.GetName().Name + ":" + type.FullName + "." + field.Name, field.GetValue(null));
+                }
         }
     }
 }

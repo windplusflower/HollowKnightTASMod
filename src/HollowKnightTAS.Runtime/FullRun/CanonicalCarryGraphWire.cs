@@ -180,9 +180,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             : value == 3 ? "node" : value == 4 ? "external" : value == 5 ? "unsupported" : throw new InvalidDataException("Unknown carry value kind.");
         private static byte NodeKind(string value) => value == "object" ? (byte)0 : value == "array" ? (byte)1 : value == "boxed-scalar" ? (byte)2
             : value == "ease-callback" ? (byte)3
+            : value == "boss-challenge-callback" ? (byte)4
             : throw new InvalidDataException("Unknown carry node kind.");
         private static string NodeKind(byte value) => value == 0 ? "object" : value == 1 ? "array" : value == 2 ? "boxed-scalar"
             : value == 3 ? "ease-callback"
+            : value == 4 ? "boss-challenge-callback"
             : throw new InvalidDataException("Unknown carry node kind.");
     }
 }

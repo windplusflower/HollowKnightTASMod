@@ -142,9 +142,13 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal static void Validate()
         {
-            CanonicalBossSetupDiagnostic.ValidateAbi();
             if (typeof(BossChallengeUI).Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid
                 || Primary == null || Secondary == null || Self == null || Constructor == null || Return == null
+                || !Primary.GetFields(Flags | BindingFlags.DeclaredOnly).OrderBy(field => field.MetadataToken)
+                    .Select(field => field.Name + ":" + field.FieldType.FullName).SequenceEqual(new[] {
+                        "level:System.Int32", "<>4__this:BossChallengeUI", "<>9__1:System.Action" })
+                || Primary.GetMethod("<LoadBoss>b__0", Flags)?.MetadataToken != 100666692
+                || Primary.GetMethod("<LoadBoss>b__1", Flags)?.MetadataToken != 100666693
                 || Return.MetadataToken != 100666695 || Return.ReturnType != typeof(void) || Return.GetParameters().Length != 0
                 || !Secondary.GetFields(Flags | BindingFlags.DeclaredOnly).Select(field => field.Name + ":" + field.FieldType.FullName)
                     .SequenceEqual(new[] { "self:BossSceneController" }))
@@ -159,6 +163,24 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (type.GetMethod(name, Flags | BindingFlags.DeclaredOnly) != null)
                         throw new InvalidDataException("Boss asset declares an unqualified lifecycle callback: " + type.FullName + "/" + name);
             }
+            foreach (var type in new[] { typeof(BossSceneController), typeof(BossSequenceController), typeof(BossChallengeUI), typeof(BossStatue) })
+                RequireStaticInventory(type);
+        }
+        internal static void RequireStaticInventory(Type type)
+        {
+            var initializer = type.TypeInitializer;
+            var expected = type == typeof(BossSceneController) ? "2A" : type == typeof(BossChallengeUI) ? "15-80-40-17-00-0A-2A" : null;
+            if (initializer == null ? expected != null : expected == null
+                || BitConverter.ToString(initializer.GetMethodBody()!.GetILAsByteArray()!) != expected)
+                throw new InvalidDataException("Challenge static initializer differs: " + type.FullName);
+            if (type == typeof(BossChallengeUI)) {
+                var field = type.Module.ResolveField(0x0a001740);
+                if (field == null || field.DeclaringType != type || !field.IsStatic || field.Name != "lastSelectedButton" || field.FieldType != typeof(int))
+                    throw new InvalidDataException("Original challenge UI scalar initializer target differs.");
+            }
+            if (type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+                .Any(field => field.IsDefined(typeof(ThreadStaticAttribute), false)))
+                throw new InvalidDataException("Challenge static inventory has a thread-local field.");
         }
 
         internal static object NewReturn(object self)

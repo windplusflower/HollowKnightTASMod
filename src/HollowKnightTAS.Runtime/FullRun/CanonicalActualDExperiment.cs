@@ -20,8 +20,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 return CanonicalActualDRoute.SelectOrdinal(text, Enabled);
             }
         }
-        public int Schema = 11, Ordinal;
+        public int Schema = 12, Ordinal;
         public string OriginalUiAssetOrigins = "";
+        public string OriginalBossAssetOrigins = "";
         public CanonicalActualDRoute Route = new CanonicalActualDRoute();
         public long MovieFrame, NativeFrame;
         public byte[] Main = Array.Empty<byte>(), Input = Array.Empty<byte>(), Geo = Array.Empty<byte>(), Map = Array.Empty<byte>(), Marker = Array.Empty<byte>(), MapKeyText = Array.Empty<byte>(), MapKeyParents = Array.Empty<byte>();
@@ -58,13 +59,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private void Validate()
         {
-            if (!Enabled || Schema != 11 || !HollowKnightTAS.Core.Movie.NativeExecutionProfile.SupportsSceneCheckpoints(
+            if (!Enabled || Schema != 12 || !HollowKnightTAS.Core.Movie.NativeExecutionProfile.SupportsSceneCheckpoints(
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) || Ordinal != SelectedOrdinal || MovieFrame < 0 || NativeFrame < 0
                 || Main == null || Input == null || Geo == null || Map == null || Map.Length == 0 || Main.Length == 0 || Input.Length == 0 || Geo.Length == 0
                 || Marker == null || Marker.Length == 0 || MapKeyText == null || MapKeyText.Length == 0 || MapKeyParents == null || MapKeyParents.Length == 0
                 || Physics == null || Physics.Length == 0
                 || (long)Main.Length + Input.Length + Geo.Length + Map.Length + Marker.Length + MapKeyText.Length + MapKeyParents.Length + Physics.Length > MaximumBytes || Clock == null || Clock.NativeFrame != NativeFrame)
                 throw new InvalidDataException("Actual D source schema, epoch or graph bounds differ.");
+            if (OriginalBossAssetOrigins == null || OriginalBossAssetOrigins.Length != 129 || OriginalBossAssetOrigins[64] != ':'
+                || OriginalBossAssetOrigins.Where((value, index) => index != 64).Any(value => !Uri.IsHexDigit(value)))
+                throw new InvalidDataException("Actual D boss asset provenance manifest differs.");
             if (Route == null) throw new InvalidDataException("Source boundary route is absent.");
             Route.Validate(SelectedOrdinal, MovieFrame);
             if (OriginalUiAssetOrigins == null || OriginalUiAssetOrigins.Length != 64 || OriginalUiAssetOrigins.Any(value => !Uri.IsHexDigit(value)))
