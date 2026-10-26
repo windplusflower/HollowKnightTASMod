@@ -12,15 +12,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal Action RestoreAbsentProducedGeoStarts(CanonicalSchedulerCarry source,
             IReadOnlyDictionary<int, MonoBehaviour> produced, string prefix, IReadOnlyDictionary<int, string> names,
             Action requireDirectory, HeroController hero,
-            Action admission, Action requireSourceNative)
-            => RestoreAbsentProducedStarts(source, produced, prefix, names, requireDirectory, hero, admission, requireSourceNative, 11);
+            Action admission, Action requireSourceNative, IReadOnlyCollection<string>? pendingBorderOwners = null)
+            => RestoreAbsentProducedStarts(source, produced, prefix, names, requireDirectory, hero, admission, requireSourceNative, 11, pendingBorderOwners);
         internal Action RestoreAbsentProducedMarkerStarts(CanonicalSchedulerCarry source,
             IReadOnlyDictionary<int, MonoBehaviour> produced, string prefix, IReadOnlyDictionary<int, string> names,
             Action requireDirectory, HeroController hero, Action admission, Action requireSourceNative)
             => RestoreAbsentProducedStarts(source, produced, prefix, names, requireDirectory, hero, admission, requireSourceNative, 8);
         private Action RestoreAbsentProducedStarts(CanonicalSchedulerCarry source,
             IReadOnlyDictionary<int, MonoBehaviour> produced, string prefix, IReadOnlyDictionary<int, string> names,
-            Action requireDirectory, HeroController hero, Action admission, Action requireSourceNative, int expectedOwnerCount)
+            Action requireDirectory, HeroController hero, Action admission, Action requireSourceNative, int expectedOwnerCount,
+            IReadOnlyCollection<string>? pendingBorderOwners = null)
         {
             admission(); requireDirectory(); requireSourceNative(); RequireFrozenCapturedQueue()();
             if (produced.Count != expectedOwnerCount || produced.Any(pair => pair.Value == null || pair.Value.GetInstanceID() != pair.Key))
@@ -48,7 +49,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var states = produced.Values.ToDictionary(owner => names[owner.GetInstanceID()], owner =>
                     new CanonicalGeoSourceQueueContract.OwnerState { Lifecycle = BoundaryMonoLifecycle.ObserveUnstartedUi(owner), Active = owner.gameObject.activeInHierarchy }, StringComparer.Ordinal);
                 var actual = CaptureCanonicalCarry(source.SourceNative, hero);
-                var selectedOrders = CanonicalGeoSourceQueueContract.Select(source, actual, prefix, states);
+                var selectedOrders = CanonicalGeoSourceQueueContract.Select(source, actual, prefix, states, pendingBorderOwners);
                 var selected = selectedOrders.Select(order => callbacks[order]).ToArray();
                 if (selected.Any(item => !produced.ContainsKey(item.OwnerInstanceId) || !OriginalStart(item)))
                     throw new InvalidOperationException("Source Geo Start selection escaped its actual newly produced native owners.");

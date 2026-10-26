@@ -23,7 +23,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return frozenIdentity;
         }
         internal static int[] Select(CanonicalSchedulerCarry source, CanonicalSchedulerCarry actual,
-            string prefix, IReadOnlyDictionary<string, OwnerState> owners)
+            string prefix, IReadOnlyDictionary<string, OwnerState> owners, IReadOnlyCollection<string>? pendingBorderOwners = null)
         {
             source.Validate(); actual.Validate();
             if (string.IsNullOrEmpty(prefix) || owners.Count == 0 || owners.Count > 64
@@ -47,12 +47,43 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Mode = item.Mode, Repeat = item.Repeat, TimestampAge = item.TimestampAge, UserDataPresent = item.UserDataPresent }).ToArray();
             var remaining = new CanonicalSchedulerCarry { SourceNative = actual.SourceNative, Timestamp = actual.Timestamp,
                 Callbacks = retained, Coroutines = actual.Coroutines };
-            CanonicalSchedulerRestorePlan.Prepare(source, remaining);
-            if (source.Timestamp != remaining.Timestamp || source.Callbacks.Where((item, index) =>
-                item.WakeTimeBits != retained[index].WakeTimeBits || item.Frame != retained[index].Frame
-                || item.TimestampAge != retained[index].TimestampAge).Any())
+            var sourceComparison = source;
+            var actualComparison = remaining;
+            if (pendingBorderOwners != null) {
+                sourceComparison = WithoutPendingBorderStarts(source, remaining, pendingBorderOwners);
+                actualComparison = WithoutPendingBorderStarts(remaining, source, pendingBorderOwners);
+            }
+            CanonicalSchedulerRestorePlan.Prepare(sourceComparison, actualComparison);
+            if (sourceComparison.Timestamp != actualComparison.Timestamp || sourceComparison.Callbacks.Where((item, index) =>
+                item.WakeTimeBits != actualComparison.Callbacks[index].WakeTimeBits || item.Frame != actualComparison.Callbacks[index].Frame
+                || item.TimestampAge != actualComparison.Callbacks[index].TimestampAge).Any())
                 throw Invalid("non-Geo source scheduler scalars differ");
             return selected.Select(item => item.Order).ToArray();
+        }
+        private static CanonicalSchedulerCarry WithoutPendingBorderStarts(CanonicalSchedulerCarry current, CanonicalSchedulerCarry other, IReadOnlyCollection<string> names)
+        {
+            if (names.Count != 10 || names.Distinct(StringComparer.Ordinal).Count() != 10)
+                throw Invalid("pending Border requires ten exact frozen owner identities");
+            var selected = current.Callbacks.Where(item => names.Contains(item.Owner)).ToArray();
+            var peers = other.Callbacks.Where(item => names.Contains(item.Owner)).ToArray();
+            if (selected.Length != 10 || peers.Length != 10 || selected.Select(item => item.Owner).Distinct(StringComparer.Ordinal).Count() != 10
+                || peers.Select(item => item.Owner).Distinct(StringComparer.Ordinal).Count() != 10
+                || !selected.Select(item => item.Owner).SequenceEqual(peers.Select(item => item.Owner)))
+                throw Invalid("pending Border original Start membership differs");
+            foreach (var item in selected) {
+                var peer = peers.Single(value => value.Owner == item.Owner);
+                if (item.Call != "UnityPlayer:8ac680" || item.Cleanup != "none" || item.Coroutine.Length != 0 || item.UserDataPresent
+                    || item.Mode != 7 || item.Frame != -1 || item.Rate != 0 || item.Repeat != 0 || item.TimestampAge != 0
+                    || peer.Call != item.Call || peer.Cleanup != item.Cleanup || peer.Coroutine != item.Coroutine || peer.UserDataPresent != item.UserDataPresent
+                    || peer.Mode != item.Mode || peer.Frame != item.Frame || peer.Rate != item.Rate || peer.Repeat != item.Repeat
+                    || peer.TimestampAge != item.TimestampAge || peer.WakeTimeBits != item.WakeTimeBits)
+                    throw Invalid("pending Border original callback payload differs: " + item.Owner);
+            }
+            return new CanonicalSchedulerCarry { SourceNative = current.SourceNative, Timestamp = current.Timestamp, Coroutines = current.Coroutines,
+                Callbacks = current.Callbacks.Where(item => !names.Contains(item.Owner)).Select((item, index) =>
+                    new CanonicalSchedulerCarry.Callback { Order = index, Owner = item.Owner, Call = item.Call, Cleanup = item.Cleanup,
+                        Coroutine = item.Coroutine, WakeTimeBits = item.WakeTimeBits, Frame = item.Frame, Rate = item.Rate, Mode = item.Mode,
+                        Repeat = item.Repeat, TimestampAge = item.TimestampAge, UserDataPresent = item.UserDataPresent }).ToArray() };
         }
         private static bool Within(string owner, string prefix) => owner.StartsWith(prefix + ":", StringComparison.Ordinal)
             || owner.StartsWith(prefix + "/", StringComparison.Ordinal);

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using HollowKnightTAS.Runtime.FullRun;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 namespace HollowKnightTAS.Core.Tests.FullRun;
@@ -14,6 +15,38 @@ public sealed class CanonicalGeoSourceQueueContractTests
         SourceNative = 100, Timestamp = 10, Callbacks = callbacks };
     private static Dictionary<string, CanonicalGeoSourceQueueContract.OwnerState> Owners() => new() {
         [Geo] = new() { Lifecycle = new byte[] { 0, 0, 1, 0, 0 } } };
+    private static (CanonicalSchedulerCarry Source, CanonicalSchedulerCarry Actual, string[] Border) PendingBorder()
+    {
+        var border = Enumerable.Range(0, 10).Select(index => "fixed-original-Border/owner[" + index + "]").ToArray();
+        var source = Queue(new[] { "other/A", "other/B" }.Concat(border).Select((name, index) => Start(name, index)).ToArray());
+        var actual = Queue(border.Concat(new[] { "other/A", Geo, "other/B" }).Select((name, index) => Start(name, index)).ToArray());
+        return (source, actual, border);
+    }
+    [TestMethod]
+    public void PendingBorder_changes_only_relative_insertion_position_until_final_original_birth()
+    {
+        var (source, actual, border) = PendingBorder();
+        CollectionAssert.AreEqual(new[] { 11 }, CanonicalGeoSourceQueueContract.Select(source, actual, Prefix, Owners(), border));
+        var wrongFinal = Queue(border.Concat(new[] { "other/A", "other/B" }).Select((name, index) => Start(name, index)).ToArray());
+        Assert.ThrowsExactly<InvalidDataException>(() => CanonicalSchedulerRestorePlan.Prepare(source, wrongFinal));
+        CanonicalSchedulerRestorePlan.Prepare(source, Queue(source.Callbacks.Select((item, index) => Start(item.Owner, index)).ToArray()));
+    }
+    [TestMethod]
+    public void PendingBorder_external_lookalike_nonBorder_order_payload_and_membership_still_reject()
+    {
+        for (var mode = 0; mode < 8; mode++) {
+            var (source, actual, border) = PendingBorder();
+            if (mode == 0) actual.Callbacks[0].Owner += "/foreign-same-type";
+            if (mode == 1) { actual.Callbacks[10].Owner = "other/B"; actual.Callbacks[12].Owner = "other/A"; }
+            if (mode == 2) actual.Callbacks[0].WakeTimeBits++;
+            if (mode == 3) actual.Callbacks[0].Call = "foreign-callback";
+            if (mode == 4) actual.Callbacks[0].Rate = 1;
+            if (mode == 5) { var name = actual.Callbacks[0].Owner; actual.Callbacks[0].Owner = actual.Callbacks[1].Owner; actual.Callbacks[1].Owner = name; }
+            if (mode == 6) border = border.Take(9).ToArray();
+            if (mode == 7) actual.Callbacks[10].WakeTimeBits++;
+            Assert.ThrowsExactly<InvalidDataException>(() => CanonicalGeoSourceQueueContract.Select(source, actual, Prefix, Owners(), border));
+        }
+    }
     [TestMethod]
     public void Frozen_directory_reuse_retains_the_exact_name_object_and_strong_native_owner_witness()
     {

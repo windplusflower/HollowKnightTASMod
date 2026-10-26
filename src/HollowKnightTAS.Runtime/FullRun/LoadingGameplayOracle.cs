@@ -355,9 +355,23 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal Action RestoreAbsentProducedGeoStarts(CanonicalSchedulerCarry source, IReadOnlyDictionary<int, MonoBehaviour> produced,
             string prefix, IReadOnlyDictionary<int, string> names, Action requireDirectory, Action admission, Action requireSourceNative)
-            => (nativeScheduler ?? throw new InvalidOperationException("Missing original Geo scheduler observation.")).RestoreAbsentProducedGeoStarts(
+        {
+            IReadOnlyCollection<string>? pendingBorderOwners = null;
+            var originalDirectoryGuard = requireDirectory;
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)) {
+                var directory = CanonicalHudPresentationDirectory.Build(CanonicalHudPresentationDirectory.Current());
+                CanonicalHudPresentationColdTemplate.RequireProduced(directory);
+                var border = directory.Where(pair => pair.Value is MonoBehaviour && CanonicalHudPresentationDirectory.IsBorderMember(pair.Key))
+                    .Select(pair => (MonoBehaviour)pair.Value).ToDictionary(owner => owner.GetInstanceID());
+                if (border.Count != 10) throw new InvalidOperationException("Pending Border scheduler requires ten original native owners.");
+                var frozen = PrepareProducedSchedulerNames(border.Values.First().transform.parent.gameObject, border);
+                pendingBorderOwners = frozen.Names.Values.ToArray();
+                requireDirectory = () => { originalDirectoryGuard(); frozen.Guard(); };
+            }
+            return (nativeScheduler ?? throw new InvalidOperationException("Missing original Geo scheduler observation.")).RestoreAbsentProducedGeoStarts(
                 source, produced, prefix, names, requireDirectory,
-                HeroController.SilentInstance ?? throw new InvalidOperationException("Missing Geo source Hero."), admission, requireSourceNative);
+                HeroController.SilentInstance ?? throw new InvalidOperationException("Missing Geo source Hero."), admission, requireSourceNative, pendingBorderOwners);
+        }
         internal Action RestoreAbsentProducedMarkerStarts(CanonicalSchedulerCarry source, IReadOnlyDictionary<int, MonoBehaviour> produced,
             string prefix, IReadOnlyDictionary<int, string> names, Action requireDirectory, Action admission, Action requireSourceNative)
             => (nativeScheduler ?? throw new InvalidOperationException("Missing Marker scheduler observation.")).RestoreAbsentProducedMarkerStarts(
