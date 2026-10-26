@@ -63,14 +63,17 @@ if ($DerivedFixtureManifest) {
     $derivedFixture = Get-Content -LiteralPath $DerivedFixtureManifest -Raw | ConvertFrom-Json
     $derivedImpulse = $derivedFixture.schema -eq 'canonical-impulse-derived-diagnostic-v1'
     $derivedUi = $derivedFixture.schema -eq 'canonical-retired-ui-derived-diagnostic-v1'
+    $derivedBoss = $derivedFixture.schema -eq 'canonical-boss-context-derived-diagnostic-v1'
+    $derivedUiProfile = if ($derivedBoss) { 'hktas-unity-input-playerloop-serial-scene-canonical-boundary-2026-v15-experimental' }
+        else { 'hktas-unity-input-playerloop-serial-scene-canonical-boundary-2026-v14-experimental' }
     if (-not $ActualDExperiment -or -not $ActualDSuffix -or
         ($derivedImpulse -and (-not $PhysicsFollowOn -or $SourceBoundaryOrdinal -ne 1)) -or
-        ($derivedUi -and ($SourceBoundaryOrdinal -le 1 -or $derivedFixture.sourceBoundaryOrdinal -ne $SourceBoundaryOrdinal -or $PhysicsFollowOn -or
+        (($derivedUi -or $derivedBoss) -and ($SourceBoundaryOrdinal -le 1 -or $derivedFixture.sourceBoundaryOrdinal -ne $SourceBoundaryOrdinal -or $PhysicsFollowOn -or
             $derivedFixture.originalProfile -ne 'hktas-unity-input-playerloop-serial-scene-canonical-boundary-2026-v13-experimental' -or
-            $derivedFixture.derivedProfile -ne 'hktas-unity-input-playerloop-serial-scene-canonical-boundary-2026-v14-experimental'))) {
+            $derivedFixture.derivedProfile -ne $derivedUiProfile))) {
         throw 'Derived fixtures require their explicit finite actual-D diagnostic route.'
     }
-    if ((-not $derivedImpulse -and -not $derivedUi) -or -not $derivedFixture.diagnosticOnly -or
+    if ((-not $derivedImpulse -and -not $derivedUi -and -not $derivedBoss) -or -not $derivedFixture.diagnosticOnly -or
         $derivedFixture.newlyRecorded -or $derivedFixture.frames -ne 3150 -or
         [IO.Path]::GetFullPath($Movie) -ne $derivedFixture.destination -or
         (Get-FileHash -LiteralPath $Movie -Algorithm SHA256).Hash.ToLowerInvariant() -ne $derivedFixture.derivedPackSha256 -or
