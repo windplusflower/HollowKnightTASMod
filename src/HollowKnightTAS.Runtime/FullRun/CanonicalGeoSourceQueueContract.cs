@@ -62,12 +62,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static CanonicalSchedulerCarry WithoutPendingBorderStarts(CanonicalSchedulerCarry current, CanonicalSchedulerCarry other, IReadOnlyCollection<string> names)
         {
-            if (names.Count != 10 || names.Distinct(StringComparer.Ordinal).Count() != 10)
-                throw Invalid("pending Border requires ten exact frozen owner identities");
+            if (names.Count != 9 || names.Distinct(StringComparer.Ordinal).Count() != 9)
+                throw Invalid("pending Border requires nine exact frozen original Start identities");
             var selected = current.Callbacks.Where(item => names.Contains(item.Owner)).ToArray();
             var peers = other.Callbacks.Where(item => names.Contains(item.Owner)).ToArray();
-            if (selected.Length != 10 || peers.Length != 10 || selected.Select(item => item.Owner).Distinct(StringComparer.Ordinal).Count() != 10
-                || peers.Select(item => item.Owner).Distinct(StringComparer.Ordinal).Count() != 10
+            if (selected.Length != 9 || peers.Length != 9 || selected.Select(item => item.Owner).Distinct(StringComparer.Ordinal).Count() != 9
+                || peers.Select(item => item.Owner).Distinct(StringComparer.Ordinal).Count() != 9
                 || !selected.Select(item => item.Owner).SequenceEqual(peers.Select(item => item.Owner)))
                 throw Invalid("pending Border original Start membership differs");
             foreach (var item in selected) {

@@ -365,7 +365,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     .Select(pair => (MonoBehaviour)pair.Value).ToDictionary(owner => owner.GetInstanceID());
                 if (border.Count != 10) throw new InvalidOperationException("Pending Border scheduler requires ten original native owners.");
                 var frozen = PrepareProducedSchedulerNames(border.Values.First().transform.parent.gameObject, border);
-                pendingBorderOwners = frozen.Names.Values.ToArray();
+                pendingBorderOwners = border.Values.Where(owner => !(owner is UnboldIfCJK)).Select(owner => frozen.Names[owner.GetInstanceID()]).ToArray();
+                if (pendingBorderOwners.Count != 9 || border.Values.Count(owner => owner is UnboldIfCJK) != 1)
+                    throw new InvalidOperationException("Original Border has nine pending-capable owners and one OnEnable-only Unbold owner.");
                 requireDirectory = () => { originalDirectoryGuard(); frozen.Guard(); };
             }
             return (nativeScheduler ?? throw new InvalidOperationException("Missing original Geo scheduler observation.")).RestoreAbsentProducedGeoStarts(

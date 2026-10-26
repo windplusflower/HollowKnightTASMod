@@ -17,7 +17,9 @@ public sealed class CanonicalGeoSourceQueueContractTests
         [Geo] = new() { Lifecycle = new byte[] { 0, 0, 1, 0, 0 } } };
     private static (CanonicalSchedulerCarry Source, CanonicalSchedulerCarry Actual, string[] Border) PendingBorder()
     {
-        var border = Enumerable.Range(0, 10).Select(index => "fixed-original-Border/owner[" + index + "]").ToArray();
+        var border = new[] { "Pane Name", "Pane Name L", "Pane Name R" }.SelectMany(leaf =>
+            new[] { "TMPro.TextContainer", "TMPro.TextMeshPro", "ChangeFontByLanguage" }.Select(type =>
+                "DontDestroyOnLoad/_GameCameras[0]/HudCamera[0]/Inventory[0]/Border[0]/" + leaf + "[0]:" + type + "[0]")).ToArray();
         var source = Queue(new[] { "other/A", "other/B" }.Concat(border).Select((name, index) => Start(name, index)).ToArray());
         var actual = Queue(border.Concat(new[] { "other/A", Geo, "other/B" }).Select((name, index) => Start(name, index)).ToArray());
         return (source, actual, border);
@@ -26,7 +28,7 @@ public sealed class CanonicalGeoSourceQueueContractTests
     public void PendingBorder_changes_only_relative_insertion_position_until_final_original_birth()
     {
         var (source, actual, border) = PendingBorder();
-        CollectionAssert.AreEqual(new[] { 11 }, CanonicalGeoSourceQueueContract.Select(source, actual, Prefix, Owners(), border));
+        CollectionAssert.AreEqual(new[] { 10 }, CanonicalGeoSourceQueueContract.Select(source, actual, Prefix, Owners(), border));
         var wrongFinal = Queue(border.Concat(new[] { "other/A", "other/B" }).Select((name, index) => Start(name, index)).ToArray());
         Assert.ThrowsExactly<InvalidDataException>(() => CanonicalSchedulerRestorePlan.Prepare(source, wrongFinal));
         CanonicalSchedulerRestorePlan.Prepare(source, Queue(source.Callbacks.Select((item, index) => Start(item.Owner, index)).ToArray()));
@@ -34,16 +36,18 @@ public sealed class CanonicalGeoSourceQueueContractTests
     [TestMethod]
     public void PendingBorder_external_lookalike_nonBorder_order_payload_and_membership_still_reject()
     {
-        for (var mode = 0; mode < 8; mode++) {
+        for (var mode = 0; mode < 10; mode++) {
             var (source, actual, border) = PendingBorder();
             if (mode == 0) actual.Callbacks[0].Owner += "/foreign-same-type";
-            if (mode == 1) { actual.Callbacks[10].Owner = "other/B"; actual.Callbacks[12].Owner = "other/A"; }
+            if (mode == 1) { actual.Callbacks[9].Owner = "other/B"; actual.Callbacks[11].Owner = "other/A"; }
             if (mode == 2) actual.Callbacks[0].WakeTimeBits++;
             if (mode == 3) actual.Callbacks[0].Call = "foreign-callback";
             if (mode == 4) actual.Callbacks[0].Rate = 1;
             if (mode == 5) { var name = actual.Callbacks[0].Owner; actual.Callbacks[0].Owner = actual.Callbacks[1].Owner; actual.Callbacks[1].Owner = name; }
-            if (mode == 6) border = border.Take(9).ToArray();
-            if (mode == 7) actual.Callbacks[10].WakeTimeBits++;
+            if (mode == 6) border = border.Take(8).ToArray();
+            if (mode == 7) actual.Callbacks[9].WakeTimeBits++;
+            if (mode == 8) actual = Queue(actual.Callbacks.Concat(new[] { Start("DontDestroyOnLoad/_GameCameras[0]/HudCamera[0]/Inventory[0]/Border[0]/Pane Name[0]:UnboldIfCJK[0]", actual.Callbacks.Length) }).ToArray());
+            if (mode == 9) actual = Queue(actual.Callbacks.Skip(1).Select((item, index) => Start(item.Owner, index)).ToArray());
             Assert.ThrowsExactly<InvalidDataException>(() => CanonicalGeoSourceQueueContract.Select(source, actual, Prefix, Owners(), border));
         }
     }
