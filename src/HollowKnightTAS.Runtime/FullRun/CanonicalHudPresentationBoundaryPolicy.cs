@@ -99,11 +99,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             var queueNames = new[] { "m_GraphicQueueLookup", "m_GraphicRebuildQueue", "m_LayoutQueueLookup", "m_LayoutRebuildQueue" };
             if (!tmpType.GetFields(Instance).Select(field => field.Name).OrderBy(name => name, StringComparer.Ordinal).SequenceEqual(queueNames))
                 throw new InvalidOperationException("Original TMP queue field ABI differs.");
-            var textIds = new HashSet<int>(directory.Where(pair => pair.Value is TMPro.TextMeshPro && !CanonicalHudPresentationDirectory.IsBorderMember(pair.Key)).Select(pair => pair.Value.GetInstanceID()));
+            var coldTexts = directory.Where(pair => pair.Value is TMPro.TextMeshPro && !CanonicalHudPresentationDirectory.IsBorderMember(pair.Key)).Select(pair => (TMPro.TextMeshPro)pair.Value).ToArray();
+            var textIds = new HashSet<int>(coldTexts.Select(text => text.GetInstanceID()));
             foreach (var name in queueNames) {
                 var value = tmpType.GetField(name, Instance)!.GetValue(tmp);
                 if (value is IDictionary lookup && lookup.Keys.Cast<object>().Any(key => key is int id && textIds.Contains(id))
-                    || value is IList queue && queue.Cast<object>().Any(item => texts.Any(owner => ReferenceEquals(owner, item))))
+                    || value is IList queue && queue.Cast<object>().Any(item => coldTexts.Any(owner => ReferenceEquals(owner, item))))
                     throw new InvalidOperationException("Inactive HUD presentation retains a TMP rebuild entry; natural queue retirement is required.");
             }
             using var fields = new LoadingFieldDigest(value => value is UnityEngine.Object native ? "marker-canon-native:" + native.GetInstanceID() : null,
