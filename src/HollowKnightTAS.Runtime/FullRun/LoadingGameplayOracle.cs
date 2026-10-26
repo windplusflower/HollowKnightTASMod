@@ -76,6 +76,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly LoadingGeoIncomingReferences markerIncoming = new LoadingGeoIncomingReferences();
         private readonly LoadingGeoIncomingReferences frozenMarkerIncoming = new LoadingGeoIncomingReferences();
         private bool frozenMarkerSample;
+        private readonly LoadingGeoIncomingReferences hudPresentationIncoming = new LoadingGeoIncomingReferences();
+        private readonly LoadingGeoIncomingReferences frozenHudPresentationIncoming = new LoadingGeoIncomingReferences();
+        private bool hudPresentationSample;
         private readonly LoadingGeoIncomingReferences frozenMenuFlashIncoming = new LoadingGeoIncomingReferences();
         private bool frozenMenuFlashSample;
         private readonly LoadingGeoIncomingReferences mapKeyIncoming = new LoadingGeoIncomingReferences();
@@ -150,10 +153,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                             mapKeyParentIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                             if (frozenMapKeySample) frozenMapKeyIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         }
+                        if (hudPresentationSample) {
+                            hudPresentationIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
+                            frozenHudPresentationIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
+                        }
                         if (frozenMarkerSample) frozenMarkerIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (frozenGeoSample) frozenGeoIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (frozenMenuFlashSample) frozenMenuFlashIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
-                    }, observeSlotValue: value => geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || mapKeyParentIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value) || frozenMenuFlashSample && frozenMenuFlashIncoming.Owns(value));
+                    }, observeSlotValue: value => hudPresentationSample && (hudPresentationIncoming.Owns(value) || frozenHudPresentationIncoming.Owns(value)) || geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || mapKeyParentIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value) || frozenMenuFlashSample && frozenMenuFlashIncoming.Owns(value));
             if (!physicsFollowOn && (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1"))
                 nativeScheduler = new LoadingNativeSchedulerDigest();
             if (physicsFollowOn || boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
@@ -288,6 +295,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal Action RequireFrozenS0Scheduler() => (nativeScheduler ?? throw new InvalidOperationException("Missing original scheduler observation.")).RequireFrozenCapturedQueue();
         internal LoadingGeoIncomingReferences FreezeGeoIncoming() => geoIncoming.Freeze();
+        internal LoadingGeoIncomingReferences FreezeHudPresentationIncoming() => hudPresentationIncoming.Freeze();
         internal LoadingGeoIncomingReferences FreezeMarkerIncoming() => markerIncoming.Freeze();
         internal LoadingGeoIncomingReferences FreezeMapKeyIncoming() => mapKeyIncoming.Freeze();
         internal LoadingGeoIncomingReferences FreezeMapKeyParentIncoming() => mapKeyParentIncoming.Freeze();
@@ -782,6 +790,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             var frozenMapKey = CanonicalMapKeyTextColdTemplate.FrozenKeys;
             frozenMapKeySample = frozenMapKey != null;
             if (frozenMapKeySample) frozenMapKeyIncoming.BeginMapKeySample(UnityId, frozenMapKey!);
+            var frozenPresentation = CanonicalHudPresentationColdTemplate.FrozenInventory;
+            hudPresentationSample = frozenPresentation != null;
+            if (hudPresentationSample) {
+                hudPresentationIncoming.BeginHudPresentationSample(UnityId, CanonicalHudPresentationDirectory.Current(), allowGenerated: true);
+                hudPresentationIncoming.ObserveRetiringHudPresentationMeshes(CanonicalHudPresentationDirectory.Current(), UnityId);
+                frozenHudPresentationIncoming.BeginHudPresentationSample(UnityId, frozenPresentation!);
+            }
             markerIncoming.BeginMarkerSample(UnityId);
             var frozenMarker = CanonicalMarkerColdTemplate.FrozenOwner;
             frozenMarkerSample = frozenMarker != null;
@@ -1052,6 +1067,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             CaptureProgress("asset-values");
             result["assetValues"] = nativePhysicsOnly || !fullInventory ? "not-observed" : CaptureAssetValues(inventory);
             if (frozenGeoSample) frozenGeoIncoming.RequireNoExternalConsumers();
+            if (hudPresentationSample) frozenHudPresentationIncoming.RequireNoExternalConsumers();
             if (frozenMarkerSample) frozenMarkerIncoming.RequireNoExternalConsumers();
             if (frozenMapKeySample) frozenMapKeyIncoming.RequireNoExternalConsumers();
             if (frozenMenuFlashSample) frozenMenuFlashIncoming.RequireNoExternalConsumers();
@@ -1333,6 +1349,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (fields.Capturing && readingMapKeyManagedRoots && mapKeyIncoming.Owns(value)) mapKeyIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && readingMapKeyManagedRoots && frozenMapKeySample && frozenMapKeyIncoming.Owns(value)) frozenMapKeyIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && markerIncoming.Owns(value)) markerIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
+            if (fields.Capturing && hudPresentationSample) {
+                if (hudPresentationIncoming.Owns(value)) hudPresentationIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
+                if (frozenHudPresentationIncoming.Owns(value)) frozenHudPresentationIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
+            }
             if (fields.Capturing && frozenMarkerSample && frozenMarkerIncoming.Owns(value)) frozenMarkerIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && frozenGeoSample && frozenGeoIncoming.Owns(value)) frozenGeoIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && frozenMenuFlashSample && frozenMenuFlashIncoming.Owns(value)) frozenMenuFlashIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);

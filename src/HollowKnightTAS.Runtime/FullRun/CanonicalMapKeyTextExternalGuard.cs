@@ -34,13 +34,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         // reader for a finite set of non-Map owners. No second approximation
         // of that partition or larger per-root budget is introduced.
         internal CanonicalMapKeyTextExternalGuard(IReadOnlyList<KeyValuePair<string, object?>> roots,
-            IReadOnlyDictionary<string, object> originalOwned)
+            IReadOnlyDictionary<string, object> originalOwned, Transform[]? explicitPoseOwners = null)
         {
             if (roots.Count > 16000) throw new InvalidOperationException("Explicit preservation roots exceed the existing owner bound.");
-            keys = null!; ancestors = Array.Empty<Transform>(); owners = Array.Empty<MonoBehaviour>();
+            keys = null!; ancestors = explicitPoseOwners ?? Array.Empty<Transform>(); owners = Array.Empty<MonoBehaviour>();
             subtreeNodes = Array.Empty<Transform>(); subtreeComponents = Array.Empty<Component>();
             sourceParentPoseOwners = Array.Empty<Transform>(); sourceManagedOwners = Array.Empty<MonoBehaviour>();
-            native = Array.Empty<string>(); subtreeNative = Array.Empty<string>();
+            native = ancestors.Select(Pose).ToArray(); subtreeNative = Array.Empty<string>();
             this.originalOwned = originalOwned; explicitManagedRoots = roots.ToArray();
             foreach (var pair in originalOwned.OrderBy(pair => pair.Key, StringComparer.Ordinal))
                 if (!logicalOwned.ContainsKey(pair.Value)) logicalOwned.Add(pair.Value, "owned:" + pair.Key);
@@ -53,8 +53,41 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal void VerifyManagedRoots()
         {
-            if (explicitManagedRoots == null || !managed.SequenceEqual(ReadAll()))
-                throw new InvalidOperationException("Complete explicit preservation graph or cross-root aliases changed.");
+            RequireExplicitManaged();
+            var actual = ancestors.Select(Pose).ToArray();
+            if (!native.SequenceEqual(actual))
+                throw new InvalidOperationException("Complete explicit preservation native ancestor pose changed: "
+                    + string.Join(";", native.Select((before, index) => before == actual[index] ? null : "ancestor[" + index + "] before=" + before + " after=" + actual[index]).Where(value => value != null)));
+        }
+        private void RequireExplicitManaged()
+        {
+            var actual = ReadAll();
+            if (explicitManagedRoots == null || !managed.SequenceEqual(actual))
+                throw new InvalidOperationException("Complete explicit preservation managed graph or cross-root alias changed: "
+                    + string.Join(";", managed.Select((before, index) => index < actual.Length && before == actual[index] ? null
+                        : index < explicitManagedRoots!.Length ? explicitManagedRoots[index].Key : "member-root[" + index + "]").Where(value => value != null)));
+        }
+        internal static string ProjectOriginalDetachedSibling(string pose, int removedBefore)
+        {
+            var original = Newtonsoft.Json.Linq.JObject.Parse(pose);
+            var sibling = (int?)original["sibling"] ?? throw new InvalidOperationException("Original parent pose has no sibling index.");
+            if (removedBefore < 0 || removedBefore > 13 || sibling < removedBefore)
+                throw new InvalidOperationException("Original HUD detach sibling projection is out of bounds.");
+            original["sibling"] = sibling - removedBefore;
+            return original.ToString(Newtonsoft.Json.Formatting.None);
+        }
+        internal void VerifyManagedRootsAfterOriginalHudDetach(Transform[] originalParents, int[] originalSiblings)
+        {
+            RequireExplicitManaged();
+            if (originalParents.Length != 13 || originalSiblings.Length != 13)
+                throw new InvalidOperationException("Original HUD detach closure differs.");
+            for (var index = 0; index < ancestors.Length; index++) {
+                var before = Newtonsoft.Json.Linq.JObject.Parse(native[index]);
+                var parent = (int)before["parent"]!; var sibling = (int)before["sibling"]!;
+                var removedBefore = Enumerable.Range(0, 13).Count(root => originalParents[root].GetInstanceID() == parent && originalSiblings[root] < sibling);
+                if (Pose(ancestors[index]) != ProjectOriginalDetachedSibling(native[index], removedBefore))
+                    throw new InvalidOperationException("Original HUD detach changed more than its exact removed-sibling projection: ancestor[" + index + "]");
+            }
         }
         internal CanonicalMapKeyTextExternalGuard(Transform keys, IReadOnlyDictionary<string, object>? sourceParentOwned = null,
             MonoBehaviour[]? sourceManagedOwners = null, Transform[]? sourcePoseOwners = null)
@@ -129,6 +162,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             // Build proves actual Key parent/component identity before mapping.
             PrepareExactIncomingRebind(LoadingGeoIncomingReferences.BuildMapKeyDirectory(keys, created));
+        }
+        internal void PrepareExplicitIncomingRebind(IReadOnlyDictionary<string, object> replacement)
+        {
+            if (explicitManagedRoots == null) throw new InvalidOperationException("Explicit incoming rebind requires its original explicit-root preservation contract.");
+            PrepareExactIncomingRebind(replacement);
         }
         private void AddMember(object value, string name)
         {

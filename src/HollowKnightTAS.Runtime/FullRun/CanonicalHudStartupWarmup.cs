@@ -20,12 +20,15 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalGeoColdTemplate geoTemplate = new CanonicalGeoColdTemplate();
         private readonly CanonicalMarkerColdTemplate markerTemplate = new CanonicalMarkerColdTemplate();
         private readonly CanonicalMapKeyTextColdTemplate mapKeyTemplate = new CanonicalMapKeyTextColdTemplate();
+        private readonly CanonicalHudPresentationColdTemplate? presentationTemplate = HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(
+            HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) ? new CanonicalHudPresentationColdTemplate() : null;
         private CanonicalMapTextStartup? mapText;
         internal CanonicalGeoColdTemplate GeoTemplate => geoTemplate;
         // Startup only retains the actual serialized cold definition. The
         // three execution paths normalize the live hint at each unloaded B.
         internal CanonicalMarkerColdTemplate MarkerColdDefinition => markerTemplate;
         internal CanonicalMapKeyTextColdTemplate MapKeyTextColdDefinition => mapKeyTemplate;
+        internal CanonicalHudPresentationColdTemplate? HudPresentationColdDefinition => presentationTemplate;
 
         internal bool Advance()
         {
@@ -48,7 +51,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var marker = CanonicalMarkerDirectory.Current();
                 var keys = CanonicalMapKeyTextDirectory.Current();
                 geoTemplate.Capture(cameras.geoCounter, marker, incoming => markerTemplate.Capture(marker, incoming),
-                    keys, incoming => mapKeyTemplate.Capture(keys, incoming));
+                    keys, incoming => mapKeyTemplate.Capture(keys, incoming),
+                    presentationTemplate == null ? null : CanonicalHudPresentationDirectory.Current(), presentationTemplate == null ? null
+                        : incoming => presentationTemplate.Capture(CanonicalHudPresentationDirectory.Current(), incoming));
                 Modding.Logger.Log("[HKTAS] Original Geo before HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingGeoLifecycleObservation.Capture()));
                 Modding.Logger.Log("[HKTAS] Original Map before HUD startup: " + Newtonsoft.Json.JsonConvert.SerializeObject(LoadingMapLifecycleObservation.Capture()));
                 if (!camera.enabled || !cameras.gameObject.activeInHierarchy)
@@ -83,6 +88,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             Modding.Logger.Log("[HKTAS] Original HUD initialization completed; original PD derivation preserved and Invoke finished naturally.");
             return true;
         }
-        public void Dispose() { mapText?.Dispose(); mapKeyTemplate.Dispose(); markerTemplate.Dispose(); geoTemplate.Dispose(); }
+        public void Dispose() { mapText?.Dispose(); presentationTemplate?.Dispose(); mapKeyTemplate.Dispose(); markerTemplate.Dispose(); geoTemplate.Dispose(); }
     }
 }

@@ -47,6 +47,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly CanonicalMapKeyTextSourceDomain mapKeyDomain;
         private readonly CanonicalMapKeyTextColdTemplate mapKeyTemplate;
         private readonly CanonicalBossChallengeAssets? bossAssets;
+        private readonly CanonicalHudPresentationColdTemplate? hudPresentationTemplate;
+        private readonly CanonicalHudPresentationSourceDomain? hudPresentationDomain;
+        private readonly Func<LoadingGeoIncomingReferences>? snapshotHudPresentationIncoming;
+        internal byte[] HudPresentationGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] MapKeyTextGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] MarkerGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] MapGraph { get; private set; } = Array.Empty<byte>();
@@ -59,9 +63,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<LoadingGeoIncomingReferences> consumeMapKeyParentIncoming, Func<LoadingGeoIncomingReferences> snapshotMapKeyParentIncoming,
             Action<Action, Action<Tuple<Action, Action>>> restoreMapKeyParentDependencies,
             Action<Action, LoadingGeoIncomingReferences, Tuple<Action, Action>, Action<Action>> normalizeMapKey,
-            CanonicalMapKeyTextColdTemplate mapKeyTemplate, CanonicalBossChallengeAssets? bossAssets = null)
+            CanonicalMapKeyTextColdTemplate mapKeyTemplate, CanonicalBossChallengeAssets? bossAssets = null, CanonicalHudPresentationColdTemplate? hudPresentationTemplate = null,
+            Func<LoadingGeoIncomingReferences>? snapshotHudPresentationIncoming = null)
         { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; this.journal = journal;
             this.bossAssets = bossAssets;
+            this.hudPresentationTemplate = hudPresentationTemplate;
+            this.snapshotHudPresentationIncoming = snapshotHudPresentationIncoming;
+            hudPresentationDomain = hudPresentationTemplate == null ? null : new CanonicalHudPresentationSourceDomain(hudPresentationTemplate);
             this.restoreHudSourceDependencies = restoreHudSourceDependencies; this.restoreGeoSourceDependencies = restoreGeoSourceDependencies; this.restoreMarkerSourceDependencies = restoreMarkerSourceDependencies; this.consumeMapKeyIncoming = consumeMapKeyIncoming;
             this.consumeMapKeyParentIncoming = consumeMapKeyParentIncoming; this.snapshotMapKeyParentIncoming = snapshotMapKeyParentIncoming;
             this.restoreMapKeyParentDependencies = restoreMapKeyParentDependencies; this.normalizeMapKey = normalizeMapKey;
@@ -230,7 +238,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var guardEventSlots = CanonicalEventStaticSlots.PrepareGuard(roots);
             var inputBindings = CanonicalCarryRootBindings.Merge(InputCarryAudit.FixedBindings, inputRoots);
             var captureEpoch = new object();
-            var bindings = new ExternalBindings(identities, assetTemplates, mapKeyTemplate, canonicalSenders, inputBindings, captureEpoch, bossAssets: bossAssets);
+            var bindings = new ExternalBindings(identities, assetTemplates, mapKeyTemplate, canonicalSenders, inputBindings, captureEpoch, bossAssets: bossAssets, hudPresentationTemplate: hudPresentationTemplate);
             CanonicalCarryGraphData Empty() => new CanonicalCarryGraphData { Roots = Array.Empty<CanonicalCarryGraphData.Root>(),
                 Nodes = Array.Empty<CanonicalCarryGraphData.Node>(), Externals = Array.Empty<CanonicalCarryGraphData.External>(), Unsupported = Array.Empty<string>() };
             var mainNodes = new Dictionary<object, int>(new References());
@@ -241,10 +249,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             MapKeyTextGraph = targetDirectoryOnly ? Array.Empty<byte>() : mapKeyDomain.Capture(CanonicalMapKeyTextDirectory.Current(), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             MapKeyParentGraph = targetDirectoryOnly ? Array.Empty<byte>() : mapKeyParentDomain.Capture(CanonicalMapKeyTextDirectory.Current(),
                 snapshotMapKeyParentIncoming(), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
+            hudPresentationTemplate?.RequireFrozenAssets();
+            HudPresentationGraph = targetDirectoryOnly || hudPresentationDomain == null ? Array.Empty<byte>()
+                : hudPresentationDomain.Capture(CanonicalHudPresentationDirectory.Current(), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             MarkerGraph = targetDirectoryOnly ? Array.Empty<byte>() : markerDomain.Capture(CanonicalMarkerDirectory.Current(), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             var mainBindings = new SortedDictionary<string, object>(InputCarryAudit.FixedBindings.ToDictionary(pair => pair.Key, pair => pair.Value), StringComparer.Ordinal);
             foreach (var pair in roots) mainBindings.Add("canonical-main-root/" + pair.Key, pair.Value);
-            var inputExternal = new ExternalBindings(identities, assetTemplates, mapKeyTemplate, canonicalSenders, mainBindings, captureEpoch, bindings.ownerDirectory, bossAssets);
+            var inputExternal = new ExternalBindings(identities, assetTemplates, mapKeyTemplate, canonicalSenders, mainBindings, captureEpoch, bindings.ownerDirectory, bossAssets, hudPresentationTemplate);
             InputGraph = targetDirectoryOnly ? Empty() : inputCodec.Capture(inputRoots, inputExternal.Bind);
             var sourceEpoch = inputEpoch.Copy();
             CanonicalPreparedWritePlan? mainPlan = null, inputPlan = null;
@@ -559,6 +570,37 @@ namespace HollowKnightTAS.Runtime.FullRun
                     } catch { parent.Fault(); throw; }
                     }, Require);
                 });
+                if (hudPresentationDomain != null) domainActions.Add(() => {
+                    ActualTargetStage = "hud-presentation-source-graph";
+                    var envelope = actualSourceValidation ?? throw new InvalidOperationException("HUD source envelope is absent.");
+                    var inventory = CanonicalHudPresentationDirectory.Current();
+                    var old = LoadingGeoIncomingReferences.BuildHudPresentationDirectory(inventory);
+                    var incoming = (snapshotHudPresentationIncoming ?? throw new InvalidOperationException("HUD incoming snapshot callback absent."))();
+                    void RequireMain() { main.VerifyReadback(); sdk.VerifyReadback(); }
+                    IReadOnlyDictionary<string, object>? final = null;
+                    var apply = hudPresentationDomain.Prepare(envelope.HudPresentation, inventory, mainView!, RequireMain,
+                        bindings.ResolveTarget, admitted, value => final = value, out var verify);
+                    if (final == null) throw new InvalidDataException("HUD final source directory absent.");
+                    Dictionary<string, object> Replacements(CanonicalCarryGraphData graph, Func<string, object> resolve) {
+                        var changes = new Dictionary<string, object>(StringComparer.Ordinal);
+                        foreach (var external in graph.Externals) {
+                            var current = resolve(external.Binding);
+                            var matches = old.Where(pair => ReferenceEquals(pair.Value, current)).ToArray();
+                            if (matches.Length > 1) throw new InvalidDataException("HUD source external aliases are ambiguous.");
+                            if (matches.Length == 1) changes.Add(external.Binding, final[matches[0].Key]);
+                        }
+                        return changes;
+                    }
+                    var mainChanges = Replacements(sourceMain, binding => codec.ResolveExternalBinding(binding, bindings.ResolveTarget));
+                    var inputChanges = Replacements(sourceInput, binding => inputCodec.ResolveExternalBinding(binding, inputExternal.ResolveTarget));
+                    if (mainChanges.Count != 0) mainRebinding!.PrepareMapKey(mainChanges).Apply();
+                    if (inputChanges.Count != 0) sdkRebinding!.PrepareMapKey(inputChanges).Apply();
+                    var aliases = incoming.Prepare(final);
+                    aliases.Apply();
+                    CanonicalEventDataCarry.PrepareSourceReapply(mainView!, admitted)();
+                    apply(); aliases.VerifyReadback(); RequireMain();
+                    sourceChecks.Add(() => { verify(); aliases.VerifyReadback(); });
+                });
                 domainActions.Add(() => prepareScheduler(continuation!.Scheduler)());
                 var physics = CheckpointPhysicsBroadphaseState.DecodeCompact(actualSourceValidation!.Physics);
                 var applyPhysics = physics.PrepareCanonicalApply(identities);
@@ -653,6 +695,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly CanonicalHeroAssetTemplates assetTemplates;
             private readonly CanonicalMapKeyTextColdTemplate mapKeyTemplate;
             private readonly CanonicalBossChallengeAssets? bossAssets;
+            private readonly CanonicalHudPresentationColdTemplate? hudPresentationTemplate;
             private readonly CanonicalVisualSenderBindings canonicalSenders;
             internal readonly List<EventAudit> Events = new List<EventAudit>();
             internal bool HasEvents { get; private set; }
@@ -667,7 +710,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (ambiguousKnown.Contains(binding)) throw new InvalidDataException("Target external directory is ambiguous: " + binding);
                 if (reverseKnown.TryGetValue(binding, out var cached)) return cached;
                 object value;
-                if (binding.StartsWith(CanonicalMapKeyTextColdTemplate.AssetBindingPrefix, StringComparison.Ordinal))
+                if (binding.StartsWith(CanonicalHudPresentationColdTemplate.AssetBindingPrefix, StringComparison.Ordinal))
+                    value = (hudPresentationTemplate ?? throw new InvalidDataException("HUD asset directory absent.")).ResolveOriginalAsset(binding.Substring(CanonicalHudPresentationColdTemplate.AssetBindingPrefix.Length));
+                else if (binding.StartsWith(CanonicalMapKeyTextColdTemplate.AssetBindingPrefix, StringComparison.Ordinal))
                     value = mapKeyTemplate.ResolveOriginalAsset(binding.Substring(CanonicalMapKeyTextColdTemplate.AssetBindingPrefix.Length));
                 else if (binding.StartsWith(CanonicalBossChallengeAssets.BindingPrefix, StringComparison.Ordinal))
                     value = (bossAssets ?? throw new InvalidDataException("Challenge asset directory is absent.")).Resolve(binding);
@@ -712,11 +757,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal ExternalBindings(BoundaryObjectIdentity identities, CanonicalHeroAssetTemplates assetTemplates,
                 CanonicalMapKeyTextColdTemplate mapKeyTemplate, CanonicalVisualSenderBindings canonicalSenders,
                 IReadOnlyDictionary<string, object> fixedInputBindings, object captureEpoch, CanonicalCaptureOwnerDirectory? sharedDirectory = null,
-                CanonicalBossChallengeAssets? bossAssets = null)
+                CanonicalBossChallengeAssets? bossAssets = null, CanonicalHudPresentationColdTemplate? hudPresentationTemplate = null)
             {
                 this.identities = identities;
                 this.assetTemplates = assetTemplates;
-                this.bossAssets = bossAssets;
+                this.bossAssets = bossAssets; this.hudPresentationTemplate = hudPresentationTemplate;
                 this.mapKeyTemplate = mapKeyTemplate;
                 this.canonicalSenders = canonicalSenders;
                 IReadOnlyDictionary<string, object> CaptureNativeDirectory() {
@@ -784,6 +829,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal string? Bind(object value)
             {
                 if (known.TryGetValue(value, out var bound)) return bound;
+                var hudAsset = hudPresentationTemplate?.BindOriginalAsset(value);
+                if (hudAsset != null) { var key = CanonicalHudPresentationColdTemplate.AssetBindingPrefix + hudAsset; Remember(value, key); return key; }
                 var challengeAsset = bossAssets?.Bind(value);
                 if (challengeAsset != null) { Remember(value, challengeAsset); return challengeAsset; }
                 var canonicalSlot = canonicalSenders.Bind(value);

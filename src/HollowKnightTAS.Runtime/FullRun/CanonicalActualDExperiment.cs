@@ -20,12 +20,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 return CanonicalActualDRoute.SelectOrdinal(text, Enabled);
             }
         }
-        public int Schema = 12, Ordinal;
-        public string OriginalUiAssetOrigins = "";
+        public int Schema = 13, Ordinal;
+        public string OriginalUiAssetOrigins = "", OriginalHudPresentationAssetOrigins = "";
         public string OriginalBossAssetOrigins = "";
         public CanonicalActualDRoute Route = new CanonicalActualDRoute();
         public long MovieFrame, NativeFrame;
         public byte[] Main = Array.Empty<byte>(), Input = Array.Empty<byte>(), Geo = Array.Empty<byte>(), Map = Array.Empty<byte>(), Marker = Array.Empty<byte>(), MapKeyText = Array.Empty<byte>(), MapKeyParents = Array.Empty<byte>();
+        public byte[] HudPresentation = Array.Empty<byte>();
         public byte[] Physics = Array.Empty<byte>();
         public CanonicalClockApplyExperiment Clock = new CanonicalClockApplyExperiment();
         public CanonicalRegisteredS0Contract RegisteredS0 = new CanonicalRegisteredS0Contract();
@@ -59,13 +60,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private void Validate()
         {
-            if (!Enabled || Schema != 12 || !HollowKnightTAS.Core.Movie.NativeExecutionProfile.SupportsSceneCheckpoints(
+            if (!Enabled || Schema != 13 || !HollowKnightTAS.Core.Movie.NativeExecutionProfile.SupportsSceneCheckpoints(
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) || Ordinal != SelectedOrdinal || MovieFrame < 0 || NativeFrame < 0
                 || Main == null || Input == null || Geo == null || Map == null || Map.Length == 0 || Main.Length == 0 || Input.Length == 0 || Geo.Length == 0
                 || Marker == null || Marker.Length == 0 || MapKeyText == null || MapKeyText.Length == 0 || MapKeyParents == null || MapKeyParents.Length == 0
-                || Physics == null || Physics.Length == 0
-                || (long)Main.Length + Input.Length + Geo.Length + Map.Length + Marker.Length + MapKeyText.Length + MapKeyParents.Length + Physics.Length > MaximumBytes || Clock == null || Clock.NativeFrame != NativeFrame)
+                || HudPresentation == null || HudPresentation.Length == 0 || Physics == null || Physics.Length == 0
+                || (long)Main.Length + Input.Length + Geo.Length + Map.Length + Marker.Length + MapKeyText.Length + MapKeyParents.Length + HudPresentation.Length + Physics.Length > MaximumBytes || Clock == null || Clock.NativeFrame != NativeFrame)
                 throw new InvalidDataException("Actual D source schema, epoch or graph bounds differ.");
+            if (OriginalHudPresentationAssetOrigins == null || OriginalHudPresentationAssetOrigins.Length != 64
+                || OriginalHudPresentationAssetOrigins.Any(value => !Uri.IsHexDigit(value)))
+                throw new InvalidDataException("HUD presentation source asset manifest is absent.");
             if (OriginalBossAssetOrigins == null || OriginalBossAssetOrigins.Length != 129 || OriginalBossAssetOrigins[64] != ':'
                 || OriginalBossAssetOrigins.Where((value, index) => index != 64).Any(value => !Uri.IsHexDigit(value)))
                 throw new InvalidDataException("Actual D boss asset provenance manifest differs.");

@@ -13,6 +13,7 @@
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengeCarry.cs" Link="FullRun/CanonicalBossChallengeCarry.cs" />
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengeAssets.cs" Link="FullRun/CanonicalBossChallengeAssets.cs" />
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengePolicy.cs" Link="FullRun/CanonicalBossChallengePolicy.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalHudPresentationDirectory.cs" Link="FullRun/CanonicalHudPresentationDirectory.cs" />
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/LoadingContactUserDataBindings.cs" Link="FullRun/LoadingContactUserDataBindings.cs" />
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalListEmptyArrayBindings.cs" Link="FullRun/CanonicalListEmptyArrayBindings.cs" />
     <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/LoadingSharedGraphEvidence.cs" Link="FullRun/LoadingSharedGraphEvidence.cs" />
@@ -83,6 +84,9 @@
     <Reference Include="Assembly-CSharp"><HintPath>$(HKManagedDir)\Assembly-CSharp.dll</HintPath></Reference>
     <Reference Include="UnityEngine"><HintPath>$(HKManagedDir)\UnityEngine.dll</HintPath></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(HKManagedDir)\UnityEngine.CoreModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.UIModule"><HintPath>$(HKManagedDir)\UnityEngine.UIModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.UI"><HintPath>$(HKManagedDir)\UnityEngine.UI.dll</HintPath></Reference>
+    <Reference Include="PlayMaker"><HintPath>$(HKManagedDir)\PlayMaker.dll</HintPath></Reference>
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\FullRunFrameJournal.cs"
              Link="FullRun\FullRunFrameJournal.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingFieldDigest.cs"

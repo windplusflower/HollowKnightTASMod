@@ -17,7 +17,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private Transform? parent;
         private int sibling;
         internal void Capture(GeoCounter source, GameObject? markerRoot = null, Action<LoadingGeoIncomingReferences>? installMarker = null,
-            Transform? mapKeyRoot = null, Action<LoadingGeoIncomingReferences>? installMapKey = null)
+            Transform? mapKeyRoot = null, Action<LoadingGeoIncomingReferences>? installMapKey = null,
+            Transform? presentationRoot = null, Action<LoadingGeoIncomingReferences>? installPresentation = null)
         {
             var stage = "original-owner-admission";
             try {
@@ -31,9 +32,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             stage = "full-original-incoming-reader";
             var markerIncoming = installMarker == null ? null : new LoadingGeoIncomingReferences();
             var mapKeyIncoming = installMapKey == null ? null : new LoadingGeoIncomingReferences();
-            var incoming = ObserveIncoming(source, markerIncoming, markerRoot, mapKeyIncoming: mapKeyIncoming, mapKeyRoot: mapKeyRoot);
+            var presentationIncoming = installPresentation == null ? null : new LoadingGeoIncomingReferences();
+            var incoming = ObserveIncoming(source, markerIncoming, markerRoot, mapKeyIncoming: mapKeyIncoming, mapKeyRoot: mapKeyRoot,
+                presentationIncoming: presentationIncoming, presentationRoot: presentationRoot);
             if (installMarker != null) installMarker(markerIncoming!);
             if (installMapKey != null) installMapKey(mapKeyIncoming!);
+            if (installPresentation != null) installPresentation(presentationIncoming!);
             stage = "original-PD-counter-random-preservation";
             var originalSelf = source.gameObject.activeSelf;
             var random = UnityEngine.Random.state;
@@ -105,7 +109,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             LoadingGeoIncomingReferences? markerIncoming = null, GameObject? markerRoot = null, bool retiringMarkerMeshes = false,
             LoadingGeoIncomingReferences? mapKeyIncoming = null, Transform? mapKeyRoot = null, bool retiringMapKeyMeshes = false,
             LoadingGeoIncomingReferences? menuFlashIncoming = null, GameObject? menuFlashRoot = null,
-            LoadingGeoIncomingReferences? frozenMenuFlashIncoming = null, GameObject? frozenMenuFlashRoot = null)
+            LoadingGeoIncomingReferences? frozenMenuFlashIncoming = null, GameObject? frozenMenuFlashRoot = null,
+            LoadingGeoIncomingReferences? presentationIncoming = null, Transform? presentationRoot = null, bool retiringPresentationMeshes = false)
         {
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
             var challengeIncoming = CanonicalBossChallengePolicy.Incoming;
@@ -113,6 +118,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             long observedNodes = 0, logicalCharacters = 0; var observedRoots = 0;
             var identities = new BoundaryObjectIdentity();
             var incoming = new LoadingGeoIncomingReferences(); incoming.BeginSample(identities.Get, source);
+            if (presentationIncoming != null) presentationIncoming.BeginHudPresentationSample(identities.Get,
+                presentationRoot ?? throw new InvalidOperationException("HUD presentation original incoming reader has no exact owner."), allowGenerated: retiringPresentationMeshes);
+            if (retiringPresentationMeshes) (presentationIncoming ?? throw new InvalidOperationException("HUD presentation retiring reader is absent."))
+                .ObserveRetiringHudPresentationMeshes(presentationRoot!, identities.Get);
             if (markerIncoming != null) markerIncoming.BeginMarkerSample(identities.Get,
                 markerRoot ?? throw new InvalidOperationException("Shared original incoming reader has no exact Marker owner."));
             if (retiringMarkerMeshes) (markerIncoming ?? throw new InvalidOperationException("Retiring Marker mesh reader is absent.")).ObserveRetiringMarkerMeshes();
@@ -149,6 +158,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             string? Reference(object value) {
                 if (reader!.Capturing) challengeIncoming?.ObserveReference(value, reader.DiagnosticRoot);
+                if (reader.Capturing && presentationIncoming != null && presentationIncoming.Owns(value))
+                    presentationIncoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
                 if (reader!.Capturing && incoming.Owns(value)) incoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
                 if (reader.Capturing && markerIncoming != null && markerIncoming.Owns(value))
                     markerIncoming.Observe(value, reader.DiagnosticPath, reader.DiagnosticRoot);
@@ -191,6 +202,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             using (reader = new LoadingFieldDigest(Reference, type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object),
                 slotObservation: (owner, field, index, value, path) => {
                     challengeIncoming?.ObserveSlot(owner, field, value);
+                    presentationIncoming?.ObserveSlot(owner, field, index, value, path, reader!.DiagnosticRoot);
                     incoming.ObserveSlot(owner, field, index, value, path, reader!.DiagnosticRoot);
                     markerIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
                     mapKeyIncoming?.ObserveSlot(owner, field, index, value, path, reader.DiagnosticRoot);
@@ -199,7 +211,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }, observeSlotValue: value => incoming.Owns(value) || markerIncoming != null && markerIncoming.Owns(value)
                     || mapKeyIncoming != null && mapKeyIncoming.Owns(value) || menuFlashIncoming != null && menuFlashIncoming.Owns(value)
                     || frozenMenuFlashIncoming != null && frozenMenuFlashIncoming.Owns(value)
-                    || challengeIncoming != null && challengeIncoming.Owns(value), sharedFieldReaders: true)) {
+                    || challengeIncoming != null && challengeIncoming.Owns(value)
+                    || presentationIncoming != null && presentationIncoming.Owns(value), sharedFieldReaders: true)) {
                 var owners = Resources.FindObjectsOfTypeAll<MonoBehaviour>().Where(owner => owner != null && owner.gameObject.scene.IsValid()
                     && owner.gameObject.scene.isLoaded && owner.GetType().Assembly != typeof(CanonicalGeoColdTemplate).Assembly).ToArray();
                 if (owners.Length > 16000) throw new InvalidOperationException("Original Geo incoming owner inventory exceeded its existing reader bound.");

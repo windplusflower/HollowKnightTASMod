@@ -1,0 +1,135 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using UnityEngine;
+
+namespace HollowKnightTAS.Runtime.FullRun
+{
+    // Original thirteen-root presentation closure; gameplay parents remain external.
+    internal static class CanonicalHudPresentationBoundaryPolicy
+    {
+        private const BindingFlags Instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        internal static object Reset(CanonicalHudPresentationColdTemplate template, LoadingGameplayOracle observer)
+        {
+            void Require() => LoadingSerialSceneProbe.RequireCanonicalMutationBoundary();
+            Require(); template.RequireFrozenAssets();
+            var keys = CanonicalHudPresentationDirectory.Current();
+            var directory = CanonicalHudPresentationDirectory.Build(keys, allowGeneratedSubmeshes: true);
+            var generated = CanonicalHudPresentationDirectory.GeneratedSubmeshes(directory);
+            var old = CanonicalHudPresentationDirectory.RootPaths.Select(path => keys.Find(path).gameObject).ToArray();
+            var parents = old.Select(root => root.transform.parent).ToArray();
+            if (parents.Any(parent => parent == null || parent.gameObject.activeInHierarchy) || old.Any(root => root.activeInHierarchy))
+                throw new InvalidOperationException("Active HUD presentation requires its original natural-close continuation.");
+            var native = directory.ToDictionary(pair => pair.Key, pair => (object)pair.Value, StringComparer.Ordinal);
+            var poseOwners = parents.SelectMany(Ancestors).Distinct().ToArray();
+            var parentRoots = poseOwners.SelectMany(parent => parent.GetComponents<MonoBehaviour>()).Distinct()
+                .Select((owner, index) => new KeyValuePair<string, object?>("hud-parent[" + index + "]", owner)).ToArray();
+            using var externalGuard = new CanonicalMapKeyTextExternalGuard(parentRoots, native, poseOwners);
+            CanonicalMarkerEventCarry.RequireEmpty(directory);
+            CanonicalMarkerReadonlyCarry.CaptureMapKey(directory);
+            var icon = directory.Values.OfType<MenuButtonIcon>().Single();
+            if (typeof(ActionButtonIconBase).GetField("OnIconUpdate", Instance)!.GetValue(icon) != null)
+                throw new InvalidOperationException("HUD presentation icon retains an unsupported listener.");
+            var fsmListField = typeof(PlayMakerFSM).GetField("fsmList", BindingFlags.Static | BindingFlags.NonPublic)!;
+            var fsmList = fsmListField.GetValue(null) as IList ?? throw new InvalidOperationException("Original FSM list is absent.");
+            var ownedFsms = directory.Values.OfType<PlayMakerFSM>().ToArray();
+            var retainedFsms = fsmList.Cast<object>().Where(item => !ownedFsms.Any(owner => ReferenceEquals(owner, item))).ToArray();
+            var rawType = typeof(HutongGames.PlayMaker.Fsm);
+            var rawField = typeof(PlayMakerFSM).GetField("fsm", Instance)!;
+            var selectedField = typeof(PlayMakerFSM).Assembly.GetType("PlayMakerGUI", true)!
+                .GetField("SelectedFSM", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!;
+            var selectedBefore = selectedField.GetValue(null);
+            var raycastField = rawType.GetField("lastRaycastHit2DInfoLUT", BindingFlags.Static | BindingFlags.NonPublic)!;
+            var raycasts = raycastField.GetValue(null) as IDictionary;
+            foreach (var owner in ownedFsms) {
+                var raw = rawField.GetValue(owner)!;
+                if (rawType.GetField("subFsmList", Instance)!.GetValue(raw) is IList sub && sub.Count != 0
+                    || rawType.GetField("myLog", Instance)!.GetValue(raw) != null
+                    || (bool)rawType.GetField("handleLevelLoaded", Instance)!.GetValue(raw)
+                    || ReferenceEquals(selectedBefore, raw) || raycasts != null && raycasts.Contains(raw))
+                    throw new InvalidOperationException("HUD presentation FSM has an external editor, log, sub-FSM or scene continuation.");
+            }
+            var input = GameManager.instance.inputHandler;
+            var controllerEvent = typeof(InputHandler).GetField("RefreshActiveControllerEvent", Instance)!;
+            var controllerBefore = controllerEvent.GetValue(input);
+            if (controllerBefore is Delegate callbacks && callbacks.GetInvocationList().Any(item => ReferenceEquals(item.Target, icon)))
+                throw new InvalidOperationException("Inactive HUD presentation icon retains a controller subscription.");
+            var texts = directory.Values.OfType<TMPro.TextMeshPro>().ToArray();
+            var meshField = typeof(TMPro.TextMeshPro).GetField("m_mesh", Instance)!;
+            var meshes = texts.Select(owner => meshField.GetValue(owner)).Concat(generated.Values.OfType<TMPro.TMP_SubMesh>().Select(owner => typeof(TMPro.TMP_SubMesh).GetField("m_mesh", Instance)!.GetValue(owner))).Where(value => !ReferenceEquals(value, null)).Cast<Mesh>().ToArray();
+            if (meshes.Any(mesh => mesh == null) || meshes.Distinct().Count() != meshes.Length)
+                throw new InvalidOperationException("HUD presentation retired native meshes are already dead or shared.");
+            // The existing managed incoming walk cannot read native MeshFilter /
+            // collider slots. Check those real consumers before native retirement.
+            var filters = directory.Values.Concat(generated.Values).OfType<MeshFilter>().ToArray();
+            foreach (var filter in Resources.FindObjectsOfTypeAll<MeshFilter>())
+                if (filter != null && meshes.Any(mesh => mesh == filter.sharedMesh) && !filters.Any(owner => ReferenceEquals(owner, filter)))
+                    throw new InvalidOperationException("HUD presentation owned mesh has an external native MeshFilter consumer.");
+            foreach (var collider in Resources.FindObjectsOfTypeAll<MeshCollider>())
+                if (collider != null && meshes.Any(mesh => mesh == collider.sharedMesh))
+                    throw new InvalidOperationException("HUD presentation owned mesh has an external native MeshCollider consumer.");
+            foreach (var renderer in Resources.FindObjectsOfTypeAll<SkinnedMeshRenderer>())
+                if (renderer != null && meshes.Any(mesh => mesh == renderer.sharedMesh))
+                    throw new InvalidOperationException("HUD presentation owned mesh has an external native skinned-renderer consumer.");
+            // TMP's original OnDestroy unregisters both queues. An inactive
+            // hint must already be absent; all unrelated queue storage remains
+            // byte/field-identical, including hidden capacities and aliases.
+            var tmpType = typeof(TMPro.TMP_UpdateManager);
+            var tmpField = tmpType.GetField("s_Instance", BindingFlags.Static | BindingFlags.NonPublic)!;
+            var tmp = tmpField.GetValue(null);
+            if (tmp == null) throw new InvalidOperationException("The original HUD has no initialized TMP update manager.");
+            var queueNames = new[] { "m_GraphicQueueLookup", "m_GraphicRebuildQueue", "m_LayoutQueueLookup", "m_LayoutRebuildQueue" };
+            if (!tmpType.GetFields(Instance).Select(field => field.Name).OrderBy(name => name, StringComparer.Ordinal).SequenceEqual(queueNames))
+                throw new InvalidOperationException("Original TMP queue field ABI differs.");
+            var textIds = new HashSet<int>(texts.Select(owner => owner.GetInstanceID()));
+            foreach (var name in queueNames) {
+                var value = tmpType.GetField(name, Instance)!.GetValue(tmp);
+                if (value is IDictionary lookup && lookup.Keys.Cast<object>().Any(key => key is int id && textIds.Contains(id))
+                    || value is IList queue && queue.Cast<object>().Any(item => texts.Any(owner => ReferenceEquals(owner, item))))
+                    throw new InvalidOperationException("Inactive HUD presentation retains a TMP rebuild entry; natural queue retirement is required.");
+            }
+            using var fields = new LoadingFieldDigest(value => value is UnityEngine.Object native ? "marker-canon-native:" + native.GetInstanceID() : null,
+                type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object), sharedFieldReaders: true);
+            string Tmp() {
+                var result = fields.Capture(tmp, "original-TMP-queues", expandRoot: true);
+                if (result.Unsupported.Count != 0) throw new InvalidOperationException("HUD presentation TMP queue preservation has unread fields.");
+                return result.Sha256;
+            }
+            var tmpBefore = Tmp();
+            var rng = UnityEngine.Random.state; var particles = LoadingGameplayOracle.CaptureParticleRandomState();
+            var incoming = new LoadingGeoIncomingReferences();
+            CanonicalGeoColdTemplate.ObserveIncoming(GameCameras.instance.geoCounter, presentationIncoming: incoming,
+                presentationRoot: keys, retiringPresentationMeshes: true);
+            var owners = directory.Values.Concat(generated.Values).OfType<MonoBehaviour>().ToDictionary(owner => owner.GetInstanceID());
+            observer.RecaptureOwnedHudScheduler(Require, () => { });
+            var transition = observer.PrepareOwnedHudLifecycle(owners, _ => false, out var retireStarts);
+            var created = template.ProduceInactive();
+            void RequireCreated() => CanonicalHudPresentationColdTemplate.RequireCold(CanonicalHudPresentationDirectory.Build(keys, created));
+            RequireCreated();
+            externalGuard.PrepareExplicitIncomingRebind(CanonicalHudPresentationDirectory.Build(keys, created)
+                .ToDictionary(pair => pair.Key, pair => (object)pair.Value, StringComparer.Ordinal));
+            var plan = incoming.Prepare(LoadingGeoIncomingReferences.BuildHudPresentationDirectory(keys, created));
+            plan.Apply();
+            foreach (var text in old) UnityEngine.Object.DestroyImmediate(text);
+            retireStarts();
+            observer.RecaptureOwnedHudScheduler(Require, transition);
+            plan.VerifyReadback(); RequireCreated(); Require(); externalGuard.VerifyManagedRoots(); template.RequireFrozenAssets();
+            if (created.Where((text, index) => !ReferenceEquals(text.transform.parent, parents[index])).Any()
+                || parents.Any(parent => parent.gameObject.activeInHierarchy) || old.Any(text => text != null)
+                || !CanonicalHudPresentationDirectory.Build(keys).Keys.SequenceEqual(directory.Keys) || meshes.Any(mesh => mesh != null)
+                || !ReferenceEquals(fsmList, fsmListField.GetValue(null)) || fsmList.Count != retainedFsms.Length
+                || fsmList.Cast<object>().Where((item, index) => !ReferenceEquals(item, retainedFsms[index])).Any()
+                || !ReferenceEquals(selectedBefore, selectedField.GetValue(null)) || !ReferenceEquals(raycasts, raycastField.GetValue(null))
+                || !ReferenceEquals(controllerBefore, controllerEvent.GetValue(input)) || !ReferenceEquals(tmp, tmpField.GetValue(null)) || tmpBefore != Tmp()
+                || !rng.Equals(UnityEngine.Random.state) || !particles.SequenceEqual(LoadingGameplayOracle.CaptureParticleRandomState()))
+                throw new InvalidOperationException("HUD presentation cold Canon changed an external callback, queue, RNG, registration or retired native mesh contract.");
+            return new { originalRoots = 13, originalObjects = 18, originalMonoOwners = 40, realColdNative = true,
+                fullIncomingReadback = true, retiredOwnedMeshes = meshes.Length, controllerAndTmpQueuesPreserved = true,
+                gameplayParentDataTouched = false, sourceHistoryReplayed = false, completeStateCoverage = false };
+        }
+        private static IEnumerable<Transform> Ancestors(Transform node)
+        { for (int depth = 0; node != null; node = node.parent) { if (++depth > 32) throw new InvalidOperationException("HUD parent bound exceeded."); yield return node; } }
+    }
+}
