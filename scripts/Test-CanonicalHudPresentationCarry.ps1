@@ -37,6 +37,12 @@ try{
   for($i=0;$i-lt40;$i++){$rows[$i]=[object[]]::new($metadataRows[$i].Count)}
   $shared=[object[]]@('source-alias',[int]17)
   $rows[0][0]=$shared;$rows[1][0]=$shared
+  $fsmType=([AppDomain]::CurrentDomain.GetAssemblies()|Where-Object {$_.GetName().Name-eq'PlayMaker'}).GetType('HutongGames.PlayMaker.Fsm',$true)
+  for($owner=0;$owner-lt40;$owner++){for($field=0;$field-lt$metadataRows[$owner].Count;$field++){
+   if($metadataRows[$owner][$field].DeclaringType.FullName-eq'PlayMakerFSM'-and$metadataRows[$owner][$field].Name-eq'fsm'){
+    $rows[$owner][$field]=[Runtime.Serialization.FormatterServices]::GetUninitializedObject($fsmType)
+   }
+  }}
   $dataType.GetField('FieldValues').SetValue($data,$rows)
   return $data
  }
@@ -45,9 +51,11 @@ try{
  $roots=$rootsMethod.Invoke($null,[object[]]@($source))
  $codecType=$asm.GetType('HollowKnightTAS.Runtime.FullRun.CanonicalCarryGraphCodec',$true)
  $readonlyType=$asm.GetType('HollowKnightTAS.Runtime.FullRun.CanonicalMarkerReadonlyCarry',$true)
- $types=[Type[]](@($carry.GetField('DataTypes',$flags).GetValue($null))+@($readonlyType.GetField('DataTypes',$flags).GetValue($null))+@([int[]],[float[]],[UnityEngine.Vector3]))
+ $types=[Type[]](@($carry.GetField('DataTypes',$flags).GetValue($null))+@($readonlyType.GetField('DataTypes',$flags).GetValue($null))+@([int[]],[float[]],[UnityEngine.Vector3],([AppDomain]::CurrentDomain.GetAssemblies()|Where-Object {$_.GetName().Name-eq'PlayMaker'}).GetType('HutongGames.PlayMaker.Fsm')))
+ $fsmContractType=([AppDomain]::CurrentDomain.GetAssemblies()|Where-Object {$_.GetName().Name-eq'PlayMaker'}).GetType('HutongGames.PlayMaker.Fsm')
+ $types=[Type[]](@($types)+@([UnityEngine.RaycastHit],[UnityEngine.Vector2])+@($fsmContractType.GetFields($flags)|Where-Object {$_.FieldType.IsEnum}|ForEach-Object FieldType))
  $codec=$codecType.GetConstructors($flags)[0].Invoke([object[]]@($types,$schema,$null,$null,$null,$true,$null))
- Add-Type 'public static class HudCarryNullBinding { public static string Bind(object value) { return null; } }'
+ Add-Type 'public static class HudCarryNullBinding { public static string Bind(object value) { if(value.GetType().FullName=="HutongGames.PlayMaker.Fsm") throw new System.IO.InvalidDataException("foreign-FSM-needs-explicit-owner-binding"); return null; } }'
  $bind=[Delegate]::CreateDelegate([Func[object,string]],[HudCarryNullBinding].GetMethod('Bind'))
  $graph=$codec.GetType().GetMethod('Capture',$flags).Invoke($codec,[object[]]@($roots,$bind,$null))
  if($graph.Unsupported.Length-ne0){throw ('Unsupported graph: '+($graph.Unsupported-join';'))}
@@ -73,6 +81,17 @@ try{
  $bad=NewData;$badRows=$dataType.GetField('FieldValues').GetValue($bad)
  $badRows[0]=[object[]]::new($badRows[0].Length-1);$badRows[1]=[object[]]::new($badRows[1].Length+1)
  try{$rootsMethod.Invoke($null,[object[]]@($bad))|Out-Null;throw 'Accepted redistributed complete field total'}catch{if($_.Exception.InnerException-is[IO.InvalidDataException]){$rejected++}else{throw}}
+ $fsmBindings=@($roots.Keys|Where-Object {$_.StartsWith('HudPresentation/Fsm/')})
+ if($fsmBindings.Count-ne7){throw 'Original FSM explicit roots differ'}
+ foreach($binding in $fsmBindings){
+  $key=$binding.Substring('HudPresentation/Fsm/'.Length);$owner=[Array]::IndexOf($nativeKeys,$key)
+  $field=[Array]::FindIndex([Reflection.FieldInfo[]]$metadataRows[$owner],[Predicate[Reflection.FieldInfo]]{param($f)$f.Name-eq'fsm'})
+  if(-not[object]::ReferenceEquals($targetRoots[$binding],$rows[$owner][$field])){throw 'FSM root/field alias not preserved'}
+ }
+ $withoutFsm=[Collections.Generic.SortedDictionary[string,object]]::new([StringComparer]::Ordinal)
+ $withoutFsm.Add('HudPresentation/Source',$source)
+ $unbound=$codec.GetType().GetMethod('Capture',$flags).Invoke($codec,[object[]]@($withoutFsm,$bind,$null))
+ if(@($unbound.Unsupported|Where-Object {$_-like'*foreign-FSM-needs-explicit-owner-binding*'}).Count-ne7){throw 'Foreign raw FSM fallback was widened'}
  $guard=$asm.GetType('HollowKnightTAS.Runtime.FullRun.CanonicalMapKeyTextExternalGuard',$true)
  $project=$guard.GetMethod('ProjectOriginalDetachedSibling',$flags)
  $original='{"id":7,"parent":9,"active":true,"hierarchy":false,"poseBits":[-2147483648,1,17],"sibling":17,"layer":5,"tag":"Untagged","isStatic":false,"hideFlags":0}'
@@ -88,6 +107,6 @@ try{
   try{$project.Invoke($null,[object[]]@($original,$count))|Out-Null;throw 'Invalid sibling projection admitted'}
   catch{if($_.Exception.InnerException-is[InvalidOperationException]){$invalidProjection++}else{throw}}
  }
- [ordered]@{productionSchema=$schema;encodedBytes=$encoded.Length;productionWireRoundtrip=$true;sharedAliasesPreserved=$true;malformedDirectoriesRejected=$rejected;exactSiblingProjections=14;invalidSiblingProjectionsRejected=$invalidProjection;frozenRegistryRequiresOriginalMono=$true;nativeMonoExecutionNotTested=$true}|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $OutputPath
- [ordered]@{encodedBytes=$encoded.Length;productionWireRoundtrip=$true;sharedAliasesPreserved=$true;malformedDirectoriesRejected=$rejected;nativeMonoExecutionNotTested=$true}|ConvertTo-Json
+ [ordered]@{productionSchema=$schema;encodedBytes=$encoded.Length;productionWireRoundtrip=$true;sharedAliasesPreserved=$true;malformedDirectoriesRejected=$rejected;exactSiblingProjections=14;invalidSiblingProjectionsRejected=$invalidProjection;frozenRegistryRequiresOriginalMono=$true;explicitOriginalFsmRoots=7;rootFieldAliasesPreserved=$true;foreignFsmStillRejected=$true;nativeMonoExecutionNotTested=$true}|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $OutputPath
+ [ordered]@{encodedBytes=$encoded.Length;productionWireRoundtrip=$true;sharedAliasesPreserved=$true;malformedDirectoriesRejected=$rejected;explicitOriginalFsmRoots=7;rootFieldAliasesPreserved=$true;foreignFsmStillRejected=$true;nativeMonoExecutionNotTested=$true}|ConvertTo-Json
 }finally{}

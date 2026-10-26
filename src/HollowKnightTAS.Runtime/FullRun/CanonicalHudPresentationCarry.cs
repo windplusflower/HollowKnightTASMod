@@ -10,8 +10,9 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal static class CanonicalHudPresentationCarry
     {
         internal const string Root = "HudPresentation/Source";
+        internal const string FsmRootPrefix = "HudPresentation/Fsm/";
         private static readonly string Schema = "original-hud-presentation-18-all-managed-v1:" + CanonicalHudPresentationDirectory.SchemaIdentity
-            + ":" + CanonicalMarkerReadonlyCarry.SchemaIdentity;
+            + ":" + CanonicalMarkerReadonlyCarry.SchemaIdentity + ":7-explicit-original-cold-fsm-roots-v1";
         internal static readonly Type[] DataTypes = { typeof(Data), typeof(object[]), typeof(object[][]), typeof(string[]), typeof(bool[]), typeof(byte[]) };
         internal sealed class Data
         {
@@ -81,7 +82,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || data.FieldValues.Where((row, index) => row.Length != expected.Values.ElementAt(index).Length).Any()
                 || data.Lifecycle.Length != expected.Count * 5 || data.ActiveSelf.Length != expectedObjects.Length)
                 throw new InvalidDataException("HUD presentation per-owner original field rows, lifecycle or object directory differs.");
-            return new SortedDictionary<string, object>(StringComparer.Ordinal) { [Root] = data };
+            var roots = new SortedDictionary<string, object>(StringComparer.Ordinal) { [Root] = data };
+            var expectedRows = expected.ToArray();
+            for (var owner = 0; owner < expectedRows.Length; owner++) {
+                var fields = expectedRows[owner].Value;
+                var index = Array.FindIndex(fields, field => field.DeclaringType == typeof(PlayMakerFSM) && field.Name == "fsm");
+                if (index < 0) continue;
+                var raw = data.FieldValues[owner][index];
+                if (raw == null || raw.GetType() != typeof(HutongGames.PlayMaker.Fsm) || roots.Values.Any(value => ReferenceEquals(value, raw)))
+                    throw new InvalidDataException("HUD original cold FSM root is absent, foreign or shared.");
+                roots.Add(FsmRootPrefix + expectedRows[owner].Key, raw);
+            }
+            if (roots.Count != 8) throw new InvalidDataException("HUD original seven cold FSM roots differ.");
+            return roots;
         }
         internal static Action PrepareManaged(Data source, Transform keys, CanonicalCarryGraphCodec codec, Func<bool> admitted)
         {

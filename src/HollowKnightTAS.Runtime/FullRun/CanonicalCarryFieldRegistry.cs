@@ -174,7 +174,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                             throw new InvalidDataException("Border pre-Awake input domain has an unknown/missing root.");
                     }
                     else if (hudPresentationDomain) {
-                        if (graph.Roots == null || graph.Roots.Length != 1 || graph.Roots[0].Binding != CanonicalHudPresentationCarry.Root)
+                        if (graph.Roots == null || graph.Roots.Length != 8 || graph.Roots.Count(root => root.Binding == CanonicalHudPresentationCarry.Root) != 1
+                            || graph.Roots.Count(root => root.Binding.StartsWith(CanonicalHudPresentationCarry.FsmRootPrefix, StringComparison.Ordinal)) != 7
+                            || graph.Roots.Any(root => root.Binding != CanonicalHudPresentationCarry.Root
+                                && !root.Binding.StartsWith(CanonicalHudPresentationCarry.FsmRootPrefix, StringComparison.Ordinal)))
                             throw new InvalidDataException("HUD presentation carry domain has unknown/missing root.");
                     }
                     else if (mapKeyParentDomain) {
