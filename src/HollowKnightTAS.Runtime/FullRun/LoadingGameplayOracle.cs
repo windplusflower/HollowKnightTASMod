@@ -79,6 +79,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly LoadingGeoIncomingReferences hudPresentationIncoming = new LoadingGeoIncomingReferences();
         private readonly LoadingGeoIncomingReferences frozenHudPresentationIncoming = new LoadingGeoIncomingReferences();
         private bool hudPresentationSample;
+        private bool readingOwnedHudNativeProjection;
         private CanonicalHudBorderQueuePartition? hudBorderQueues;
         private string? hudBorderQueueFailure;
         private readonly LoadingGeoIncomingReferences frozenMenuFlashIncoming = new LoadingGeoIncomingReferences();
@@ -156,7 +157,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                             if (frozenMapKeySample) frozenMapKeyIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         }
                         hudBorderQueues?.ObserveSlot(owner, field, index, value, path);
-                        if (hudPresentationSample) {
+                        if (hudPresentationSample && !readingOwnedHudNativeProjection) {
                             hudPresentationIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                             frozenHudPresentationIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         }
@@ -1248,10 +1249,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                             s0InvariantFailures.Add(id + "/R2.localScale:differs-from-actual-fresh-Idle-Scale");
                     }
                 }
-                var digest = fields.Capture(new { go.activeSelf, go.layer, go.tag, go.isStatic,
+                var projection = new { go.activeSelf, go.layer, go.tag, go.isStatic,
                     hideFlags = (int)go.hideFlags, parent = transform.parent == null ? null : UnityId(transform.parent),
                     sibling = transform.GetSiblingIndex(), transform.hasChanged, transform.localPosition, transform.localRotation,
-                    localScale, rect, components }, id, expandRoot: true);
+                    localScale, rect, components };
+                // This newly allocated read-only DTO is our own native getter
+                // observation, not a persistent game consumer to rebind. Scope
+                // only the exact owned GO capture; external GO projections and
+                // every real managed owner remain in the incoming proof.
+                var priorHudProjection = readingOwnedHudNativeProjection;
+                readingOwnedHudNativeProjection = hudPresentationSample && hudPresentationIncoming.Owns(go);
+                LoadingFieldDigestResult digest;
+                try { digest = fields.Capture(projection, id, expandRoot: true); }
+                finally { readingOwnedHudNativeProjection = priorHudProjection; }
                 text.Append(id).Append(':').Append(digest.Sha256).Append('\n');
                 foreach (var omitted in digest.Unsupported) omissions.Add(omitted);
                 inventory.Add(new { id, type = "UnityEngine.GameObject/native-hierarchy", digest = digest.Sha256,
@@ -1371,7 +1381,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (fields.Capturing && readingMapKeyManagedRoots && mapKeyIncoming.Owns(value)) mapKeyIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && readingMapKeyManagedRoots && frozenMapKeySample && frozenMapKeyIncoming.Owns(value)) frozenMapKeyIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && markerIncoming.Owns(value)) markerIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
-            if (fields.Capturing && hudPresentationSample) {
+            if (fields.Capturing && hudPresentationSample && !readingOwnedHudNativeProjection) {
                 if (hudPresentationIncoming.Owns(value)) hudPresentationIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
                 if (frozenHudPresentationIncoming.Owns(value)) frozenHudPresentationIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             }
