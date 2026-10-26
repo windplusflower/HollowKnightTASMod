@@ -25,6 +25,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly List<string> foreign = new List<string>();
         private readonly TextMeshPro[] oldTexts;
         private readonly LoadingFieldDigest fields;
+        private object[]? digestQueues;
         private bool consumed;
         private readonly string beforeDigest;
         private readonly Camera.CameraCallback cameraCallbacks;
@@ -70,8 +71,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 internalOwners.Add(source);
                 foreach (var field in layout) {
                     var value = field.GetValue(source);
-                    if ((field.Name == "_syncRoot" || field.Name == "keys" || field.Name == "values") && value != null)
-                        throw new InvalidOperationException("Original TMP queue has an unsupported cached external collection consumer.");
+                    if (field.Name == "_syncRoot" && value != null)
+                        throw new InvalidOperationException("Original TMP queue has an unsupported monitor cache: " + source.GetType().FullName + "/" + field.Name);
+                    if ((field.Name == "keys" || field.Name == "values") && value != null) {
+                        internalOwners.Add(value);
+                        value = CopyOriginalLazyCache(source, copy, field.Name, value);
+                    }
                     if (value is Array array) {
                         if (array.Length > 4096) throw new InvalidDataException("Original TMP queue backing array exceeds its fixed bound.");
                         internalOwners.Add(array);
@@ -83,11 +88,28 @@ namespace HollowKnightTAS.Runtime.FullRun
                 return copy;
             }
             predicted = original.Select(CopyCollection).ToArray();
-            fields = new LoadingFieldDigest(value => value is UnityEngine.Object native ? "border-TMP-queue-native:" + native.GetInstanceID() : null,
-                type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object), sharedFieldReaders: true);
+            fields = new LoadingFieldDigest(value => {
+                if (digestQueues != null) for (var index = 0; index < digestQueues.Length; index++)
+                    if (ReferenceEquals(value, digestQueues[index])) return "original-TMP-queue[" + index + "]";
+                return value is UnityEngine.Object native ? "border-TMP-queue-native:" + native.GetInstanceID() : null;
+            }, type => type == typeof(MonoBehaviour) || type == typeof(UnityEngine.Object), sharedFieldReaders: true);
             beforeDigest = Digest(original);
             if (beforeDigest != Digest(predicted)) throw new InvalidOperationException("Original TMP queue private copies lost raw storage or aliases.");
         }
+        internal static object CopyOriginalLazyCache(object source, object copy, string kind, object cache)
+        {
+            if (source.GetType() != typeof(Dictionary<int, int>) || copy.GetType() != source.GetType() || kind != "keys" && kind != "values")
+                throw new InvalidOperationException("Foreign TMP collection cache copy input.");
+            var type = source.GetType().GetNestedType(kind == "keys" ? "KeyCollection" : "ValueCollection")!.MakeGenericType(typeof(int), typeof(int));
+            var fields = CanonicalCarryGraphCodec.Fields(cache.GetType());
+            if (cache.GetType() != type || fields.Length != 1 || fields[0].Name != "dictionary" || !ReferenceEquals(fields[0].GetValue(cache), source))
+                throw new InvalidOperationException("Original TMP collection lazy cache has a foreign dictionary owner: " + kind);
+            var result = Activator.CreateInstance(type, new[] { copy })!;
+            if (!ReferenceEquals(fields[0].GetValue(result), copy)) throw new InvalidOperationException("Original TMP cache copy constructor lost its exact dictionary owner.");
+            return result;
+        }
+        internal static object?[][] CompleteQueueStorage(object[] queues)
+            => queues.Select(queue => CanonicalCarryGraphCodec.Fields(queue.GetType()).Select(field => field.GetValue(queue)).ToArray()).ToArray();
         internal void ReadFiniteRoots(Action<object, string, bool> capture)
         { capture(manager, ManagerRoot, true); capture(cameraCallbacks, CameraRoot, true); }
         internal void ObserveReference(object value, string path, string root)
@@ -113,16 +135,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private string Digest(object[] queues)
         {
-            fields.BeginSharedGraph();
+            // The general world reader intentionally summarizes dictionaries. This
+            // guard instead reads every pinned field, full backing arrays and cache
+            // back-reference under one shared graph, including unused capacity.
+            var prior = digestQueues; digestQueues = queues;
             try {
-                var hashes = new List<string>();
-                for (var index = 0; index < queues.Length; index++) {
-                    var result = fields.Capture(queues[index], QueueNames[index], expandRoot: true);
-                    if (result.Unsupported.Count != 0) throw new InvalidOperationException("Original TMP queue has unread raw fields: " + string.Join(";", result.Unsupported));
-                    hashes.Add(result.Sha256);
-                }
-                return string.Join(";", hashes);
-            } finally { fields.EndSharedGraph(); }
+                var raw = CompleteQueueStorage(queues);
+                var result = fields.Capture(raw, "original-TMP-complete-raw-storage", expandRoot: true);
+                if (result.Unsupported.Count != 0) throw new InvalidOperationException("Original TMP queue has unread raw storage: " + string.Join(";", result.Unsupported));
+                return result.Sha256;
+            } finally { digestQueues = prior; }
         }
         internal void RequireBeforeMutation()
         {
