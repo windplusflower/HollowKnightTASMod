@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 using HollowKnightTAS.Core.SceneCheckpoints;
@@ -22,6 +23,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly string schema;
         private readonly CanonicalListEmptyArrayBindings listEmptyArrays;
         private readonly Dictionary<Type, int> leafSizes = new Dictionary<Type, int>();
+        private readonly Dictionary<Type, Func<object, object>> parsedValueCopies = new Dictionary<Type, Func<object, object>>();
         private readonly Func<object, string?>? portability;
         private readonly Func<object, string?>? allocationPortability;
         private readonly Action<CanonicalCarryGraphData>? importValidation;
@@ -84,6 +86,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (bossCallbacks) foreach (var type in new[] { typeof(Action), typeof(BossSceneController.SetupEventDelegate) }) {
                 var id = Identity(type); types.Add(id, type); typeIdentities.Add(type, id);
+            }
+            // Only these common, recursively pure value layouts use local
+            // parsing templates. Every returned box is still independent.
+            foreach (var type in new[] { typeof(bool), typeof(byte), typeof(int), typeof(uint), typeof(UnityEngine.Vector2),
+                typeof(UnityEngine.Vector3), typeof(UnityEngine.Quaternion), typeof(UnityEngine.Color) }) {
+                if (!types.TryGetValue(Identity(type), out var registeredType) || registeredType != type
+                    || !IsScalar(type) && LeafSize(type) <= 0) continue;
+                var copy = new DynamicMethod("hktas_copy_parsed_value", typeof(object), new[] { typeof(object) }, typeof(CanonicalCarryGraphCodec).Module, true);
+                var il = copy.GetILGenerator(); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Unbox_Any, type); il.Emit(OpCodes.Box, type); il.Emit(OpCodes.Ret);
+                parsedValueCopies.Add(type, (Func<object, object>)copy.CreateDelegate(typeof(Func<object, object>)));
             }
         }
 
@@ -415,6 +427,22 @@ namespace HollowKnightTAS.Runtime.FullRun
                 external[i] = owner;
             }
             var visitedNodes = new HashSet<int>(); var visitedExternal = new HashSet<int>(); var valueCount = 0;
+            // This preparation only: no live owners, reader results, strings or
+            // explicit boxed graph nodes enter the bounded source-value cache.
+            var scalarTemplates = new Dictionary<Type, Dictionary<string, object>>();
+            var leafTemplates = new Dictionary<Type, Dictionary<string, object>>();
+            var parsedTemplateCount = 0;
+            object ParsedValue(string text, Type type, bool leaf, bool valueSlot)
+            {
+                if (!valueSlot || !parsedValueCopies.TryGetValue(type, out var copy)) return leaf ? DecodeLeaf(text, type) : DecodeScalar(text, type);
+                var cache = leaf ? leafTemplates : scalarTemplates;
+                if (cache.TryGetValue(type, out var texts) && texts.TryGetValue(text, out var template)) return copy(template);
+                var parsed = leaf ? DecodeLeaf(text, type) : DecodeScalar(text, type);
+                if (parsedTemplateCount >= 4096) return parsed;
+                if (texts == null) { texts = new Dictionary<string, object>(StringComparer.Ordinal); cache.Add(type, texts); }
+                texts.Add(text, parsed); parsedTemplateCount++;
+                return copy(parsed);
+            }
             object? Read(CanonicalCarryGraphData.Value item, Type expected)
             {
                 if (++valueCount > MaximumValues) throw new InvalidDataException("Carry value count exceeds its bound.");
@@ -428,14 +456,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     case "scalar":
                         if (item.Reference != 0 || item.Type == null || !types.TryGetValue(item.Type, out var scalar) || !IsScalar(scalar)
                             || item.Text == null) throw new InvalidDataException("Carry scalar type is invalid.");
-                        result = DecodeScalar(item.Text, scalar); break;
+                        result = ParsedValue(item.Text, scalar, false, expected.IsValueType); break;
                     case "value":
                         if (item.Reference != 0 || item.Type == null || !types.TryGetValue(item.Type, out var leaf)
                             || !expected.IsValueType || LeafSize(leaf) <= 0 || item.Text == null)
                             throw new InvalidDataException("Carry inline value type is invalid.");
                         valueCount = checked(valueCount + LeafSize(leaf) - 1);
                         if (valueCount > MaximumValues) throw new InvalidDataException("Carry leaf field count exceeds its bound.");
-                        result = DecodeLeaf(item.Text, leaf); break;
+                        result = ParsedValue(item.Text, leaf, true, true); break;
                     case "node":
                         if (item.Text != null || item.Reference < 1 || item.Reference > objects.Length
                             || item.Type != value.Nodes[item.Reference - 1].Type) throw new InvalidDataException("Carry managed reference is invalid.");

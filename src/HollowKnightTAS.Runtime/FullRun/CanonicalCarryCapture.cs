@@ -628,7 +628,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (!admitted()) throw new InvalidOperationException("Actual D domain lost paused admission.");
                         domainActions[index]();
                     }
-                }, () => { ActualTargetStage = "verify-source-domains"; foreach (var check in sourceChecks) check(); },
+                }, () => {
+                    for (var index = 0; index < sourceChecks.Count; index++) { ActualTargetStage = "verify-source-domains/" + index; sourceChecks[index](); }
+                    ActualTargetStage = "verify-source-domains/complete";
+                },
                     stage => ActualTargetStage = stage);
             };
             if (mainPlan != null && inputPlan != null) {
