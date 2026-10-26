@@ -19,9 +19,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static readonly string[] ContainerNames = { "m_pivot","m_anchorPosition","m_rect","m_margins" };
         private static readonly string[] FontNames = { "defaultFont","fontJA","fontRU","fontZH","fontKO","onlyOnStart","fontScaleLangType" };
         private static readonly string[] PaneNames = { "Current Pane Str", "L Pane Str", "R Pane Str" };
-        internal static string SchemaIdentity => "original-active-Border3-inputs-v1:" + CanonicalHudPresentationDirectory.OriginalLevel1Sha256
+        internal static string SchemaIdentity => CanonicalHudPresentationDirectory.MetadataSchema("border-input", () => "original-active-Border3-inputs-v1:" + CanonicalHudPresentationDirectory.OriginalLevel1Sha256
             + ":" + string.Join(";", new[] { typeof(TextMeshPro), typeof(TextContainer), typeof(ChangeFontByLanguage), typeof(UnboldIfCJK) }
-                .SelectMany(Fields).Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName));
+                .SelectMany(Fields).Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName)));
         internal static readonly Type[] DataTypes = { typeof(Data), typeof(RectData), typeof(RectData[]), typeof(object[]), typeof(object[][]), typeof(string[]), typeof(float[]), typeof(bool[]) };
         internal sealed class Data
         {
@@ -43,6 +43,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static bool IsBorderPath(string path) => Paths.Contains(path, StringComparer.Ordinal);
         internal static FieldInfo[] Fields(Type type)
         {
+            return CanonicalHudPresentationDirectory.MetadataFields(type, "border-input", () => {
             var complete = CanonicalHudPresentationDirectory.ManagedFields(type);
             var names = type == typeof(TextMeshPro) ? TextNames : type == typeof(TextContainer) ? ContainerNames
                 : type == typeof(ChangeFontByLanguage) ? FontNames : type == typeof(UnboldIfCJK) ? Array.Empty<string>()
@@ -54,6 +55,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidDataException("Original Border serialized input ABI differs: " + type.FullName + "/" + name);
                 return matches[0];
             }).ToArray();
+            });
         }
         private static KeyValuePair<string, UnityEngine.Object>[] Owners(IReadOnlyDictionary<string, UnityEngine.Object> directory)
         {
@@ -179,7 +181,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!PaneStrings(inventory).Select(value => value.Value).SequenceEqual(source.PaneStrings, StringComparer.Ordinal))
                 throw new InvalidOperationException("Original Border source pane scalar readback differs.");
         }
-        internal static Action PreparePaneStringsAfterRebind(Transform inventory, Data source, Func<bool> admitted)
+        internal static Action PreparePaneStringsAfterRebind(Transform inventory, Data source, Func<bool> admitted, CanonicalCarryGraphCodec codec)
         {
             Validate(source);
             var slots = PaneStrings(inventory);
@@ -190,7 +192,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Original Border FsmString complete ABI differs.");
             var fields = CanonicalCarryGraphCodec.Fields(typeof(FsmString));
             var before = slots.Select(slot => fields.Select(field => field.GetValue(slot)).ToArray()).ToArray();
-            var codec = CanonicalCarryFieldRegistry.Create(hudPresentationDomain: true);
             var used = false;
             return () => {
                 if (used || !admitted()) throw new InvalidOperationException("Border source pane scalar application lost single-use parked admission.");

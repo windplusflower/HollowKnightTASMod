@@ -61,6 +61,22 @@ try{
  if($graph.Unsupported.Length-ne0){throw ('Unsupported graph: '+($graph.Unsupported-join';'))}
  $encoded=$codec.GetType().GetMethod('Encode',$flags).Invoke($codec,[object[]]@(,$graph))
  $decoded=$codec.GetType().GetMethod('Decode',$flags).Invoke($codec,[object[]]@(,$encoded))
+ $session=$directoryType.GetMethod('BeginMetadataSession',$flags).Invoke($null,@())
+ try{
+  if($carry.GetProperty('SchemaIdentity',$flags).GetValue($null)-cne$schema){throw 'Cached original HUD schema changed'}
+  $borderType=$asm.GetType('HollowKnightTAS.Runtime.FullRun.CanonicalHudBorderInputs',$true)
+  $null=$borderType.GetProperty('SchemaIdentity',$flags).GetValue($null)
+  $tmpType=([AppDomain]::CurrentDomain.GetAssemblies()|Where-Object {$_.GetName().Name-eq'Assembly-CSharp'}).GetType('TMPro.TextMeshPro')
+  $array=$directoryType.GetMethod('ManagedFields',$flags).Invoke($null,[object[]]@($tmpType));$first=$array[0];$array[0]=$null
+  $fresh=$directoryType.GetMethod('ManagedFields',$flags).Invoke($null,[object[]]@($tmpType))
+  if($fresh[0]-ne$first){throw 'Caller mutation poisoned session metadata'}
+  $cachedRoots=$rootsMethod.Invoke($null,[object[]]@($source))
+  $cachedGraph=$codec.GetType().GetMethod('Capture',$flags).Invoke($codec,[object[]]@($cachedRoots,$bind,$null))
+  $cachedBytes=$codec.GetType().GetMethod('Encode',$flags).Invoke($codec,[object[]]@(,$cachedGraph))
+  if(-not[Linq.Enumerable]::SequenceEqual[byte]($encoded,$cachedBytes)){throw 'Cached original HUD graph wire changed'}
+ }finally{$session.Dispose()}
+ if($session.GetType().GetField('fields',$flags).GetValue($session).Count-ne0-or$session.GetType().GetField('schemas',$flags).GetValue($session).Count-ne0){throw 'Template session metadata survived disposal'}
+ try{$session.GetType().GetMethod('Schema',$flags).Invoke($session,[object[]]@('old',$null))|Out-Null;throw 'Expired session metadata reused'}catch{if($_.Exception.InnerException-isnot[InvalidOperationException]){throw}}
  $destination=NewData
  $targetRoots=$rootsMethod.Invoke($null,[object[]]@($destination))
  $resolveExternal=[Func[string,object]]{param($key)throw "Unexpected external $key"}
@@ -107,6 +123,6 @@ try{
   try{$project.Invoke($null,[object[]]@($original,$count))|Out-Null;throw 'Invalid sibling projection admitted'}
   catch{if($_.Exception.InnerException-is[InvalidOperationException]){$invalidProjection++}else{throw}}
  }
- [ordered]@{productionSchema=$schema;encodedBytes=$encoded.Length;productionWireRoundtrip=$true;sharedAliasesPreserved=$true;malformedDirectoriesRejected=$rejected;exactSiblingProjections=14;invalidSiblingProjectionsRejected=$invalidProjection;frozenRegistryRequiresOriginalMono=$true;explicitOriginalFsmRoots=7;rootFieldAliasesPreserved=$true;foreignFsmStillRejected=$true;nativeMonoExecutionNotTested=$true}|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $OutputPath
- [ordered]@{encodedBytes=$encoded.Length;productionWireRoundtrip=$true;sharedAliasesPreserved=$true;malformedDirectoriesRejected=$rejected;explicitOriginalFsmRoots=7;rootFieldAliasesPreserved=$true;foreignFsmStillRejected=$true;nativeMonoExecutionNotTested=$true}|ConvertTo-Json
+ [ordered]@{productionSchema=$schema;encodedBytes=$encoded.Length;productionWireRoundtrip=$true;sessionMetadataRawWireAndSchemaEqual=$true;metadataMutationAndExpiredSessionRejected=$true;sharedAliasesPreserved=$true;malformedDirectoriesRejected=$rejected;exactSiblingProjections=14;invalidSiblingProjectionsRejected=$invalidProjection;frozenRegistryRequiresOriginalMono=$true;explicitOriginalFsmRoots=7;rootFieldAliasesPreserved=$true;foreignFsmStillRejected=$true;nativeMonoExecutionNotTested=$true}|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $OutputPath
+ [ordered]@{encodedBytes=$encoded.Length;productionWireRoundtrip=$true;sessionMetadataRawWireAndSchemaEqual=$true;metadataMutationAndExpiredSessionRejected=$true;sharedAliasesPreserved=$true;malformedDirectoriesRejected=$rejected;explicitOriginalFsmRoots=7;rootFieldAliasesPreserved=$true;foreignFsmStillRejected=$true;nativeMonoExecutionNotTested=$true}|ConvertTo-Json
 }finally{}

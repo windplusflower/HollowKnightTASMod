@@ -13,6 +13,14 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal sealed class CanonicalHudPresentationColdTemplate : IDisposable
     {
         internal const string AssetBindingPrefix = "HudPresentationOriginalAsset/v1/";
+        private readonly CanonicalHudPresentationDirectory.MetadataSession metadataSession;
+        internal CanonicalCarryGraphCodec Comparisons { get; }
+        internal CanonicalHudPresentationColdTemplate()
+        {
+            metadataSession = CanonicalHudPresentationDirectory.BeginMetadataSession();
+            try { Comparisons = CanonicalCarryFieldRegistry.Create(hudPresentationDomain: true); }
+            catch { metadataSession.Dispose(); throw; }
+        }
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         private GameObject? holder;
         private Transform? inventory;
@@ -205,7 +213,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var raw = texts.Select(pair => CanonicalHudPresentationDirectory.ManagedFields(pair.Value.GetType()).Select(field => field.GetValue(pair.Value)).ToArray()).ToArray();
             var coldFlags = directory.Values.OfType<MonoBehaviour>().SelectMany(BoundaryMonoLifecycle.ObserveUnstartedUi).ToArray();
             var self = directory.Values.OfType<GameObject>().Select(owner => owner.activeSelf).ToArray();
-            var codec = CanonicalCarryFieldRegistry.Create(hudPresentationDomain: true);
+            var codec = Comparisons;
             bool freeze = true;
             void Verify()
             {
@@ -288,7 +296,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 result[index].transform.SetParent(parents[index], false); result[index].transform.SetSiblingIndex(siblings[index]);
             }
             var produced = CanonicalHudPresentationDirectory.Build(inventory!, result); RequireProduced(produced);
-            var floatCodec = CanonicalCarryFieldRegistry.Create(hudPresentationDomain: true);
+            var floatCodec = Comparisons;
             for (var index = 0; index < 3; index++) {
                 var key = "$/" + CanonicalHudBorderInputs.Paths[index] + ":TMPro.TextMeshPro[0]";
                 var text = (TextMeshPro)produced[key];
@@ -305,7 +313,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             LastBorderInputs = source; SnapshotUnsupportedReason = null;
             return result;
         }
-        public void Dispose() { if (holder != null) UnityEngine.Object.DestroyImmediate(holder); holder = null; FrozenInventory = null; inventory = null; }
+        public void Dispose() { try { if (holder != null) UnityEngine.Object.DestroyImmediate(holder); holder = null; FrozenInventory = null; inventory = null; } finally { metadataSession.Dispose(); } }
         private sealed class References : IEqualityComparer<object> {
             public new bool Equals(object? x, object? y) => ReferenceEquals(x, y);
             public int GetHashCode(object value) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(value);

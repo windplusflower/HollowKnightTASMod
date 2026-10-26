@@ -190,14 +190,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             Action<Action> applySource, Func<bool> admitted)
         {
             void Require() { if (!admitted()) throw new InvalidOperationException("Original Border source producer lost parked admission."); }
+            void Stage(string phase) { carry!.ActualTargetStage = "hud-border/" + phase; Require(); }
             LoadingSerialSceneProbe.DeriveProtectedSourceBorderDirectory(() => {
-                Require();
+                Stage("frozen-input-queues");
                 var current = observer ?? throw new InvalidOperationException("Border source producer observer absent.");
                 var template = hudStartup.HudPresentationColdDefinition ?? throw new InvalidOperationException("Original Border cold definition absent.");
                 var incoming = pendingHudPresentationIncoming ?? throw new InvalidOperationException("Border full frozen incoming proof absent.");
                 var queues = pendingBorderQueues ?? throw new InvalidOperationException("Border full frozen TMP queue proof absent.");
                 pendingHudPresentationIncoming = null; pendingBorderQueues = null; queues.RequireBeforeMutation();
                 var inventory = CanonicalHudPresentationDirectory.Current();
+                Stage("old-owner-directory");
                 var oldDirectory = LoadingGeoIncomingReferences.BuildHudPresentationDirectory(inventory, includeBorderMeshes: true);
                 var old = CanonicalHudBorderInputs.Paths.Select(path => inventory.Find(path).gameObject).ToArray();
                 var oldTexts = old.Select(root => root.GetComponent<TMPro.TextMeshPro>()).ToArray();
@@ -214,13 +216,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var parentRoots = ancestors.SelectMany(parent => parent.GetComponents<MonoBehaviour>()).Distinct()
                     .Select((owner, index) => new KeyValuePair<string, object?>("border-parent[" + index + "]", owner)).ToArray();
                 using var guard = new CanonicalMapKeyTextExternalGuard(parentRoots, native, ancestors.ToArray());
+                Stage("old-parent-and-scheduler-guard");
                 var born = new HashSet<int>(); current.RecaptureOwnedHudScheduler(Require, () => { });
                 var transition = current.PrepareOwnedHudLifecycle(oldOwners, id => born.Contains(id), out var retireStarts);
+                Stage("original-factory");
                 var created = template.ProduceMixed(sourceInputs, borderOnly: true);
+                Stage("new-owner-directory");
                 var producedNative = CanonicalHudPresentationDirectory.Build(inventory, created);
                 foreach (var pair in producedNative.Where(pair => pair.Value is MonoBehaviour && CanonicalHudPresentationDirectory.IsBorderMember(pair.Key))) born.Add(pair.Value.GetInstanceID());
                 var produced = LoadingGeoIncomingReferences.BuildHudPresentationDirectory(inventory, created, includeBorderMeshes: true);
+                Stage("source-graph-and-main-input-rebind");
                 var final = rebindGraphs(oldDirectory, produced, created);
+                Stage("incoming-native-retirement");
                 var nativeRebind = producedNative.ToDictionary(pair => pair.Key, pair => (object)pair.Value, StringComparer.Ordinal);
                 foreach (var pair in paneBindings) nativeRebind.Add(pair.Key, pair.Value);
                 guard.PrepareExplicitIncomingRebind(nativeRebind);
@@ -230,11 +237,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 foreach (var root in old) UnityEngine.Object.DestroyImmediate(root);
                 retireStarts(); current.RecaptureOwnedHudScheduler(Require, transition);
                 plan.VerifyReadback(); guard.VerifyManagedRoots(); verifyQueues();
-                var paneApply = CanonicalHudBorderInputs.PreparePaneStringsAfterRebind(inventory, sourceInputs, admitted);
+                Stage("pane-source-and-full-managed-fields");
+                var paneApply = CanonicalHudBorderInputs.PreparePaneStringsAfterRebind(inventory, sourceInputs, admitted, template.Comparisons);
                 paneApply(); applySource(plan.VerifyReadback); guard.VerifyManagedRoots(); verifyQueues(); Require();
                 if (old.Any(root => root != null) || oldMeshes.Any(mesh => mesh != null))
                     throw new InvalidOperationException("Original Border old owners or owned meshes survived native retirement.");
                 CanonicalHudPresentationColdTemplate.RequireProduced(CanonicalHudPresentationDirectory.Build(inventory));
+                Stage("full-readback-complete");
             }, Require);
         }
         private void RestoreMarkerSourceDependencies(CanonicalSchedulerCarry sourceScheduler, Func<bool> admitted,

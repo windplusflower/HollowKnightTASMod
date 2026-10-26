@@ -54,21 +54,60 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static readonly Type[] ManagedTypes = { typeof(TextContainer), typeof(TextMeshPro), typeof(UnboldIfCJK), typeof(ChangeFontByLanguage),
             typeof(PlayMakerFSM), typeof(MenuButtonIcon), typeof(SetTextMeshProGameText), typeof(WaveEffectControl), typeof(SimpleFadeOut) };
         private static readonly int[] ManagedCounts = { 12, 223, 1, 14, 4, 20, 3, 10, 6 };
+        private static readonly object metadataGate = new object();
+        private static MetadataSession? metadataSession;
+        internal sealed class MetadataSession : IDisposable
+        {
+            private readonly string profile = HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId;
+            private readonly Dictionary<Tuple<Module, Type, string>, FieldInfo[]> fields = new Dictionary<Tuple<Module, Type, string>, FieldInfo[]>();
+            private readonly Dictionary<string, string> schemas = new Dictionary<string, string>(StringComparer.Ordinal);
+            internal FieldInfo[] Fields(Type type, string kind, Func<FieldInfo[]> build)
+            {
+                lock (metadataGate) {
+                    Require();
+                    var key = Tuple.Create(type.Module, type, kind + ":" + OriginalLevel1Sha256 + ":" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalHudPresentationPolicyId);
+                    if (!fields.TryGetValue(key, out var value)) {
+                        if (fields.Count >= 13) throw new InvalidDataException("HUD session metadata exceeded its fixed nine-plus-four type bound.");
+                        fields.Add(key, value = build());
+                    }
+                    return (FieldInfo[])value.Clone();
+                }
+            }
+            internal string Schema(string key, Func<string> build)
+            {
+                lock (metadataGate) { Require(); if (!schemas.TryGetValue(key, out var value)) { if (schemas.Count >= 2) throw new InvalidDataException("HUD session schema bound exceeded."); schemas.Add(key, value = build()); } return value; }
+            }
+            private void Require()
+            { if (!ReferenceEquals(metadataSession, this) || profile != HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) throw new InvalidOperationException("HUD metadata lost its sealed template session/profile."); }
+            public void Dispose()
+            { lock (metadataGate) { if (ReferenceEquals(metadataSession, this)) metadataSession = null; fields.Clear(); schemas.Clear(); } }
+        }
+        internal static MetadataSession BeginMetadataSession()
+        {
+            lock (metadataGate) {
+                if (metadataSession != null) throw new InvalidOperationException("HUD metadata template session is already active.");
+                return metadataSession = new MetadataSession();
+            }
+        }
+        internal static FieldInfo[] MetadataFields(Type type, string kind, Func<FieldInfo[]> build) => metadataSession?.Fields(type, kind, build) ?? build();
+        internal static string MetadataSchema(string key, Func<string> build) => metadataSession?.Schema(key, build) ?? build();
         internal static FieldInfo[] ManagedFields(Type type)
         {
             var index = Array.IndexOf(ManagedTypes, type);
             var module = type == typeof(PlayMakerFSM) ? "29eb59fa-5c99-43cd-8f33-6db074533d31" : CanonicalSceneMappingCarry.ModuleMvid;
             if (index < 0 || type.Module.ModuleVersionId.ToString("D") != module)
                 throw new InvalidDataException("Original HUD presentation managed type/module differs.");
+            return MetadataFields(type, "original-managed", () => {
             var fields = CanonicalCarryGraphCodec.Fields(type).Where(field => field.DeclaringType != typeof(UnityEngine.Object)
                 && field.DeclaringType != typeof(Component) && field.DeclaringType != typeof(Behaviour) && field.DeclaringType != typeof(MonoBehaviour)).ToArray();
             if (fields.Length != ManagedCounts[index] || fields.Any(field => field.FieldType.IsPointer || field.FieldType.IsByRef
                 || field.FieldType == typeof(IntPtr) || field.FieldType == typeof(UIntPtr)))
                 throw new InvalidDataException("Original HUD presentation complete managed ABI differs: " + type.FullName);
             return fields;
+            });
         }
-        internal static string SchemaIdentity => "original-hud-presentation:13roots18objects92components40mono9TMP7FSM:level1:" + OriginalLevel1Sha256
-            + ":" + string.Join(";", ManagedTypes.SelectMany(type => ManagedFields(type)).Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName));
+        internal static string SchemaIdentity => MetadataSchema("original-managed", () => "original-hud-presentation:13roots18objects92components40mono9TMP7FSM:level1:" + OriginalLevel1Sha256
+            + ":" + string.Join(";", ManagedTypes.SelectMany(type => ManagedFields(type)).Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName)));
         internal static string[] RootPaths => Nodes.Select(node => node.Path).Where(path => !Nodes.Any(parent =>
             path.StartsWith(parent.Path + "/", StringComparison.Ordinal))).ToArray();
         internal static void ValidateAbi()
