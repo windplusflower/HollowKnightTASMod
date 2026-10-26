@@ -39,9 +39,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 lifecycle = owners.SelectMany(pair => BoundaryMonoLifecycle.ObserveUnstartedUi((MonoBehaviour)pair.Value)).ToArray();
             var registrations = typeof(PlayMakerFSM).GetField("fsmList", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null) as System.Collections.IList
                 ?? throw new InvalidDataException("HUD original FSM registration list is absent.");
-            if (typeof(iTweenFSMEvents).Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid
-                || typeof(iTweenFSMEvents).TypeInitializer != null)
-                throw new InvalidDataException("HUD original tween counter ABI differs.");
+            RequireTweenCounterAbi();
             return new Data { TweenIdCount = iTweenFSMEvents.itweenIDCount,
                 Registered = directory.Where(pair => pair.Value is PlayMakerFSM && registrations.Cast<object>().Any(item => ReferenceEquals(item, pair.Value))).Select(pair => pair.Key).ToArray(), Schema = SchemaIdentity, NativeOwners = owners.Select(pair => pair.Key).ToArray(),
                 FieldOwners = owners.SelectMany(pair => ManagedFields(pair.Value.GetType())
@@ -64,6 +62,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static Action PrepareManaged(Data source, Transform keys, CanonicalCarryGraphCodec codec, Func<bool> admitted)
         {
+            RequireTweenCounterAbi();
             Roots(source);
             var directory = CanonicalHudPresentationDirectory.Build(keys);
             var owners = directory.Where(pair => pair.Value is MonoBehaviour).ToArray();
@@ -107,6 +106,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                             throw new InvalidOperationException("HUD presentation complete raw field readback differs: " + owners[owner].Key + "/" + fields[owner][field].Name);
                 if (!admitted()) throw new InvalidOperationException("HUD presentation source readback lost paused admission.");
             };
+        }
+        private static void RequireTweenCounterAbi()
+        {
+            var type = typeof(iTweenFSMEvents);
+            var initializer = type.TypeInitializer;
+            var counter = type.GetField("itweenIDCount", BindingFlags.Static | BindingFlags.Public);
+            if (type.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid
+                || initializer == null || initializer.MetadataToken != 0x060001a4
+                || initializer.GetMethodBody()?.GetILAsByteArray() is not byte[] body
+                || body.Length != 1 || body[0] != 0x2a
+                || counter == null || counter.FieldType != typeof(int) || !counter.IsStatic || counter.IsInitOnly)
+                throw new InvalidDataException("HUD original tween counter ABI differs.");
         }
     }
 }
