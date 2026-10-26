@@ -43,6 +43,8 @@ try {
  if($oracleCalls.Count-ne2){throw 'HUD current/frozen incoming domains are not both observed'}
  $reset=(FindMethod $hudBoundary Reset)[0]
  if((Calls $reset Object DestroyImmediate).Count-ne1-or(Calls $reset CanonicalGeoColdTemplate ObserveIncoming).Count-ne1){throw 'HUD original destruction or full incoming proof absent'}
+ $factoryCapture=(FindMethod (FindType $runtime CanonicalHudPresentationColdTemplate) Capture)[0]
+ if((Calls $factoryCapture CanonicalCarryFieldRegistry Create).Count-ne1-or(Calls $factoryCapture CanonicalCarryGraphCodec '.ctor').Count-ne0){throw 'HUD raw slots require full original value-type registry'}
  $hudCarry=FindType $runtime CanonicalHudPresentationCarry
  if((Calls (FindMethod $hudCarry Capture)[0] BoundaryMonoLifecycle ObserveUnstartedUi).Count-gt1){throw 'Unexpected HUD lifecycle observation route'}
  [ordered]@{commonStartupAssetLoadOnce=$true;commonBoundaryCanon=$true;oneOriginalIncomingInventory=$true;threeFiniteRetiredRoots=$true;sourceAuditAndTargetDApply=$true;originalAwakeClearBeforeInvoke=$true;noAssetSearchOrRngRewrite=$true;fileHashesOnlyAtStartup=$true;hudCommonBoundaryAndSourceTargetDomain=$true;hudCurrentAndFrozenIncoming=$true;nativeMonoExecutionNotTested=$true}|ConvertTo-Json|Set-Content -LiteralPath $OutputPath

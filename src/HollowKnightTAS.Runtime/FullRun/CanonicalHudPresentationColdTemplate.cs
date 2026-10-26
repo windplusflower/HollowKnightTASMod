@@ -168,7 +168,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var raw = texts.Select(pair => CanonicalHudPresentationDirectory.ManagedFields(pair.Value.GetType()).Select(field => field.GetValue(pair.Value)).ToArray()).ToArray();
             var coldFlags = directory.Values.OfType<MonoBehaviour>().SelectMany(BoundaryMonoLifecycle.ObserveUnstartedUi).ToArray();
             var self = directory.Values.OfType<GameObject>().Select(owner => owner.activeSelf).ToArray();
-            var codec = new CanonicalCarryGraphCodec(Array.Empty<Type>(), "hud-original-freeze-raw-slots-v1");
+            var codec = CanonicalCarryFieldRegistry.Create(hudPresentationDomain: true);
             bool freeze = true;
             void Verify()
             {
@@ -185,6 +185,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var fields = CanonicalHudPresentationDirectory.ManagedFields(texts[owner].Value.GetType());
                     for (var index = 0; index < fields.Length; index++) {
                         var field = fields[index]; var actual = field.GetValue(texts[owner].Value);
+                        // Original Transform::SetParent broadcasts OnBeforeTransformParentChanged recursively
+                        // (pinned 0x7ea27e -> 0x22a540 -> 0x7e3c90), including button text descendants.
                         var parentCache = freeze && field.DeclaringType == typeof(UnityEngine.UI.Graphic) && field.Name == "m_RectTransform"
                             && ReferenceEquals(raw[owner][index], null) && ReferenceEquals(actual, ((Component)texts[owner].Value).GetComponent<RectTransform>());
                         if (parentCache) { transitions++; raw[owner][index] = actual; }
@@ -192,7 +194,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                             throw new InvalidOperationException("HUD original cold parent callback changed a raw TMP field: " + texts[owner].Key + "/" + field.Name);
                     }
                 }
-                if (freeze && transitions != 9) throw new InvalidOperationException("HUD original cold freeze did not take its nine exact original parent-cache transitions.");
+                if (freeze && transitions != texts.Length) throw new InvalidOperationException("HUD original cold freeze did not take its complete original subtree parent-cache transitions.");
                 freeze = false;
             }
             holder = new GameObject("__HKTAS_OriginalHudPresentationColdTemplate"); holder.SetActive(false); UnityEngine.Object.DontDestroyOnLoad(holder);

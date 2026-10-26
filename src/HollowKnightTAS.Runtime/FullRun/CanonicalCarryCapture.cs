@@ -587,14 +587,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                             var current = resolve(external.Binding);
                             var matches = old.Where(pair => ReferenceEquals(pair.Value, current)).ToArray();
                             if (matches.Length > 1) throw new InvalidDataException("HUD source external aliases are ambiguous.");
-                            if (matches.Length == 1) changes.Add(external.Binding, final[matches[0].Key]);
+                            if (matches.Length == 1 && !ReferenceEquals(current, final[matches[0].Key])) changes.Add(external.Binding, final[matches[0].Key]);
                         }
                         return changes;
                     }
                     var mainChanges = Replacements(sourceMain, binding => codec.ResolveExternalBinding(binding, bindings.ResolveTarget));
                     var inputChanges = Replacements(sourceInput, binding => inputCodec.ResolveExternalBinding(binding, inputExternal.ResolveTarget));
-                    if (mainChanges.Count != 0) mainRebinding!.PrepareMapKey(mainChanges).Apply();
-                    if (inputChanges.Count != 0) sdkRebinding!.PrepareMapKey(inputChanges).Apply();
+                    if (mainChanges.Count != 0) mainRebinding!.PrepareHudPresentation(mainChanges).Apply();
+                    if (inputChanges.Count != 0) sdkRebinding!.PrepareHudPresentation(inputChanges).Apply();
                     var aliases = incoming.Prepare(final);
                     aliases.Apply();
                     CanonicalEventDataCarry.PrepareSourceReapply(mainView!, admitted)();

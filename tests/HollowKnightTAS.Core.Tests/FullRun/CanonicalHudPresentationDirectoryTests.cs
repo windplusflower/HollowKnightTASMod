@@ -43,6 +43,16 @@ public sealed class CanonicalHudPresentationDirectoryTests
                 node.Components, Array.Empty<string>(), false));
         }
     }
+    [TestMethod] public void OriginalRecursiveParentBroadcastReachesEachTmpOwnerExactlyOnce()
+    {
+        var nodes = CanonicalHudPresentationDirectory.Definitions;
+        var roots = CanonicalHudPresentationDirectory.RootPaths;
+        var texts = nodes.Where(node => node.Components.Contains(typeof(TMPro.TextMeshPro))).ToArray();
+        Assert.AreEqual(9, texts.Length);
+        foreach (var text in texts)
+            Assert.AreEqual(1, roots.Count(root => text.Path == root || text.Path.StartsWith(root + "/", StringComparison.Ordinal)));
+        Assert.IsTrue(texts.Any(node => node.Path == "Charms/Confirm Action/ActionButtonIcon/Label"));
+    }
     [TestMethod] public void GeneratedTmpNameIsOnlyProvisionalShapeAndCannotEnterColdDefinition()
     {
         foreach (var node in CanonicalHudPresentationDirectory.Definitions) {

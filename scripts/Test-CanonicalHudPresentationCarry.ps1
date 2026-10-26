@@ -74,8 +74,3 @@ try{
  [ordered]@{productionSchema=$schema;encodedBytes=$encoded.Length;productionWireRoundtrip=$true;sharedAliasesPreserved=$true;malformedDirectoriesRejected=$rejected;exactSiblingProjections=14;invalidSiblingProjectionsRejected=$invalidProjection;frozenRegistryRequiresOriginalMono=$true;nativeMonoExecutionNotTested=$true}|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $OutputPath
  [ordered]@{encodedBytes=$encoded.Length;productionWireRoundtrip=$true;sharedAliasesPreserved=$true;malformedDirectoriesRejected=$rejected;nativeMonoExecutionNotTested=$true}|ConvertTo-Json
 }finally{}
-
-
-
-
-

@@ -739,6 +739,32 @@ public sealed class CanonicalCarryGraphCodecTests
         }
     }
 
+    [TestMethod]
+    public void Hud_external_phase_follows_parent_and_key_and_preserves_disjoint_aliases()
+    {
+        foreach (var fault in new[] { "none", "order", "overlap", "collapse", "repeat" }) {
+            var codec = new CanonicalCarryGraphCodec(new[] { typeof(ExternalOwner), typeof(Value), typeof(object[]) }, "five-producers-v1");
+            var original = Enumerable.Range(0, 5).Select(_ => new Value()).ToArray();
+            var next = Enumerable.Range(0, 5).Select(_ => new Value()).ToArray();
+            var names = new[] { "geo", "marker", "parents", "leaves", "hud" };
+            var source = new ExternalOwner { Item = original[0], Items = new object[] { original[1], original[2], original[3], original[4], original[4] } };
+            var graph = codec.Capture(Roots(("owner", source)), value => Array.FindIndex(original, item => ReferenceEquals(item, value)) is var at && at >= 0 ? names[at] : null);
+            var target = new ExternalOwner(); CanonicalCarryGraphCodec.ExternalRebinding? phases = null;
+            var root = codec.PrepareOwnedGraph(graph, Roots(("owner", target)), name => original[Array.IndexOf(names, name)], exposeExternalRebinding: value => phases = value);
+            root.Apply();
+            if (fault == "order") { Assert.ThrowsExactly<InvalidOperationException>(() => phases!.PrepareHudPresentation(Roots(("hud", next[4])))); continue; }
+            phases!.Prepare(Roots(("geo", next[0]))).Apply(); phases.CompleteGeoPhase();
+            phases.PrepareMarker(Roots(("marker", next[1]))).Apply(); phases.CompleteMarkerPhase();
+            phases.PrepareMapKeyParents(Roots(("parents", next[2]))).Apply(); phases.CompleteMapKeyParentPhase();
+            phases.PrepareMapKey(Roots(("leaves", next[3]))).Apply();
+            if (fault == "overlap") { Assert.ThrowsExactly<InvalidDataException>(() => phases.PrepareHudPresentation(Roots(("leaves", new Value())))); continue; }
+            if (fault == "collapse") { Assert.ThrowsExactly<InvalidDataException>(() => phases.PrepareHudPresentation(Roots(("hud", next[3])))); continue; }
+            phases.PrepareHudPresentation(Roots(("hud", next[4]))).Apply(); root.VerifyReadback();
+            Assert.AreSame(next[4], target.Items[3]); Assert.AreSame(next[4], target.Items[4]);
+            if (fault == "repeat") Assert.ThrowsExactly<InvalidOperationException>(() => phases.PrepareHudPresentation(Roots(("hud", new Value()))));
+        }
+    }
+
     private sealed class Owner
     {
         public int Counter;

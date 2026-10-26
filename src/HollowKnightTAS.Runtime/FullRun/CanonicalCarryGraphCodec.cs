@@ -621,7 +621,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly HashSet<int> copiedExternal;
             private readonly object[] rootOwners;
             private bool consumed;
-            private bool markerConsumed, markerCompleted, parentConsumed, parentCompleted, mapKeyConsumed;
+            private bool markerConsumed, markerCompleted, parentConsumed, parentCompleted, mapKeyConsumed, hudPresentationConsumed;
             private CanonicalPreparedWritePlan? parentPlan;
             private CanonicalPreparedWritePlan? markerPlan;
             private bool geoCompleted, terminal;
@@ -687,10 +687,19 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             internal CanonicalPreparedWritePlan PrepareMapKey(IReadOnlyDictionary<string, object> replacements)
             {
-                if (terminal || !parentCompleted || mapKeyConsumed || replacements.Count == 0) {
+                if (terminal || !parentCompleted || mapKeyConsumed || hudPresentationConsumed || replacements.Count == 0) {
                     terminal = true; throw new InvalidOperationException("Map Key external phase is out of order, absent or consumed.");
                 }
                 mapKeyConsumed = true;
+                try { parent.VerifyReadback(); return PrepareExact(replacements); }
+                catch { terminal = true; throw; }
+            }
+            internal CanonicalPreparedWritePlan PrepareHudPresentation(IReadOnlyDictionary<string, object> replacements)
+            {
+                if (terminal || !parentCompleted || hudPresentationConsumed || replacements.Count == 0) {
+                    terminal = true; throw new InvalidOperationException("HUD presentation external phase is out of order, absent or consumed.");
+                }
+                hudPresentationConsumed = true;
                 try { parent.VerifyReadback(); return PrepareExact(replacements); }
                 catch { terminal = true; throw; }
             }
