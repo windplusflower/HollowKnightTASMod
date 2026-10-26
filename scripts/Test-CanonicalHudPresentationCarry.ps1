@@ -13,21 +13,25 @@ try{
  $schema=$carry.GetProperty('SchemaIdentity',$flags).GetValue($null)
  $directoryType=$asm.GetType('HollowKnightTAS.Runtime.FullRun.CanonicalHudPresentationDirectory',$true)
  $managedTypes=$directoryType.GetField('ManagedTypes',$flags).GetValue($null)
- $metadataRows=@();foreach($node in $directoryType.GetProperty('Definitions',$flags).GetValue($null)){
+ $metadata=[Collections.Generic.SortedDictionary[string,object]]::new([StringComparer]::Ordinal)
+ $objectKeys=@();foreach($node in $directoryType.GetProperty('Definitions',$flags).GetValue($null)){
+  $key='$/'+$node.GetType().GetField('Path',$flags).GetValue($node);$objectKeys+=$key;$ordinals=@{}
   foreach($type in $node.GetType().GetProperty('Components',$flags).GetValue($node)){
-   if($managedTypes-contains$type){$metadataRows+=,@($directoryType.GetMethod('ManagedFields',$flags).Invoke($null,[object[]]@($type)))}
+   $ordinal=if($ordinals.ContainsKey($type.FullName)){$ordinals[$type.FullName]}else{0};$ordinals[$type.FullName]=$ordinal+1
+   if($managedTypes-contains$type){$metadata.Add($key+':'+$type.FullName+'['+$ordinal+']',@($directoryType.GetMethod('ManagedFields',$flags).Invoke($null,[object[]]@($type))))}
   }
  }
+ $metadataRows=@($metadata.Values);$nativeKeys=[string[]]@($metadata.Keys);$objectKeys=[string[]]$objectKeys;[Array]::Sort($objectKeys,[StringComparer]::Ordinal)
  if($metadataRows.Count-ne40-or($metadataRows|ForEach-Object Count|Measure-Object -Sum).Sum-ne2301){throw 'Original 40-owner field metadata closure differs'}
  function NewData {
   $data=[Activator]::CreateInstance($dataType,$true)
   $dataType.GetField('Schema').SetValue($data,$schema)
   $dataType.GetField('OriginalAssetOrigins').SetValue($data,('a'*64))
-  $dataType.GetField('NativeOwners').SetValue($data,[string[]](0..39|ForEach-Object{"owner$_"}))
-  $dataType.GetField('GameObjectOwners').SetValue($data,[string[]](0..17|ForEach-Object{"go$_"}))
+  $dataType.GetField('NativeOwners').SetValue($data,$nativeKeys)
+  $dataType.GetField('GameObjectOwners').SetValue($data,$objectKeys)
   $dataType.GetField('ActiveSelf').SetValue($data,[bool[]]::new(18))
   $dataType.GetField('Lifecycle').SetValue($data,[byte[]]::new(200))
-  $fieldOwners=@();for($owner=0;$owner-lt40;$owner++){foreach($field in $metadataRows[$owner]){$fieldOwners+="owner$owner/"+$field.DeclaringType.FullName+"/"+$field.Name}}
+  $fieldOwners=@();for($owner=0;$owner-lt40;$owner++){foreach($field in $metadataRows[$owner]){$fieldOwners+=$nativeKeys[$owner]+"/"+$field.DeclaringType.FullName+"/"+$field.Name}}
   $dataType.GetField('FieldOwners').SetValue($data,[string[]]$fieldOwners)
   $rows=[object[][]]::new(40)
   for($i=0;$i-lt40;$i++){$rows[$i]=[object[]]::new($metadataRows[$i].Count)}
@@ -65,6 +69,10 @@ try{
   $f.SetValue($bad,[Management.Automation.LanguagePrimitives]::ConvertTo($value,$f.FieldType))
   try{$rootsMethod.Invoke($null,[object[]]@($bad))|Out-Null;throw "Accepted malformed $field"}catch { if($_.Exception.InnerException -is [IO.InvalidDataException]){$rejected++}else{throw} }
  }
+ # Same aggregate count cannot hide a missing field in one owner and padding in another.
+ $bad=NewData;$badRows=$dataType.GetField('FieldValues').GetValue($bad)
+ $badRows[0]=[object[]]::new($badRows[0].Length-1);$badRows[1]=[object[]]::new($badRows[1].Length+1)
+ try{$rootsMethod.Invoke($null,[object[]]@($bad))|Out-Null;throw 'Accepted redistributed complete field total'}catch{if($_.Exception.InnerException-is[IO.InvalidDataException]){$rejected++}else{throw}}
  $guard=$asm.GetType('HollowKnightTAS.Runtime.FullRun.CanonicalMapKeyTextExternalGuard',$true)
  $project=$guard.GetMethod('ProjectOriginalDetachedSibling',$flags)
  $original='{"id":7,"parent":9,"active":true,"hierarchy":false,"poseBits":[-2147483648,1,17],"sibling":17,"layer":5,"tag":"Untagged","isStatic":false,"hideFlags":0}'

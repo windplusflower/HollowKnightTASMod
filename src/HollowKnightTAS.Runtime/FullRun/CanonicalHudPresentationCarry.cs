@@ -50,6 +50,19 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static SortedDictionary<string, object> Roots(Data data)
         {
+            // Derive each complete row from the pinned original directory as
+            // well as checking its independently fixed total; no padding or
+            // truncation can satisfy the source contract.
+            var expected = new SortedDictionary<string, FieldInfo[]>(StringComparer.Ordinal);
+            foreach (var node in CanonicalHudPresentationDirectory.Definitions) {
+                var ordinals = new Dictionary<Type, int>();
+                foreach (var type in node.Components) {
+                    ordinals.TryGetValue(type, out var ordinal); ordinals[type] = ordinal + 1;
+                    if (typeof(MonoBehaviour).IsAssignableFrom(type))
+                        expected.Add("$/" + node.Path + ":" + type.FullName + "[" + ordinal + "]", ManagedFields(type));
+                }
+            }
+            var expectedObjects = CanonicalHudPresentationDirectory.Definitions.Select(node => "$/" + node.Path).OrderBy(value => value, StringComparer.Ordinal).ToArray();
             if (data.Registered == null || data.Registered.Length != 0 || data.Schema != SchemaIdentity || data.OriginalAssetOrigins == null || data.OriginalAssetOrigins.Length != 64
                 || data.OriginalAssetOrigins.Any(value => !Uri.IsHexDigit(value))
                 || data.NativeOwners.Length != 40 || data.NativeOwners.Distinct(StringComparer.Ordinal).Count() != 40
@@ -62,6 +75,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                     + ";nativeOwners=" + data.NativeOwners.Length + ";fieldRows=" + data.FieldValues.Length
                     + ";fieldSlots=" + data.FieldValues.Sum(row => row?.Length ?? 0) + ";fieldOwners=" + data.FieldOwners.Length
                     + ";lifecycleBytes=" + data.Lifecycle.Length + ";objects=" + data.GameObjectOwners.Length + ";activeSelf=" + data.ActiveSelf.Length);
+            if (expected.Count != 40 || expected.Values.Sum(row => row.Length) != 2301
+                || !data.NativeOwners.SequenceEqual(expected.Keys) || !data.GameObjectOwners.SequenceEqual(expectedObjects)
+                || !data.FieldOwners.SequenceEqual(expected.SelectMany(pair => pair.Value.Select(field => pair.Key + "/" + field.DeclaringType!.FullName + "/" + field.Name)))
+                || data.FieldValues.Where((row, index) => row.Length != expected.Values.ElementAt(index).Length).Any()
+                || data.Lifecycle.Length != expected.Count * 5 || data.ActiveSelf.Length != expectedObjects.Length)
+                throw new InvalidDataException("HUD presentation per-owner original field rows, lifecycle or object directory differs.");
             return new SortedDictionary<string, object>(StringComparer.Ordinal) { [Root] = data };
         }
         internal static Action PrepareManaged(Data source, Transform keys, CanonicalCarryGraphCodec codec, Func<bool> admitted)
