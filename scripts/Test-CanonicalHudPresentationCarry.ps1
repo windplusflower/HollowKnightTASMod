@@ -11,6 +11,14 @@ try{
  $carry=$asm.GetType('HollowKnightTAS.Runtime.FullRun.CanonicalHudPresentationCarry',$true)
  $dataType=$carry.GetNestedType('Data',$flags)
  $schema=$carry.GetProperty('SchemaIdentity',$flags).GetValue($null)
+ $directoryType=$asm.GetType('HollowKnightTAS.Runtime.FullRun.CanonicalHudPresentationDirectory',$true)
+ $managedTypes=$directoryType.GetField('ManagedTypes',$flags).GetValue($null)
+ $metadataRows=@();foreach($node in $directoryType.GetProperty('Definitions',$flags).GetValue($null)){
+  foreach($type in $node.GetType().GetProperty('Components',$flags).GetValue($node)){
+   if($managedTypes-contains$type){$metadataRows+=,@($directoryType.GetMethod('ManagedFields',$flags).Invoke($null,[object[]]@($type)))}
+  }
+ }
+ if($metadataRows.Count-ne40-or($metadataRows|ForEach-Object Count|Measure-Object -Sum).Sum-ne2301){throw 'Original 40-owner field metadata closure differs'}
  function NewData {
   $data=[Activator]::CreateInstance($dataType,$true)
   $dataType.GetField('Schema').SetValue($data,$schema)
@@ -19,9 +27,10 @@ try{
   $dataType.GetField('GameObjectOwners').SetValue($data,[string[]](0..17|ForEach-Object{"go$_"}))
   $dataType.GetField('ActiveSelf').SetValue($data,[bool[]]::new(18))
   $dataType.GetField('Lifecycle').SetValue($data,[byte[]]::new(200))
-  $dataType.GetField('FieldOwners').SetValue($data,[string[]](0..2400|ForEach-Object{"field$_"}))
+  $fieldOwners=@();for($owner=0;$owner-lt40;$owner++){foreach($field in $metadataRows[$owner]){$fieldOwners+="owner$owner/"+$field.DeclaringType.FullName+"/"+$field.Name}}
+  $dataType.GetField('FieldOwners').SetValue($data,[string[]]$fieldOwners)
   $rows=[object[][]]::new(40)
-  for($i=0;$i-lt40;$i++){$rows[$i]=[object[]]::new($(if($i-eq0){61}else{60}))}
+  for($i=0;$i-lt40;$i++){$rows[$i]=[object[]]::new($metadataRows[$i].Count)}
   $shared=[object[]]@('source-alias',[int]17)
   $rows[0][0]=$shared;$rows[1][0]=$shared
   $dataType.GetField('FieldValues').SetValue($data,$rows)

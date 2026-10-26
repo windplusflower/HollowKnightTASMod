@@ -53,11 +53,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (data.Registered == null || data.Registered.Length != 0 || data.Schema != SchemaIdentity || data.OriginalAssetOrigins == null || data.OriginalAssetOrigins.Length != 64
                 || data.OriginalAssetOrigins.Any(value => !Uri.IsHexDigit(value))
                 || data.NativeOwners.Length != 40 || data.NativeOwners.Distinct(StringComparer.Ordinal).Count() != 40
-                || data.FieldValues.Length != 40 || data.FieldValues.Any(row => row == null) || data.FieldValues.Sum(row => row.Length) != 2401
-                || data.FieldOwners.Length != 2401 || data.FieldOwners.Distinct(StringComparer.Ordinal).Count() != 2401
+                || data.FieldValues.Length != 40 || data.FieldValues.Any(row => row == null) || data.FieldValues.Sum(row => row.Length) != 2301
+                || data.FieldOwners.Length != 2301 || data.FieldOwners.Distinct(StringComparer.Ordinal).Count() != 2301
                 || data.Lifecycle.Length != 200 || data.Lifecycle.Any(value => value > 1)
                 || data.GameObjectOwners.Length != 18 || data.GameObjectOwners.Distinct(StringComparer.Ordinal).Count() != 18 || data.ActiveSelf.Length != 18)
-                throw new InvalidDataException("HUD presentation complete source data directory differs.");
+                throw new InvalidDataException("HUD presentation complete source data directory differs: registered=" + data.Registered?.Length
+                    + ";schema=" + (data.Schema == SchemaIdentity) + ";assetManifestLength=" + data.OriginalAssetOrigins?.Length
+                    + ";nativeOwners=" + data.NativeOwners.Length + ";fieldRows=" + data.FieldValues.Length
+                    + ";fieldSlots=" + data.FieldValues.Sum(row => row?.Length ?? 0) + ";fieldOwners=" + data.FieldOwners.Length
+                    + ";lifecycleBytes=" + data.Lifecycle.Length + ";objects=" + data.GameObjectOwners.Length + ";activeSelf=" + data.ActiveSelf.Length);
             return new SortedDictionary<string, object>(StringComparer.Ordinal) { [Root] = data };
         }
         internal static Action PrepareManaged(Data source, Transform keys, CanonicalCarryGraphCodec codec, Func<bool> admitted)
