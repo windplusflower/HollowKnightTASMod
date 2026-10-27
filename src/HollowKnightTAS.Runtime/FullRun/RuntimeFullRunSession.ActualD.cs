@@ -208,6 +208,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     && clock.CurrentFrameIndex == (imported ? source.NativeFrame : targetNative);
             }
             actualDApplicationStarted = true; job.Phase = "ApplyingActualD";
+            using var engineValidation = new LoadingEngineClockProbe.ActualDValidation();
             using var poolDiagnosticPhase = CanonicalPoolFlukeDiagnostic.EnterPhase("actual-D-transaction");
             applicationStage = "verify-registered-S0-before-D";
             var requireRegisteredS0AfterClock = source.RegisteredS0.Prepare(LoadingSerialSceneProbe.RecaptureRegisteredS0(
@@ -260,6 +261,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 JsonConvert.SerializeObject(new { applicationExecuted = true, source.Ordinal, source.Route, source.MovieFrame, source.NativeFrame,
                     consumedSamples = input.ConsumedSamples, sourcePrefix = session.MoviePrefixSha256, sourceDBytes = source.Main.Length + source.Input.Length + source.Geo.Length + source.Map.Length + source.Marker.Length + source.MapKeyText.Length + source.MapKeyParents.Length + source.Physics.Length,
                     applicationMilestones,
+                    applicationElapsedMilliseconds = applicationBudget.ElapsedMilliseconds,
+                    engineModuleIdentityChecks = engineValidation.ModuleIdentityChecks,
                     codecReadbackMetrics = LoadingSerialSceneProbe.ExperimentalReadbackMetrics,
                     registeredR2R6S0SourceContractSatisfied = true,
                     rawClockReadbackEqual = true, unityRandomRawReadbackEqual = true, particleManagerRandomRawReadbackEqual = true, particleComponentStateQualified = false, restoreQualified = false, completeStateCoverage = false, d2Passed = false, d3Passed = false }));
