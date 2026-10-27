@@ -94,6 +94,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Modding.Logger.Log("[HKTAS] Actual D original event factory identities prepared: missing=" + preparedEvents
                 + ";existingOwnersAndFieldsPreserved=true;sourceFlagsAndCacheOrderStillRequireCompleteDGraph=true.");
             var detached = Array.Exists(sourceGraph.Roots, root => root.Binding == CanonicalSceneMappingCarry.DetachedPlayerRoot);
+            carry.PrepareOriginalSoulIdentity(source, identities, admission);
             carry.Capture(identities, epoch, input, mouse, observer.BoundarySchedulerCarry(epoch), observer.BoundaryHeroInvulnerabilityCarry(epoch),
                 targetDirectoryOnly: true, originalBootstrapPlayer: originalBootstrapPlayer, sourceRequiresDetachedPlayer: detached,
                 retainedTargetTitleCallback: originalTitleCallback, sourceHasEmptyMapping: emptyMapping);
@@ -409,7 +410,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }, () => (observer ?? throw new InvalidOperationException("Map Key source snapshot has no original observer.")).FreezeMapKeyParentIncoming(),
                 RestoreMapKeyParentDependencies, (dependency, incoming, lifecycle, readback) =>
                     CanonicalMapKeyTextBoundaryPolicy.Reset(hudStartup.MapKeyTextColdDefinition,
-                        observer ?? throw new InvalidOperationException("Map Key deferred Canon has no observer."), dependency, incoming, lifecycle, readback), hudStartup.MapKeyTextColdDefinition, bossAssets, hudStartup.HudPresentationColdDefinition, () => (observer ?? throw new InvalidOperationException("HUD presentation observer absent.")).FreezeHudPresentationIncoming(), RestoreBorderSourceDependencies); }
+                        observer ?? throw new InvalidOperationException("Map Key deferred Canon has no observer."), dependency, incoming, lifecycle, readback), hudStartup.MapKeyTextColdDefinition, bossAssets, hudStartup.HudPresentationColdDefinition, () => (observer ?? throw new InvalidOperationException("HUD presentation observer absent.")).FreezeHudPresentationIncoming(), RestoreBorderSourceDependencies,
+                        () => (observer ?? throw new InvalidOperationException("Soul observer absent.")).FreezeSoulCopiedIncoming()); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
@@ -507,6 +509,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             bool OwnsCanonicalStart(int instance) => pools.OwnsNewPoolStart(instance) || visualTemplates.OwnsResetStart(instance) || journal.OwnsNewStart(instance) || charms.OwnsNewStart(instance) || hudStartup.HudPresentationColdDefinition?.OwnsNewStart(instance) == true;
             string? RetiredOwner(int instance) => pools.RetiredOwner(instance) ?? LoadingSerialSceneProbe.RetiredSourceOwner(instance);
             var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
+            if (carry.SoulContinuationEnabled)
+                observer.ConfigureSoulCopiedMembers(carry.SoulCopiedMembers);
             inputEpoch.RequireControlOrigin();
             var digest = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, RetiredOwner);
             File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + ".json"), JsonConvert.SerializeObject(digest));
@@ -549,10 +553,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                     route.Ordinal = ordinal; route.MovieFrame = movie; route.Validate(CanonicalActualDExperiment.SelectedOrdinal, movie);
                     if (route.SourceScene != source || route.TargetScene != target)
                         throw new InvalidOperationException("Actual source route disagrees with its observed boundary.");
+                    var mainBytes = carry.Encode(data);
+                    Modding.Logger.Log("[HKTAS] Actual D graph byte counts: main=" + mainBytes.Length + ";soul=" + carry.SoulGraph.Length + ";totalPacketLimit=" + CanonicalActualDExperiment.MaximumBytes);
                     ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, Route = route,
                         OriginalBossAssetOrigins = bossAssets?.Manifest ?? throw new InvalidOperationException("New-profile challenge asset startup is absent."),
                         OriginalHudPresentationAssetOrigins = hudStartup.HudPresentationColdDefinition!.AssetManifest, OriginalUiAssetOrigins = hudStartup.MapKeyTextColdDefinition.OriginalAssetManifest, MovieFrame = movie, NativeFrame = native,
-                        Main = carry.Encode(data), Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, HudPresentation = carry.HudPresentationGraph, BorderInputs = carry.BorderInputGraph, Physics = carry.PhysicsGraph, RegisteredS0 = CanonicalRegisteredS0Contract.Capture(s0), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
+                        Main = mainBytes, Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, HudPresentation = carry.HudPresentationGraph, BorderInputs = carry.BorderInputGraph, Soul = carry.SoulGraph, Physics = carry.PhysicsGraph, RegisteredS0 = CanonicalRegisteredS0Contract.Capture(s0), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
                     Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,
                         blockingQualifications = carry.BlockingQualifications });
                 }

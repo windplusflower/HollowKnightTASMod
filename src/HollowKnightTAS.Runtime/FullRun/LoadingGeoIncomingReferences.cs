@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -16,6 +17,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly SortedSet<string> references = new SortedSet<string>(StringComparer.Ordinal);
         private readonly Dictionary<string, Slot> slots = new Dictionary<string, Slot>(StringComparer.Ordinal);
         private readonly HashSet<string> externalReferences = new HashSet<string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, object> soulExternalOwners = new Dictionary<string, object>(StringComparer.Ordinal);
+        private readonly HashSet<object> soulMembers = new HashSet<object>(new References());
+        private readonly HashSet<object> soulGlobalCandidates = new HashSet<object>(new References());
+        private readonly Dictionary<string, object> soulCandidatePaths = new Dictionary<string, object>(StringComparer.Ordinal);
+        private readonly Dictionary<string, Slot> soulCandidateSlots = new Dictionary<string, Slot>(StringComparer.Ordinal);
+        private bool soulSample;
+        private int soulReferenceBytes;
+        private CanonicalHeroAnimationCallbacks.DetachedBenchProof? soulBench;
+        private string? soulBenchId;
+        private readonly List<Tuple<object, string, string>> soulBenchReferences = new List<Tuple<object, string, string>>();
         private string[] ownedRoots = Array.Empty<string>();
         private GeoCounter? counter;
         private GameObject? marker;
@@ -23,6 +34,43 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool menuFlash;
         private bool hudPresentation;
         internal bool Owns(object? value) => value != null && owned.ContainsKey(value);
+        // Soul's Fsm/state/action objects retain their actual identities as D
+        // roots. Unknown outside holders of roots or copied descendants are
+        // still refused: preserving identity alone does not restore their slots.
+        internal void BeginSoulCopiedSample(Func<UnityEngine.Object, string> identity, IReadOnlyDictionary<object, string> copied)
+        {
+            owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear();
+            soulExternalOwners.Clear(); soulMembers.Clear(); soulGlobalCandidates.Clear(); soulCandidatePaths.Clear(); soulCandidateSlots.Clear(); soulSample = true; soulReferenceBytes = 0;
+            soulBench = CanonicalHeroAnimationCallbacks.ProbeDetachedBench(); soulBenchId = null; soulBenchReferences.Clear();
+            counter = null; marker = null; mapKey = null; menuFlash = false; hudPresentation = false;
+            var owner = CanonicalSoulOrbCarry.Owner();
+            var roots = new List<string> { identity(owner) };
+            foreach (var callback in owner.transform.Find("SoulOrb_fill/Liquid").GetComponents<iTweenFSMEvents>()) roots.Add(identity(callback));
+            ownedRoots = roots.ToArray();
+            foreach (var pair in copied) { owned.Add(pair.Key, "$/Soul/" + pair.Value + " (" + pair.Key.GetType().FullName + ")"); soulMembers.Add(pair.Key); }
+            var globals = CanonicalSoulOrbCarry.GlobalGameObjects();
+            if (globals.Length > 4096) throw new InvalidOperationException("Soul global candidate count exceeds its bound.");
+            Modding.Logger.Log("[HKTAS] Soul global incoming original array: count=" + globals.Length + ";candidateLimit=4096;indexLimit=32768;allReferenceBytesLimit=4194304.");
+            for (var i = 0; i < globals.Length; i++) if (globals[i] != null) {
+                soulGlobalCandidates.Add(globals[i]);
+                if (!owned.ContainsKey(globals[i])) owned.Add(globals[i], "$/Soul/global-candidate[" + i + "]");
+            }
+        }
+        internal bool IsSoulMember(object value) => soulMembers.Contains(value);
+        internal void ObserveSoulBench(object value, string path, string root)
+        {
+            if (soulBench == null || !soulBench.Members.Contains(value)) return;
+            if (soulBenchReferences.Count >= 4096) throw new InvalidOperationException("Detached Bench incoming proof exceeds its bound.");
+            soulBenchReferences.Add(Tuple.Create(value, path, root));
+        }
+        internal void BindSoulBenchFsm(Fsm value, string id)
+        {
+            if (soulBench == null || !ReferenceEquals(value, soulBench.Fsm)) return;
+            if (soulBenchId != null && soulBenchId != id) throw new InvalidOperationException("Detached Bench FSM identity changed.");
+            soulBenchId = id;
+        }
+        internal string SoulIndexStatistics() => "candidates=" + soulGlobalCandidates.Count + ";paths=" + soulCandidatePaths.Count
+            + ";slots=" + soulCandidateSlots.Count + ";bytes=" + soulReferenceBytes;
         internal void BeginMenuFlashSample(Func<UnityEngine.Object, string> identity, GameObject root)
         {
             owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear(); ownedRoots = Array.Empty<string>();
@@ -232,17 +280,78 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal IReadOnlyDictionary<string, object> OwnedDirectory() => owned.ToDictionary(pair => pair.Value, pair => pair.Key, StringComparer.Ordinal);
         internal LoadingGeoIncomingReferences Freeze()
         {
-            var copy = new LoadingGeoIncomingReferences { counter = counter, marker = marker, mapKey = mapKey, menuFlash = menuFlash, hudPresentation = hudPresentation, ownedRoots = (string[])ownedRoots.Clone() };
+            var copy = new LoadingGeoIncomingReferences { counter = counter, marker = marker, mapKey = mapKey, menuFlash = menuFlash, hudPresentation = hudPresentation, soulSample = soulSample, soulReferenceBytes = soulReferenceBytes, ownedRoots = (string[])ownedRoots.Clone() };
             foreach (var pair in owned) copy.owned.Add(pair.Key, pair.Value);
             foreach (var item in references) copy.references.Add(item);
             foreach (var pair in slots) copy.slots.Add(pair.Key, pair.Value);
             foreach (var item in externalReferences) copy.externalReferences.Add(item);
+            foreach (var item in soulMembers) copy.soulMembers.Add(item);
+            foreach (var pair in soulExternalOwners) copy.soulExternalOwners.Add(pair.Key, pair.Value);
+            foreach (var item in soulGlobalCandidates) copy.soulGlobalCandidates.Add(item);
+            foreach (var pair in soulCandidatePaths) copy.soulCandidatePaths.Add(pair.Key, pair.Value);
+            foreach (var pair in soulCandidateSlots) copy.soulCandidateSlots.Add(pair.Key, pair.Value);
+            copy.soulBench = soulBench; copy.soulBenchId = soulBenchId; copy.soulBenchReferences.AddRange(soulBenchReferences);
             return copy;
         }
         internal void RequireNoExternalConsumers()
         {
             if (externalReferences.Count != 0)
-                throw new InvalidOperationException("Frozen original Geo owner still has an external consumer: " + string.Join(";", externalReferences.OrderBy(value => value, StringComparer.Ordinal)));
+                throw new InvalidOperationException("Frozen original Geo owner still has an external consumer: " + string.Join(";", externalReferences.OrderBy(value => value, StringComparer.Ordinal))
+                    + (owned.Values.Any(value => value.StartsWith("$/Soul/", StringComparison.Ordinal)) ? ";soulMatches=" + string.Join(";", references.Where(value => value.StartsWith("$/Soul/", StringComparison.Ordinal) && externalReferences.Contains(value.Substring(value.IndexOf(" <- ", StringComparison.Ordinal) + 4))).Take(32)) : ""));
+        }
+        // Existing full-walk observations only: no new world traversal. Every
+        // admitted external path must have a readable slot to guard twice.
+        internal string[] SoulSharedPaths(IReadOnlyDictionary<object, string> globals)
+        {
+            var result = new List<string>();
+            foreach (var path in externalReferences.OrderBy(value => value, StringComparer.Ordinal))
+                if (!soulExternalOwners.TryGetValue(path, out var observed) || !globals.ContainsKey(observed))
+                    throw new InvalidOperationException("Soul external holder is not a registered global variable: " + path);
+            foreach (var pair in soulCandidatePaths.OrderBy(value => value.Key, StringComparer.Ordinal)) {
+                var path = pair.Key; var observed = pair.Value;
+                if (!globals.TryGetValue(observed, out var key)) continue;
+                if (!soulCandidateSlots.TryGetValue(path, out var slot) || !ReferenceEquals(slot.Original, observed)
+                    || !ReferenceEquals(slot.Read(), slot.Original))
+                    throw new InvalidOperationException("Soul external holder is not an exact writable global variable slot: " + path);
+                result.Add(key + "\n" + path);
+            }
+            if (result.Count > 4096 || System.Text.Encoding.UTF8.GetByteCount(string.Join("\n", result)) > 1024 * 1024)
+                throw new InvalidOperationException("Soul global incoming directory exceeds its bounds.");
+            return result.ToArray();
+        }
+        internal void RequireSoulSharedPaths(IReadOnlyDictionary<object, string> globals, string[] expected)
+        {
+            if (!SoulSharedPaths(globals).SequenceEqual(expected))
+                throw new InvalidOperationException("Soul global shared incoming paths or current identities differ.");
+        }
+        internal Action ValidateSoulSharedTransition(IReadOnlyDictionary<object, string> globals, string[] sourcePaths)
+        {
+            var current = SoulSharedPaths(globals);
+            var missing = sourcePaths.Except(current, StringComparer.Ordinal).ToArray();
+            var extra = current.Except(sourcePaths, StringComparer.Ordinal).ToArray();
+            if (missing.Length != 0) throw new InvalidDataException("Soul source incoming paths are missing on target: count=" + missing.Length + ";first=" + missing[0]);
+            if (extra.Length == 0) return () => RequireSoulSharedPaths(globals, current);
+            var proof = soulBench ?? throw new InvalidDataException("Soul target has extra incoming paths without the original detached Bench callback.");
+            var id = soulBenchId ?? throw new InvalidDataException("Original detached Bench FSM was not observed by the full walker.");
+            proof.VerifyBefore();
+            foreach (var reference in soulBenchReferences) {
+                var internalRoot = reference.Item3 == id || reference.Item3.StartsWith(id + "/", StringComparison.Ordinal);
+                var callbackRoot = ReferenceEquals(reference.Item1, proof.Target)
+                    && reference.Item2 == "DontDestroyOnLoad/Knight[0]:tk2dSpriteAnimator[0].AnimationCompleted.target[0]";
+                if (!internalRoot && !callbackRoot) throw new InvalidDataException("Detached Bench FSM/action has an unknown external holder: " + reference.Item2);
+            }
+            if (!soulBenchReferences.Any(reference => ReferenceEquals(reference.Item1, proof.Target)
+                && reference.Item2 == "DontDestroyOnLoad/Knight[0]:tk2dSpriteAnimator[0].AnimationCompleted.target[0]"))
+                throw new InvalidDataException("Detached Bench original animator edge was not observed.");
+            var field = typeof(FsmOwnerDefault).GetField("gameObject", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!;
+            foreach (var item in extra) {
+                var split = item.IndexOf('\n'); if (split < 0) throw new InvalidDataException("Soul extra path is malformed.");
+                var path = item.Substring(split + 1); var prefix = id + "/";
+                if (!path.StartsWith(prefix, StringComparison.Ordinal) || !proof.Slots.TryGetValue(path.Substring(prefix.Length), out var owner)
+                    || !soulCandidateSlots.TryGetValue(path, out var slot) || !slot.SameFieldOwner(owner, field))
+                    throw new InvalidDataException("Soul target extra is not an exact original detached Bench slot: " + path);
+            }
+            return () => { RequireSoulSharedPaths(globals, current); proof.VerifyRemoved(); };
         }
         internal static IReadOnlyDictionary<string, object> HudFsmMembers(object raw, string path)
         {
@@ -272,13 +381,44 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal void Observe(object value, string path, string root)
         {
             if (!owned.TryGetValue(value, out var identity)) return;
+            if (soulSample && soulGlobalCandidates.Contains(value) && !InternalRoot(root) && !LifecycleRoot(root)) {
+                if (soulCandidatePaths.TryGetValue(path, out var existing)) {
+                    if (!ReferenceEquals(existing, value)) throw new InvalidOperationException("Soul candidate path maps to multiple identities.");
+                } else {
+                    soulReferenceBytes = checked(soulReferenceBytes + System.Text.Encoding.UTF8.GetByteCount(path) + System.Text.Encoding.UTF8.GetByteCount(identity));
+                    if (soulCandidatePaths.Count >= 32768 || soulReferenceBytes > 4 * 1024 * 1024)
+                        throw new InvalidOperationException("Soul global candidate index exceeds bound: paths=" + soulCandidatePaths.Count + ";bytes=" + soulReferenceBytes + ";candidates=" + soulGlobalCandidates.Count);
+                    soulCandidatePaths.Add(path, value);
+                }
+                if (!soulMembers.Contains(value)) return;
+            }
             if (references.Count >= 4096) throw new InvalidOperationException("Geo incoming reference diagnostic bound exceeded.");
-            references.Add(identity + " <- " + path);
-            if (!InternalRoot(root) && !LifecycleRoot(root)) externalReferences.Add(path);
+            var reference = identity + " <- " + path;
+            references.Add(reference);
+            if (!InternalRoot(root) && !LifecycleRoot(root)) {
+                externalReferences.Add(path);
+                if (soulSample) {
+                    if (soulExternalOwners.TryGetValue(path, out var prior) && !ReferenceEquals(prior, value))
+                        throw new InvalidOperationException("Soul incoming path maps to multiple identities.");
+                    soulExternalOwners[path] = value;
+                }
+            }
         }
         internal void ObserveSlot(object owner, FieldInfo? field, int index, object? value, string path, string root)
         {
             if (value == null || !owned.TryGetValue(value, out var identity) || InternalRoot(root) || LifecycleRoot(root)) return;
+            if (soulSample && soulGlobalCandidates.Contains(value)) {
+                if (owner.GetType().IsValueType || field?.IsInitOnly == true) throw new InvalidOperationException("Soul candidate incoming alias is not writable: " + path);
+                if (soulCandidateSlots.TryGetValue(path, out var prior)) {
+                    if (!prior.SameSlot(owner, field, index, value)) throw new InvalidOperationException("Soul candidate path maps to different slots: " + path);
+                } else {
+                    soulReferenceBytes = checked(soulReferenceBytes + System.Text.Encoding.UTF8.GetByteCount(path) + System.Text.Encoding.UTF8.GetByteCount(identity));
+                    if (soulCandidateSlots.Count >= 32768 || soulReferenceBytes > 4 * 1024 * 1024)
+                        throw new InvalidOperationException("Soul candidate slot index exceeds bound: slots=" + soulCandidateSlots.Count + ";bytes=" + soulReferenceBytes + ";candidates=" + soulGlobalCandidates.Count);
+                    soulCandidateSlots.Add(path, new Slot(owner, field, index, value, identity));
+                }
+                if (!soulMembers.Contains(value)) return;
+            }
             if (slots.Count >= 4096) throw new InvalidOperationException("Geo incoming source slot bound exceeded.");
             if (owner.GetType().IsValueType || field?.IsInitOnly == true)
                 throw new InvalidOperationException("Geo incoming alias needs an explicit writable containing owner: " + path);
@@ -320,6 +460,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal readonly object Original; internal readonly string Identity;
             internal Slot(object owner, FieldInfo? field, int index, object original, string identity)
             { this.owner = owner; this.field = field; this.index = index; Original = original; Identity = identity; }
+            internal bool SameSlot(object candidateOwner, FieldInfo? candidateField, int candidateIndex, object value)
+                => ReferenceEquals(owner, candidateOwner) && field == candidateField && index == candidateIndex && ReferenceEquals(Original, value);
+            internal bool SameFieldOwner(object candidateOwner, FieldInfo candidateField) => ReferenceEquals(owner, candidateOwner) && field == candidateField;
             internal bool IsArraySlot(Array array, int arrayIndex) => field == null && ReferenceEquals(owner, array) && index == arrayIndex && ReferenceEquals(Read(), Original);
             internal object? Read() => field == null ? ((Array)owner).GetValue(index) : field.GetValue(owner);
             internal void Write(object value) { if (field == null) ((Array)owner).SetValue(value, index); else field.SetValue(owner, value); }

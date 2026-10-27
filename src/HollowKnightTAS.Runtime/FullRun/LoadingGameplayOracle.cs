@@ -54,6 +54,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly LoadingUnityAssetIdentity assetIdentities = new LoadingUnityAssetIdentity();
         private readonly LoadingAssetProvenanceObservation assetProvenance = new LoadingAssetProvenanceObservation();
         private readonly List<Tuple<UnityEngine.Object, string>> assetRoots = new List<Tuple<UnityEngine.Object, string>>();
+        private readonly bool meshReferenceAuditEnabled = Environment.GetEnvironmentVariable("HKTAS_LOADING_MESH_REFERENCE_AUDIT") == "1";
+        private readonly SortedDictionary<string, object> meshReferenceAudit = new SortedDictionary<string, object>(StringComparer.Ordinal);
+        private bool meshReferenceAuditRefused;
+        private object? MeshReferenceAudit() => !meshReferenceAuditEnabled ? null : new {
+            diagnosticOnly = true, maximumReferences = 8192, refused = meshReferenceAuditRefused, existingFieldWalkOnly = true,
+            entries = meshReferenceAudit.Values.ToArray(), completeStateCoverage = false };
         private readonly CanonicalCoverageCatalog coverage = new CanonicalCoverageCatalog();
         private readonly List<CanonicalS0Observation.Root> s0Roots = new List<CanonicalS0Observation.Root>();
         private object? s0EventLock;
@@ -77,6 +83,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly LoadingGeoIncomingReferences frozenMarkerIncoming = new LoadingGeoIncomingReferences();
         private bool frozenMarkerSample;
         private readonly LoadingGeoIncomingReferences hudPresentationIncoming = new LoadingGeoIncomingReferences();
+        private readonly LoadingGeoIncomingReferences soulCopiedIncoming = new LoadingGeoIncomingReferences();
+        private Func<IReadOnlyDictionary<object, string>>? soulCopiedMembers;
+        internal void ConfigureSoulCopiedMembers(Func<IReadOnlyDictionary<object, string>> capture) => soulCopiedMembers = capture;
+        internal LoadingGeoIncomingReferences FreezeSoulCopiedIncoming() => soulCopiedIncoming.Freeze();
         private readonly LoadingGeoIncomingReferences frozenHudPresentationIncoming = new LoadingGeoIncomingReferences();
         private bool hudPresentationSample;
         private bool readingOwnedHudNativeProjection;
@@ -157,6 +167,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                             if (frozenMapKeySample) frozenMapKeyIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         }
                         hudBorderQueues?.ObserveSlot(owner, field, index, value, path);
+                        if (soulCopiedMembers != null) soulCopiedIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (hudPresentationSample && !readingOwnedHudNativeProjection) {
                             hudPresentationIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                             frozenHudPresentationIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
@@ -164,7 +175,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (frozenMarkerSample) frozenMarkerIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (frozenGeoSample) frozenGeoIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (frozenMenuFlashSample) frozenMenuFlashIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
-                    }, observeSlotValue: value => hudBorderQueues != null && hudBorderQueues.Owns(value) || hudPresentationSample && (hudPresentationIncoming.Owns(value) || frozenHudPresentationIncoming.Owns(value)) || geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || mapKeyParentIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value) || frozenMenuFlashSample && frozenMenuFlashIncoming.Owns(value));
+                    }, observeSlotValue: value => soulCopiedMembers != null && soulCopiedIncoming.Owns(value) || hudBorderQueues != null && hudBorderQueues.Owns(value) || hudPresentationSample && (hudPresentationIncoming.Owns(value) || frozenHudPresentationIncoming.Owns(value)) || geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || mapKeyParentIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value) || frozenMenuFlashSample && frozenMenuFlashIncoming.Owns(value));
             if (!physicsFollowOn && (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1"))
                 nativeScheduler = new LoadingNativeSchedulerDigest();
             if (physicsFollowOn || boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
@@ -807,6 +818,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             assetRoots.Clear(); assetInstances.Clear();
             assetArrays.Clear();
             assetValues.BeginSample();
+            meshReferenceAudit.Clear(); meshReferenceAuditRefused = false;
+            if (soulCopiedMembers != null) soulCopiedIncoming.BeginSoulCopiedSample(UnityId, soulCopiedMembers());
             textCacheDetails.Clear();
             geoIncoming.BeginSample(UnityId);
             mapKeyIncoming.BeginMapKeySample(UnityId, CanonicalMapKeyTextDirectory.Current());
@@ -1391,12 +1404,14 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private string? ReferenceCore(object value)
         {
+            if (fields.Capturing && soulCopiedMembers != null) soulCopiedIncoming.ObserveSoulBench(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing) hudBorderQueues?.ObserveReference(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && geoIncoming.Owns(value)) geoIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && readingMapKeyManagedRoots && mapKeyParentIncoming.Owns(value)) mapKeyParentIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && readingMapKeyManagedRoots && mapKeyIncoming.Owns(value)) mapKeyIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && readingMapKeyManagedRoots && frozenMapKeySample && frozenMapKeyIncoming.Owns(value)) frozenMapKeyIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && markerIncoming.Owns(value)) markerIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
+            if (fields.Capturing && soulCopiedMembers != null && soulCopiedIncoming.Owns(value)) soulCopiedIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && hudPresentationSample && !readingOwnedHudNativeProjection) {
                 if (hudPresentationIncoming.Owns(value)) hudPresentationIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
                 if (frozenHudPresentationIncoming.Owns(value)) frozenHudPresentationIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
@@ -1409,7 +1424,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (value is ParticleSystem.MinMaxGradient gradient) return GradientIdentity(gradient);
             if (value is Coroutine coroutine && nativeScheduler != null) return nativeScheduler.Reference(coroutine, fields);
             if (value is UnityEngine.Object unity) {
-                return UnityId(unity);
+                var id = UnityId(unity);
+                if (meshReferenceAuditEnabled && fields.Capturing && unity is Mesh) {
+                    var root = fields.DiagnosticRoot; var path = fields.DiagnosticPath;
+                    var key = id + " <- " + root + ":" + path;
+                    if (meshReferenceAudit.ContainsKey(key)) { }
+                    else if (meshReferenceAudit.Count >= 8192) meshReferenceAuditRefused = true;
+                    else meshReferenceAudit.Add(key, new { asset = id, root, path,
+                        source = readingOwnedHudNativeProjection ? "owned-HUD-original-native-observation" : "existing-field-reader-reference" });
+                }
+                return id;
             }
             if (fsmMemberIds.TryGetValue(value, out var memberId)) return "fsm-member:" + memberId;
             if (value is FsmState || value is FsmStateAction)
@@ -1443,6 +1467,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (fsmIds.TryGetValue(fsm, out var existing)) return existing;
             var id = "detached-fsm[" + detachedFsmRoots.Count + "]";
             fsmIds.Add(fsm, id);
+            if (soulCopiedMembers != null) soulCopiedIncoming.BindSoulBenchFsm(fsm, id);
             var owner = fields.Read(fsm, "owner") as MonoBehaviour;
             var hasOwner = !ReferenceEquals(owner, null);
             string? retiredSourceOwner = null;
@@ -1656,6 +1681,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidOperationException("P0 state inventory exceeds its explicit 16 MiB budget: bytes="
                             + inventoryBytes + ";roots=" + lastInventory.Length + ".");
                     File.WriteAllText(Path.Combine(directory, "loading-state-inventory.json"), inventory, new UTF8Encoding(false));
+                    if (meshReferenceAuditEnabled) {
+                        var audit = JsonConvert.SerializeObject(MeshReferenceAudit());
+                        if (Encoding.UTF8.GetByteCount(audit) > 8 * 1024 * 1024)
+                            audit = JsonConvert.SerializeObject(new { diagnosticOnly = true, refused = true,
+                                reason = "bounded-existing-mesh-reference-audit-byte-limit", originalRawInventoryPreserved = true, completeStateCoverage = false });
+                        File.WriteAllText(Path.Combine(directory, "mesh-reference-audit.json"), audit, new UTF8Encoding(false));
+                    }
                     var diagnostics = JsonConvert.SerializeObject(new { diagnosticOnly = true,
                         movieFrame = lastSampleMovieFrame, completionMovieFrame = movieFrame(), roots = lastFieldDiagnostics,
                         nativeCoroutines = nativeScheduler?.FieldDiagnostics });

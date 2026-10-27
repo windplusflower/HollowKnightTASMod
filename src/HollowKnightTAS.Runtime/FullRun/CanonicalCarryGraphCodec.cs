@@ -21,6 +21,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Dictionary<string, Type> types = new Dictionary<string, Type>(StringComparer.Ordinal);
         private readonly Dictionary<Type, string> typeIdentities = new Dictionary<Type, string>();
         private readonly string schema;
+        internal string SchemaIdentity => schema;
         private readonly CanonicalListEmptyArrayBindings listEmptyArrays;
         private readonly Dictionary<Type, int> leafSizes = new Dictionary<Type, int>();
         private readonly Dictionary<Type, Func<object, object>> parsedValueCopies = new Dictionary<Type, Func<object, object>>();
@@ -53,6 +54,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) && registeredTypes.Contains(CanonicalBossChallengeCallback.Target);
             if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
                 this.schema += "\n" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalHudPresentationPolicyId;
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
+                this.schema += "\n" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalSoulOrbContinuationPolicyId;
             if (bossCallbacks) this.schema += "\n" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalBossChallengeContextPolicyId;
             easeCallbacks = HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalRetiredUiCallbacks(
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)
@@ -112,10 +115,13 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal object ResolveExternalBinding(string binding, Func<string, object> other) => listEmptyArrays.Resolve(binding, other);
         internal CanonicalCarryGraphData Capture(IReadOnlyDictionary<string, object> roots,
-            Func<object, string?> externalBinding, Action<object, int>? capturedNode = null)
+            Func<object, string?> externalBinding, Action<object, int>? capturedNode = null, Action<object, int, string>? capturedPath = null)
         {
             var nodes = new List<CanonicalCarryGraphData.Node>();
             var pending = new Queue<Tuple<object, int, int>>();
+            var diagnosticPaths = capturedPath == null ? null : new Dictionary<int, string>();
+            var provenance = Environment.GetEnvironmentVariable("HKTAS_CARRY_NODE_BUDGET_AUDIT") == "1" ? new List<string>() : null;
+            var provenanceFields = provenance == null ? null : new List<string>();
             var seen = new Dictionary<object, int>(new References());
             var externals = new List<CanonicalCarryGraphData.External>();
             var externalValues = new Dictionary<string, object>(StringComparer.Ordinal);
@@ -125,11 +131,28 @@ namespace HollowKnightTAS.Runtime.FullRun
             int AddNode(object value, int depth, string path)
             {
                 if (seen.TryGetValue(value, out var known)) return known;
-                if (nodes.Count >= MaximumNodes || depth > 128) throw new InvalidDataException("Carry graph exceeds its bound at " + path
-                    + ";nodes=" + nodes.Count + ";depth=" + depth + ";type=" + Identity(value.GetType()));
+                if (nodes.Count >= MaximumNodes || depth > 128) {
+                    var audit = provenance == null ? "" : ";typeCounts=" + string.Join(",", nodes.GroupBy(item => item.Type).OrderByDescending(group => group.Count()).Take(20).Select(group => group.Key + "=" + group.Count()))
+                        + ";soulRootNodes=" + provenance.Count(item => item.StartsWith("R2/SoulOrb/", StringComparison.Ordinal))
+                        + ";soulDistinctRoots=" + provenance.Where(item => item.StartsWith("R2/SoulOrb/", StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).Count()
+                        + ";rootCounts=" + string.Join(",", provenance.GroupBy(item => item).OrderByDescending(group => group.Count()).Take(20).Select(group => group.Key + "=" + group.Count()))
+                        + ";rootFieldCounts=" + string.Join(",", provenanceFields!.GroupBy(item => item).OrderByDescending(group => group.Count()).Take(20).Select(group => group.Key + "=" + group.Count()));
+                    throw new InvalidDataException("Carry graph exceeds its bound at " + path
+                        + ";nodes=" + nodes.Count + ";depth=" + depth + ";type=" + Identity(value.GetType()) + audit);
+                }
                 var id = nodes.Count + 1;
+                if (provenance != null) {
+                    var end = path.IndexOf(']');
+                    var parent = path.StartsWith("node[", StringComparison.Ordinal) && end > 5 && int.TryParse(path.Substring(5, end - 5), out var parsed) ? parsed : 0;
+                    var root = parent > 0 && parent <= provenance.Count ? provenance[parent - 1] : path;
+                    provenance.Add(root);
+                    provenanceFields!.Add(parent > 0 && parent <= provenanceFields.Count
+                        ? (provenanceFields[parent - 1] == root ? root + path.Substring(end + 1) : provenanceFields[parent - 1]) : root);
+                }
                 seen.Add(value, id);
                 capturedNode?.Invoke(value, id);
+                capturedPath?.Invoke(value, id, path);
+                diagnosticPaths?.Add(id, path);
                 nodes.Add(new CanonicalCarryGraphData.Node { Id = id, Type = TypeIdentity(value.GetType()) });
                 pending.Enqueue(Tuple.Create(value, id, depth));
                 return id;
@@ -220,7 +243,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             while (pending.Count != 0)
             {
                 var entry = pending.Dequeue(); var owner = entry.Item1; var node = nodes[entry.Item2 - 1];
-                var path = "node[" + entry.Item2 + "]";
+                var path = diagnosticPaths == null ? "node[" + entry.Item2 + "]" : diagnosticPaths[entry.Item2];
                 var frameworkEmpty = listEmptyArrays.ObserveList(owner);
                 if (frameworkEmpty != null && seen.ContainsKey(frameworkEmpty))
                     unsupported.Add(path + ":framework-list-static-empty-was-allocated-before-original-list-provenance");

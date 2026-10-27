@@ -29,6 +29,61 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static tk2dSpriteAnimator Animator() => (HeroController.SilentInstance
             ?? throw new InvalidDataException("Hero callback owner is absent.")).GetComponent<tk2dSpriteAnimator>()
             ?? throw new InvalidDataException("Original Hero animator is absent.");
+        internal sealed class DetachedBenchProof
+        {
+            internal Fsm Fsm = null!;
+            internal FsmStateAction Target = null!;
+            internal readonly Dictionary<string, object> Slots = new Dictionary<string, object>(StringComparer.Ordinal);
+            internal readonly HashSet<object> Members = new HashSet<object>(new ReferenceComparer());
+            internal Action VerifyBefore = null!;
+            internal Action VerifyRemoved = null!;
+        }
+        private sealed class ReferenceComparer : IEqualityComparer<object>
+        {
+            public new bool Equals(object? a, object? b) => ReferenceEquals(a, b);
+            public int GetHashCode(object value) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(value);
+        }
+        internal static DetachedBenchProof? ProbeDetachedBench()
+        {
+            var animator = Animator(); var chain = animator.AnimationCompleted?.GetInvocationList() ?? Array.Empty<Delegate>();
+            var candidates = chain.Where(callback => callback.Target is FsmStateAction action
+                && typeof(FsmStateAction).GetField("fsm", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!.GetValue(action) is Fsm fsm
+                && fsm.Name == "Bench Control" && ReferenceEquals(typeof(Fsm).GetField("owner", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!.GetValue(fsm), null)).ToArray();
+            if (candidates.Length == 0) return null;
+            if (chain.Length != 1 || candidates.Length != 1) throw new InvalidDataException("Detached Bench callback invocation shape differs.");
+            var target = RequireCallback(candidates[0], true);
+            var ownerFsm = (Fsm)typeof(FsmStateAction).GetField("fsm", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!.GetValue(target);
+            var states = States(ownerFsm);
+            if (states.Sum(state => Actions(state).Count(action => ReferenceEquals(action, target))) != 1)
+                throw new InvalidDataException("Detached Bench callback is not the exact original FSM action.");
+            var result = new DetachedBenchProof { Fsm = ownerFsm, Target = target };
+            var originalComplete = animator.AnimationCompleted; var originalEvent = animator.AnimationEventTriggered;
+            result.VerifyBefore = () => {
+                if (!ReferenceEquals(Animator(), animator) || !ReferenceEquals(animator.AnimationCompleted, originalComplete)
+                    || !ReferenceEquals(animator.AnimationEventTriggered, originalEvent))
+                    throw new InvalidOperationException("Original detached Bench callback changed before source replacement.");
+            };
+            result.Members.Add(ownerFsm);
+            var actionData = typeof(FsmState).GetField("actionData", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!;
+            var parameterList = typeof(ActionData).GetField("fsmOwnerDefaultParams", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!;
+            for (var i = 0; i < states.Length; i++) {
+                var state = states[i]; result.Members.Add(state);
+                foreach (var action in Actions(state)) if (action != null) result.Members.Add(action);
+                var data = actionData.GetValue(state); if (data == null) continue;
+                var list = parameterList.GetValue(data); if (list == null) continue;
+                var items = list.GetType().GetField("_items", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(list) as Array
+                    ?? throw new InvalidDataException("Detached Bench original parameter array is absent.");
+                if (items.Length > 4096) throw new InvalidDataException("Detached Bench original parameter array exceeds bound.");
+                for (var j = 0; j < items.Length; j++) if (items.GetValue(j) is FsmOwnerDefault item)
+                    result.Slots.Add("state[" + i + "]:" + state.Name + ".actionData.fsmOwnerDefaultParams._items[" + j + "].gameObject", item);
+            }
+            result.VerifyRemoved = () => {
+                if (!ReferenceEquals(Animator(), animator) || (animator.AnimationCompleted?.GetInvocationList() ?? Array.Empty<Delegate>()).Any(callback => ReferenceEquals(callback.Target, target))
+                    || (animator.AnimationEventTriggered?.GetInvocationList() ?? Array.Empty<Delegate>()).Any(callback => ReferenceEquals(callback.Target, target)))
+                    throw new InvalidOperationException("Original detached Bench action remains reachable from Hero animator callbacks.");
+            };
+            return result;
+        }
         private static MethodInfo Method(Type actionType, bool complete)
         {
             var play = actionType == typeof(Tk2dPlayAnimationWithEvents);

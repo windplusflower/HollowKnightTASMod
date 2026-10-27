@@ -37,6 +37,7 @@ namespace HollowKnightTAS.Core.Movie
         public const string CanonicalBossChallengeContextPolicyId = "explicit-original-statue-challenge-context:dead-ui:original-b0-b1-api-order:original-b2:sealed-Marmu-origin:v1";
 
         public const string CanonicalHudPresentationPolicyId = "original-level1-10cold-3active-18objects40mono9TMP7FSM:original-preAwake-inputs-and-Start:owned-mesh-and-queue-partition:full-source-fields:v2";
+        public const string CanonicalSoulOrbContinuationPolicyId = "original-level1-Soul-28states121actions:stable-150-root-identities:original-live-callback-producer:4-fields-and-counter:readonly-native-phase:v1";
 
         public static string SelectedProfileId => Select(
             Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_STARTUP_CLOCK") == "1",

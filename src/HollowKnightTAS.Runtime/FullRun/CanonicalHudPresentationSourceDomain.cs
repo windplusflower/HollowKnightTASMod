@@ -50,7 +50,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return codec.Encode(graph);
         }
         internal Action Prepare(byte[] source, Transform keys, CanonicalCarryGraphCodec.PreparedView main,
-            Action requireMainApplied, Func<string, object> resolveOther, Func<bool> admitted, Action<IReadOnlyDictionary<string, object>> exposeDirectory, out Action verifySource, IReadOnlyList<GameObject>? producedRoots = null)
+            Action requireMainApplied, Func<string, object> resolveOther, Func<bool> admitted, Action<IReadOnlyDictionary<string, object>> exposeDirectory, out Action verifySource, IReadOnlyList<GameObject>? producedRoots = null, int? expectedTweenCounter = null)
         {
             requireMainApplied();
             if (!admitted()) throw new InvalidOperationException("HUD presentation preparation lost post-main paused admission.");
@@ -81,6 +81,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (saved.OriginalAssetOrigins != template.AssetManifest)
                     throw new InvalidDataException("HUD presentation source original asset provenance or shared aliases differ.");
                 CanonicalHudPresentationCarry.Roots(saved);
+                if (expectedTweenCounter.HasValue && saved.TweenIdCount != expectedTweenCounter.Value)
+                    throw new InvalidDataException("HUD and Soul original global Tween counter source values differ.");
                 for (var owner = 0; owner < saved.NativeOwners.Length; owner++)
                     if (CanonicalHudPresentationDirectory.IsBorderMember(saved.NativeOwners[owner])
                         ? saved.Lifecycle[owner * 5] != 1 || directory[saved.NativeOwners[owner]] is ChangeFontByLanguage && saved.Lifecycle[owner * 5 + 1] != 0 || saved.Lifecycle[owner * 5 + 2] != 1 || saved.Lifecycle[owner * 5 + 3] != 0

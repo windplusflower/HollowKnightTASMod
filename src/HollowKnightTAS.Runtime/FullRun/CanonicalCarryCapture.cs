@@ -29,6 +29,22 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private readonly CanonicalCarryGraphCodec codec = CanonicalCarryFieldRegistry.Create();
         private readonly CanonicalCarryGraphCodec inputCodec = CanonicalCarryFieldRegistry.Create(inputDomain: true);
+        private readonly CanonicalCarryGraphCodec? soulCodec = HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(
+            HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) ? CanonicalCarryFieldRegistry.Create(soulDomain: true) : null;
+        private readonly CanonicalSoulOrbCarry? soul = CanonicalActualDExperiment.Enabled && HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(
+            HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) ? new CanonicalSoulOrbCarry() : null;
+        internal bool SoulContinuationEnabled => soul != null;
+        private readonly Func<LoadingGeoIncomingReferences>? snapshotSoulIncoming;
+        private string[]? actualSoulSourceSlots;
+        internal IReadOnlyDictionary<object, string> SoulCopiedMembers() => CanonicalSoulOrbCarry.CopiedMembers(codec);
+        internal void PrepareOriginalSoulIdentity(CanonicalActualDExperiment envelope, BoundaryObjectIdentity identities, Func<bool> admitted) {
+            if (soul == null) return;
+            decodedActualSoulHash = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(envelope.Soul);
+            var reader = soulCodec ?? throw new InvalidOperationException("Soul domain codec absent.");
+            var source = reader.Decode(envelope.Soul);
+            soul.PrepareOriginalIdentity(source, reader.SchemaIdentity, identities, admitted, (snapshotSoulIncoming ?? throw new InvalidOperationException("Soul incoming proof absent."))());
+            actualSoulSourceSlots = CanonicalSoulOrbCarry.SourceStrings(source, "SharedSlots");
+        }
         private readonly CanonicalHeroAssetTemplates assetTemplates;
         private readonly CanonicalVisualFsmTemplates visualTemplates;
         private readonly CanonicalHudJournalPolicy journal;
@@ -58,6 +74,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal byte[] MarkerGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] MapGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] GeoGraph { get; private set; } = Array.Empty<byte>();
+        internal byte[] SoulGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] PhysicsGraph { get; private set; } = Array.Empty<byte>();
         internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates, CanonicalHudJournalPolicy journal,
             Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies,
@@ -68,9 +85,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             Action<Action, LoadingGeoIncomingReferences, Tuple<Action, Action>, Action<Action>> normalizeMapKey,
             CanonicalMapKeyTextColdTemplate mapKeyTemplate, CanonicalBossChallengeAssets? bossAssets = null, CanonicalHudPresentationColdTemplate? hudPresentationTemplate = null,
             Func<LoadingGeoIncomingReferences>? snapshotHudPresentationIncoming = null,
-            Action<CanonicalHudBorderInputs.Data, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, GameObject[], IReadOnlyDictionary<string, object>>, Action<Action>, Func<bool>>? restoreBorderSource = null)
+            Action<CanonicalHudBorderInputs.Data, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, GameObject[], IReadOnlyDictionary<string, object>>, Action<Action>, Func<bool>>? restoreBorderSource = null,
+            Func<LoadingGeoIncomingReferences>? snapshotSoulIncoming = null)
         { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; this.journal = journal;
             this.bossAssets = bossAssets;
+            this.snapshotSoulIncoming = snapshotSoulIncoming;
             this.hudPresentationTemplate = hudPresentationTemplate;
             this.snapshotHudPresentationIncoming = snapshotHudPresentationIncoming; this.restoreBorderSource = restoreBorderSource;
             borderInputDomain = hudPresentationTemplate == null ? null : new CanonicalHudBorderInputDomain(hudPresentationTemplate);
@@ -114,6 +133,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private CanonicalActualDExperiment? decodedActualEnvelope;
         private CanonicalCarryGraphData? decodedActualMain;
         private string? decodedActualMainHash;
+        private string? decodedActualSoulHash;
         internal object? HeroAnimationCallbackAudit { get; private set; }
         internal CanonicalCarryGraphData DecodeActualMainForOwnerContext(CanonicalActualDExperiment source)
         {
@@ -232,6 +252,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var fsm = (Fsm)RawFsm.GetValue(pair.Value);
                 if (!CanonicalHeroFsmBindingRegistry.IsCanonicalVisual(pair.Key, fsm.Name)) roots.Add("HeroFSM/" + pair.Key, fsm);
             }
+            var soulRoots = new SortedDictionary<string, object>(StringComparer.Ordinal);
+            if (soul != null) {
+                var incoming = (snapshotSoulIncoming ?? throw new InvalidOperationException("Soul copied-member incoming proof is absent."))();
+                var shared = CanonicalSoulOrbCarry.Shared(incoming, targetDirectoryOnly ? actualSoulSourceSlots ?? throw new InvalidOperationException("Soul source slot directory absent.") : null);
+                incoming.RequireSoulSharedPaths(shared.Identities, shared.Paths);
+                foreach (var pair in shared.Roots) roots.Add(pair.Key, pair.Value);
+                CanonicalSoulOrbCarry.AddRoots(soulRoots, targetDirectoryOnly, shared);
+            }
             var globals = typeof(PlayMakerGlobals).GetField("instance", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null);
             var initialized = typeof(PlayMakerGlobals).GetField("<Initialized>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null);
             if (globals == null || !Equals(initialized, true)) throw new InvalidDataException("Original PlayMaker globals are not initialized.");
@@ -248,6 +276,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Nodes = Array.Empty<CanonicalCarryGraphData.Node>(), Externals = Array.Empty<CanonicalCarryGraphData.External>(), Unsupported = Array.Empty<string>() };
             var mainNodes = new Dictionary<object, int>(new References());
             var result = targetDirectoryOnly ? Empty() : codec.Capture(roots, bindings.Bind, (owner, id) => mainNodes.Add(owner, id));
+            if (!targetDirectoryOnly && soul != null) {
+                if (soulRoots.Values.Any(value => mainNodes.ContainsKey(value)))
+                    throw new InvalidDataException("Soul original root is already owned by the main graph; cross-domain root alias is unsupported.");
+                string? BindSoul(object value) => mainNodes.TryGetValue(value, out var node) ? "Soul/MainNode/" + node : bindings.Bind(value);
+                var soulReader = soulCodec ?? throw new InvalidOperationException("Soul domain codec absent.");
+                var soulGraph = soulReader.Capture(soulRoots, BindSoul);
+                if (soulGraph.Unsupported.Length != 0) throw new InvalidDataException("Soul source graph has unsupported fields: " + string.Join(";", soulGraph.Unsupported));
+                bindings.AuditGeoAssets(soulGraph);
+                SoulGraph = soulReader.Encode(soulGraph);
+                Modding.Logger.Log("[HKTAS] Actual D graph domains: mainNodes=" + result.Nodes.Length + ";soulNodes=" + soulGraph.Nodes.Length
+                    + ";soulBytes=" + SoulGraph.Length + ";soulMainBindings=" + soulGraph.Externals.Count(item => item.Binding.StartsWith("Soul/MainNode/", StringComparison.Ordinal)));
+            }
             GeoGraph = targetDirectoryOnly ? Array.Empty<byte>() : geoDomain.Capture(GameCameras.instance.geoCounter,
                 CanonicalGeoColdTemplate.Directory(GameCameras.instance.geoCounter.gameObject), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             MapGraph = targetDirectoryOnly ? Array.Empty<byte>() : mapDomain.Capture(mainNodes, bindings.Bind, bindings.AuditGeoAssets);
@@ -324,6 +364,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var targetInputRoots = SelectTargetRoots(sourceInput, inputRoots, allowRetiredEventCacheEntries: false);
                 CanonicalCarryContinuationContract.Prepared? continuation = null;
                 CanonicalCarryGraphCodec.PreparedView? mainView = null;
+                CanonicalSoulOrbCarry.Data? sourceSoul = null;
                 CanonicalCarryGraphCodec.ExternalRebinding? mainRebinding = null, sdkRebinding = null;
                 CanonicalEventCarryRoots.ValidateGraph(sourceMain);
                 ActualTargetStage = "prepare-main";
@@ -402,6 +443,35 @@ namespace HollowKnightTAS.Runtime.FullRun
                     domainActions.Add(deviceManagers.PrepareApply(CanonicalDeviceManagerCarry.FromPrepared(view)));
                 }, rebind => sdkRebinding = rebind);
                 Modding.Logger.Log("[HKTAS] Actual D input graph preparation timing: elapsedMilliseconds=" + (prepareTimer.ElapsedMilliseconds - mainPreparedMilliseconds));
+                if (soul != null) domainActions.Insert(0, () => {
+                    ActualTargetStage = "soul-source-graph";
+                    var envelope = actualSourceValidation ?? throw new InvalidOperationException("Soul has no sealed source envelope.");
+                    if (decodedActualSoulHash != HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(envelope.Soul))
+                        throw new InvalidOperationException("Soul source graph changed after its producer preflight.");
+                    var soulReader = soulCodec ?? throw new InvalidOperationException("Soul domain codec absent.");
+                    var graph = soulReader.Decode(envelope.Soul);
+                    object ResolveSoul(string binding) {
+                        const string prefix = "Soul/MainNode/";
+                        if (!binding.StartsWith(prefix, StringComparison.Ordinal)) return bindings.ResolveTarget(binding);
+                        if (!int.TryParse(binding.Substring(prefix.Length), out var id) || id < 1)
+                            throw new InvalidDataException("Soul main-node identity differs.");
+                        return mainView!.Node(id);
+                    }
+                    Action? native = null; Action? verifyNative = null;
+                    var targetRoots = SelectTargetRoots(graph, soulRoots, allowRetiredEventCacheEntries: false);
+                    var plan = soulReader.PrepareOwnedGraph(graph, targetRoots, ResolveSoul, view => {
+                        sourceSoul = CanonicalSoulOrbCarry.FromPrepared(view);
+                        native = CanonicalSoulOrbCarry.PrepareApply(view, admitted, out var verification);
+                        verifyNative = verification;
+                    });
+                    var incoming = (snapshotSoulIncoming ?? throw new InvalidOperationException("Soul incoming proof absent."))();
+                    var shared = CanonicalSoulOrbCarry.Shared(incoming, sourceSoul!.SharedSlots);
+                    if (!shared.Slots.SequenceEqual(sourceSoul.SharedSlots)) throw new InvalidDataException("Prepared Soul shared source slot directory differs.");
+                    incoming.ValidateSoulSharedTransition(shared.Identities, sourceSoul.SharedPaths);
+                    main.VerifyReadback(); sdk.VerifyReadback(); plan.Apply(); native!();
+                    plan.VerifyReadback(); main.VerifyReadback(); sdk.VerifyReadback();
+                    sourceChecks.Add(() => { plan.VerifyReadback(); verifyNative!(); soul.TransitionVerify(); });
+                });
                 domainActions.Add(() => {
                     ActualTargetStage = "geo-source-producer";
                     var envelope = actualSourceValidation ?? throw new InvalidOperationException("Post-main Geo has no sealed source envelope.");
@@ -589,7 +659,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     restore(borderSource, (old, produced, roots) => {
                         IReadOnlyDictionary<string, object>? final = null;
                         applySource = hudPresentationDomain.Prepare(envelope.HudPresentation, inventory, mainView!, RequireMain,
-                            bindings.ResolveTarget, admitted, value => final = value, out var verify, roots);
+                            bindings.ResolveTarget, admitted, value => final = value, out var verify, roots, sourceSoul?.Counter);
                         verifySource = verify;
                         if (final == null) throw new InvalidDataException("HUD final source directory absent.");
                         Dictionary<string, object> Replacements(CanonicalCarryGraphData graph, Func<string, object> resolve) {
