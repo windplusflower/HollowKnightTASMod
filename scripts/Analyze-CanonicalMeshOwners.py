@@ -29,11 +29,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("evidence", type=Path)
     args = parser.parse_args()
-    samples, references = {}, {}
+    samples, references, headers = {}, {}, {}
     for role in ("source", "target"):
         folder = args.evidence / role / "run-01" / f"actual-d-{role}-suffix-oracle"
         samples[role] = [json.loads(line) for line in (folder / "loading-gameplay-oracle.jsonl").read_text(encoding="utf-8-sig").splitlines() if json.loads(line).get("kind") == "sample"]
-        audit = load(folder / "mesh-reference-audit.json")
+        paired = folder / "mesh-value-audit-1.json"
+        candidate = load(paired) if paired.exists() else None
+        if candidate and "references" in candidate:
+            audit = {"refused": candidate.get("refused"), "existingFieldWalkOnly": candidate.get("existingFieldWalkOnly"), "entries": candidate["references"]}
+            headers[role] = {key: candidate.get(key) for key in ("movieFrame", "nativeFrame", "sampleOrdinal", "runtimeSha256")}
+        else:
+            audit = load(folder / "mesh-reference-audit.json")
         if audit.get("refused") or not audit.get("existingFieldWalkOnly"):
             raise ValueError("Mesh owner audit is incomplete")
         refs = collections.defaultdict(set)
@@ -42,6 +48,8 @@ def main():
         references[role] = refs
     if len(samples["source"]) != 3 or len(samples["target"]) != 3:
         raise ValueError("expected original three samples")
+    if headers and (len(headers) != 2 or headers["source"] != headers["target"] or None in headers["source"].values()):
+        raise ValueError("paired Mesh audit sample/runtime identity differs")
     # A consumer pair is evidence of a relationship, not an equality rule.
     by_consumer = {}
     for role in ("source", "target"):
@@ -56,7 +64,8 @@ def main():
             for other in by_consumer["target"].get(path, ()):
                 pairs[asset].add(other)
     pairs = {asset: sorted(others) for asset, others in pairs.items()}
-    output = {"diagnosticOnly": True, "comparisonRulesUnchanged": True, "samples": []}
+    output = {"diagnosticOnly": True, "comparisonRulesUnchanged": True,
+              "referenceSampleMatched": bool(headers), "referenceHeader": headers.get("source"), "samples": []}
     for left, right in zip(samples["source"], samples["target"]):
         a, b = inventory(left), inventory(right)
         meshes_a = {name.removesuffix("/asset-values"): item for name, item in a.items() if name.startswith("asset:UnityEngine.Mesh:") and name.endswith("/asset-values")}
@@ -75,6 +84,7 @@ def main():
         source_mapped = {row["source"] for row in mapping}
         target_mapped = set(reverse)
         output["samples"].append({"movieFrame": left["movieFrame"], "sourceMeshCount": len(meshes_a), "targetMeshCount": len(meshes_b),
+            "sameFrameReference": bool(headers) and left["movieFrame"] == headers["source"]["movieFrame"] and left["nativeFrame"] == headers["source"]["nativeFrame"],
             "mappedPairs": len(mapping), "sourceWithoutMappedConsumer": sorted(set(meshes_a) - source_mapped),
             "targetWithoutMappedConsumer": sorted(set(meshes_b) - target_mapped),
             "ambiguousSource": {asset: others for asset, others in pairs.items() if len(others) != 1},

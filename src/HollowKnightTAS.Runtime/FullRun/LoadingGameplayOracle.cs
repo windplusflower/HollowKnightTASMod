@@ -57,9 +57,31 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly bool meshReferenceAuditEnabled = Environment.GetEnvironmentVariable("HKTAS_LOADING_MESH_REFERENCE_AUDIT") == "1";
         private readonly SortedDictionary<string, object> meshReferenceAudit = new SortedDictionary<string, object>(StringComparer.Ordinal);
         private bool meshReferenceAuditRefused;
+        private readonly bool meshValueAuditEnabled = Environment.GetEnvironmentVariable("HKTAS_LOADING_MESH_VALUE_AUDIT") == "1";
+        private readonly List<object> meshValueAudit = new List<object>();
+        private LoadingMeshValueAudit? meshValueReader;
+        private int meshValueBytes, meshValueSamples;
+        private bool meshValueRefused;
+        internal static bool MeshAuditSelected(bool enabled, bool suffix, long movie, long firstFrame) => enabled && suffix && movie == firstFrame;
+        private bool MeshValueAuditActive => MeshAuditSelected(meshValueAuditEnabled, suffixCapture, movieFrame(), first);
+        private bool MeshReferenceAuditActive => meshReferenceAuditEnabled && (!meshValueAuditEnabled || MeshAuditSelected(true, suffixCapture, movieFrame(), first));
         private object? MeshReferenceAudit() => !meshReferenceAuditEnabled ? null : new {
             diagnosticOnly = true, maximumReferences = 8192, refused = meshReferenceAuditRefused, existingFieldWalkOnly = true,
             entries = meshReferenceAudit.Values.ToArray(), completeStateCoverage = false };
+        private void SealMeshValueSample(long movie, long native, int ordinal)
+        {
+            if (++meshValueSamples != 1 || !meshReferenceAuditEnabled) { meshValueRefused = true; meshValueAudit.Clear(); }
+            var runtimeSha = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(File.ReadAllBytes(typeof(LoadingGameplayOracle).Assembly.Location));
+            var audit = JsonConvert.SerializeObject(new { diagnosticOnly = true, refused = meshValueRefused || meshReferenceAuditRefused,
+                existingProjectionOnly = true, existingFieldWalkOnly = true, independentPerField = true, maximumMeshes = 2048,
+                maximumReferences = 8192, maximumBytes = 8 * 1024 * 1024, movieFrame = movie, nativeFrame = native,
+                sampleOrdinal = ordinal, runtimeSha256 = runtimeSha, entries = meshValueAudit.ToArray(),
+                references = meshReferenceAudit.Values.ToArray(), completeStateCoverage = false },
+                new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
+            if (Encoding.UTF8.GetByteCount(audit) > 8 * 1024 * 1024)
+                audit = JsonConvert.SerializeObject(new { diagnosticOnly = true, refused = true, reason = "mesh-value-and-reference-audit-byte-limit", completeStateCoverage = false });
+            File.WriteAllText(Path.Combine(directory, "mesh-value-audit-1.json"), audit, new UTF8Encoding(false));
+        }
         private readonly CanonicalCoverageCatalog coverage = new CanonicalCoverageCatalog();
         private readonly List<CanonicalS0Observation.Root> s0Roots = new List<CanonicalS0Observation.Root>();
         private object? s0EventLock;
@@ -757,6 +779,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     menuFlashCanvasDomain = fullInventory ? CanonicalMenuFlashColdPolicy.ObserveCanvasDomain(Reference) : null,
                     captureMilliseconds = captureElapsed.ElapsedMilliseconds,
                     captureStages = captureStages.ToArray() });
+                if (MeshValueAuditActive && fullInventory && !nativePhysicsOnly) SealMeshValueSample(movieFrame(), nativeFrame(), rows - 1);
                 if (phase == "before" || phase == "after") gameplaySamples++;
                 priorCapture = new { movieFrame = movieFrame(), phase, boundary,
                     captureMilliseconds = captureElapsed.ElapsedMilliseconds, stages = captureStages.ToArray() };
@@ -819,6 +842,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             assetArrays.Clear();
             assetValues.BeginSample();
             meshReferenceAudit.Clear(); meshReferenceAuditRefused = false;
+            meshValueAudit.Clear(); meshValueBytes = 0; meshValueRefused = false;
             if (soulCopiedMembers != null) soulCopiedIncoming.BeginSoulCopiedSample(UnityId, soulCopiedMembers());
             textCacheDetails.Clear();
             geoIncoming.BeginSample(UnityId);
@@ -1188,6 +1212,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (snapshot == null) continue;
                 var id = entry.Item2 + "/asset-values";
                 var digest = fields.Capture(snapshot, id, expandRoot: true);
+                if (MeshValueAuditActive && entry.Item1 is Mesh mesh && !meshValueRefused) {
+                    if (meshValueAudit.Count >= 2048) meshValueRefused = true;
+                    else {
+                        try {
+                            meshValueReader ??= new LoadingMeshValueAudit();
+                            var audit = new { asset = entry.Item2, value = meshValueReader.Capture(mesh, snapshot) };
+                            meshValueBytes = checked(meshValueBytes + Encoding.UTF8.GetByteCount(JsonConvert.SerializeObject(audit)));
+                            if (meshValueBytes > 8 * 1024 * 1024) { meshValueRefused = true; meshValueAudit.Clear(); }
+                            else meshValueAudit.Add(audit);
+                        } catch (InvalidOperationException) { meshValueRefused = true; meshValueAudit.Clear(); }
+                    }
+                }
                 AddAssetRecord(id, entry.Item1.GetType().FullName, digest, text, inventory);
             }
             return Hash(text.ToString());
@@ -1425,7 +1461,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (value is Coroutine coroutine && nativeScheduler != null) return nativeScheduler.Reference(coroutine, fields);
             if (value is UnityEngine.Object unity) {
                 var id = UnityId(unity);
-                if (meshReferenceAuditEnabled && fields.Capturing && unity is Mesh) {
+                if (MeshReferenceAuditActive && fields.Capturing && unity is Mesh) {
                     var root = fields.DiagnosticRoot; var path = fields.DiagnosticPath;
                     var key = id + " <- " + root + ":" + path;
                     if (meshReferenceAudit.ContainsKey(key)) { }
@@ -1681,7 +1717,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidOperationException("P0 state inventory exceeds its explicit 16 MiB budget: bytes="
                             + inventoryBytes + ";roots=" + lastInventory.Length + ".");
                     File.WriteAllText(Path.Combine(directory, "loading-state-inventory.json"), inventory, new UTF8Encoding(false));
-                    if (meshReferenceAuditEnabled) {
+                    if (meshReferenceAuditEnabled && !meshValueAuditEnabled) {
                         var audit = JsonConvert.SerializeObject(MeshReferenceAudit());
                         if (Encoding.UTF8.GetByteCount(audit) > 8 * 1024 * 1024)
                             audit = JsonConvert.SerializeObject(new { diagnosticOnly = true, refused = true,
@@ -1765,6 +1801,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             => Sample("event", "active-scene:" + previous.name + "->" + current.name);
         public void Dispose()
         {
+            meshValueReader?.Dispose(); meshValueReader = null;
             hudBorderQueues?.Dispose(); hudBorderQueues = null;
             if (physicsFollowOn) { if (!sealedTrace) SealPhysicsFollowOn(false, "disposed-before-window-complete"); return; }
             if (boundaryCapture)
