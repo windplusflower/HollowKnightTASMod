@@ -22,7 +22,15 @@ def inventory(row):
     for item in data["names"]:
         previous = previous[:item["prefix"] * 2] + item["suffix"].encode("utf-16-le")
         names.append(previous.decode("utf-16-le"))
-    return {names[item["id"] - 1]: item for item in data["roots"]}
+    result = {}
+    for item in data["roots"]:
+        if not isinstance(item["id"], int) or item["id"] < 0 or item["id"] >= len(names):
+            raise ValueError("inventory root id is outside its zero-based name table")
+        name = names[item["id"]]
+        if name.startswith("asset:UnityEngine.Mesh:") and name.endswith("/asset-values") and name in result:
+            raise ValueError("Mesh asset root identity is duplicated")
+        result[name] = item
+    return result
 
 
 def main():
@@ -65,6 +73,7 @@ def main():
                 pairs[asset].add(other)
     pairs = {asset: sorted(others) for asset, others in pairs.items()}
     output = {"diagnosticOnly": True, "comparisonRulesUnchanged": True,
+              "priorOneBasedRootIndexResultsInvalidated": True,
               "referenceSampleMatched": bool(headers), "referenceHeader": headers.get("source"), "samples": []}
     for left, right in zip(samples["source"], samples["target"]):
         a, b = inventory(left), inventory(right)

@@ -48,7 +48,7 @@ def main():
         value = values["source"][source]
         # Report each distinct object independently; equality is never used to merge identities.
         matches[source] = [target for target, candidate in values["target"].items() if value == candidate]
-    output = {"diagnosticOnly": True, "formalHashUnchanged": True,
+    output = {"diagnosticOnly": True, "formalHashUnchanged": True, "priorOneBasedRootIndexResultsInvalidated": True,
         "sameFrameConsumerProof": correlation_file.get("referenceSampleMatched", False), "movieFrame": audits["source"]["movieFrame"],
         "nativeFrame": audits["source"]["nativeFrame"], "sourceCount": len(values["source"]), "targetCount": len(values["target"]),
         "mappedPairs": len(pairs), "originalDigestDifferent": sum(not row["originalDigestEqual"] for row in pairs),
