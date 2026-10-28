@@ -82,6 +82,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             var epoch = CanonicalInputEpochRuntime.Capture(origin, targetNative, controlOrigin);
             var identities = new BoundaryObjectIdentity();
             PreparedPhase("frozen-owner-context");
+            carry.ActualTargetStage = "preflight-persistent-sprite-identities";
+            carry.PreparePersistentSpriteIdentity(source);
+            PreparedPhase("persistent-sprite-incoming-and-native-preflight");
             var sourceGraph = carry.DecodeActualMainForOwnerContext(source);
             var emptyMapping = CanonicalSceneMappingCarry.IsEmptySourceGraph(sourceGraph);
             PreparedPhase("decode-source-main");
@@ -411,7 +414,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 RestoreMapKeyParentDependencies, (dependency, incoming, lifecycle, readback) =>
                     CanonicalMapKeyTextBoundaryPolicy.Reset(hudStartup.MapKeyTextColdDefinition,
                         observer ?? throw new InvalidOperationException("Map Key deferred Canon has no observer."), dependency, incoming, lifecycle, readback), hudStartup.MapKeyTextColdDefinition, bossAssets, hudStartup.HudPresentationColdDefinition, () => (observer ?? throw new InvalidOperationException("HUD presentation observer absent.")).FreezeHudPresentationIncoming(), RestoreBorderSourceDependencies,
-                        () => (observer ?? throw new InvalidOperationException("Soul observer absent.")).FreezeSoulCopiedIncoming()); }
+                        () => (observer ?? throw new InvalidOperationException("Soul observer absent.")).FreezeSoulCopiedIncoming(),
+                        () => (observer ?? throw new InvalidOperationException("Persistent sprite observer absent.")).FreezePersistentSpriteIncoming(),
+                        () => (observer ?? throw new InvalidOperationException("Persistent sprite observer absent.")).FreezePersistentSpriteNative()); }
             catch (Exception error) {
                 Progress("D-field-registry-rejected", new { type = error.GetType().FullName, detail = error.Message });
                 throw;
@@ -509,8 +514,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             bool OwnsCanonicalStart(int instance) => pools.OwnsNewPoolStart(instance) || visualTemplates.OwnsResetStart(instance) || journal.OwnsNewStart(instance) || charms.OwnsNewStart(instance) || hudStartup.HudPresentationColdDefinition?.OwnsNewStart(instance) == true;
             string? RetiredOwner(int instance) => pools.RetiredOwner(instance) ?? LoadingSerialSceneProbe.RetiredSourceOwner(instance);
             var inputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, native, inputControlOrigin);
-            if (carry.SoulContinuationEnabled)
+            if (carry.SoulContinuationEnabled) {
                 observer.ConfigureSoulCopiedMembers(carry.SoulCopiedMembers);
+                observer.ConfigurePersistentSpriteIncoming();
+            }
             inputEpoch.RequireControlOrigin();
             var digest = observer.CaptureBoundaryFrame(movie, native, OwnsCanonicalStart, RetiredOwner);
             File.WriteAllText(Path.Combine(directory, "boundary-digest-" + ordinal + ".json"), JsonConvert.SerializeObject(digest));
@@ -543,8 +550,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     CanonicalActualDExperiment.CaptureSource, ordinal, CanonicalActualDExperiment.SelectedOrdinal,
                     Environment.GetEnvironmentVariable(CanonicalBossSetupDiagnostic.Flag) == "1",
                     () => CanonicalBossSetupDiagnostic.Write(ordinal, identities, directory),
-                    () => carry.Capture(identities, inputEpoch, input, mouse,
-                        observer.BoundarySchedulerCarry(inputEpoch), observer.BoundaryHeroInvulnerabilityCarry(inputEpoch)), out var data))
+                    () => {
+                        return carry.Capture(identities, inputEpoch, input, mouse,
+                            observer.BoundarySchedulerCarry(inputEpoch), observer.BoundaryHeroInvulnerabilityCarry(inputEpoch));
+                    }, out var data))
                 {
                     if (data.Unsupported.Length != 0 || carry.InputGraph!.Unsupported.Length != 0)
                         throw new InvalidOperationException("Actual D source has unread or unsupported managed data: "
@@ -558,7 +567,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     ExperimentalSource = new CanonicalActualDExperiment { Ordinal = ordinal, Route = route,
                         OriginalBossAssetOrigins = bossAssets?.Manifest ?? throw new InvalidOperationException("New-profile challenge asset startup is absent."),
                         OriginalHudPresentationAssetOrigins = hudStartup.HudPresentationColdDefinition!.AssetManifest, OriginalUiAssetOrigins = hudStartup.MapKeyTextColdDefinition.OriginalAssetManifest, MovieFrame = movie, NativeFrame = native,
-                        Main = mainBytes, Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, HudPresentation = carry.HudPresentationGraph, BorderInputs = carry.BorderInputGraph, Soul = carry.SoulGraph, Physics = carry.PhysicsGraph, RegisteredS0 = CanonicalRegisteredS0Contract.Capture(s0), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
+                        Main = mainBytes, Input = carry.EncodeInput(), Geo = carry.GeoGraph, Map = carry.MapGraph, Marker = carry.MarkerGraph, MapKeyText = carry.MapKeyTextGraph, MapKeyParents = carry.MapKeyParentGraph, HudPresentation = carry.HudPresentationGraph, BorderInputs = carry.BorderInputGraph, Soul = carry.SoulGraph, PersistentSprites = carry.PersistentSpriteGraph, Physics = carry.PhysicsGraph, RegisteredS0 = CanonicalRegisteredS0Contract.Capture(s0), Clock = CanonicalClockApplyExperiment.Capture(native) }.Encode();
                     Progress("actual-D-source-captured-in-memory", new { bytes = ExperimentalSource.Length, heroAnimationCallbacks = carry.HeroAnimationCallbackAudit, restoreQualified = false,
                         blockingQualifications = carry.BlockingQualifications });
                 }

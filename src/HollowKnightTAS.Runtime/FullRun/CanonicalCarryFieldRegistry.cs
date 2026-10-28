@@ -28,9 +28,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 ?? throw new InvalidDataException("Pinned FsmEvent field binding is absent: " + name)).ToArray();
 
         internal static CanonicalCarryGraphCodec Create(bool inputDomain = false, bool geoDomain = false, bool mapDomain = false, bool markerDomain = false,
-            bool mapKeyTextDomain = false, bool mapKeyParentDomain = false, bool hudPresentationDomain = false, bool hudBorderInputDomain = false, bool soulDomain = false)
+            bool mapKeyTextDomain = false, bool mapKeyParentDomain = false, bool hudPresentationDomain = false, bool hudBorderInputDomain = false, bool soulDomain = false, bool persistentSpriteDomain = false)
         {
-            if ((inputDomain ? 1 : 0) + (geoDomain ? 1 : 0) + (mapDomain ? 1 : 0) + (markerDomain ? 1 : 0) + (mapKeyTextDomain ? 1 : 0) + (mapKeyParentDomain ? 1 : 0) + (hudPresentationDomain ? 1 : 0) + (hudBorderInputDomain ? 1 : 0) + (soulDomain ? 1 : 0) > 1)
+            if ((inputDomain ? 1 : 0) + (geoDomain ? 1 : 0) + (mapDomain ? 1 : 0) + (markerDomain ? 1 : 0) + (mapKeyTextDomain ? 1 : 0) + (mapKeyParentDomain ? 1 : 0) + (hudPresentationDomain ? 1 : 0) + (hudBorderInputDomain ? 1 : 0) + (soulDomain ? 1 : 0) + (persistentSpriteDomain ? 1 : 0) > 1)
                 throw new InvalidDataException("Carry domains must be distinct.");
             string ReadResource(string name)
             {
@@ -118,12 +118,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             types.AddRange(CanonicalMarkerReadonlyCarry.DataTypes);
             if (hudBorderInputDomain) types.AddRange(CanonicalHudBorderInputs.DataTypes);
             if (hudPresentationDomain) types.AddRange(CanonicalHudPresentationCarry.DataTypes);
+            if (persistentSpriteDomain) types.AddRange(CanonicalPersistentSpriteCarry.DataTypes);
             if (mapKeyTextDomain) types.AddRange(CanonicalMapKeyTextCarry.DataTypes);
             if (markerDomain || mapKeyTextDomain || hudPresentationDomain || hudBorderInputDomain) types.AddRange(CanonicalMarkerCarry.OriginalDataTypes());
             if (mapKeyParentDomain) { types.AddRange(CanonicalMapKeyParentSourceDomain.DataTypes); types.AddRange(CanonicalMapKeyParentSourceDomain.OriginalActionTypes()); }
             if (markerDomain || mapKeyTextDomain || hudPresentationDomain || hudBorderInputDomain) types.AddRange(CanonicalMarkerEventCarry.Types());
             using var hash = SHA256.Create();
-            return new CanonicalCarryGraphCodec(types, (soulDomain ? "canonical-soul-fields-v1:" : hudBorderInputDomain ? "canonical-hud-border-input-v1:" : hudPresentationDomain ? "canonical-hud-presentation-v1:" : inputDomain ? "canonical-input-fields-v2:" : geoDomain ? "canonical-geo-fields-v1:" : mapDomain ? "canonical-map-fields-v1:" : markerDomain ? "canonical-marker-fields-v1:" : mapKeyTextDomain ? "canonical-map-key-text-fields-v1:" : mapKeyParentDomain ? "canonical-map-key-parent-fields-v1:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
+            return new CanonicalCarryGraphCodec(types, (persistentSpriteDomain ? "canonical-persistent-sprite-fields-v1:" : soulDomain ? "canonical-soul-fields-v1:" : hudBorderInputDomain ? "canonical-hud-border-input-v1:" : hudPresentationDomain ? "canonical-hud-presentation-v1:" : inputDomain ? "canonical-input-fields-v2:" : geoDomain ? "canonical-geo-fields-v1:" : mapDomain ? "canonical-map-fields-v1:" : markerDomain ? "canonical-marker-fields-v1:" : mapKeyTextDomain ? "canonical-map-key-text-fields-v1:" : mapKeyParentDomain ? "canonical-map-key-parent-fields-v1:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
                 hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + loadingText + "\n" + geoText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
                     + (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) ? "\n" + CanonicalSoulOrbCarry.SchemaIdentity + "\n" + CanonicalSoulOrbCarry.BoundSoulLayout : "")
                     + "\n" + (markerDomain ? CanonicalMarkerCarry.SchemaIdentity : "")
@@ -210,6 +211,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                             throw new InvalidDataException("Geo carry domain contains an unknown or missing original root.");
                     }
                     else if (soulDomain) CanonicalSoulOrbCarry.ValidateDomainRoots(graph);
+                    else if (persistentSpriteDomain) {
+                        if (graph.Roots == null || graph.Roots.Length != 1 || graph.Roots[0].Binding != CanonicalPersistentSpriteCarry.Root)
+                            throw new InvalidDataException("Persistent sprite carry domain contains unknown or missing roots.");
+                    }
                     else if (!inputDomain) CanonicalEventCarryRoots.ValidateGraph(graph);
                     else if (graph.Roots == null || graph.Roots.Length == 0 || graph.Roots.Any(root =>
                         root.Binding == null || !root.Binding.StartsWith("R6/Input", StringComparison.Ordinal)))

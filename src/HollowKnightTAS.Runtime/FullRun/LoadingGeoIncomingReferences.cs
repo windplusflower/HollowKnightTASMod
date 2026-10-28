@@ -34,6 +34,30 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool menuFlash;
         private bool hudPresentation;
         internal bool Owns(object? value) => value != null && owned.ContainsKey(value);
+        internal void BeginPersistentSpriteSample(Func<UnityEngine.Object, string> identity)
+        {
+            owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear(); ownedRoots = Array.Empty<string>();
+            counter = null; marker = null; mapKey = null; menuFlash = false; hudPresentation = false; soulSample = false;
+            var directory = CanonicalPersistentSpriteDirectory.Resolve(); var fields = CanonicalPersistentSpriteCarry.Fields();
+            ownedRoots = directory.Values.Select(identity).ToArray();
+            foreach (var pair in directory) foreach (var field in fields) {
+                var value = field.GetValue(pair.Value);
+                if (value == null || (!(value is Array) && !(value is System.Collections.IList) && !(value is Mesh))) continue;
+                if (!owned.ContainsKey(value)) owned.Add(value, "$/PersistentSprite/" + pair.Key + "/" + field.Name);
+                if (value is System.Collections.IList && !(value is Array)) {
+                    var items = value.GetType().GetField("_items", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(value);
+                    if (!(items is Array)) throw new InvalidOperationException("Persistent sprite list backing ABI differs.");
+                    if (!owned.ContainsKey(items)) owned.Add(items, "$/PersistentSprite/" + pair.Key + "/" + field.Name + "/_items");
+                }
+            }
+        }
+        internal void RequirePersistentSpriteNoExternalManagedHolders(Func<object, bool>? mainNode = null)
+        {
+            var rejected = externalReferences.Where(path => !slots.TryGetValue(path, out var slot)
+                || mainNode == null || !mainNode(slot.Original) || !ReferenceEquals(slot.Read(), slot.Original)).OrderBy(path => path, StringComparer.Ordinal).ToArray();
+            if (ownedRoots.Length != 7 || rejected.Length != 0)
+                throw new InvalidOperationException("Persistent sprite managed incoming proof has external holders: " + string.Join(";", rejected.Take(32)));
+        }
         // Soul's Fsm/state/action objects retain their actual identities as D
         // roots. Unknown outside holders of roots or copied descendants are
         // still refused: preserving identity alone does not restore their slots.

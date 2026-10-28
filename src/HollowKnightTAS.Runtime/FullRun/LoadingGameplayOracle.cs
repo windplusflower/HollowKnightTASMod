@@ -106,6 +106,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool frozenMarkerSample;
         private readonly LoadingGeoIncomingReferences hudPresentationIncoming = new LoadingGeoIncomingReferences();
         private readonly LoadingGeoIncomingReferences soulCopiedIncoming = new LoadingGeoIncomingReferences();
+        private readonly LoadingGeoIncomingReferences persistentSpriteIncoming = new LoadingGeoIncomingReferences();
+        private bool persistentSpriteSample;
+        internal void ConfigurePersistentSpriteIncoming() => persistentSpriteSample = true;
+        internal LoadingGeoIncomingReferences FreezePersistentSpriteIncoming() => persistentSpriteIncoming.Freeze();
+        private Component[] persistentSpriteNativeComponents = Array.Empty<Component>();
+        internal CanonicalPersistentSpriteNativeGuard FreezePersistentSpriteNative() => CanonicalPersistentSpriteNativeGuard.Capture(persistentSpriteNativeComponents);
         private Func<IReadOnlyDictionary<object, string>>? soulCopiedMembers;
         internal void ConfigureSoulCopiedMembers(Func<IReadOnlyDictionary<object, string>> capture) => soulCopiedMembers = capture;
         internal LoadingGeoIncomingReferences FreezeSoulCopiedIncoming() => soulCopiedIncoming.Freeze();
@@ -190,6 +196,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         }
                         hudBorderQueues?.ObserveSlot(owner, field, index, value, path);
                         if (soulCopiedMembers != null) soulCopiedIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
+                        if (persistentSpriteSample && readingMapKeyManagedRoots) persistentSpriteIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (hudPresentationSample && !readingOwnedHudNativeProjection) {
                             hudPresentationIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                             frozenHudPresentationIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
@@ -197,7 +204,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (frozenMarkerSample) frozenMarkerIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (frozenGeoSample) frozenGeoIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
                         if (frozenMenuFlashSample) frozenMenuFlashIncoming.ObserveSlot(owner, field, index, value, path, fields.DiagnosticRoot);
-                    }, observeSlotValue: value => soulCopiedMembers != null && soulCopiedIncoming.Owns(value) || hudBorderQueues != null && hudBorderQueues.Owns(value) || hudPresentationSample && (hudPresentationIncoming.Owns(value) || frozenHudPresentationIncoming.Owns(value)) || geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || mapKeyParentIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value) || frozenMenuFlashSample && frozenMenuFlashIncoming.Owns(value));
+                    }, observeSlotValue: value => persistentSpriteSample && persistentSpriteIncoming.Owns(value) || soulCopiedMembers != null && soulCopiedIncoming.Owns(value) || hudBorderQueues != null && hudBorderQueues.Owns(value) || hudPresentationSample && (hudPresentationIncoming.Owns(value) || frozenHudPresentationIncoming.Owns(value)) || geoIncoming.Owns(value) || markerIncoming.Owns(value) || mapKeyIncoming.Owns(value) || mapKeyParentIncoming.Owns(value) || frozenMapKeySample && frozenMapKeyIncoming.Owns(value) || frozenMarkerSample && frozenMarkerIncoming.Owns(value) || frozenGeoSample && frozenGeoIncoming.Owns(value) || frozenMenuFlashSample && frozenMenuFlashIncoming.Owns(value));
             if (!physicsFollowOn && (boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_SCHEDULER") == "1"))
                 nativeScheduler = new LoadingNativeSchedulerDigest();
             if (physicsFollowOn || boundaryCapture || Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS") == "1")
@@ -844,6 +851,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             meshReferenceAudit.Clear(); meshReferenceAuditRefused = false;
             meshValueAudit.Clear(); meshValueBytes = 0; meshValueRefused = false;
             if (soulCopiedMembers != null) soulCopiedIncoming.BeginSoulCopiedSample(UnityId, soulCopiedMembers());
+            if (persistentSpriteSample) persistentSpriteIncoming.BeginPersistentSpriteSample(UnityId);
             textCacheDetails.Clear();
             geoIncoming.BeginSample(UnityId);
             mapKeyIncoming.BeginMapKeySample(UnityId, CanonicalMapKeyTextDirectory.Current());
@@ -928,8 +936,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // no MonoBehaviour (for example a temporary AudioSource). The
                 // native owner map must cover the loaded hierarchy, even though
                 // managed field roots are collected separately above.
-                var schedulerComponents = Resources.FindObjectsOfTypeAll<Component>()
-                    .Where(component => component != null && Loaded(component.gameObject)).ToArray();
+                var allSchedulerComponents = Resources.FindObjectsOfTypeAll<Component>().Where(component => component != null).ToArray();
+                if (persistentSpriteSample) persistentSpriteNativeComponents = allSchedulerComponents;
+                var schedulerComponents = allSchedulerComponents.Where(component => Loaded(component.gameObject)).ToArray();
                 if (schedulerComponents.Length > 100000) throw new InvalidOperationException("Native scheduler owner inventory exceeds 100000 components.");
                 foreach (var component in schedulerComponents)
                 {
@@ -1448,6 +1457,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (fields.Capturing && readingMapKeyManagedRoots && frozenMapKeySample && frozenMapKeyIncoming.Owns(value)) frozenMapKeyIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && markerIncoming.Owns(value)) markerIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && soulCopiedMembers != null && soulCopiedIncoming.Owns(value)) soulCopiedIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
+            if (fields.Capturing && persistentSpriteSample && readingMapKeyManagedRoots && persistentSpriteIncoming.Owns(value)) persistentSpriteIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
             if (fields.Capturing && hudPresentationSample && !readingOwnedHudNativeProjection) {
                 if (hudPresentationIncoming.Owns(value)) hudPresentationIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);
                 if (frozenHudPresentationIncoming.Owns(value)) frozenHudPresentationIncoming.Observe(value, fields.DiagnosticPath, fields.DiagnosticRoot);

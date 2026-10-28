@@ -858,6 +858,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             // this exposes identities, never bypasses the plan's owner guards.
             internal object Node(int id) => id > 0 && id <= objects.Length ? objects[id - 1]
                 : throw new InvalidDataException("Prepared carry node identity is outside its source graph.");
+            internal bool ContainsNode(object value) => nodes.ContainsKey(value);
             internal object? Field(object owner, Type declaringType, string name)
             {
                 if (!nodes.TryGetValue(owner, out var node) || values[node] == null)

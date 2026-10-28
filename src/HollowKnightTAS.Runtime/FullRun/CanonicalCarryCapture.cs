@@ -35,8 +35,23 @@ namespace HollowKnightTAS.Runtime.FullRun
             HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) ? new CanonicalSoulOrbCarry() : null;
         internal bool SoulContinuationEnabled => soul != null;
         private readonly Func<LoadingGeoIncomingReferences>? snapshotSoulIncoming;
+        private readonly Func<LoadingGeoIncomingReferences>? snapshotSpriteIncoming;
+        private readonly Func<CanonicalPersistentSpriteNativeGuard>? snapshotSpriteNative;
+        private CanonicalPersistentSpriteNativeGuard? spriteNative;
         private string[]? actualSoulSourceSlots;
         internal IReadOnlyDictionary<object, string> SoulCopiedMembers() => CanonicalSoulOrbCarry.CopiedMembers(codec);
+        internal void PreparePersistentSpriteIdentity(CanonicalActualDExperiment envelope) {
+            if (soul == null) return;
+            if (envelope.PersistentSprites.Length != 0) {
+                _ = new CanonicalPersistentSpriteSourceDomain().ValidatePayload(envelope.PersistentSprites);
+                // Until a main-plan write witness exists for an outside target
+                // holder, refuse it before the original producer can mutate D.
+                // A source main-node binding is not that target-side witness.
+                (snapshotSpriteIncoming ?? throw new InvalidOperationException("Persistent sprite managed proof absent."))()
+                    .RequirePersistentSpriteNoExternalManagedHolders();
+                spriteNative = (snapshotSpriteNative ?? throw new InvalidOperationException("Persistent sprite native proof absent."))();
+            }
+        }
         internal void PrepareOriginalSoulIdentity(CanonicalActualDExperiment envelope, BoundaryObjectIdentity identities, Func<bool> admitted) {
             if (soul == null) return;
             decodedActualSoulHash = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(envelope.Soul);
@@ -75,6 +90,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal byte[] MapGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] GeoGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] SoulGraph { get; private set; } = Array.Empty<byte>();
+        internal byte[] PersistentSpriteGraph { get; private set; } = Array.Empty<byte>();
         internal byte[] PhysicsGraph { get; private set; } = Array.Empty<byte>();
         internal CanonicalCarryCapture(CanonicalHeroAssetTemplates assetTemplates, CanonicalVisualFsmTemplates visualTemplates, CanonicalHudJournalPolicy journal,
             Action<CanonicalSchedulerCarry, Func<bool>> restoreHudSourceDependencies,
@@ -86,10 +102,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             CanonicalMapKeyTextColdTemplate mapKeyTemplate, CanonicalBossChallengeAssets? bossAssets = null, CanonicalHudPresentationColdTemplate? hudPresentationTemplate = null,
             Func<LoadingGeoIncomingReferences>? snapshotHudPresentationIncoming = null,
             Action<CanonicalHudBorderInputs.Data, Func<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, object>, GameObject[], IReadOnlyDictionary<string, object>>, Action<Action>, Func<bool>>? restoreBorderSource = null,
-            Func<LoadingGeoIncomingReferences>? snapshotSoulIncoming = null)
+            Func<LoadingGeoIncomingReferences>? snapshotSoulIncoming = null,
+            Func<LoadingGeoIncomingReferences>? snapshotSpriteIncoming = null,
+            Func<CanonicalPersistentSpriteNativeGuard>? snapshotSpriteNative = null)
         { this.assetTemplates = assetTemplates; this.visualTemplates = visualTemplates; this.journal = journal;
             this.bossAssets = bossAssets;
             this.snapshotSoulIncoming = snapshotSoulIncoming;
+            this.snapshotSpriteIncoming = snapshotSpriteIncoming; this.snapshotSpriteNative = snapshotSpriteNative;
             this.hudPresentationTemplate = hudPresentationTemplate;
             this.snapshotHudPresentationIncoming = snapshotHudPresentationIncoming; this.restoreBorderSource = restoreBorderSource;
             borderInputDomain = hudPresentationTemplate == null ? null : new CanonicalHudBorderInputDomain(hudPresentationTemplate);
@@ -287,6 +306,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 SoulGraph = soulReader.Encode(soulGraph);
                 Modding.Logger.Log("[HKTAS] Actual D graph domains: mainNodes=" + result.Nodes.Length + ";soulNodes=" + soulGraph.Nodes.Length
                     + ";soulBytes=" + SoulGraph.Length + ";soulMainBindings=" + soulGraph.Externals.Count(item => item.Binding.StartsWith("Soul/MainNode/", StringComparison.Ordinal)));
+            }
+            PersistentSpriteGraph = targetDirectoryOnly || soul == null ? Array.Empty<byte>()
+                : new CanonicalPersistentSpriteSourceDomain().Capture(mainNodes, bindings.Bind, bindings.AuditGeoAssets);
+            if (!targetDirectoryOnly && soul != null) {
+                (snapshotSpriteIncoming ?? throw new InvalidOperationException("Persistent sprite managed proof absent."))()
+                    .RequirePersistentSpriteNoExternalManagedHolders(mainNodes.ContainsKey);
+                (snapshotSpriteNative ?? throw new InvalidOperationException("Persistent sprite native proof absent."))().RequireNoOutsideConsumers();
             }
             GeoGraph = targetDirectoryOnly ? Array.Empty<byte>() : geoDomain.Capture(GameCameras.instance.geoCounter,
                 CanonicalGeoColdTemplate.Directory(GameCameras.instance.geoCounter.gameObject), mainNodes, bindings.Bind, bindings.AuditGeoAssets);
@@ -685,6 +711,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                     sourceChecks.Add(() => { (verifySource ?? throw new InvalidOperationException("HUD final verifier absent."))(); CanonicalHudBorderInputs.VerifyPaneSource(inventory, borderSource); });
                     });
                 }
+                if (soul != null) domainActions.Add(() => {
+                    ActualTargetStage = "persistent-sprite-source-values";
+                    var incoming = (snapshotSpriteIncoming ?? throw new InvalidOperationException("Persistent sprite managed proof absent."))();
+                    var native = spriteNative ?? throw new InvalidOperationException("Persistent sprite native proof was not prepared.");
+                    void RequireMain() { main.VerifyReadback(); sdk.VerifyReadback(); }
+                    void RequireIncoming() {
+                        incoming.RequirePersistentSpriteNoExternalManagedHolders(mainView!.ContainsNode);
+                        native.RequireNoOutsideConsumers();
+                    }
+                    new CanonicalPersistentSpriteSourceDomain().Prepare(actualSourceValidation!.PersistentSprites, mainView!,
+                        bindings.ResolveTarget, admitted, RequireMain, RequireIncoming, out var verifySprite)();
+                    sourceChecks.Add(verifySprite);
+                });
                 domainActions.Add(() => prepareScheduler(continuation!.Scheduler)());
                 var physics = CheckpointPhysicsBroadphaseState.DecodeCompact(actualSourceValidation!.Physics);
                 var applyPhysics = physics.PrepareCanonicalApply(identities);
