@@ -15,7 +15,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal static class CanonicalPersistentSpriteContinuation
     {
         internal const string Prefix = "R2/PersistentSprites/health/";
-        internal const int AnimatorCount = 5, NativeOwnerCount = 9, RootCount = 262;
+        internal const int AnimatorCount = 4 + CanonicalBorderArrowCarry.OwnerCount, NativeOwnerCount = AnimatorCount + 2 + 2 + CanonicalBorderArrowCarry.OwnerCount, RootCount = 1 + 254 + 2 * 7;
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         private static readonly FieldInfo Raw = typeof(PlayMakerFSM).GetField("fsm", Flags)!;
         private static readonly FieldInfo States = typeof(Fsm).GetField("states", Flags)!;
@@ -39,8 +39,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Original bound-heart enum layout differs.");
             return new[] { respawn, bound, source };
         }
-        internal static readonly string[] Keys = { "HudCamera/Hud Canvas/Health/Health 1", "HudCamera/Hud Canvas/Health/Health 2",
-            "HudCamera/Hud Canvas/Health/Joni Health", "HudCamera/Hud Canvas/Soul Orb/SoulOrb_fill/Liquid", CanonicalBorderArrowCarry.OwnerKey };
+        internal static readonly string[] Keys = new[] { "HudCamera/Hud Canvas/Health/Health 1", "HudCamera/Hud Canvas/Health/Health 2",
+            "HudCamera/Hud Canvas/Health/Joni Health", "HudCamera/Hud Canvas/Soul Orb/SoulOrb_fill/Liquid" }.Concat(CanonicalBorderArrowCarry.OwnerKeys).ToArray();
         internal sealed class Data
         {
             public string[] Fields = Array.Empty<string>(), Owners = Array.Empty<string>();
@@ -48,7 +48,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public object?[][] CallbackArguments = Array.Empty<object?[]>();
             public byte[][] Lifecycle = Array.Empty<byte[]>();
             public int GlobalState;
-            public CanonicalBorderArrowCarry.Data Arrow = new CanonicalBorderArrowCarry.Data();
+            public CanonicalBorderArrowCarry.Data[] Arrows = Array.Empty<CanonicalBorderArrowCarry.Data>();
         }
         internal static FieldInfo[] AnimatorFields()
         {
@@ -137,7 +137,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             return new Data { Owners = owners.Keys.ToArray(), Fields = fields.Select(field => field.Name + "=" + field.FieldType.FullName).ToArray(),
                 Values = owners.Values.Select(owner => fields.Select(field => field.GetValue(owner)).ToArray()).ToArray(), Lifecycle = lifecycle.ToArray(),
-                GlobalState = Convert.ToInt32(typeof(tk2dSpriteAnimator).GetField("globalState", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!.GetValue(null)), Arrow = CanonicalBorderArrowCarry.Capture(),
+                GlobalState = Convert.ToInt32(typeof(tk2dSpriteAnimator).GetField("globalState", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!.GetValue(null)), Arrows = CanonicalBorderArrowCarry.OwnerKeys.Select(key => CanonicalBorderArrowCarry.Capture(key)).ToArray(),
                 CallbackArguments = owners.Values.SelectMany(owner => AnimatorFields().Where(field => typeof(Delegate).IsAssignableFrom(field.FieldType))
                     .SelectMany(field => ((Delegate?)field.GetValue(owner))?.GetInvocationList() ?? Array.Empty<Delegate>()))
                     .Select(call => call.Target is Tk2dPlayAnimationWithEvents action
@@ -146,7 +146,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static MonoBehaviour[] NativeOwners() => Animators().Values.Cast<MonoBehaviour>()
             .Concat(Enumerable.Range(0, 2).Select(index => (MonoBehaviour)HealthOwner(index)))
-            .Concat(new MonoBehaviour[] { CanonicalBorderArrowCarry.FsmOwner(), CanonicalBorderArrowCarry.Animation() }).ToArray();
+            .Concat(CanonicalBorderArrowCarry.OwnerKeys.Take(2).Select(key => (MonoBehaviour)CanonicalBorderArrowCarry.FsmOwner(key)))
+            .Concat(CanonicalBorderArrowCarry.OwnerKeys.Select(key => (MonoBehaviour)CanonicalBorderArrowCarry.Animation(key))).ToArray();
         internal static SortedDictionary<string, object> ExternalDirectory()
         {
             var result = new SortedDictionary<string, object>(StringComparer.Ordinal);
@@ -207,7 +208,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || source.GlobalState != current.GlobalState)
                 throw new InvalidDataException("Persistent animator source owner/ABI/global state/native lifecycle differs.");
             var instances = owners.Values.ToArray();
-            var applyArrow = CanonicalBorderArrowCarry.Prepare(source.Arrow, current.Arrow, codec, out var verifyArrow);
+            if (source.Arrows.Length != CanonicalBorderArrowCarry.OwnerCount || current.Arrows.Length != CanonicalBorderArrowCarry.OwnerCount) throw new InvalidDataException("Original eight-Border source producer directory differs.");
+            var applyArrows = new List<Action>(); var verifyArrows = new List<Action>();
+            for (var index = 0; index < source.Arrows.Length; index++) {
+                if (source.Arrows[index].Owner != CanonicalBorderArrowCarry.OwnerKeys[index]) throw new InvalidDataException("Original Border producer order differs.");
+                applyArrows.Add(CanonicalBorderArrowCarry.Prepare(source.Arrows[index], current.Arrows[index], codec, out var verifyArrow)); verifyArrows.Add(verifyArrow);
+            }
             foreach (var row in source.CallbackArguments)
                 if (row == null || row.Length != 5 || !(row[0] is Delegate call) || !(row[1] is Tk2dPlayAnimationWithEvents action)
                     || !ReferenceEquals(call.Target, action) || !ReferenceEquals(row[2], action.clipName)
@@ -226,7 +232,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
             }
             void Verify() {
-                verifyArrow();
+                foreach (var verifyArrow in verifyArrows) verifyArrow();
                 var now = Capture();
                 if (now.GlobalState != source.GlobalState || !now.Owners.SequenceEqual(source.Owners)
                     || now.Lifecycle.Where((bytes, index) => !bytes.SequenceEqual(source.Lifecycle[index])).Any()
@@ -238,7 +244,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             verify = Verify;
             return () => {
-                applyArrow();
+                foreach (var applyArrow in applyArrows) applyArrow();
                 for (var owner = 0; owner < instances.Length; owner++) for (var field = 1; field < fields.Length; field++)
                     fields[field].SetValue(instances[owner], source.Values[owner][field]);
                 Verify();

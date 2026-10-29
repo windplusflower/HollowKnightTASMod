@@ -11,7 +11,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     // the eventual carry domain must independently prove its incoming aliases.
     internal static class CanonicalPersistentSpriteDirectory
     {
-        internal const int OwnerCount = 8;
+        internal const int OwnerCount = 7 + CanonicalBorderArrowCarry.OwnerCount;
         private static readonly FieldInfo MeshField = typeof(tk2dSprite).GetField("mesh", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidDataException("Original tk2dSprite mesh field is absent.");
         private static readonly string[] HudPaths = {
@@ -31,7 +31,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var result = new SortedDictionary<string, tk2dSprite>(StringComparer.Ordinal);
             Add(result, "Hero/Effects/Dash Burst", FindPath(hero.transform, "Effects/Dash Burst"));
             foreach (var path in HudPaths) Add(result, "HudCamera/" + path, FindPath(hud, path));
-            Add(result, CanonicalBorderArrowCarry.OwnerKey, FindPath(hud, "Inventory/Border/Arrow Left/Arrow Left"));
+            foreach (var key in CanonicalBorderArrowCarry.OwnerKeys) Add(result, key, FindPath(hud, key.Substring("HudCamera/".Length)));
             if (result.Count != OwnerCount) throw new InvalidDataException("Persistent sprite owner count differs.");
             var meshes = new HashSet<Mesh>();
             foreach (var pair in result) {

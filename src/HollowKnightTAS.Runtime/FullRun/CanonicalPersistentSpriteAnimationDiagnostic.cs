@@ -59,17 +59,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             var color = (Color)Read(typeof(tk2dBaseSprite), sprite, "_color")!;
             return new { owner = name, frameCount = Time.frameCount, deltaBits = Bits(Time.deltaTime), sprite.enabled,
                 active = sprite.gameObject.activeInHierarchy, spriteId = Read(typeof(tk2dBaseSprite), sprite, "_spriteId"),
-                arrow = name != CanonicalBorderArrowCarry.OwnerKey ? null : (object)new {
-                    nativeSignature = CanonicalBorderArrowCarry.NativeSignature(),
-                    upAnimation = Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(), "upAnimation"),
-                    downAnimation = Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(), "downAnimation"),
-                    upDelayBits = Bits((float)Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(), "upDelay")!),
-                    randomStartFrameSpriteMax = Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(), "randomStartFrameSpriteMax"),
-                    timerBits = Bits((float)Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(), "timer")!),
-                    animatingDown = Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(), "animatingDown"),
-                    readyingAnimUp = Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(), "readyingAnimUp"),
-                    animatorAlias = ReferenceEquals(Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(), "spriteAnimator"), animator),
-                    rendererAlias = ReferenceEquals(Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(), "meshRenderer"), sprite.GetComponent<MeshRenderer>()) },
+                arrow = !CanonicalBorderArrowCarry.OwnerKeys.Contains(name, StringComparer.Ordinal) ? null : (object)new {
+                    nativeSignature = CanonicalBorderArrowCarry.NativeSignature(name),
+                    upAnimation = Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(name), "upAnimation"),
+                    downAnimation = Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(name), "downAnimation"),
+                    upDelayBits = Bits((float)Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(name), "upDelay")!),
+                    randomStartFrameSpriteMax = Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(name), "randomStartFrameSpriteMax"),
+                    timerBits = Bits((float)Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(name), "timer")!),
+                    animatingDown = Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(name), "animatingDown"),
+                    readyingAnimUp = Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(name), "readyingAnimUp"),
+                    animatorAlias = ReferenceEquals(Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(name), "spriteAnimator"), animator),
+                    rendererAlias = ReferenceEquals(Read(typeof(InvAnimateUpAndDown), CanonicalBorderArrowCarry.Animation(name), "meshRenderer"), sprite.GetComponent<MeshRenderer>()) },
                 collection = Collection((tk2dSpriteCollectionData?)Read(typeof(tk2dBaseSprite), sprite, "collection")),
                 collectionInst = Collection((tk2dSpriteCollectionData?)Read(typeof(tk2dBaseSprite), sprite, "collectionInst")),
                 scale = new[] { Bits(scale.x), Bits(scale.y), Bits(scale.z) }, color = new[] { Bits(color.r), Bits(color.g), Bits(color.b), Bits(color.a) },
@@ -99,7 +99,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var all = CanonicalPersistentSpriteDirectory.Resolve();
             owners = new SortedDictionary<string, tk2dSprite>(StringComparer.Ordinal);
             foreach (var key in new[] { "HudCamera/Hud Canvas/Health/Health 1", "HudCamera/Hud Canvas/Health/Health 2",
-                "HudCamera/Hud Canvas/Health/Joni Health", "HudCamera/Hud Canvas/Soul Orb/SoulOrb_fill/Liquid", CanonicalBorderArrowCarry.OwnerKey }) owners.Add(key, all[key]);
+                "HudCamera/Hud Canvas/Health/Joni Health", "HudCamera/Hud Canvas/Soul Orb/SoulOrb_fill/Liquid" }.Concat(CanonicalBorderArrowCarry.OwnerKeys)) owners.Add(key, all[key]);
             if (typeof(tk2dSprite).Module.ModuleVersionId.ToString("D") != "2b54cdaf-7a93-4f0e-b297-d50c4090ea9f")
                 throw new InvalidDataException("Sprite diagnostic original module differs.");
             RecordAll("B-before-D", movie, native);
