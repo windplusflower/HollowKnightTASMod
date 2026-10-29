@@ -11,7 +11,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         internal const string Root = "R2/PersistentSprites/context";
         internal static readonly Type[] DataTypes = { typeof(Data), typeof(object[]), typeof(object[][]), typeof(string[]), typeof(byte[][]),
-            typeof(CanonicalPersistentSpriteContinuation.Data), typeof(tk2dSpriteAnimator).GetNestedType("State", BindingFlags.Public | BindingFlags.NonPublic)! };
+            typeof(CanonicalPersistentSpriteContinuation.Data), typeof(CanonicalBorderArrowCarry.Data), typeof(tk2dSpriteAnimator).GetNestedType("State", BindingFlags.Public | BindingFlags.NonPublic)! };
         internal sealed class Data
         {
             public string[] Owners = Array.Empty<string>(), Fields = Array.Empty<string>();

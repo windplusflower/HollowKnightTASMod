@@ -45,10 +45,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             counter = null; marker = null; mapKey = null; menuFlash = false; hudPresentation = false; soulSample = false;
             persistentSprites = true; persistentInternalContainers.Clear(); persistentInternalSlotPath = null; persistentInternalSlotValue = null; persistentInternalSlotCount = 0;
             var directory = CanonicalPersistentSpriteDirectory.Resolve(); var fields = CanonicalPersistentSpriteCarry.Fields();
-            foreach (var owner in directory.Values.Cast<object>().Concat(CanonicalPersistentSpriteContinuation.Animators().Values)
-                .Concat(Enumerable.Range(0, 2).Select(index => CanonicalPersistentSpriteContinuation.HealthOwner(index)))) persistentInternalContainers.Add(owner);
-            ownedRoots = directory.Values.Select(identity).Concat(CanonicalPersistentSpriteContinuation.Animators().Values.Select(identity))
-                .Concat(Enumerable.Range(0, 2).Select(index => identity(CanonicalPersistentSpriteContinuation.HealthOwner(index)))).ToArray();
+            foreach (var owner in directory.Values.Cast<object>().Concat(CanonicalPersistentSpriteContinuation.NativeOwners())) persistentInternalContainers.Add(owner);
+            ownedRoots = directory.Values.Select(identity).Concat(CanonicalPersistentSpriteContinuation.NativeOwners().Select(identity)).ToArray();
             foreach (var pair in CanonicalPersistentSpriteContinuation.CopiedMembers()) owned.Add(pair.Key, "$/PersistentAnimator/" + pair.Value);
             foreach (var pair in directory) foreach (var field in fields) {
                 var value = field.GetValue(pair.Value);
@@ -65,7 +63,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var rejected = externalReferences.Where(path => !slots.TryGetValue(path, out var slot)
                 || mainNode == null || !mainNode(slot.Original) || !ReferenceEquals(slot.Read(), slot.Original)).OrderBy(path => path, StringComparer.Ordinal).ToArray();
-            if (ownedRoots.Length != 13 || rejected.Length != 0)
+            if (ownedRoots.Length != CanonicalPersistentSpriteDirectory.OwnerCount + CanonicalPersistentSpriteContinuation.NativeOwnerCount || rejected.Length != 0)
                 throw new InvalidOperationException("Persistent sprite managed incoming proof has external holders: " + string.Join(";", rejected.Take(32)));
         }
         internal object PersistentSpriteSharedIdentityAudit(Func<object, int?> mainNode)

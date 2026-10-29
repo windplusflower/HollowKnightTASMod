@@ -15,6 +15,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal static class CanonicalPersistentSpriteContinuation
     {
         internal const string Prefix = "R2/PersistentSprites/health/";
+        internal const int AnimatorCount = 5, NativeOwnerCount = 9, RootCount = 262;
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         private static readonly FieldInfo Raw = typeof(PlayMakerFSM).GetField("fsm", Flags)!;
         private static readonly FieldInfo States = typeof(Fsm).GetField("states", Flags)!;
@@ -39,7 +40,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return new[] { respawn, bound, source };
         }
         internal static readonly string[] Keys = { "HudCamera/Hud Canvas/Health/Health 1", "HudCamera/Hud Canvas/Health/Health 2",
-            "HudCamera/Hud Canvas/Health/Joni Health", "HudCamera/Hud Canvas/Soul Orb/SoulOrb_fill/Liquid" };
+            "HudCamera/Hud Canvas/Health/Joni Health", "HudCamera/Hud Canvas/Soul Orb/SoulOrb_fill/Liquid", CanonicalBorderArrowCarry.OwnerKey };
         internal sealed class Data
         {
             public string[] Fields = Array.Empty<string>(), Owners = Array.Empty<string>();
@@ -47,6 +48,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public object?[][] CallbackArguments = Array.Empty<object?[]>();
             public byte[][] Lifecycle = Array.Empty<byte[]>();
             public int GlobalState;
+            public CanonicalBorderArrowCarry.Data Arrow = new CanonicalBorderArrowCarry.Data();
         }
         internal static FieldInfo[] AnimatorFields()
         {
@@ -102,7 +104,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     }
                 }
             }
-            if (result.Values.Distinct(new References()).Count() != result.Count) throw new InvalidDataException("Health original root alias differs.");
+            foreach (var pair in CanonicalBorderArrowCarry.Roots()) result.Add(pair.Key, pair.Value);
+            if (result.Values.Distinct(new References()).Count() != result.Count) throw new InvalidDataException("Original persistent FSM root alias differs.");
             return result;
         }
         internal static SortedDictionary<string, object> OwnerDefaultVariableSlots()
@@ -130,18 +133,20 @@ namespace HollowKnightTAS.Runtime.FullRun
             var owners = Animators(); var fields = AnimatorFields();
             var lifecycle = new List<byte[]>();
             using (new LoadingEngineClockProbe.CheckpointValidation()) {
-                foreach (var owner in owners.Values) lifecycle.Add(BoundaryMonoLifecycle.Read(owner));
-                for (var i = 0; i < 2; i++) lifecycle.Add(BoundaryMonoLifecycle.Read(HealthOwner(i)));
+                foreach (var owner in NativeOwners()) lifecycle.Add(BoundaryMonoLifecycle.Read(owner));
             }
             return new Data { Owners = owners.Keys.ToArray(), Fields = fields.Select(field => field.Name + "=" + field.FieldType.FullName).ToArray(),
                 Values = owners.Values.Select(owner => fields.Select(field => field.GetValue(owner)).ToArray()).ToArray(), Lifecycle = lifecycle.ToArray(),
-                GlobalState = Convert.ToInt32(typeof(tk2dSpriteAnimator).GetField("globalState", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!.GetValue(null)),
+                GlobalState = Convert.ToInt32(typeof(tk2dSpriteAnimator).GetField("globalState", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!.GetValue(null)), Arrow = CanonicalBorderArrowCarry.Capture(),
                 CallbackArguments = owners.Values.SelectMany(owner => AnimatorFields().Where(field => typeof(Delegate).IsAssignableFrom(field.FieldType))
                     .SelectMany(field => ((Delegate?)field.GetValue(owner))?.GetInvocationList() ?? Array.Empty<Delegate>()))
                     .Select(call => call.Target is Tk2dPlayAnimationWithEvents action
                         ? new object?[] { call, action, action.clipName, action.animationTriggerEvent, action.animationCompleteEvent }
                         : throw new InvalidDataException("Unknown persistent callback argument owner.")).ToArray() };
         }
+        internal static MonoBehaviour[] NativeOwners() => Animators().Values.Cast<MonoBehaviour>()
+            .Concat(Enumerable.Range(0, 2).Select(index => (MonoBehaviour)HealthOwner(index)))
+            .Concat(new MonoBehaviour[] { CanonicalBorderArrowCarry.FsmOwner(), CanonicalBorderArrowCarry.Animation() }).ToArray();
         internal static SortedDictionary<string, object> ExternalDirectory()
         {
             var result = new SortedDictionary<string, object>(StringComparer.Ordinal);
@@ -196,12 +201,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static Action Prepare(Data source, Data current, CanonicalCarryGraphCodec codec, out Action verify)
         {
             var owners = Animators(); var fields = AnimatorFields();
-            if (!source.Owners.SequenceEqual(current.Owners) || !source.Fields.SequenceEqual(current.Fields) || source.Values.Length != 4
-                || source.Values.Any(row => row == null || row.Length != 11) || source.Lifecycle.Length != 6
+            if (!source.Owners.SequenceEqual(current.Owners) || !source.Fields.SequenceEqual(current.Fields) || source.Values.Length != AnimatorCount
+                || source.Values.Any(row => row == null || row.Length != 11) || source.Lifecycle.Length != NativeOwnerCount
                 || source.Lifecycle.Where((bytes, index) => bytes == null || !bytes.SequenceEqual(current.Lifecycle[index])).Any()
                 || source.GlobalState != current.GlobalState)
                 throw new InvalidDataException("Persistent animator source owner/ABI/global state/native lifecycle differs.");
             var instances = owners.Values.ToArray();
+            var applyArrow = CanonicalBorderArrowCarry.Prepare(source.Arrow, current.Arrow, codec, out var verifyArrow);
             foreach (var row in source.CallbackArguments)
                 if (row == null || row.Length != 5 || !(row[0] is Delegate call) || !(row[1] is Tk2dPlayAnimationWithEvents action)
                     || !ReferenceEquals(call.Target, action) || !ReferenceEquals(row[2], action.clipName)
@@ -211,10 +217,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var value = source.Values[owner][field];
                 if (value == null ? fields[field].FieldType.IsValueType : !fields[field].FieldType.IsInstanceOfType(value))
                     throw new InvalidDataException("Persistent animator source field type differs.");
-                if ((field == 0 || field == 10) && !ReferenceEquals(value, fields[field].GetValue(instances[owner])))
-                    throw new InvalidDataException("Persistent animator original library/sprite alias differs.");
+                if (field == 0 && !ReferenceEquals(value, fields[field].GetValue(instances[owner])))
+                    throw new InvalidDataException("Persistent animator original library alias differs.");
+                if (field == 10) {
+                    var sprite = instances[owner].GetComponent<tk2dSprite>(); var old = fields[field].GetValue(instances[owner]);
+                    if (value != null && !ReferenceEquals(value, sprite) || old != null && !ReferenceEquals(old, sprite))
+                        throw new InvalidDataException("Persistent animator cached sprite is not its original fixed body.");
+                }
             }
             void Verify() {
+                verifyArrow();
                 var now = Capture();
                 if (now.GlobalState != source.GlobalState || !now.Owners.SequenceEqual(source.Owners)
                     || now.Lifecycle.Where((bytes, index) => !bytes.SequenceEqual(source.Lifecycle[index])).Any()
@@ -226,7 +238,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             verify = Verify;
             return () => {
-                for (var owner = 0; owner < instances.Length; owner++) for (var field = 1; field < fields.Length - 1; field++)
+                applyArrow();
+                for (var owner = 0; owner < instances.Length; owner++) for (var field = 1; field < fields.Length; field++)
                     fields[field].SetValue(instances[owner], source.Values[owner][field]);
                 Verify();
             };

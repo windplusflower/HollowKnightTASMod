@@ -58,6 +58,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var sourceSprites = new CanonicalPersistentSpriteSourceDomain().DecodeForRootWitness(envelope.PersistentSprites);
                 spriteMainRootWitness = new CanonicalPersistentSpriteMainRootWitness(sourceMain, sourceSprites, shared.Roots);
                 spriteRequiredAssets = new CanonicalPersistentSpriteRequiredAssets(sourceSprites, identities);
+                CanonicalBorderArrowCarry.PreflightMaterials(sourceSprites, spriteRequiredAssets.Resolve);
                 Modding.Logger.Log("[HKTAS] Persistent sprite existing main-root identity witness: " + Newtonsoft.Json.JsonConvert.SerializeObject(spriteMainRootWitness.Audit));
                 (snapshotSpriteIncoming ?? throw new InvalidOperationException("Persistent sprite managed proof absent."))()
                     .RequirePersistentSpriteNoExternalManagedHolders(spriteMainRootWitness.Contains);

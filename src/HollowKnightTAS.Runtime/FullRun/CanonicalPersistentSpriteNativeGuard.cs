@@ -102,10 +102,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (expected.Any(filter => !components.Contains(filter)))
                     throw new InvalidOperationException("Persistent sprite original native consumer is absent.");
                 var meshes = expected.Select(filter => filter.sharedMesh).ToArray();
-                if (meshes.Any(mesh => mesh == null) || meshes.Distinct().Count() != 7)
+                if (meshes.Any(mesh => mesh == null) || meshes.Distinct().Count() != CanonicalPersistentSpriteDirectory.OwnerCount)
                     throw new InvalidOperationException("Persistent sprite native mesh identity differs.");
                 var data = meshes.Select(mesh => BitConverter.ToInt64(Native(mesh, 64), 56)).ToArray();
-                if (data.Any(value => value == 0) || data.Distinct().Count() != 7)
+                if (data.Any(value => value == 0) || data.Distinct().Count() != CanonicalPersistentSpriteDirectory.OwnerCount)
                     throw new InvalidOperationException("Persistent sprite native shared mesh data is absent or shared.");
                 if (data.Any(value => RefCount(value) != 1))
                     throw new InvalidOperationException("Persistent sprite native mesh data has an outside retained reference.");

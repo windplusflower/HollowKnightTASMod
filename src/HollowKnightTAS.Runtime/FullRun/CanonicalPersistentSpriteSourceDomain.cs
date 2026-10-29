@@ -20,6 +20,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Persistent sprite source graph schema, root or unsupported values differ.");
             var root = graph.Nodes[graph.Roots.Single(item => item.Binding == CanonicalPersistentSpriteCarry.Root).Node - 1];
             var continuationExternals = CanonicalPersistentSpriteContinuation.ExternalDirectory();
+            CanonicalBorderArrowCarry.PreflightNative(graph);
+            CanonicalBorderArrowCarry.OriginalMaterial();
             foreach (var external in graph.Externals.Where(item => item.Binding.StartsWith("PersistentAnimator/", StringComparison.Ordinal)))
                 if (!continuationExternals.TryGetValue(external.Binding, out var target) || CanonicalCarryGraphCodec.Identity(target.GetType()) != external.Type)
                     throw new InvalidDataException("Persistent animator original clip/callback preflight differs.");
@@ -51,16 +53,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             var global = ContinuationField("GlobalState");
             if (global.Kind != "scalar" || global.Type != CanonicalCarryGraphCodec.Identity(typeof(int)) || global.Text != currentContinuation.GlobalState.ToString(CultureInfo.InvariantCulture))
                 throw new InvalidDataException("Persistent animator global control differs before producer.");
-            var nativeFlags = ArrayNode(ContinuationField("Lifecycle"), typeof(byte[][]), 6).Items!;
-            for (var index = 0; index < 6; index++) {
+            var nativeFlags = ArrayNode(ContinuationField("Lifecycle"), typeof(byte[][]), CanonicalPersistentSpriteContinuation.NativeOwnerCount).Items!;
+            for (var index = 0; index < CanonicalPersistentSpriteContinuation.NativeOwnerCount; index++) {
                 var flags = ArrayNode(nativeFlags[index], typeof(byte[]), 5).Items!;
                 if (flags.Where((value, slot) => value.Kind != "scalar" || value.Type != CanonicalCarryGraphCodec.Identity(typeof(byte))
                     || value.Text != currentContinuation.Lifecycle[index][slot].ToString(CultureInfo.InvariantCulture)).Any())
                     throw new InvalidDataException("Persistent animator/health native lifecycle differs before producer.");
             }
-            if (!Strings("Owners", 7).SequenceEqual(owners.Keys) || !Strings("Fields", fields.Length).SequenceEqual(fields.Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName)))
+            if (!Strings("Owners", CanonicalPersistentSpriteDirectory.OwnerCount).SequenceEqual(owners.Keys) || !Strings("Fields", fields.Length).SequenceEqual(fields.Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName)))
                 throw new InvalidDataException("Persistent sprite source preflight owner or original field ABI differs.");
-            var meshes = ArrayNode(Field("Meshes"), typeof(byte[][]), 7).Items!;
+            var meshes = ArrayNode(Field("Meshes"), typeof(byte[][]), CanonicalPersistentSpriteDirectory.OwnerCount).Items!;
             var current = owners.Values.ToArray();
             for (var i = 0; i < meshes.Length; i++) {
                 var item = meshes[i];
@@ -83,7 +85,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (CanonicalPersistentSpriteContinuation.HealthRoots().Values.Any(mainNodes.ContainsKey))
                 throw new InvalidDataException("Health original root is already owned by the main graph.");
             var continuationExternals = CanonicalPersistentSpriteContinuation.ExternalDirectory();
+            var arrowMaterial = CanonicalBorderArrowCarry.OriginalMaterial();
             string? Bind(object value) {
+                if (ReferenceEquals(value, arrowMaterial)) return CanonicalBorderArrowCarry.MaterialBinding;
                 foreach (var pair in continuationExternals) if (ReferenceEquals(pair.Value, value)) return pair.Key;
                 if (mainNodes.TryGetValue(value, out var id)) return MainNode + id;
                 foreach (var pair in owners) if (ReferenceEquals(pair.Value.GetComponent<MeshFilter>().sharedMesh, value)) return MeshOwner + pair.Key;
@@ -107,6 +111,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var fields = CanonicalPersistentSpriteCarry.Fields();
             var continuationExternals = CanonicalPersistentSpriteContinuation.ExternalDirectory();
             object Resolve(string binding) {
+                if (binding == CanonicalBorderArrowCarry.MaterialBinding) return CanonicalBorderArrowCarry.OriginalMaterial();
                 if (binding.StartsWith("PersistentAnimator/", StringComparison.Ordinal)) return continuationExternals.TryGetValue(binding, out var value)
                     ? value : throw new InvalidDataException("Persistent animator original external identity differs.");
                 if (binding.StartsWith(MainNode, StringComparison.Ordinal)) {
@@ -126,12 +131,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                     field.SetValue(saved, view.Field(root, field.DeclaringType!, field.Name));
             });
             if (saved == null || !saved.Owners.SequenceEqual(actual.Owners) || !saved.Fields.SequenceEqual(actual.Fields)
-                || saved.Values.Length != 7 || saved.Meshes.Length != 7 || saved.Values.Any(row => row == null || row.Length != fields.Length))
+                || saved.Values.Length != CanonicalPersistentSpriteDirectory.OwnerCount || saved.Meshes.Length != CanonicalPersistentSpriteDirectory.OwnerCount || saved.Values.Any(row => row == null || row.Length != fields.Length))
                 throw new InvalidDataException("Persistent sprite source owner or field directory differs.");
             var applyContinuation = CanonicalPersistentSpriteContinuation.Prepare(saved.Continuation, actual.Continuation, codec, out var verifyContinuation);
             var snapshots = saved.Meshes.Select(CanonicalPersistentSpriteMeshSnapshot.Decode).ToArray();
             var currentOwners = owners.Values.ToArray();
-            for (var i = 0; i < 7; i++) {
+            for (var i = 0; i < CanonicalPersistentSpriteDirectory.OwnerCount; i++) {
                 if (!ReferenceEquals(saved.Values[i][0], fields[0].GetValue(currentOwners[i])))
                     throw new InvalidDataException("Persistent sprite source mesh alias differs.");
                 snapshots[i].RequireTargetLayout((Mesh)fields[0].GetValue(currentOwners[i]));
@@ -146,7 +151,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var current = CanonicalPersistentSpriteDirectory.Resolve();
                 if (!current.Keys.SequenceEqual(owners.Keys) || current.Where((pair, index) => !ReferenceEquals(pair.Value, currentOwners[index])).Any())
                     throw new InvalidOperationException("Persistent sprite owner identity changed.");
-                for (var i = 0; i < 7; i++) {
+                for (var i = 0; i < CanonicalPersistentSpriteDirectory.OwnerCount; i++) {
                     for (var f = 0; f < fields.Length; f++)
                         if (!codec.SameRawSlot(saved.Values[i][f], fields[f].GetValue(currentOwners[i]), fields[f].FieldType, 0))
                             throw new InvalidOperationException("Persistent sprite managed source readback differs.");
@@ -158,7 +163,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (used || !admitted()) throw new InvalidOperationException("Persistent sprite application lost single-use admission.");
                 used = true; requireMain(); requireIncoming(); plan.Apply(); plan.VerifyReadback();
                 applyContinuation();
-                for (var i = 0; i < 7; i++) {
+                for (var i = 0; i < CanonicalPersistentSpriteDirectory.OwnerCount; i++) {
                     for (var f = 1; f < fields.Length; f++) if (!fields[f].IsInitOnly) fields[f].SetValue(currentOwners[i], saved.Values[i][f]);
                     snapshots[i].Apply((Mesh)fields[0].GetValue(currentOwners[i]), admitted);
                 }
