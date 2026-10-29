@@ -13,6 +13,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Original asset candidate is absent, ambiguous or a different scene/resource identity: " + binding);
             return matchingCandidates[0];
         }
+        internal static T UniqueLiveOriginal<T>(T[] inventory, string name, string binding, Func<T, bool> alive,
+            Func<T, string> readName, Func<T, string> identity, T? required = null) where T : class
+        {
+            if (required != null && !alive(required)) throw new InvalidDataException("Required original asset was retired: " + binding);
+            // Never read a destroyed wrapper's native name. Every live match,
+            // including a newly produced duplicate, still participates.
+            var value = UniqueOriginal(inventory.Where(alive).Where(owner => readName(owner) == name).ToArray(), binding, identity);
+            if (required != null && !ReferenceEquals(required, value)) throw new InvalidDataException("Required original asset identity was replaced: " + binding);
+            return value;
+        }
         internal static Tuple<Type, string> Resolve(string binding, Assembly[] loaded, Func<Type, bool> admitType)
         {
             const string prefix = "asset:";

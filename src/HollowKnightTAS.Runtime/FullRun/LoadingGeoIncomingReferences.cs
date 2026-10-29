@@ -33,13 +33,23 @@ namespace HollowKnightTAS.Runtime.FullRun
         private Transform? mapKey;
         private bool menuFlash;
         private bool hudPresentation;
+        private bool persistentSprites;
+        private readonly HashSet<object> persistentInternalContainers = new HashSet<object>(new References());
+        private string? persistentInternalSlotPath;
+        private object? persistentInternalSlotValue;
+        private long persistentInternalSlotCount;
         internal bool Owns(object? value) => value != null && owned.ContainsKey(value);
         internal void BeginPersistentSpriteSample(Func<UnityEngine.Object, string> identity)
         {
             owned.Clear(); references.Clear(); slots.Clear(); externalReferences.Clear(); ownedRoots = Array.Empty<string>();
             counter = null; marker = null; mapKey = null; menuFlash = false; hudPresentation = false; soulSample = false;
+            persistentSprites = true; persistentInternalContainers.Clear(); persistentInternalSlotPath = null; persistentInternalSlotValue = null; persistentInternalSlotCount = 0;
             var directory = CanonicalPersistentSpriteDirectory.Resolve(); var fields = CanonicalPersistentSpriteCarry.Fields();
-            ownedRoots = directory.Values.Select(identity).ToArray();
+            foreach (var owner in directory.Values.Cast<object>().Concat(CanonicalPersistentSpriteContinuation.Animators().Values)
+                .Concat(Enumerable.Range(0, 2).Select(index => CanonicalPersistentSpriteContinuation.HealthOwner(index)))) persistentInternalContainers.Add(owner);
+            ownedRoots = directory.Values.Select(identity).Concat(CanonicalPersistentSpriteContinuation.Animators().Values.Select(identity))
+                .Concat(Enumerable.Range(0, 2).Select(index => identity(CanonicalPersistentSpriteContinuation.HealthOwner(index)))).ToArray();
+            foreach (var pair in CanonicalPersistentSpriteContinuation.CopiedMembers()) owned.Add(pair.Key, "$/PersistentAnimator/" + pair.Value);
             foreach (var pair in directory) foreach (var field in fields) {
                 var value = field.GetValue(pair.Value);
                 if (value == null || (!(value is Array) && !(value is System.Collections.IList) && !(value is Mesh))) continue;
@@ -55,8 +65,23 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var rejected = externalReferences.Where(path => !slots.TryGetValue(path, out var slot)
                 || mainNode == null || !mainNode(slot.Original) || !ReferenceEquals(slot.Read(), slot.Original)).OrderBy(path => path, StringComparer.Ordinal).ToArray();
-            if (ownedRoots.Length != 7 || rejected.Length != 0)
+            if (ownedRoots.Length != 13 || rejected.Length != 0)
                 throw new InvalidOperationException("Persistent sprite managed incoming proof has external holders: " + string.Join(";", rejected.Take(32)));
+        }
+        internal object PersistentSpriteSharedIdentityAudit(Func<object, int?> mainNode)
+        {
+            var anchors = CanonicalPersistentSpriteContinuation.OwnerDefaultVariableSlots();
+            var members = new Dictionary<object, List<string>>(new References());
+            foreach (var path in externalReferences.OrderBy(path => path, StringComparer.Ordinal)) {
+                if (!slots.TryGetValue(path, out var slot) || !ReferenceEquals(slot.Read(), slot.Original)) throw new InvalidOperationException("Persistent sprite identity audit has an unreadable or changed outside slot.");
+                if (!members.TryGetValue(slot.Original, out var paths)) { paths = new List<string>(); members.Add(slot.Original, paths); }
+                paths.Add(path);
+            }
+            if (members.Count > 32 || externalReferences.Count > 4096) throw new InvalidOperationException("Persistent sprite identity audit exceeds its finite bound.");
+            return members.Select(pair => new { type = pair.Key.GetType().FullName, mainNode = mainNode(pair.Key),
+                localOwnedNodePath = owned[pair.Key], exactSameObjectHealthSlots = anchors.Where(anchor => ReferenceEquals(anchor.Value, pair.Key)).Select(anchor => anchor.Key).ToArray(),
+                outsideSlotCount = pair.Value.Count, outsideSlotsSample = pair.Value.Take(8).ToArray(),
+                allOutsidePathsSha256 = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(System.Text.Encoding.UTF8.GetBytes(string.Join("\n", pair.Value))) }).ToArray();
         }
         // Soul's Fsm/state/action objects retain their actual identities as D
         // roots. Unknown outside holders of roots or copied descendants are
@@ -304,7 +329,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal IReadOnlyDictionary<string, object> OwnedDirectory() => owned.ToDictionary(pair => pair.Value, pair => pair.Key, StringComparer.Ordinal);
         internal LoadingGeoIncomingReferences Freeze()
         {
-            var copy = new LoadingGeoIncomingReferences { counter = counter, marker = marker, mapKey = mapKey, menuFlash = menuFlash, hudPresentation = hudPresentation, soulSample = soulSample, soulReferenceBytes = soulReferenceBytes, ownedRoots = (string[])ownedRoots.Clone() };
+            var copy = new LoadingGeoIncomingReferences { counter = counter, marker = marker, mapKey = mapKey, menuFlash = menuFlash, hudPresentation = hudPresentation, soulSample = soulSample, soulReferenceBytes = soulReferenceBytes, ownedRoots = (string[])ownedRoots.Clone(), persistentSprites = persistentSprites, persistentInternalSlotCount = persistentInternalSlotCount };
+            foreach (var owner in persistentInternalContainers) copy.persistentInternalContainers.Add(owner);
             foreach (var pair in owned) copy.owned.Add(pair.Key, pair.Value);
             foreach (var item in references) copy.references.Add(item);
             foreach (var pair in slots) copy.slots.Add(pair.Key, pair.Value);
@@ -405,6 +431,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal void Observe(object value, string path, string root)
         {
             if (!owned.TryGetValue(value, out var identity)) return;
+            // Slot observation precedes Reference(value) in the original full
+            // reader. Omit only this exact already-owned internal slot from the
+            // diagnostic path set; its full value/alias remains in the graph.
+            // A root-name match alone is never sufficient for this omission.
+            if (persistentSprites && path == persistentInternalSlotPath && ReferenceEquals(value, persistentInternalSlotValue)) {
+                persistentInternalSlotPath = null; persistentInternalSlotValue = null; return;
+            }
             if (soulSample && soulGlobalCandidates.Contains(value) && !InternalRoot(root) && !LifecycleRoot(root)) {
                 if (soulCandidatePaths.TryGetValue(path, out var existing)) {
                     if (!ReferenceEquals(existing, value)) throw new InvalidOperationException("Soul candidate path maps to multiple identities.");
@@ -430,7 +463,18 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal void ObserveSlot(object owner, FieldInfo? field, int index, object? value, string path, string root)
         {
-            if (value == null || !owned.TryGetValue(value, out var identity) || InternalRoot(root) || LifecycleRoot(root)) return;
+            if (value == null || !owned.TryGetValue(value, out var identity)) return;
+            if (persistentSprites) {
+                persistentInternalSlotPath = null; persistentInternalSlotValue = null;
+                if ((InternalRoot(root) || LifecycleRoot(root)) && (owned.ContainsKey(owner) || persistentInternalContainers.Contains(owner))) {
+                    persistentInternalSlotCount = checked(persistentInternalSlotCount + 1);
+                    persistentInternalSlotPath = path; persistentInternalSlotValue = value; return;
+                }
+                // Even a forged/internal root cannot hide an outside containing
+                // owner. Keep every outside slot under the original 4096 cap.
+                if (externalReferences.Count >= 4096 && !externalReferences.Contains(path)) throw new InvalidOperationException("Persistent sprite external reference bound exceeded.");
+                externalReferences.Add(path);
+            } else if (InternalRoot(root) || LifecycleRoot(root)) return;
             if (soulSample && soulGlobalCandidates.Contains(value)) {
                 if (owner.GetType().IsValueType || field?.IsInitOnly == true) throw new InvalidOperationException("Soul candidate incoming alias is not writable: " + path);
                 if (soulCandidateSlots.TryGetValue(path, out var prior)) {
@@ -499,6 +543,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal object Snapshot() => new { diagnosticOnly = true, managedPaths = references.ToArray(),
             writableExternalPaths = slots.Keys.OrderBy(value => value, StringComparer.Ordinal).ToArray(),
             unboundExternalPaths = externalReferences.Where(path => !slots.ContainsKey(path)).OrderBy(value => value, StringComparer.Ordinal).ToArray(),
-            includesInternalAliases = true, unobservedNativeSlotsQualified = false };
+            includesInternalAliases = !persistentSprites, countedInternalManagedSlots = persistentInternalSlotCount,
+            completeInternalAliasesRemainInOwnedGraph = persistentSprites, unobservedNativeSlotsQualified = false };
     }
 }

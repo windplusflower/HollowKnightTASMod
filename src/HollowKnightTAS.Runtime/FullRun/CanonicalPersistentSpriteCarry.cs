@@ -10,12 +10,14 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal static class CanonicalPersistentSpriteCarry
     {
         internal const string Root = "R2/PersistentSprites/context";
-        internal static readonly Type[] DataTypes = { typeof(Data), typeof(object[]), typeof(object[][]), typeof(string[]), typeof(byte[][]) };
+        internal static readonly Type[] DataTypes = { typeof(Data), typeof(object[]), typeof(object[][]), typeof(string[]), typeof(byte[][]),
+            typeof(CanonicalPersistentSpriteContinuation.Data), typeof(tk2dSpriteAnimator).GetNestedType("State", BindingFlags.Public | BindingFlags.NonPublic)! };
         internal sealed class Data
         {
             public string[] Owners = Array.Empty<string>(), Fields = Array.Empty<string>();
             public object?[][] Values = Array.Empty<object?[]>();
             public byte[][] Meshes = Array.Empty<byte[]>();
+            public CanonicalPersistentSpriteContinuation.Data Continuation = new CanonicalPersistentSpriteContinuation.Data();
         }
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
         private static readonly string[] OriginalNames = { "mesh", "meshVertices", "meshNormals", "meshTangents", "meshColors",
@@ -41,9 +43,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             return new Data {
                 Owners = owners.Keys.ToArray(), Fields = fields.Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName).ToArray(),
                 Values = owners.Values.Select(owner => fields.Select(field => field.GetValue(owner)).ToArray()).ToArray(),
-                Meshes = owners.Values.Select(owner => CanonicalPersistentSpriteMeshSnapshot.Capture((Mesh)fields[0].GetValue(owner)).Encode()).ToArray()
+                Meshes = owners.Values.Select(owner => CanonicalPersistentSpriteMeshSnapshot.Capture((Mesh)fields[0].GetValue(owner)).Encode()).ToArray(),
+                Continuation = CanonicalPersistentSpriteContinuation.Capture()
             };
         }
-        internal static SortedDictionary<string, object> Roots(Data data) => new SortedDictionary<string, object>(StringComparer.Ordinal) { [Root] = data };
+        internal static SortedDictionary<string, object> Roots(Data data) {
+            var roots = CanonicalPersistentSpriteContinuation.HealthRoots(); roots.Add(Root, data); return roots;
+        }
     }
 }

@@ -20,7 +20,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 return CanonicalActualDRoute.SelectOrdinal(text, Enabled);
             }
         }
-        public int Schema = 17, Ordinal;
+        public int Schema = 18, Ordinal;
         public string OriginalUiAssetOrigins = "", OriginalHudPresentationAssetOrigins = "";
         public string OriginalBossAssetOrigins = "";
         public CanonicalActualDRoute Route = new CanonicalActualDRoute();
@@ -62,7 +62,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var needsSoul = HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId);
-            if (!Enabled || Schema != 17 || !HollowKnightTAS.Core.Movie.NativeExecutionProfile.SupportsSceneCheckpoints(
+            if (!Enabled || Schema != 18 || !HollowKnightTAS.Core.Movie.NativeExecutionProfile.SupportsSceneCheckpoints(
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) || Ordinal != SelectedOrdinal || MovieFrame < 0 || NativeFrame < 0
                 || Main == null || Input == null || Geo == null || Map == null || Map.Length == 0 || Main.Length == 0 || Input.Length == 0 || Geo.Length == 0
                 || Marker == null || Marker.Length == 0 || MapKeyText == null || MapKeyText.Length == 0 || MapKeyParents == null || MapKeyParents.Length == 0

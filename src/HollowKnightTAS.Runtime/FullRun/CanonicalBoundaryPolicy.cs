@@ -82,12 +82,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             var epoch = CanonicalInputEpochRuntime.Capture(origin, targetNative, controlOrigin);
             var identities = new BoundaryObjectIdentity();
             PreparedPhase("frozen-owner-context");
-            carry.ActualTargetStage = "preflight-persistent-sprite-identities";
-            carry.PreparePersistentSpriteIdentity(source);
-            PreparedPhase("persistent-sprite-incoming-and-native-preflight");
+            CanonicalPersistentSpriteAnimationDiagnostic.Arm("target", 0, targetNative);
             var sourceGraph = carry.DecodeActualMainForOwnerContext(source);
-            var emptyMapping = CanonicalSceneMappingCarry.IsEmptySourceGraph(sourceGraph);
             PreparedPhase("decode-source-main");
+            carry.ActualTargetStage = "preflight-persistent-sprite-identities";
+            carry.PreparePersistentSpriteIdentity(source, sourceGraph, identities);
+            PreparedPhase("persistent-sprite-incoming-and-native-preflight");
+            var emptyMapping = CanonicalSceneMappingCarry.IsEmptySourceGraph(sourceGraph);
             // Already inside the single-use nine-second ApplyingActualD
             // transaction, after its full registered-S0 check. Interning changes
             // D cache state; any later failure must retire this target process.
@@ -109,6 +110,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var savedEpoch = carry.PreparedRestoreEpoch ?? throw new InvalidOperationException("Actual D source epoch is absent.");
                 restoreEpoch(savedEpoch);
                 savedEpoch.RequireReadback(CanonicalInputEpochRuntime.Capture(savedEpoch.OriginNative, source.NativeFrame, savedEpoch), source.NativeFrame);
+                CanonicalPersistentSpriteAnimationDiagnostic.DReadback(source.MovieFrame, source.NativeFrame);
             };
         }
         private void RestoreHudSourceDependencies(CanonicalSchedulerCarry sourceScheduler, Func<bool> admitted)
@@ -551,6 +553,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Environment.GetEnvironmentVariable(CanonicalBossSetupDiagnostic.Flag) == "1",
                     () => CanonicalBossSetupDiagnostic.Write(ordinal, identities, directory),
                     () => {
+                        CanonicalPersistentSpriteAnimationDiagnostic.Arm("source", movie, native);
                         return carry.Capture(identities, inputEpoch, input, mouse,
                             observer.BoundarySchedulerCarry(inputEpoch), observer.BoundaryHeroInvulnerabilityCarry(inputEpoch));
                     }, out var data))
@@ -691,7 +694,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             observer = LoadingGameplayOracle.CreateBoundaryObserver(observerSession, source.OriginNative!.Value);
         }
         internal void EndPoolDiagnostic() => poolFlukes.Dispose();
-        internal void EndUiCallbackPolicy() { retiredUiAnimations.Dispose(); EndPoolDiagnostic(); }
+        internal void EndUiCallbackPolicy() { retiredUiAnimations.Dispose(); EndPoolDiagnostic(); CanonicalPersistentSpriteAnimationDiagnostic.Abort(); }
         public void Dispose() { EndUiCallbackPolicy(); menuFlash.Dispose(); hudStartup.Dispose(); hudParticles.Dispose(); journal.Dispose(); observer?.Dispose(); retiredMeshes.Dispose(); visualTemplates.Dispose(); assetTemplates.Dispose(); startup.Dispose(); }
     }
 }

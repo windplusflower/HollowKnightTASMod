@@ -109,7 +109,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly LoadingGeoIncomingReferences persistentSpriteIncoming = new LoadingGeoIncomingReferences();
         private bool persistentSpriteSample;
         internal void ConfigurePersistentSpriteIncoming() => persistentSpriteSample = true;
-        internal LoadingGeoIncomingReferences FreezePersistentSpriteIncoming() => persistentSpriteIncoming.Freeze();
+        internal LoadingGeoIncomingReferences FreezePersistentSpriteIncoming() {
+            (nativeScheduler ?? throw new InvalidOperationException("Persistent animator scheduler observation absent.")).RequireCapturedPersistentAnimatorCallbacksAbsent();
+            return persistentSpriteIncoming.Freeze();
+        }
         private Component[] persistentSpriteNativeComponents = Array.Empty<Component>();
         internal CanonicalPersistentSpriteNativeGuard FreezePersistentSpriteNative() => CanonicalPersistentSpriteNativeGuard.Capture(persistentSpriteNativeComponents);
         private Func<IReadOnlyDictionary<object, string>>? soulCopiedMembers;
@@ -787,6 +790,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     captureMilliseconds = captureElapsed.ElapsedMilliseconds,
                     captureStages = captureStages.ToArray() });
                 if (MeshValueAuditActive && fullInventory && !nativePhysicsOnly) SealMeshValueSample(movieFrame(), nativeFrame(), rows - 1);
+                if (suffixCapture && rows == 1) CanonicalPersistentSpriteAnimationDiagnostic.FirstK3(movieFrame(), nativeFrame());
                 if (phase == "before" || phase == "after") gameplaySamples++;
                 priorCapture = new { movieFrame = movieFrame(), phase, boundary,
                     captureMilliseconds = captureElapsed.ElapsedMilliseconds, stages = captureStages.ToArray() };

@@ -38,17 +38,29 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Func<LoadingGeoIncomingReferences>? snapshotSpriteIncoming;
         private readonly Func<CanonicalPersistentSpriteNativeGuard>? snapshotSpriteNative;
         private CanonicalPersistentSpriteNativeGuard? spriteNative;
+        private CanonicalPersistentSpriteMainRootWitness? spriteMainRootWitness;
+        private Action? spriteSoulTransitionReadback;
+        private CanonicalPersistentSpriteRequiredAssets? spriteRequiredAssets;
         private string[]? actualSoulSourceSlots;
         internal IReadOnlyDictionary<object, string> SoulCopiedMembers() => CanonicalSoulOrbCarry.CopiedMembers(codec);
-        internal void PreparePersistentSpriteIdentity(CanonicalActualDExperiment envelope) {
+        internal void PreparePersistentSpriteIdentity(CanonicalActualDExperiment envelope, CanonicalCarryGraphData sourceMain, BoundaryObjectIdentity identities) {
             if (soul == null) return;
             if (envelope.PersistentSprites.Length != 0) {
                 _ = new CanonicalPersistentSpriteSourceDomain().ValidatePayload(envelope.PersistentSprites);
-                // Until a main-plan write witness exists for an outside target
-                // holder, refuse it before the original producer can mutate D.
-                // A source main-node binding is not that target-side witness.
+                CanonicalPersistentSpriteAnimationDiagnostic.SharedIdentity("target-before-producer", () => (snapshotSpriteIncoming
+                    ?? throw new InvalidOperationException("Persistent sprite managed proof absent."))().PersistentSpriteSharedIdentityAudit(_ => null));
+                var sourceSoul = (soulCodec ?? throw new InvalidOperationException("Soul source codec absent.")).Decode(envelope.Soul);
+                var soulIncoming = (snapshotSoulIncoming ?? throw new InvalidOperationException("Soul incoming proof absent."))();
+                var shared = CanonicalSoulOrbCarry.Shared(soulIncoming, CanonicalSoulOrbCarry.SourceStrings(sourceSoul, "SharedSlots"));
+                // This reuses the original exact-slot Bench transition proof.
+                // No extra path is admitted by count, prefix or field values.
+                spriteSoulTransitionReadback = soulIncoming.ValidateSoulSharedTransition(shared.Identities, CanonicalSoulOrbCarry.SourceStrings(sourceSoul, "SharedPaths"));
+                var sourceSprites = new CanonicalPersistentSpriteSourceDomain().DecodeForRootWitness(envelope.PersistentSprites);
+                spriteMainRootWitness = new CanonicalPersistentSpriteMainRootWitness(sourceMain, sourceSprites, shared.Roots);
+                spriteRequiredAssets = new CanonicalPersistentSpriteRequiredAssets(sourceSprites, identities);
+                Modding.Logger.Log("[HKTAS] Persistent sprite existing main-root identity witness: " + Newtonsoft.Json.JsonConvert.SerializeObject(spriteMainRootWitness.Audit));
                 (snapshotSpriteIncoming ?? throw new InvalidOperationException("Persistent sprite managed proof absent."))()
-                    .RequirePersistentSpriteNoExternalManagedHolders();
+                    .RequirePersistentSpriteNoExternalManagedHolders(spriteMainRootWitness.Contains);
                 spriteNative = (snapshotSpriteNative ?? throw new InvalidOperationException("Persistent sprite native proof absent."))();
             }
         }
@@ -310,6 +322,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             PersistentSpriteGraph = targetDirectoryOnly || soul == null ? Array.Empty<byte>()
                 : new CanonicalPersistentSpriteSourceDomain().Capture(mainNodes, bindings.Bind, bindings.AuditGeoAssets);
             if (!targetDirectoryOnly && soul != null) {
+                CanonicalPersistentSpriteAnimationDiagnostic.SharedIdentity("source-main-capture", () => (snapshotSpriteIncoming
+                    ?? throw new InvalidOperationException("Persistent sprite managed proof absent."))().PersistentSpriteSharedIdentityAudit(value => mainNodes.TryGetValue(value, out var id) ? id : (int?)null));
                 (snapshotSpriteIncoming ?? throw new InvalidOperationException("Persistent sprite managed proof absent."))()
                     .RequirePersistentSpriteNoExternalManagedHolders(mainNodes.ContainsKey);
                 (snapshotSpriteNative ?? throw new InvalidOperationException("Persistent sprite native proof absent."))().RequireNoOutsideConsumers();
@@ -717,12 +731,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var native = spriteNative ?? throw new InvalidOperationException("Persistent sprite native proof was not prepared.");
                     void RequireMain() { main.VerifyReadback(); sdk.VerifyReadback(); }
                     void RequireIncoming() {
+                        (spriteRequiredAssets ?? throw new InvalidOperationException("Persistent sprite required assets were not prepared.")).RequireCurrent();
+                        (spriteMainRootWitness ?? throw new InvalidOperationException("Persistent sprite main-root witness absent.")).RequirePrepared(mainView!);
                         incoming.RequirePersistentSpriteNoExternalManagedHolders(mainView!.ContainsNode);
                         native.RequireNoOutsideConsumers();
                     }
                     new CanonicalPersistentSpriteSourceDomain().Prepare(actualSourceValidation!.PersistentSprites, mainView!,
-                        bindings.ResolveTarget, admitted, RequireMain, RequireIncoming, out var verifySprite)();
+                        binding => binding.StartsWith("asset:", StringComparison.Ordinal)
+                            ? (spriteRequiredAssets ?? throw new InvalidOperationException("Persistent sprite required assets absent.")).Resolve(binding) : bindings.ResolveTarget(binding),
+                        admitted, RequireMain, RequireIncoming, out var verifySprite)();
                     sourceChecks.Add(verifySprite);
+                    sourceChecks.Add(spriteSoulTransitionReadback ?? throw new InvalidOperationException("Persistent sprite shared global transition proof absent."));
                 });
                 domainActions.Add(() => prepareScheduler(continuation!.Scheduler)());
                 var physics = CheckpointPhysicsBroadphaseState.DecodeCompact(actualSourceValidation!.Physics);

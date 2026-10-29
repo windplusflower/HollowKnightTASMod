@@ -64,6 +64,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         internal object[] Inventory => inventory.ToArray();
+        internal void RequireCapturedPersistentAnimatorCallbacksAbsent()
+        {
+            if (!capturedQueueValid) throw new InvalidOperationException("Persistent animator has no original scheduler snapshot.");
+            var owners = CanonicalPersistentSpriteContinuation.Animators().Values.Select(value => value.GetInstanceID())
+                .Concat(Enumerable.Range(0, 2).Select(index => CanonicalPersistentSpriteContinuation.HealthOwner(index).GetInstanceID())).ToArray();
+            if (owners.Distinct().Count() != 6 || capturedCallbacks.Any(callback => owners.Contains(callback.OwnerInstanceId)))
+                throw new InvalidOperationException("Persistent animator/health has an unsupported original pending native callback.");
+        }
         internal Action RequireFrozenCapturedQueue()
         {
             if (!capturedQueueValid) throw new InvalidOperationException("Original scheduler has no complete frozen observation.");

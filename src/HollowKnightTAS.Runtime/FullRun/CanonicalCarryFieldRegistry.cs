@@ -118,13 +118,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             types.AddRange(CanonicalMarkerReadonlyCarry.DataTypes);
             if (hudBorderInputDomain) types.AddRange(CanonicalHudBorderInputs.DataTypes);
             if (hudPresentationDomain) types.AddRange(CanonicalHudPresentationCarry.DataTypes);
-            if (persistentSpriteDomain) types.AddRange(CanonicalPersistentSpriteCarry.DataTypes);
+            if (persistentSpriteDomain) { types.AddRange(CanonicalPersistentSpriteCarry.DataTypes); types.AddRange(CanonicalPersistentSpriteContinuation.OriginalActionTypes()); }
             if (mapKeyTextDomain) types.AddRange(CanonicalMapKeyTextCarry.DataTypes);
             if (markerDomain || mapKeyTextDomain || hudPresentationDomain || hudBorderInputDomain) types.AddRange(CanonicalMarkerCarry.OriginalDataTypes());
             if (mapKeyParentDomain) { types.AddRange(CanonicalMapKeyParentSourceDomain.DataTypes); types.AddRange(CanonicalMapKeyParentSourceDomain.OriginalActionTypes()); }
             if (markerDomain || mapKeyTextDomain || hudPresentationDomain || hudBorderInputDomain) types.AddRange(CanonicalMarkerEventCarry.Types());
             using var hash = SHA256.Create();
-            return new CanonicalCarryGraphCodec(types, (persistentSpriteDomain ? "canonical-persistent-sprite-fields-v1:" : soulDomain ? "canonical-soul-fields-v1:" : hudBorderInputDomain ? "canonical-hud-border-input-v1:" : hudPresentationDomain ? "canonical-hud-presentation-v1:" : inputDomain ? "canonical-input-fields-v2:" : geoDomain ? "canonical-geo-fields-v1:" : mapDomain ? "canonical-map-fields-v1:" : markerDomain ? "canonical-marker-fields-v1:" : mapKeyTextDomain ? "canonical-map-key-text-fields-v1:" : mapKeyParentDomain ? "canonical-map-key-parent-fields-v1:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
+            return new CanonicalCarryGraphCodec(types, (persistentSpriteDomain ? "canonical-persistent-sprite-fields-v2-health-animator:" : soulDomain ? "canonical-soul-fields-v1:" : hudBorderInputDomain ? "canonical-hud-border-input-v1:" : hudPresentationDomain ? "canonical-hud-presentation-v1:" : inputDomain ? "canonical-input-fields-v2:" : geoDomain ? "canonical-geo-fields-v1:" : mapDomain ? "canonical-map-fields-v1:" : markerDomain ? "canonical-marker-fields-v1:" : mapKeyTextDomain ? "canonical-map-key-text-fields-v1:" : mapKeyParentDomain ? "canonical-map-key-parent-fields-v1:" : "canonical-carry-fields-v6:") + BitConverter.ToString(
                 hash.ComputeHash(Encoding.UTF8.GetBytes(text + "\n" + eventText + "\n" + inputText + "\n" + loadingText + "\n" + geoText + "\n" + CanonicalSystemEventBindings.SchemaIdentity
                     + (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) ? "\n" + CanonicalSoulOrbCarry.SchemaIdentity + "\n" + CanonicalSoulOrbCarry.BoundSoulLayout : "")
                     + "\n" + (markerDomain ? CanonicalMarkerCarry.SchemaIdentity : "")
@@ -212,7 +212,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     }
                     else if (soulDomain) CanonicalSoulOrbCarry.ValidateDomainRoots(graph);
                     else if (persistentSpriteDomain) {
-                        if (graph.Roots == null || graph.Roots.Length != 1 || graph.Roots[0].Binding != CanonicalPersistentSpriteCarry.Root)
+                        if (graph.Roots == null || graph.Roots.Length != 255 || graph.Roots.Count(root => root.Binding == CanonicalPersistentSpriteCarry.Root) != 1
+                            || graph.Roots.Any(root => root.Binding != CanonicalPersistentSpriteCarry.Root && !root.Binding.StartsWith(CanonicalPersistentSpriteContinuation.Prefix, StringComparison.Ordinal)))
                             throw new InvalidDataException("Persistent sprite carry domain contains unknown or missing roots.");
                     }
                     else if (!inputDomain) CanonicalEventCarryRoots.ValidateGraph(graph);
