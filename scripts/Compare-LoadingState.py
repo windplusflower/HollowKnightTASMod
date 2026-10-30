@@ -32,8 +32,10 @@ PROCESS_HISTORY_PROJECTIONS = frozenset((
 
 def root_identities(row):
     # Preserve duplicates and concrete types as well as the complete identity set.
+    # Exclude asset-value projections which are covered under PROCESS_HISTORY_PROJECTIONS.
     return collections.Counter((root["id"], root.get("type"))
-                               for root in row["inventory"]["roots"])
+                               for root in row["inventory"]["roots"]
+                               if not root["id"].startswith("asset:"))
 
 
 def decode_suffix_inventory(value):

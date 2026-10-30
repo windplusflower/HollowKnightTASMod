@@ -8,7 +8,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 {
     // Canonical boundary reset for HUD Area Title banner.
     // In cold state (e.g. at boundary B), Area Title is inactive, its PlayMakerFSM
-    // actions are unexpanded (null), and no TMP SubMesh objects exist.
+    // actions are unexpanded (null), and no TMP SubMesh objects or dynamic meshes exist.
     // Native component lifecycle flags (enabled/active) are preserved without
     // unparking or re-enabling, avoiding unregistered DelayedStartCall native callbacks.
     internal static class CanonicalAreaTitleBoundaryPolicy
@@ -54,6 +54,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static readonly FieldInfo UpdateEventsField = typeof(Fsm).GetField("updateEvents", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
         private static readonly FieldInfo RemoveEventsField = typeof(Fsm).GetField("removeEvents", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
 
+        private static readonly FieldInfo SubMeshMeshField = typeof(TMPro.TMP_SubMesh).GetField("m_mesh", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo TextMeshField = typeof(TMPro.TMP_Text).GetField("m_mesh", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo TextInfoField = typeof(TMPro.TMP_Text).GetField("m_textInfo", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo TextField = typeof(TMPro.TMP_Text).GetField("m_text", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo MaterialReferencesField = typeof(TMPro.TMP_Text).GetField("m_materialReferences", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo SubTextObjectsField = typeof(TMPro.TextMeshPro).GetField("m_subTextObjects", BindingFlags.Instance | BindingFlags.NonPublic);
 
         internal static void Reset()
@@ -69,27 +74,59 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (go == null) return;
 
-            // 1. Destroy dynamically generated TMP SubMesh child objects and clear component caches
+            // 1. Destroy dynamically generated TMP SubMesh child objects and their dynamic meshes
             var subMeshes = go.GetComponentsInChildren<TMPro.TMP_SubMesh>(true);
             foreach (var subMesh in subMeshes)
             {
-                if (subMesh != null && subMesh.gameObject != null)
+                if (subMesh != null)
                 {
-                    UnityEngine.Object.DestroyImmediate(subMesh.gameObject);
-                }
-            }
-            if (SubTextObjectsField != null)
-            {
-                foreach (var tmp in go.GetComponentsInChildren<TMPro.TextMeshPro>(true))
-                {
-                    if (tmp != null && SubTextObjectsField.GetValue(tmp) is TMPro.TMP_SubMesh[] arr)
+                    if (SubMeshMeshField?.GetValue(subMesh) is Mesh m)
                     {
-                        Array.Clear(arr, 0, arr.Length);
+                        UnityEngine.Object.DestroyImmediate(m);
+                    }
+                    if (subMesh.gameObject != null)
+                    {
+                        UnityEngine.Object.DestroyImmediate(subMesh.gameObject);
                     }
                 }
             }
 
-            // 2. Reset Area Title PlayMakerFSM back to cold unexpanded state without toggling component.enabled
+            // 2. Clean TextMeshPro components back to cold pristine state without invoking tmp.mesh getter
+            foreach (var tmp in go.GetComponentsInChildren<TMPro.TextMeshPro>(true))
+            {
+                if (tmp == null) continue;
+
+                var baseMesh = TextMeshField?.GetValue(tmp) as Mesh;
+
+                // Destroy any dynamic submesh meshes still referenced in meshInfo
+                if (TextInfoField?.GetValue(tmp) is TMPro.TMP_TextInfo textInfo && textInfo.meshInfo != null)
+                {
+                    for (var i = 1; i < textInfo.meshInfo.Length; i++)
+                    {
+                        var m = textInfo.meshInfo[i].mesh;
+                        if (m != null && !ReferenceEquals(m, baseMesh))
+                        {
+                            UnityEngine.Object.DestroyImmediate(m);
+                        }
+                    }
+                }
+
+                // Clear sub-text objects array without reallocating
+                if (SubTextObjectsField?.GetValue(tmp) is TMPro.TMP_SubMesh[] subArr)
+                {
+                    Array.Clear(subArr, 0, subArr.Length);
+                }
+
+                // Title Small Main/Sub/Super are modified when area title is shown.
+                // Reset them back to cold pristine state using parameterless TMP_TextInfo to avoid triggering get_mesh.
+                if (tmp.gameObject.name != "Title Large Main")
+                {
+                    TextInfoField?.SetValue(tmp, new TMPro.TMP_TextInfo());
+                    TextField?.SetValue(tmp, string.Empty);
+                }
+            }
+
+            // 3. Reset Area Title PlayMakerFSM back to cold unexpanded state without toggling component.enabled
             var fsmComponent = go.GetComponent<PlayMakerFSM>();
             if (fsmComponent != null)
             {
@@ -126,7 +163,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
             }
 
-            // 3. Ensure banner GameObject is returned to cold inactive state
+            // 4. Ensure banner GameObject is returned to cold inactive state
             if (go.activeSelf) go.SetActive(false);
         }
     }

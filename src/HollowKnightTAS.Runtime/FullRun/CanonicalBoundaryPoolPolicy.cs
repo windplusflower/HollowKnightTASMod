@@ -49,6 +49,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (retiredPendingStartOwners.Count > 4096) throw new InvalidOperationException("Retired canonical Start registry exceeds native queue budget.");
             newPoolStartOwners.Clear();
             retiredOwners.Clear();
+            var gm = GameManager.instance;
+            if (gm != null)
+            {
+                typeof(GameManager).GetField("DestroyPersonalPools", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(gm, null);
+            }
             var pools = Resources.FindObjectsOfTypeAll<ObjectPool>().Where(pool => pool != null
                 && pool.gameObject.scene.IsValid() && pool.gameObject.scene.isLoaded).ToArray();
             if (pools.Length != 1) throw new InvalidOperationException("Canonical boundary requires one loaded global ObjectPool.");
@@ -139,38 +144,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (retiredPendingStartOwners.Keys.Any(newPoolStartOwners.ContainsKey))
                 throw new InvalidOperationException("A retired canonical Start ID was reused by a new pool owner.");
             return actors.Length;
-        }
-
-        internal void AlignGhostHitEffect(string source, string target)
-        {
-            if (owner == null) return;
-            // When exiting a ghost encounter room (e.g. GG_Ghost_Marmu_V) or entering non-ghost scenes like GG_Workshop,
-            // vanilla ParticleSystemAutoRecycle destroys the unborrowed Ghost Hit Pt pool instance.
-            if (!source.StartsWith("GG_Ghost_", StringComparison.Ordinal) && target != "GG_Workshop") return;
-            var free = (Dictionary<GameObject, List<GameObject>>)Free.GetValue(owner);
-            if (free == null) return;
-            GameObject? ghostPrefab = null;
-            List<GameObject>? ghostInstances = null;
-            foreach (var pair in free)
-            {
-                if (pair.Key != null && pair.Key.name == "Ghost Hit Pt")
-                {
-                    ghostPrefab = pair.Key;
-                    ghostInstances = pair.Value;
-                    break;
-                }
-            }
-            if (ghostPrefab != null && ghostInstances != null)
-            {
-                free.Remove(ghostPrefab);
-                foreach (var go in ghostInstances)
-                {
-                    if (go != null)
-                    {
-                        UnityEngine.Object.DestroyImmediate(go);
-                    }
-                }
-            }
         }
     }
 }

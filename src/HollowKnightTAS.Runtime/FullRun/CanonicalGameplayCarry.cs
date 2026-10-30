@@ -207,6 +207,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 if (body.bodyType != bodyType) body.bodyType = bodyType;
                 body.gravityScale = gravity; body.simulated = simulated; body.velocity = velocity;
+                var heroBox = currentHero.transform.Find("HeroBox");
+                if (heroBox != null)
+                {
+                    var heroBoxCol = heroBox.GetComponent<BoxCollider2D>();
+                    if (heroBoxCol != null)
+                    {
+                        heroBoxCol.offset = new Vector2(0.005573273f, -0.70312494f);
+                        heroBoxCol.size = new Vector2(0.45541382f, 1.1875f);
+                    }
+                }
                 // The original body/property writers can update the tree and
                 // native caches. Their complete readback remains mandatory.
             };
