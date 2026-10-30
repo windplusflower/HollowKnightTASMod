@@ -16,6 +16,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             ?? (owner.GetType().GetField(name, Flags) == null ? throw new InvalidOperationException("Geo observation field absent: " + name) : null);
         internal static object Capture()
         {
+            using var validation = LoadingEngineClockProbe.ReadOnlyCheckpointScope();
             var cameras = typeof(GameCameras).GetField("_instance", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null) as GameCameras;
             var counter = cameras == null ? null : cameras.geoCounter;
             if (counter == null) return new { available = false, diagnosticOnly = true };

@@ -43,9 +43,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ReadProcessMemory(IntPtr process, IntPtr address, byte[] bytes, UIntPtr size, out UIntPtr read);
         private readonly SortedDictionary<string, tk2dSprite> owners;
+        private readonly SortedDictionary<string, UnityEngine.Object> finalOwners;
         private long[]? originalData;
         private CanonicalPersistentSpriteNativeGuard(SortedDictionary<string, tk2dSprite> owners)
-        { this.owners = owners; }
+        { this.owners = owners; finalOwners = CanonicalFinalVisualCarry.Directory(); }
         internal static CanonicalPersistentSpriteNativeGuard Capture(IEnumerable<Component> source)
         {
             var components = source.ToArray();
@@ -57,6 +58,44 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static bool IsConsumer(Component component) => component is MeshFilter || component is MeshCollider
             || component is SkinnedMeshRenderer || component is CanvasRenderer || component is MeshRenderer
             || component is ParticleSystemRenderer || component is ParticleSystem;
+        internal static Action ProtectFinalVisual(Mesh[] meshes, MeshFilter[]? allowedFilters = null)
+        {
+            allowedFilters ??= Array.Empty<MeshFilter>();
+            if (meshes.Length == 0 || meshes.Length > 8 || meshes.Any(mesh => mesh == null) || meshes.Distinct().Count() != meshes.Length)
+                throw new InvalidOperationException("Registered visual mesh identity directory differs.");
+            long[] original;
+            using (LoadingEngineClockProbe.ReadOnlyCheckpointScope())
+                original = meshes.Select(mesh => BitConverter.ToInt64(Native(mesh, 64), 56)).ToArray();
+            void Verify() {
+                using var validation = LoadingEngineClockProbe.ReadOnlyCheckpointScope();
+                RequireOriginalProducers();
+                var data = meshes.Select(mesh => BitConverter.ToInt64(Native(mesh, 64), 56)).ToArray();
+                if (!original.SequenceEqual(data) || data.Any(value => value == 0 || RefCount(value) != 1) || data.Distinct().Count() != data.Length)
+                    throw new InvalidOperationException("Registered visual mesh shared data changed or has retained consumers.");
+                var count = 0; var particleSlots = 0;
+                void All<T>(Action<T> action) where T : Component {
+                    var items = Resources.FindObjectsOfTypeAll<T>(); count = checked(count + items.Length);
+                    if (count > 100000 || items.Any(item => item == null)) throw new InvalidOperationException("Registered visual consumer inventory differs.");
+                    foreach (var item in items) action(item);
+                }
+                void Reject(Mesh mesh) { if (mesh != null && meshes.Contains(mesh)) throw new InvalidOperationException("Registered visual mesh has an outside/physical consumer."); }
+                All<MeshFilter>(owner => { if (!allowedFilters.Contains(owner)) Reject(owner.sharedMesh); });
+                All<MeshCollider>(owner => Reject(owner.sharedMesh)); All<SkinnedMeshRenderer>(owner => Reject(owner.sharedMesh));
+                All<CanvasRenderer>(owner => { if (data.Contains(BitConverter.ToInt64(Native(owner, 80), 72))) throw new InvalidOperationException("Registered visual Canvas mesh consumer is unsupported."); });
+                All<MeshRenderer>(owner => { Reject(owner.additionalVertexStreams); Reject(owner.enlightenVertexStream); });
+                All<ParticleSystemRenderer>(owner => {
+                    var size = owner.meshCount;
+                    if (size < 0 || size > 100000 - particleSlots) throw new InvalidOperationException("Registered visual particle slots exceed bound.");
+                    particleSlots += size; var values = new Mesh[size];
+                    if (owner.GetMeshes(values) != size || owner.meshCount != size) throw new InvalidOperationException("Registered visual particle inventory changed.");
+                    Reject(owner.mesh); foreach (var mesh in values) Reject(mesh);
+                });
+                All<ParticleSystem>(owner => { var shape = owner.shape; Reject(shape.mesh);
+                    if (shape.meshRenderer != null) Reject(shape.meshRenderer.GetComponent<MeshFilter>()?.sharedMesh!);
+                    if (shape.skinnedMeshRenderer != null) Reject(shape.skinnedMeshRenderer.sharedMesh); });
+            }
+            Verify(); return Verify;
+        }
         private static byte[] Native(UnityEngine.Object owner, int size)
         {
             LoadingEngineClockProbe.RequirePinnedEngine();
@@ -98,14 +137,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var current = CanonicalPersistentSpriteDirectory.Resolve();
                 if (!current.Keys.SequenceEqual(owners.Keys) || owners.Any(pair => !ReferenceEquals(pair.Value, current[pair.Key])))
                     throw new InvalidOperationException("Persistent sprite native owners changed.");
+                var finalCurrent = CanonicalFinalVisualCarry.Directory();
+                if (!finalCurrent.Keys.SequenceEqual(finalOwners.Keys) || finalOwners.Any(pair => !ReferenceEquals(pair.Value, finalCurrent[pair.Key])))
+                    throw new InvalidOperationException("Final visual native owners changed.");
                 var expected = owners.Values.Select(owner => owner.GetComponent<MeshFilter>()).ToArray();
                 if (expected.Any(filter => !components.Contains(filter)))
                     throw new InvalidOperationException("Persistent sprite original native consumer is absent.");
-                var meshes = expected.Select(filter => filter.sharedMesh).ToArray();
-                if (meshes.Any(mesh => mesh == null) || meshes.Distinct().Count() != CanonicalPersistentSpriteDirectory.OwnerCount)
+                var meshes = expected.Select(filter => filter.sharedMesh).Concat(finalOwners.Values.Select(CanonicalFinalVisualCarry.Mesh)).ToArray();
+                var meshCount = CanonicalPersistentSpriteDirectory.OwnerCount + 5;
+                if (meshes.Any(mesh => mesh == null) || meshes.Distinct().Count() != meshCount)
                     throw new InvalidOperationException("Persistent sprite native mesh identity differs.");
                 var data = meshes.Select(mesh => BitConverter.ToInt64(Native(mesh, 64), 56)).ToArray();
-                if (data.Any(value => value == 0) || data.Distinct().Count() != CanonicalPersistentSpriteDirectory.OwnerCount)
+                if (data.Any(value => value == 0) || data.Distinct().Count() != meshCount)
                     throw new InvalidOperationException("Persistent sprite native shared mesh data is absent or shared.");
                 if (data.Any(value => RefCount(value) != 1))
                     throw new InvalidOperationException("Persistent sprite native mesh data has an outside retained reference.");

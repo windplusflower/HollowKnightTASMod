@@ -17,6 +17,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Action<HeroController>? beforeHeroStart;
         private HeroController? hero;
         private GameObject? crack;
+        private GameObject? shadow;
         private bool started, complete;
         private int firstFrame;
         private Vector3 position, scale;
@@ -48,6 +49,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Returning to the title may destroy the previous Hero. A later
             // original pickup owns its own once-only lifecycle warmup.
             crack = null; started = false; complete = false;
+            shadow = null;
         }
 
         // Called before the first source unload. The loader remains locked and
@@ -68,12 +70,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidOperationException("Canonical startup Hit Crack binding differs.");
                 position = crack.transform.localPosition; rotation = crack.transform.localRotation; scale = crack.transform.localScale;
                 started = true; firstFrame = Time.frameCount;
+                if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)) {
+                    shadow = CanonicalFinalVisualCarry.ShadowSprite().gameObject;
+                    if (shadow.activeSelf) throw new InvalidOperationException("Shadow Recharge startup owner must be inactive.");
+                    shadow.SetActive(true);
+                }
                 crack.SetActive(true);
                 if (!crack.activeInHierarchy) throw new InvalidOperationException("Canonical startup Hit Crack owner is inactive.");
                 Modding.Logger.Log("[HKTAS] Canonical startup warming Hit Crack and waiting for Hero SetZ.");
                 return false;
             }
             if (Time.frameCount - firstFrame > 120) throw new InvalidOperationException("Canonical Hero warmup exceeded 120 native frames.");
+            using var validation = LoadingEngineClockProbe.ReadOnlyCheckpointScope();
             var rotationScript = crack!.GetComponent<RandomRotationRange>();
             var pointer = (IntPtr)CachedPointer.GetValue(rotationScript)!;
             var lifecycle = new byte[5];
@@ -83,6 +91,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Canonical Hero startup lifecycle layout differs.");
             if (lifecycle[0] != 1 || lifecycle[1] != 1) return false;
             if (crack.activeSelf) return false;
+            if (shadow != null) {
+                var scripts = shadow.GetComponents<MonoBehaviour>();
+                if (scripts.Any(script => {
+                    var flags = BoundaryMonoLifecycle.ObserveUnstartedUi(script);
+                    return flags[0] != 1 || script.GetType().GetMethod("Start", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) != null && flags[1] != 1;
+                })) return false;
+                shadow.SetActive(false);
+            }
             var scheduler = new LoadingNativeSchedulerDigest();
             try
             {

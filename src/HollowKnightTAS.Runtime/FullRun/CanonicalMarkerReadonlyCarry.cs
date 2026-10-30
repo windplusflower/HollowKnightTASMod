@@ -31,6 +31,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             => DirectoryCore(directory, 2);
         internal static IReadOnlyDictionary<string, object> MapKeyDirectory(IReadOnlyDictionary<string, UnityEngine.Object> directory)
             => DirectoryCore(directory, 9);
+        internal static IReadOnlyDictionary<string, object> FinalVisualDirectory(IReadOnlyDictionary<string, UnityEngine.Object> directory)
+            => DirectoryCore(directory, 3);
         private static IReadOnlyDictionary<string, object> DirectoryCore(IReadOnlyDictionary<string, UnityEngine.Object> directory, int texts)
         {
             if (typeof(UnityEngine.UI.Graphic).Module.ModuleVersionId != new Guid("b4d135af-a1fd-407b-bcc7-280e400336cf"))
@@ -60,6 +62,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             => CaptureCore(directory, 2);
         internal static Data CaptureMapKey(IReadOnlyDictionary<string, UnityEngine.Object> directory)
             => CaptureCore(directory, 9);
+        internal static Data CaptureFinalVisual(IReadOnlyDictionary<string, UnityEngine.Object> directory)
+            => CaptureCore(directory, 3);
         private static Data CaptureCore(IReadOnlyDictionary<string, UnityEngine.Object> directory, int texts)
         {
             var owners = directory.Where(pair => pair.Value is TMPro.TextMeshPro).ToArray();
@@ -90,6 +94,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static Action PrepareMapKey(Data source, IReadOnlyDictionary<string, UnityEngine.Object> directory,
             CanonicalCarryGraphCodec codec, Func<bool> admitted)
             => PrepareCore(source, directory, codec, admitted, 9);
+        internal static Action PrepareFinalVisual(Data source, IReadOnlyDictionary<string, UnityEngine.Object> directory,
+            CanonicalCarryGraphCodec codec, Func<bool> admitted)
+            => PrepareCore(source, directory, codec, admitted, 3);
         private static Action PrepareCore(Data source, IReadOnlyDictionary<string, UnityEngine.Object> directory,
             CanonicalCarryGraphCodec codec, Func<bool> admitted, int texts)
         {

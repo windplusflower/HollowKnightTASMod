@@ -74,6 +74,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (++meshValueSamples != 1 || !meshReferenceAuditEnabled) { meshValueRefused = true; meshValueAudit.Clear(); }
             var runtimeSha = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(File.ReadAllBytes(typeof(LoadingGameplayOracle).Assembly.Location));
             var audit = JsonConvert.SerializeObject(new { diagnosticOnly = true, refused = meshValueRefused || meshReferenceAuditRefused,
+                registeredVisualMeshCachePolicy = CanonicalRegisteredVisualMeshCachePolicy.Id, rawHeroBoundsRetained = true,
                 existingProjectionOnly = true, existingFieldWalkOnly = true, independentPerField = true, maximumMeshes = 2048,
                 maximumReferences = 8192, maximumBytes = 8 * 1024 * 1024, movieFrame = movie, nativeFrame = native,
                 sampleOrdinal = ordinal, runtimeSha256 = runtimeSha, entries = meshValueAudit.ToArray(),
@@ -1174,6 +1175,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (frozenMenuFlashSample) frozenMenuFlashIncoming.RequireNoExternalConsumers();
             CaptureProgress("final-digests");
             result["assetBindings"] = Hash(JsonConvert.SerializeObject(assetIdentities.Snapshot()));
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
+                result["registeredVisualMeshCachePolicy"] = CanonicalRegisteredVisualMeshCachePolicy.Id;
             result["unsupported"] = Hash(string.Join("\n", omissions));
             if (nativePhysics != null)
                 foreach (var group in nativePhysics.Groups) result["nativePhysics/" + group.Key] = group.Value;

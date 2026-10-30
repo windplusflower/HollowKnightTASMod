@@ -98,8 +98,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             this.role = role;
             var all = CanonicalPersistentSpriteDirectory.Resolve();
             owners = new SortedDictionary<string, tk2dSprite>(StringComparer.Ordinal);
-            foreach (var key in new[] { "HudCamera/Hud Canvas/Health/Health 1", "HudCamera/Hud Canvas/Health/Health 2",
-                "HudCamera/Hud Canvas/Health/Joni Health", "HudCamera/Hud Canvas/Soul Orb/SoulOrb_fill/Liquid" }.Concat(CanonicalBorderArrowCarry.OwnerKeys)) owners.Add(key, all[key]);
+            foreach (var key in CanonicalPersistentSpriteContinuation.Keys) owners.Add(key, all[key]);
             if (typeof(tk2dSprite).Module.ModuleVersionId.ToString("D") != "2b54cdaf-7a93-4f0e-b297-d50c4090ea9f")
                 throw new InvalidDataException("Sprite diagnostic original module differs.");
             RecordAll("B-before-D", movie, native);

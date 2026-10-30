@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 namespace HollowKnightTAS.Runtime.FullRun
@@ -40,7 +41,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             return digest != null && digest.Length == 64;
         }
 
-        internal object Capture(Mesh mesh, object snapshot, bool heroSubmesh = false) => CaptureProjectionWithDetails(snapshot, (int)mesh.hideFlags, heroSubmesh);
+        internal object Capture(Mesh mesh, object snapshot, bool heroSubmesh = false) {
+            var result = JObject.FromObject(CaptureProjectionWithDetails(snapshot, (int)mesh.hideFlags, heroSubmesh));
+            result["registeredPolicy"] = CanonicalRegisteredVisualMeshCachePolicy.Owns(mesh) ? CanonicalRegisteredVisualMeshCachePolicy.Id : null;
+            if (heroSubmesh) result["rawHeroSubmeshBounds"] = JArray.FromObject(Enumerable.Range(0, mesh.subMeshCount).Select(index => {
+                var bounds = mesh.GetSubMesh(index).bounds; var center = bounds.center; var size = bounds.extents;
+                return new { index, bits = new[] { center.x, center.y, center.z, size.x, size.y, size.z }
+                    .Select(value => BitConverter.ToInt32(BitConverter.GetBytes(value), 0)).ToArray() };
+            }).ToArray());
+            return result;
+        }
         internal object CaptureProjection(object snapshot, int hideFlags) => CaptureProjectionWithDetails(snapshot, hideFlags, false);
         internal object CaptureProjectionWithDetails(object snapshot, int hideFlags, bool heroSubmesh)
         {

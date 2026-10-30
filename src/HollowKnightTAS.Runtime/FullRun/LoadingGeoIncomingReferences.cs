@@ -35,6 +35,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private bool hudPresentation;
         private bool persistentSprites;
         private readonly HashSet<object> persistentInternalContainers = new HashSet<object>(new References());
+        private readonly Dictionary<string, Tuple<FieldInfo, object>> persistentStructSlots = new Dictionary<string, Tuple<FieldInfo, object>>(StringComparer.Ordinal);
         private string? persistentInternalSlotPath;
         private object? persistentInternalSlotValue;
         private long persistentInternalSlotCount;
@@ -48,6 +49,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var owner in directory.Values.Cast<object>().Concat(CanonicalPersistentSpriteContinuation.NativeOwners())) persistentInternalContainers.Add(owner);
             ownedRoots = directory.Values.Select(identity).Concat(CanonicalPersistentSpriteContinuation.NativeOwners().Select(identity)).ToArray();
             foreach (var pair in CanonicalPersistentSpriteContinuation.CopiedMembers()) owned.Add(pair.Key, "$/PersistentAnimator/" + pair.Value);
+            foreach (var pair in CanonicalFinalVisualCarry.CopiedMembers()) if (!owned.ContainsKey(pair.Key)) owned.Add(pair.Key, "$/FinalVisual/" + pair.Value);
+            foreach (var owner in CanonicalFinalVisualCarry.Directory().Values) persistentInternalContainers.Add(owner);
+            ownedRoots = ownedRoots.Concat(CanonicalFinalVisualCarry.Directory().Values.Select(identity)).ToArray();
+            persistentStructSlots.Clear();
+            foreach (var pair in CanonicalFinalVisualCarry.StructSlots(identity)) persistentStructSlots.Add(pair.Key, pair.Value);
             foreach (var pair in directory) foreach (var field in fields) {
                 var value = field.GetValue(pair.Value);
                 if (value == null || (!(value is Array) && !(value is System.Collections.IList) && !(value is Mesh))) continue;
@@ -63,7 +69,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var rejected = externalReferences.Where(path => !slots.TryGetValue(path, out var slot)
                 || mainNode == null || !mainNode(slot.Original) || !ReferenceEquals(slot.Read(), slot.Original)).OrderBy(path => path, StringComparer.Ordinal).ToArray();
-            if (ownedRoots.Length != CanonicalPersistentSpriteDirectory.OwnerCount + CanonicalPersistentSpriteContinuation.NativeOwnerCount || rejected.Length != 0)
+            if (ownedRoots.Length != CanonicalPersistentSpriteDirectory.OwnerCount + CanonicalPersistentSpriteContinuation.NativeOwnerCount + 5 || rejected.Length != 0)
                 throw new InvalidOperationException("Persistent sprite managed incoming proof has external holders: " + string.Join(";", rejected.Take(32)));
         }
         internal object PersistentSpriteSharedIdentityAudit(Func<object, int?> mainNode)
@@ -329,6 +335,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var copy = new LoadingGeoIncomingReferences { counter = counter, marker = marker, mapKey = mapKey, menuFlash = menuFlash, hudPresentation = hudPresentation, soulSample = soulSample, soulReferenceBytes = soulReferenceBytes, ownedRoots = (string[])ownedRoots.Clone(), persistentSprites = persistentSprites, persistentInternalSlotCount = persistentInternalSlotCount };
             foreach (var owner in persistentInternalContainers) copy.persistentInternalContainers.Add(owner);
+            foreach (var pair in persistentStructSlots) copy.persistentStructSlots.Add(pair.Key, pair.Value);
             foreach (var pair in owned) copy.owned.Add(pair.Key, pair.Value);
             foreach (var item in references) copy.references.Add(item);
             foreach (var pair in slots) copy.slots.Add(pair.Key, pair.Value);
@@ -464,7 +471,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (value == null || !owned.TryGetValue(value, out var identity)) return;
             if (persistentSprites) {
                 persistentInternalSlotPath = null; persistentInternalSlotValue = null;
-                if ((InternalRoot(root) || LifecycleRoot(root)) && (owned.ContainsKey(owner) || persistentInternalContainers.Contains(owner))) {
+                if ((InternalRoot(root) || LifecycleRoot(root)) && (owned.ContainsKey(owner) || persistentInternalContainers.Contains(owner)
+                    || owner.GetType().IsValueType && field != null && persistentStructSlots.TryGetValue(path, out var proof)
+                        && proof.Item1 == field && ReferenceEquals(proof.Item2, value))) {
                     persistentInternalSlotCount = checked(persistentInternalSlotCount + 1);
                     persistentInternalSlotPath = path; persistentInternalSlotValue = value; return;
                 }

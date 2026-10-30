@@ -47,7 +47,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (content.Length > 16 * 1024 * 1024)
                 throw new InvalidOperationException("Actual D suffix inventory exceeds the original 16 MiB diagnostic bound.");
             using var compressed = new MemoryStream();
-            using (var gzip = new GZipStream(compressed, CompressionMode.Compress, true)) gzip.Write(content, 0, content.Length);
+            // Only compression effort changes; the complete decoded tokens,
+            // SHA and all raw/encoded size gates remain identical.
+            using (var gzip = new GZipStream(compressed, CompressionLevel.Fastest, true)) gzip.Write(content, 0, content.Length);
             return new { encoding = "gzip-base64-utf8-json-v1", bytes = content.Length,
                 sha256 = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(content), gzipBase64 = Convert.ToBase64String(compressed.ToArray()) };
         }

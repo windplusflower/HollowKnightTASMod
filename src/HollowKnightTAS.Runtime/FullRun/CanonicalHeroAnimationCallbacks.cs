@@ -84,7 +84,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             };
             return result;
         }
-        private static MethodInfo Method(Type actionType, bool complete)
+        internal static MethodInfo Method(Type actionType, bool complete)
         {
             var play = actionType == typeof(Tk2dPlayAnimationWithEvents);
             if (!play && actionType != typeof(Tk2dWatchAnimationEvents))

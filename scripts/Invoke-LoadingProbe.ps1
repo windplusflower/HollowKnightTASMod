@@ -484,6 +484,22 @@ finally {
         & dotnet $bundleTool verify (Join-Path $repo '.local/signing/companion-public.json') $install (Join-Path $install 'companion.manifest.json')
         if ($LASTEXITCODE -ne 0) { throw 'Final installation verification failed.' }
     }
+    # A relay failure can bypass the normal trace-recovery block. Preserve the
+    # exact Runtime fault from the explicitly owned protected shadow as well.
+    foreach ($runFolder in @(Get-ChildItem -LiteralPath $outputRoot -Directory -Filter 'run-*')) {
+        $shadowManifest = Join-Path $runFolder.FullName 'probe-shadows.json'
+        if (-not (Test-Path -LiteralPath $shadowManifest)) { continue }
+        $ownedShadows = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'HollowKnightTAS/save-shadows')) + [IO.Path]::DirectorySeparatorChar
+        foreach ($shadowPath in @((Get-Content -LiteralPath $shadowManifest -Raw | ConvertFrom-Json).shadows)) {
+            $resolvedShadowPath = [IO.Path]::GetFullPath($shadowPath)
+            if (-not $resolvedShadowPath.StartsWith($ownedShadows, [StringComparison]::OrdinalIgnoreCase)) { throw 'Fault evidence shadow escaped protected root.' }
+            $faultPath = Join-Path $resolvedShadowPath ('HollowKnightTAS/sessions/full-run-' + [IO.Path]::GetFileName($resolvedShadowPath) + '/full-run-fault.txt')
+            if (Test-Path -LiteralPath $faultPath -PathType Leaf) {
+                if ((Get-Item -LiteralPath $faultPath).Length -gt 1048576) { throw 'Runtime fault evidence exceeded its bound.' }
+                Copy-Item -LiteralPath $faultPath -Destination (Join-Path $runFolder.FullName 'full-run-fault.txt')
+            }
+        }
+    }
     $after = Read-SaveAudit
     [IO.File]::WriteAllText((Join-Path $outputRoot 'saves-after.json'), $after)
     if ($after -ne $before) { throw 'Original save audit mismatch on cleanup.' }

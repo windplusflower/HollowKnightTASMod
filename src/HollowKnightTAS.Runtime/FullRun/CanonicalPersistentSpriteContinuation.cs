@@ -10,12 +10,13 @@ using UnityEngine;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
-    // Original managed continuations only. No Play/Enter/SendEvent or delegate
-    // construction is allowed here: target callbacks must already exist.
+    // Restore subscriptions without Play/Enter/SendEvent. Shadow callbacks use
+    // the same pinned original closed-method binding as the Hero animator;
+    // their action instances belong to the main FSM graph, never a clone here.
     internal static class CanonicalPersistentSpriteContinuation
     {
         internal const string Prefix = "R2/PersistentSprites/health/";
-        internal const int AnimatorCount = 4 + CanonicalBorderArrowCarry.OwnerCount, NativeOwnerCount = AnimatorCount + 2 + 2 + CanonicalBorderArrowCarry.OwnerCount, RootCount = 1 + 254 + 2 * 7;
+        internal const int AnimatorCount = 5 + CanonicalBorderArrowCarry.OwnerCount, NativeOwnerCount = AnimatorCount + 2 + 2 + CanonicalBorderArrowCarry.OwnerCount + 1, RootCount = 1 + 254 + 2 * 7;
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         private static readonly FieldInfo Raw = typeof(PlayMakerFSM).GetField("fsm", Flags)!;
         private static readonly FieldInfo States = typeof(Fsm).GetField("states", Flags)!;
@@ -40,7 +41,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return new[] { respawn, bound, source };
         }
         internal static readonly string[] Keys = new[] { "HudCamera/Hud Canvas/Health/Health 1", "HudCamera/Hud Canvas/Health/Health 2",
-            "HudCamera/Hud Canvas/Health/Joni Health", "HudCamera/Hud Canvas/Soul Orb/SoulOrb_fill/Liquid" }.Concat(CanonicalBorderArrowCarry.OwnerKeys).ToArray();
+            "HudCamera/Hud Canvas/Health/Joni Health", "HudCamera/Hud Canvas/Soul Orb/SoulOrb_fill/Liquid" }.Concat(CanonicalBorderArrowCarry.OwnerKeys).Concat(new[] { CanonicalFinalVisualCarry.Shadow }).ToArray();
         internal sealed class Data
         {
             public string[] Fields = Array.Empty<string>(), Owners = Array.Empty<string>();
@@ -49,6 +50,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             public byte[][] Lifecycle = Array.Empty<byte[]>();
             public int GlobalState;
             public CanonicalBorderArrowCarry.Data[] Arrows = Array.Empty<CanonicalBorderArrowCarry.Data>();
+        }
+        private static object?[] CallbackArguments(Delegate callback)
+        {
+            if (callback.Target is Tk2dPlayAnimationWithEvents play)
+                return new object?[] { callback, play, play.clipName, play.animationTriggerEvent, play.animationCompleteEvent };
+            if (callback.Target is Tk2dWatchAnimationEvents watch)
+                return new object?[] { callback, watch, null, watch.animationTriggerEvent, watch.animationCompleteEvent };
+            throw new InvalidDataException("Unknown persistent callback argument owner.");
         }
         internal static FieldInfo[] AnimatorFields()
         {
@@ -140,14 +149,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 GlobalState = Convert.ToInt32(typeof(tk2dSpriteAnimator).GetField("globalState", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!.GetValue(null)), Arrows = CanonicalBorderArrowCarry.OwnerKeys.Select(key => CanonicalBorderArrowCarry.Capture(key)).ToArray(),
                 CallbackArguments = owners.Values.SelectMany(owner => AnimatorFields().Where(field => typeof(Delegate).IsAssignableFrom(field.FieldType))
                     .SelectMany(field => ((Delegate?)field.GetValue(owner))?.GetInvocationList() ?? Array.Empty<Delegate>()))
-                    .Select(call => call.Target is Tk2dPlayAnimationWithEvents action
-                        ? new object?[] { call, action, action.clipName, action.animationTriggerEvent, action.animationCompleteEvent }
-                        : throw new InvalidDataException("Unknown persistent callback argument owner.")).ToArray() };
+                    .Select(CallbackArguments).ToArray() };
         }
         internal static MonoBehaviour[] NativeOwners() => Animators().Values.Cast<MonoBehaviour>()
             .Concat(Enumerable.Range(0, 2).Select(index => (MonoBehaviour)HealthOwner(index)))
             .Concat(CanonicalBorderArrowCarry.OwnerKeys.Take(2).Select(key => (MonoBehaviour)CanonicalBorderArrowCarry.FsmOwner(key)))
-            .Concat(CanonicalBorderArrowCarry.OwnerKeys.Select(key => (MonoBehaviour)CanonicalBorderArrowCarry.Animation(key))).ToArray();
+            .Concat(CanonicalBorderArrowCarry.OwnerKeys.Select(key => (MonoBehaviour)CanonicalBorderArrowCarry.Animation(key)))
+            .Concat(new[] { (MonoBehaviour)CanonicalFinalVisualCarry.ShadowSprite().GetComponent<PlayMakerFSM>() }).ToArray();
         internal static SortedDictionary<string, object> ExternalDirectory()
         {
             var result = new SortedDictionary<string, object>(StringComparer.Ordinal);
@@ -159,19 +167,24 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (clip == null || result.Values.Any(value => ReferenceEquals(value, clip))) continue;
                     result.Add("PersistentAnimator/clip/" + pair.Key + "/" + index + "/" + CanonicalPersistentSpriteAnimationDiagnostic.ClipHash(clip), clip);
                 }
+                if (pair.Key == CanonicalFinalVisualCarry.Shadow) {
+                    ShadowCallbacks(pair.Value, result);
+                    continue;
+                }
                 foreach (var field in AnimatorFields().Where(field => typeof(Delegate).IsAssignableFrom(field.FieldType))) {
                     var callback = (Delegate?)field.GetValue(pair.Value); if (callback == null) continue;
                     var calls = callback.GetInvocationList();
                     if (calls.Length != 1) throw new InvalidDataException("Persistent animator callback count differs.");
                     var descriptions = new List<string>();
                     foreach (var call in calls) {
-                        if (!(call.Target is Tk2dPlayAnimationWithEvents action) || call.Method.DeclaringType != typeof(Tk2dPlayAnimationWithEvents)
+                        if (!(call.Target is FsmStateAction action) || action.GetType() != typeof(Tk2dPlayAnimationWithEvents) && action.GetType() != typeof(Tk2dWatchAnimationEvents)
+                            || call.Method.DeclaringType != action.GetType()
                             || call.Method.Module != typeof(GameManager).Module || call.Method.Name != (field.Name == "AnimationCompleted" ? "AnimationCompleteDelegate" : "AnimationEventDelegate"))
                             throw new InvalidDataException("Unknown persistent animator callback.");
                         var actionState = (FsmState)typeof(FsmStateAction).GetField("fsmState", Flags)!.GetValue(action);
                         var fsmOwner = action.Fsm == null ? null : typeof(Fsm).GetField("owner", Flags)!.GetValue(action.Fsm) as PlayMakerFSM;
                         if (fsmOwner == null || !ReferenceEquals(Raw.GetValue(fsmOwner), action.Fsm) || !ReferenceEquals(typeof(FsmState).GetField("fsm", Flags)!.GetValue(actionState), action.Fsm)
-                            || !ReferenceEquals(typeof(Tk2dPlayAnimationWithEvents).GetField("_sprite", Flags)!.GetValue(action), pair.Value))
+                            || !ReferenceEquals(action.GetType().GetField("_sprite", Flags)!.GetValue(action), pair.Value))
                             throw new InvalidDataException("Persistent animator callback original owner alias differs.");
                         // Only FSMs on this exact persistent body can subscribe.
                         var fsms = pair.Value.GetComponents<PlayMakerFSM>();
@@ -183,14 +196,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                         var actionMatches = Enumerable.Range(0, actions.Length).Where(index => ReferenceEquals(actions[index], action)).ToArray();
                         if (actionMatches.Length != 1) throw new InvalidDataException("Persistent animator callback action identity differs.");
                         var actionKey = pair.Key + "/" + matches[0] + "/" + action.Fsm.Name + "/" + stateMatches[0] + "/" + actionState.Name + "/" + actionMatches[0];
-                        descriptions.Add(actionKey + "/" + call.Method.MetadataToken + "/" + action.clipName.Value + "/" + action.animationTriggerEvent?.Name + "/" + action.animationCompleteEvent?.Name);
+                        var arguments = CallbackArguments(call);
+                        var clipName = arguments[2] as FsmString;
+                        descriptions.Add(actionKey + "/" + call.Method.MetadataToken + "/" + clipName?.Value + "/" + ((FsmEvent?)arguments[3])?.Name + "/" + ((FsmEvent?)arguments[4])?.Name);
                         void AddAlias(string key, object value) {
                             if (result.TryGetValue(key, out var previous) ? !ReferenceEquals(previous, value) : result.Values.Any(other => ReferenceEquals(other, value)))
                                 throw new InvalidDataException("Persistent callback argument binding is ambiguous.");
                             result[key] = value;
                         }
                         AddAlias("PersistentAnimator/action/" + actionKey, action);
-                        AddAlias("PersistentAnimator/clip-name/" + actionKey + "/" + action.clipName.Value, action.clipName);
+                        if (clipName != null) AddAlias("PersistentAnimator/clip-name/" + actionKey + "/" + clipName.Value, clipName);
                     }
                     var descriptor = "PersistentAnimator/callback/" + pair.Key + "/" + field.Name + "/" + string.Join(";", descriptions);
                     if (result.Values.Any(value => ReferenceEquals(value, callback))) throw new InvalidDataException("Persistent animator callback cross-slot alias is unsupported.");
@@ -198,6 +213,47 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
             }
             return result;
+        }
+        private static void ShadowCallbacks(tk2dSpriteAnimator animator, SortedDictionary<string, object> result)
+        {
+            var owners = animator.GetComponents<PlayMakerFSM>();
+            if (owners.Length != 1 || !(Raw.GetValue(owners[0]) is Fsm fsm))
+                throw new InvalidDataException("Shadow callback original FSM owner differs.");
+            var states = (FsmState[])States.GetValue(fsm);
+            // The main Hero FSM registry validates this original FSM. Bind the
+            // exact existing state/action slots on each side, including their
+            // names in the descriptor; never require a subscription to have
+            // already occurred in the target's shorter startup history.
+            if (states == null || states.Length != 5 || states.Any(state => state == null || ((FsmStateAction[])Actions.GetValue(state)).Length > 16)
+                || states.SelectMany(state => (FsmStateAction[])Actions.GetValue(state)).Count(action => action.GetType() == typeof(Tk2dPlayAnimationWithEvents)) != 1
+                || states.SelectMany(state => (FsmStateAction[])Actions.GetValue(state)).Count(action => action.GetType() == typeof(Tk2dWatchAnimationEvents)) != 1)
+                throw new InvalidDataException("Shadow callback original five-state action directory differs.");
+            var actual = AnimatorFields().Where(field => typeof(Delegate).IsAssignableFrom(field.FieldType))
+                .Select(field => (Delegate?)field.GetValue(animator)).Where(value => value != null).Cast<Delegate>().ToArray();
+            var matched = new HashSet<Delegate>();
+            for (var s = 0; s < states.Length; s++) {
+                var actions = (FsmStateAction[])Actions.GetValue(states[s]);
+                for (var a = 0; a < actions.Length; a++) {
+                    var action = actions[a];
+                    if (action.GetType() != typeof(Tk2dPlayAnimationWithEvents) && action.GetType() != typeof(Tk2dWatchAnimationEvents)) continue;
+                    if (!ReferenceEquals(action.Fsm, fsm) || !ReferenceEquals(typeof(FsmStateAction).GetField("fsmState", Flags)!.GetValue(action), states[s]))
+                        throw new InvalidDataException("Shadow callback original action/state aliases differ.");
+                    foreach (var complete in new[] { true, false }) {
+                        var method = CanonicalHeroAnimationCallbacks.Method(action.GetType(), complete);
+                        var type = complete ? typeof(Action<tk2dSpriteAnimator, tk2dSpriteAnimationClip>) : typeof(Action<tk2dSpriteAnimator, tk2dSpriteAnimationClip, int>);
+                        var candidate = Delegate.CreateDelegate(type, action, method);
+                        var existing = actual.SingleOrDefault(value => value.Equals(candidate));
+                        if (existing != null) {
+                            if (existing.GetInvocationList().Length != 1 || !ReferenceEquals(action.GetType().GetField("_sprite", Flags)!.GetValue(action), animator))
+                                throw new InvalidDataException("Shadow source callback original animator alias differs.");
+                            matched.Add(existing);
+                        }
+                        result.Add("PersistentAnimator/shadow-callback/" + (complete ? "complete" : "event") + "/" + s + "/" + states[s].Name + "/" + a + "/" + method.MetadataToken,
+                            existing ?? candidate);
+                    }
+                }
+            }
+            if (actual.Any(value => !matched.Contains(value))) throw new InvalidDataException("Unknown Shadow callback subscription.");
         }
         internal static Action Prepare(Data source, Data current, CanonicalCarryGraphCodec codec, out Action verify)
         {
@@ -215,9 +271,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 applyArrows.Add(CanonicalBorderArrowCarry.Prepare(source.Arrows[index], current.Arrows[index], codec, out var verifyArrow)); verifyArrows.Add(verifyArrow);
             }
             foreach (var row in source.CallbackArguments)
-                if (row == null || row.Length != 5 || !(row[0] is Delegate call) || !(row[1] is Tk2dPlayAnimationWithEvents action)
-                    || !ReferenceEquals(call.Target, action) || !ReferenceEquals(row[2], action.clipName)
-                    || !ReferenceEquals(row[3], action.animationTriggerEvent) || !ReferenceEquals(row[4], action.animationCompleteEvent))
+                if (row == null || row.Length != 5 || !(row[0] is Delegate call)
+                    || CallbackArguments(call).Where((value, index) => !ReferenceEquals(value, row[index])).Any())
                     throw new InvalidDataException("Persistent callback closed action/event/parameter aliases differ.");
             for (var owner = 0; owner < instances.Length; owner++) for (var field = 0; field < fields.Length; field++) {
                 var value = source.Values[owner][field];
@@ -273,7 +328,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             var graph = codec.Capture(roots, Bind, null, (value, id, path) => { if (!copied.ContainsKey(value)) copied.Add(value, "node[" + id + "]/" + path); });
             if (graph.Unsupported.Length != 0 || copied.Count > 8192) throw new InvalidDataException("Health copied closure is unsupported: " + string.Join(";", graph.Unsupported.Take(8)));
-            foreach (var pair in externals.Where(pair => pair.Value is Delegate)) if (!copied.ContainsKey(pair.Value)) copied.Add(pair.Value, pair.Key);
+            foreach (var owner in Animators()) foreach (var field in AnimatorFields().Where(field => typeof(Delegate).IsAssignableFrom(field.FieldType)))
+                if (field.GetValue(owner.Value) is Delegate callback && !copied.ContainsKey(callback)) copied.Add(callback, owner.Key + "/" + field.Name);
             return copied;
         }
         private sealed class References : IEqualityComparer<object>

@@ -55,13 +55,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // need a restore contract; the legacy weights alone do not close it.
                 if (mesh.HasVertexAttribute(UnityEngine.Rendering.VertexAttribute.BlendWeight))
                     omit("asset-mesh-native-skinning-data");
+                var registeredBounds = CanonicalRegisteredVisualMeshCachePolicy.Owns(mesh);
+                if (registeredBounds) CanonicalPersistentSpriteNativeGuard.ProtectFinalVisual(new[] { mesh }, new[] { HeroController.SilentInstance!.GetComponent<MeshFilter>() });
                 return new { mesh.isReadable, mesh.vertexCount, mesh.subMeshCount, mesh.indexFormat,
                     mesh.bounds, attributes = mesh.GetVertexAttributes(), vertices = CopyHash(mesh.vertices, 12),
                     normals = CopyHash(mesh.normals, 12), tangents = CopyHash(mesh.tangents, 16),
                     colors = CopyHash(mesh.colors, 16), uv = uv.ToArray(),
                     bindposes = CopyHash(mesh.bindposes, 64),
                     submeshes = Enumerable.Range(0, mesh.subMeshCount).Select(index => new {
-                        description = mesh.GetSubMesh(index), indices = CopyHash(mesh.GetIndices(index, false), 4) }).ToArray(),
+                        description = registeredBounds ? CanonicalRegisteredVisualMeshCachePolicy.Project(mesh.GetSubMesh(index), mesh.bounds) : mesh.GetSubMesh(index), indices = CopyHash(mesh.GetIndices(index, false), 4) }).ToArray(),
                     blendShapes = shapes.ToArray() };
             }
             if (asset is Sprite sprite)

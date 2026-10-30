@@ -95,6 +95,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
         }
 
+        // A synchronous read helper may already be inside the boundary's
+        // validated scope. Reuse only that same-thread live scope; standalone
+        // reads acquire and dispose their own validation. Never cross a loop.
+        internal static CheckpointValidation? ReadOnlyCheckpointScope()
+        {
+            if (checkpointValidation == null) return new CheckpointValidation();
+            RequirePinnedEngine();
+            return null;
+        }
+
         internal static ProcessModule RequirePinnedEngine()
         {
             var transactionEngine = actualDValidation?.RequireEngine();

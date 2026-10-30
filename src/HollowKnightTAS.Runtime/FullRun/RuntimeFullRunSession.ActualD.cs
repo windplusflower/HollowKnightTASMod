@@ -194,18 +194,21 @@ namespace HollowKnightTAS.Runtime.FullRun
             bool Admission() {
                 ownerAdmission();
                 var observedStage = applicationStage + "/" + LoadingSerialSceneProbe.ExperimentalTargetStage;
-                if (observedStage != lastApplicationStage && applicationMilestones.Count < 64) {
+                if (observedStage != lastApplicationStage && applicationMilestones.Count < 128) {
                     applicationMilestones.Add(observedStage + "@" + applicationBudget.ElapsedMilliseconds);
                     lastApplicationStage = observedStage;
                 }
+                RequireDeadline();
+                return job.Phase == "ApplyingActualD" && clock.IsPaused && !clock.IsFinished && movieFrame == 0
+                    && input.ConsumedSamples == 0 && movieInputNativeOrigin == expectedOrigin
+                    && clock.CurrentFrameIndex == (imported ? source.NativeFrame : targetNative);
+            }
+            void RequireDeadline() {
                 if (applicationBudget.ElapsedMilliseconds >= 9000)
                     throw new TimeoutException("Actual D transaction exceeded its original bounded command budget at " + applicationStage
                         + "/" + LoadingSerialSceneProbe.ExperimentalTargetStage + ";elapsedMilliseconds=" + applicationBudget.ElapsedMilliseconds
                         + ";milestones=" + string.Join(",", applicationMilestones)
                         + ";readbackMetrics=" + JsonConvert.SerializeObject(LoadingSerialSceneProbe.ExperimentalReadbackMetrics) + "; retire process.");
-                return job.Phase == "ApplyingActualD" && clock.IsPaused && !clock.IsFinished && movieFrame == 0
-                    && input.ConsumedSamples == 0 && movieInputNativeOrigin == expectedOrigin
-                    && clock.CurrentFrameIndex == (imported ? source.NativeFrame : targetNative);
             }
             actualDApplicationStarted = true; job.Phase = "ApplyingActualD";
             using var engineValidation = new LoadingEngineClockProbe.ActualDValidation();
@@ -256,12 +259,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             gameUpdateTimeSeconds = BitConverter.Int64BitsToDouble(session.GameUpdateTimeBits); executedMovieSeconds = BitConverter.Int64BitsToDouble(session.ExecutedMovieSecondsBits);
             if (JsonConvert.SerializeObject(CaptureActualSessionCarry(clock.CurrentFrameIndex)) != JsonConvert.SerializeObject(session))
                 throw new InvalidOperationException("Actual D TAS continuation complete raw readback differs.");
+            RequireDeadline();
+            var applicationElapsedMilliseconds = applicationBudget.ElapsedMilliseconds;
             job.Phase = "ActualDAppliedPaused";
             File.WriteAllText(Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")!, "actual-d-application.json"),
                 JsonConvert.SerializeObject(new { applicationExecuted = true, source.Ordinal, source.Route, source.MovieFrame, source.NativeFrame,
                     consumedSamples = input.ConsumedSamples, sourcePrefix = session.MoviePrefixSha256, sourceDBytes = source.Main.Length + source.Input.Length + source.Geo.Length + source.Map.Length + source.Marker.Length + source.MapKeyText.Length + source.MapKeyParents.Length + source.Physics.Length,
                     applicationMilestones,
-                    applicationElapsedMilliseconds = applicationBudget.ElapsedMilliseconds,
+                    applicationElapsedMilliseconds,
                     engineModuleIdentityChecks = engineValidation.ModuleIdentityChecks,
                     codecReadbackMetrics = LoadingSerialSceneProbe.ExperimentalReadbackMetrics,
                     registeredR2R6S0SourceContractSatisfied = true,

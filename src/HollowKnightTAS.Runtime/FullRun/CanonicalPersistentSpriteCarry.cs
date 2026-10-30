@@ -18,6 +18,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public object?[][] Values = Array.Empty<object?[]>();
             public byte[][] Meshes = Array.Empty<byte[]>();
             public CanonicalPersistentSpriteContinuation.Data Continuation = new CanonicalPersistentSpriteContinuation.Data();
+            public CanonicalFinalVisualCarry.Data FinalVisual = new CanonicalFinalVisualCarry.Data();
         }
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
         private static readonly string[] OriginalNames = { "mesh", "meshVertices", "meshNormals", "meshTangents", "meshColors",
@@ -44,7 +45,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Owners = owners.Keys.ToArray(), Fields = fields.Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName).ToArray(),
                 Values = owners.Values.Select(owner => fields.Select(field => field.GetValue(owner)).ToArray()).ToArray(),
                 Meshes = owners.Values.Select(owner => CanonicalPersistentSpriteMeshSnapshot.Capture((Mesh)fields[0].GetValue(owner)).Encode()).ToArray(),
-                Continuation = CanonicalPersistentSpriteContinuation.Capture()
+                Continuation = CanonicalPersistentSpriteContinuation.Capture(), FinalVisual = CanonicalFinalVisualCarry.Capture()
             };
         }
         internal static SortedDictionary<string, object> Roots(Data data) {
