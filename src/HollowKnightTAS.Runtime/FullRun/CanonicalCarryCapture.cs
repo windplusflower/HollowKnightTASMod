@@ -445,7 +445,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                             throw new InvalidOperationException("Actual Hero trigger source invocation/alias readback differs.");
                     });
                     byte[] CallbackBytes(CanonicalHeroAnimationCallbacks.Data data) => codec.Encode(codec.Capture(
-                        new SortedDictionary<string, object>(StringComparer.Ordinal) { [CanonicalHeroAnimationCallbacks.Root] = data }, _ => null));
+                        new SortedDictionary<string, object>(StringComparer.Ordinal) { [CanonicalHeroAnimationCallbacks.Root] = data },
+                        value => CanonicalHeroAnimationCallbacks.BindReadbackReference(heroCallbacks, value)));
                     var callbackBits = CallbackBytes(heroCallbacks);
                     sourceChecks.Add(() => {
                         if (!callbackBits.SequenceEqual(CallbackBytes(CanonicalHeroAnimationCallbacks.Capture(identities))))

@@ -63,6 +63,19 @@ try {
  $broken=$ctor.Invoke([object[]]@($glyphSlots));$rejected=$false
  try{$catalogType.GetMethod('Resolve',$instance).Invoke($broken,[object[]]@($binding))|Out-Null}catch{$rejected=$_.Exception.InnerException.Message.Contains('aliases differ')}
  if(-not$rejected){throw 'Cloned font glyph alias was accepted'}
+ $heroCallbacks=$assembly.GetType('HollowKnightTAS.Runtime.FullRun.CanonicalHeroAnimationCallbacks',$true)
+ if($heroCallbacks.GetMethod('ControllerFields',$static).Invoke($null,@()).Length-ne17){throw 'Hero animation controller full original field ABI differs'}
+ $controllerMethod=$heroCallbacks.GetMethod('ControllerMethod',$static).Invoke($null,@())
+ $controllerType=$game.GetType('HeroAnimationController',$true)
+ $controller=[Runtime.Serialization.FormatterServices]::GetUninitializedObject($controllerType)
+ $controllerDelegateType=[Action``2].MakeGenericType([type[]]@($game.GetType('tk2dSpriteAnimator',$true),$game.GetType('tk2dSpriteAnimationClip',$true)))
+ $controllerCallback=[Delegate]::CreateDelegate($controllerDelegateType,$controller,$controllerMethod)
+ if($controllerMethod.MetadataToken-ne0x0600028e-or-not[object]::ReferenceEquals($controllerCallback.Target,$controller)){throw 'Original Hero controller callback binding differs'}
+ $heroDataType=$heroCallbacks.GetNestedType('Data',[Reflection.BindingFlags]'Public,NonPublic')
+ $heroData=[Activator]::CreateInstance($heroDataType,$true);$heroRef=[object]::new()
+ $heroDataType.GetField('ControllerValues').SetValue($heroData,[object[]]@($heroRef,$heroRef))
+ $bindHero=$heroCallbacks.GetMethod('BindReadbackReference',$static)
+ if($bindHero.Invoke($null,[object[]]@($heroData,$heroRef))-ne'Hero-animation/source-reference[0]'-or$null-ne$bindHero.Invoke($null,[object[]]@($heroData,[object]::new()))){throw 'Hero readback binding hid a changed reference alias'}
  $callbackMethods=$assembly.GetType('HollowKnightTAS.Runtime.FullRun.CanonicalHeroAnimationCallbacks',$true).GetMethod('Method',$static)
  $callbackCount=0
  foreach($actionName in @('Tk2dPlayAnimationWithEvents','Tk2dWatchAnimationEvents')){
@@ -77,7 +90,7 @@ try {
    $callbackCount++
   }
  }
- $result=[ordered]@{completeTmpFields=223;completeSubmeshFields=13;animators=13;nativeContinuations=26;actualTmpGraphNodes=$graph.Nodes.Length;actualTmpFixtureBytes=$bytes.Length;noUnsupported=$true;canonicalWireRoundtrip=$true;nonBoundsSubmeshFieldsPreserved=$true;originalFontGlyphRebound=$true;clonedGlyphAliasRejected=$true;pinnedOriginalClosedCallbacks=$callbackCount;newStandaloneWireSegments=0;nativeAcceptanceNotClaimed=$true}
+ $result=[ordered]@{completeTmpFields=223;completeSubmeshFields=13;animators=13;nativeContinuations=26;heroControllerFields=17;originalHeroControllerCallback=$true;changedHeroReferenceAliasRejected=$true;actualTmpGraphNodes=$graph.Nodes.Length;actualTmpFixtureBytes=$bytes.Length;noUnsupported=$true;canonicalWireRoundtrip=$true;nonBoundsSubmeshFieldsPreserved=$true;originalFontGlyphRebound=$true;clonedGlyphAliasRejected=$true;pinnedOriginalClosedCallbacks=$callbackCount;newStandaloneWireSegments=0;nativeAcceptanceNotClaimed=$true}
  if($Output){$result|ConvertTo-Json|Set-Content -LiteralPath $Output -Encoding utf8}
  $result|ConvertTo-Json -Compress
 } finally {[AppDomain]::CurrentDomain.remove_AssemblyResolve($resolve)}
