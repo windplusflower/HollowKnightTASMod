@@ -16,7 +16,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         internal const string Binding = "PersistentSprites/FinalVisual/";
         internal const string Shadow = "Hero/Effects/Shadow Recharge";
-        internal const string Schema = "three-original-TMP-223-and-two-submesh13:full-fields-aliases-readonly:original-font-glyph-slots:source-buffer-refresh:shadow-source-renderer:v2";
+        internal const string Schema = "three-original-TMP-223-and-two-submesh13:full-fields-aliases-readonly:original-font-glyph-slots:source-buffer-refresh:hero-and-shadow-source-renderer:v3";
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         internal static readonly Type[] DataTypes = { typeof(Data), typeof(int[]), typeof(string[]), typeof(object[][]), typeof(object[]) };
         internal static Type[] OriginalDataTypes()
@@ -41,7 +41,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             public string[] Owners = Array.Empty<string>(), Fields = Array.Empty<string>(), Native = Array.Empty<string>();
             public object?[][] Values = Array.Empty<object?[]>();
             public CanonicalMarkerReadonlyCarry.Data Readonly = new CanonicalMarkerReadonlyCarry.Data();
-            public bool ShadowRenderer;
+            public bool ShadowRenderer, HeroRenderer;
+            public string HeroActivity = "";
         }
         private static Transform Find(Transform parent, string path)
         {
@@ -142,7 +143,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             return new Data { Owners = directory.Keys.ToArray(), Fields = directory.SelectMany(pair => Fields(pair.Value.GetType()).Select(field => pair.Key + "/" + FieldName(field))).ToArray(),
                 Values = directory.Values.Select(owner => Fields(owner.GetType()).Select(field => field.GetValue(owner)).ToArray()).ToArray(),
                 Native = directory.Values.Select(Native).ToArray(), Readonly = CanonicalMarkerReadonlyCarry.CaptureFinalVisual(directory),
-                ShadowRenderer = ShadowSprite().GetComponent<MeshRenderer>().enabled };
+                ShadowRenderer = ShadowSprite().GetComponent<MeshRenderer>().enabled,
+                HeroRenderer = HeroController.SilentInstance!.GetComponent<MeshRenderer>().enabled, HeroActivity = HeroActivity() };
+        }
+        private static string HeroActivity()
+        {
+            var sprite = HeroController.SilentInstance!.GetComponent<tk2dSprite>();
+            return sprite.enabled + ":" + sprite.gameObject.activeSelf + ":" + sprite.gameObject.activeInHierarchy;
         }
         internal static void Preflight(CanonicalCarryGraphData graph)
         {
@@ -216,7 +223,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static Action Prepare(Data source, Data current, CanonicalCarryGraphCodec codec, Func<bool> admitted, out Action verify)
         {
             if (source.Schema != Schema || !source.Owners.SequenceEqual(current.Owners) || !source.Fields.SequenceEqual(current.Fields)
-                || !source.Native.SequenceEqual(current.Native) || source.Values.Length != 5)
+                || !source.Native.SequenceEqual(current.Native) || source.Values.Length != 5 || source.HeroActivity != current.HeroActivity)
                 throw new InvalidDataException("Final visual source ABI/native lifecycle/pose differs.");
             var directory = Directory(); var owners = directory.Values.ToArray();
             var fields = owners.Select(owner => Fields(owner.GetType())).ToArray();
@@ -244,6 +251,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidOperationException("Final visual full source field/alias readback differs: " + directory.Keys.ElementAt(i) + "/" + fields[i][f].Name);
                 }
                 if (ShadowSprite().GetComponent<MeshRenderer>().enabled != source.ShadowRenderer) throw new InvalidOperationException("Shadow source renderer readback differs.");
+                if (HeroActivity() != source.HeroActivity || HeroController.SilentInstance!.GetComponent<MeshRenderer>().enabled != source.HeroRenderer)
+                    throw new InvalidOperationException("Hero source activity/renderer readback differs.");
             }
             verify = Verify;
             return () => {
@@ -263,6 +272,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     text.UpdateVertexData(); // pinned original: vertices, UV0/1, colors and bounds only; no callbacks/activation
                 }
                 ShadowSprite().GetComponent<MeshRenderer>().enabled = source.ShadowRenderer;
+                HeroController.SilentInstance!.GetComponent<MeshRenderer>().enabled = source.HeroRenderer;
                 Verify();
             };
         }
