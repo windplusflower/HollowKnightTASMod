@@ -179,6 +179,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     for (var f = 1; f < fields.Length; f++) if (!fields[f].IsInitOnly) fields[f].SetValue(currentOwners[i], saved.Values[i][f]);
                     snapshots[i].Apply((Mesh)fields[0].GetValue(currentOwners[i]), admitted);
                 }
+                CanonicalEventDataCarry.PrepareSourceReapply(main, admitted)();
                 Verify();
             };
         }

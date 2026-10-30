@@ -48,4 +48,37 @@ public sealed class LoadingSceneRootIdentityTests
         Assert.IsFalse(roots.Contains(1)); Assert.AreEqual(0, roots.Ordinal(2, 9));
         Assert.ThrowsExactly<InvalidOperationException>(() => roots.Ordinal(1, 8));
     }
+
+    [TestMethod]
+    public void AdditionalRootsRetainExistingOrdinalsAndAppendNewOnesDeterministically()
+    {
+        var roots = new LoadingSceneRootIdentity();
+        roots.Register(1, "scene", new[] { 100, 200 });
+        Assert.AreEqual(0, roots.Ordinal(1, 100));
+        Assert.AreEqual(1, roots.Ordinal(1, 200));
+        Assert.IsFalse(roots.TryGetOrdinal(1, 300, out _));
+
+        // Dynamically add roots: 100 and 200 still exist, 300 and 400 are added
+        roots.RegisterAdditionalRoots(1, new[] { 100, 200, 300, 400 });
+        Assert.IsTrue(roots.TryGetOrdinal(1, 300, out var ord300));
+        Assert.AreEqual(2, ord300);
+        Assert.AreEqual(0, roots.Ordinal(1, 100));
+        Assert.AreEqual(1, roots.Ordinal(1, 200));
+        Assert.AreEqual(2, roots.Ordinal(1, 300));
+        Assert.AreEqual(3, roots.Ordinal(1, 400));
+
+        // Even if 200 is later destroyed and absent from the new query, its ordinal remains valid
+        roots.RegisterAdditionalRoots(1, new[] { 100, 300, 400, 500 });
+        Assert.AreEqual(4, roots.Ordinal(1, 500));
+        Assert.AreEqual(1, roots.Ordinal(1, 200));
+    }
+
+    [TestMethod]
+    public void AdditionalRootsFailClosedOnUnknownSceneOrZeroRoot()
+    {
+        var roots = new LoadingSceneRootIdentity();
+        roots.Register(1, "scene", new[] { 10 });
+        Assert.ThrowsExactly<InvalidOperationException>(() => roots.RegisterAdditionalRoots(99, new[] { 20 }));
+        Assert.ThrowsExactly<InvalidOperationException>(() => roots.RegisterAdditionalRoots(1, new[] { 10, 0 }));
+    }
 }

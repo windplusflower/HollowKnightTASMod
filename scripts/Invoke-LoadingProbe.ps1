@@ -398,16 +398,17 @@ try {
             -WorkingDirectory $companion -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $destination 'stdout.log') -RedirectStandardError (Join-Path $destination 'stderr.log')
         [ordered]@{ run=$run; pid=$hostProcess.Id; status='running' } | ConvertTo-Json -Compress | Write-Output
+        $probeHostTimeoutMs = if ($ActualDSuffixToEnd) { 600000 } else { 270000 }
         if ($ActualDStage) {
             $relayPacket = $null
             if ($ActualDStage -eq 'Target') { $relayPacket = $ActualDRelayState.Packet; $ActualDRelayState.Remove('Packet') }
-            $relayTask = [HollowKnightTAS.Diagnostics.ActualDMemoryRelay]::ExchangeServer($relayPipe, $ActualDStage -eq 'Source', $relayPacket, [Math]::Max(1, 270000 - [int]$hostLifetime.ElapsedMilliseconds), $hostProcess)
+            $relayTask = [HollowKnightTAS.Diagnostics.ActualDMemoryRelay]::ExchangeServer($relayPipe, $ActualDStage -eq 'Source', $relayPacket, [Math]::Max(1, $probeHostTimeoutMs - [int]$hostLifetime.ElapsedMilliseconds), $hostProcess)
             $relayPacket = $relayTask.GetAwaiter().GetResult()
             $relayPipe.Dispose(); $relayPipe = $null
             if ($ActualDStage -eq 'Source') { $ActualDRelayState.Packet = $relayPacket }
             $relayPacket = $null; $relayTask = $null
         }
-        if (-not $hostProcess.WaitForExit([Math]::Max(1, 270000 - [int]$hostLifetime.ElapsedMilliseconds))) { $hostProcess.Kill(); throw 'Probe host timed out.' }
+        if (-not $hostProcess.WaitForExit([Math]::Max(1, $probeHostTimeoutMs - [int]$hostLifetime.ElapsedMilliseconds))) { $hostProcess.Kill(); throw 'Probe host timed out.' }
         $hostProcess.Refresh()
         foreach ($logName in @('Player.log','ModLog.txt')) {
             $logSource = Join-Path $saveRoot $logName

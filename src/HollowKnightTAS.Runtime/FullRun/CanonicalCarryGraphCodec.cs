@@ -516,7 +516,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             void CheckSlot(object? expectedValue, object? currentValue, Type declared, string name)
             {
                 if (!SameRawSlot(expectedValue, currentValue, declared, 0))
-                    throw new InvalidOperationException("Carry prepared live slot changed or readback differs: " + name);
+                    throw new InvalidOperationException("Carry prepared live slot changed or readback differs: " + name
+                        + " (expected=" + (expectedValue == null ? "null" : (expectedValue.GetType().FullName + "@" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(expectedValue)))
+                        + ", current=" + (currentValue == null ? "null" : (currentValue.GetType().FullName + "@" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(currentValue))) + ")");
             }
             var preparedFields = preflight == null ? null : new object?[objects.Length][];
             void Fill(int index, int depth)

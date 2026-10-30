@@ -1649,8 +1649,27 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var path = new Stack<string>();
                     for (var current = go.transform; current != null; current = current.parent)
                     {
-                        var index = current.parent == null
-                            ? sceneRoots.Ordinal(scene.handle, current.gameObject.GetInstanceID()) : current.GetSiblingIndex();
+                        int index;
+                        if (current.parent == null)
+                        {
+                            var currentGo = current.gameObject;
+                            var rScene = currentGo.scene;
+                            var rootId = currentGo.GetInstanceID();
+                            if (!sceneRoots.Contains(rScene.handle))
+                            {
+                                if (rScene.rootCount > 100000) throw new InvalidOperationException("P0 scene-root list exceeds its budget.");
+                                sceneRoots.Register(rScene.handle, rScene.name,
+                                    rScene.GetRootGameObjects().Select(root => root == null ? 0 : root.GetInstanceID()).ToArray());
+                            }
+                            if (!sceneRoots.TryGetOrdinal(rScene.handle, rootId, out index))
+                            {
+                                if (rScene.rootCount > 100000) throw new InvalidOperationException("P0 scene-root list exceeds its budget.");
+                                sceneRoots.RegisterAdditionalRoots(rScene.handle,
+                                    rScene.GetRootGameObjects().Select(root => root == null ? 0 : root.GetInstanceID()).ToArray());
+                                index = sceneRoots.Ordinal(rScene.handle, rootId);
+                            }
+                        }
+                        else index = current.GetSiblingIndex();
                         path.Push(current.name + "[" + index + "]");
                     }
                     id = scene.name + ":" + string.Join("/", path);

@@ -24,6 +24,7 @@ internal static partial class StudioScenarioHarness
     static bool worldlineFaultScenarios;
     static bool fsmScenarios;
     static bool customKeyScenarios;
+    static bool suffixToEndScenarios;
     static bool memoryGateEnabled;
     static T Field<T>(object owner, string name) => (T)owner.GetType().GetField(name,
         BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(owner)!;
@@ -75,6 +76,7 @@ internal static partial class StudioScenarioHarness
         worldlineFaultScenarios = args.Contains("--worldline-fault");
         fsmScenarios = args.Contains("--boss-fsm");
         customKeyScenarios = args.Contains("--custom-keys");
+        suffixToEndScenarios = args.Contains("--probe-actual-d-suffix-to-end");
         memoryGateEnabled = false; // Preserve the user-disabled memory gates.
         if (!args.Contains("--headless") || Process.GetProcessesByName("hollow_knight").Length != 0
             || Process.GetProcessesByName("HollowKnightTAS.Companion").Length != 0) return 12;
@@ -231,6 +233,7 @@ internal static partial class StudioScenarioHarness
     static void Guard()
     {
         var deadline = DateTime.UtcNow.AddMinutes(battleVideoScenarios || worldlineFaultScenarios || customKeyScenarios ? 20
+            : suffixToEndScenarios ? 10
             : videoExportScenarios || fsmScenarios || Environment.GetEnvironmentVariable("HKTAS_CINEMATIC_ACCEPTANCE") == "1" ? 8 : 4);
         const ulong minimumPhysical = 1536UL * 1024 * 1024;
         const ulong minimumCommit = 2UL * 1024 * 1024 * 1024;

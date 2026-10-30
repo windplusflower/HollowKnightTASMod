@@ -483,6 +483,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             Progress("R6-FSM-execution-stack-reset", new { });
             var metadataAudit = CanonicalBoundaryStaticPolicy.ResetActionMetadata();
             Progress("R6-action-metadata-caches-reset", metadataAudit);
+            var heroFsmAudit = CanonicalBoundaryHeroFsmPolicy.ResetDestroyedWrappers(identities);
+            Progress("R6-Hero-FSM-destroyed-wrappers-reset", heroFsmAudit);
             Progress("R6-SDK-device-type-table-reset", CanonicalBoundaryInputTablePolicy.Reset());
             Progress("R2-registered-destroyed-boss-UI-animation-callbacks", retiredUiAnimations.Reset());
             if (bossContext != null) Progress("gameplay-explicit-challenge-context-common-Canon", bossContext.Apply());

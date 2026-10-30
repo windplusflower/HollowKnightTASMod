@@ -389,7 +389,7 @@ internal static partial class StudioScenarioHarness
                         await Call(new Dictionary<string, string> { ["phase"] = "d-exp-source-resume", ["endMovie"] = originalEnd.ToString() });
                         boot.Refresh(); await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
                         await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("source suffix native fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
-                            "original source runs the same SceneLoad and bounded 32-Movie suffix", 120);
+                            "original source runs the same SceneLoad and bounded 32-Movie suffix", suffixToEnd ? 300 : 120);
                         var originalState = await VideoRuntimeState(vm);
                         Require(originalState["movieFrame"] == originalEnd.ToString() && originalState["mismatchCount"] == "0" && originalState["error"] == "",
                             "original source suffix has exact endpoint and no input mismatch");
@@ -463,7 +463,7 @@ internal static partial class StudioScenarioHarness
                         await Call(new Dictionary<string, string> { ["phase"] = "d-exp-resume", ["endMovie"] = suffixEnd.ToString() });
                         boot.Refresh(); await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
                         await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("actual D suffix native fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
-                            "original SceneLoad and bounded source Movie suffix reach a paused endpoint", 120);
+                            "original SceneLoad and bounded source Movie suffix reach a paused endpoint", suffixToEnd ? 300 : 120);
                         var suffixState = await VideoRuntimeState(vm);
                         Require(suffixState["movieFrame"] == suffixEnd.ToString() && suffixState["mismatchCount"] == "0"
                             && suffixState["error"] == "", "actual D suffix has its exact Movie endpoint and no input mismatch");

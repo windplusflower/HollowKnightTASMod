@@ -159,6 +159,15 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static SortedDictionary<string, object> ExternalDirectory()
         {
             var result = new SortedDictionary<string, object>(StringComparer.Ordinal);
+            void AddAlias(string key, object value) {
+                if (result.TryGetValue(key, out var previous)) {
+                    if (!ReferenceEquals(previous, value))
+                        throw new InvalidDataException("Persistent callback argument binding is ambiguous.");
+                    return;
+                }
+                if (result.Values.Any(other => ReferenceEquals(other, value))) return;
+                result.Add(key, value);
+            }
             foreach (var pair in Animators()) {
                 var library = (tk2dSpriteAnimation)AnimatorFields()[0].GetValue(pair.Value);
                 if (library == null || library.clips == null || library.clips.Length > 4096) throw new InvalidDataException("Original animator library differs.");
@@ -171,8 +180,47 @@ namespace HollowKnightTAS.Runtime.FullRun
                     ShadowCallbacks(pair.Value, result);
                     continue;
                 }
+                var fsms = pair.Value.GetComponents<PlayMakerFSM>();
+                var actual = AnimatorFields().Where(field => typeof(Delegate).IsAssignableFrom(field.FieldType))
+                    .Select(field => (Delegate?)field.GetValue(pair.Value)).Where(value => value != null).Cast<Delegate>().ToArray();
+                for (var f = 0; f < fsms.Length; f++) {
+                    var fsmOwner = fsms[f];
+                    var fsm = Raw.GetValue(fsmOwner) as Fsm;
+                    if (fsm == null) continue;
+                    var states = (FsmState[])States.GetValue(fsm);
+                    if (states == null) continue;
+                    for (var s = 0; s < states.Length; s++) {
+                        var actionState = states[s];
+                        var actions = (FsmStateAction[])Actions.GetValue(actionState);
+                        if (actions == null) continue;
+                        for (var a = 0; a < actions.Length; a++) {
+                            var action = actions[a];
+                            if (action.GetType() != typeof(Tk2dPlayAnimationWithEvents) && action.GetType() != typeof(Tk2dWatchAnimationEvents)) continue;
+                            var actionKey = pair.Key + "/" + f + "/" + fsm.Name + "/" + s + "/" + actionState.Name + "/" + a;
+                            AddAlias("PersistentAnimator/action/" + actionKey, action);
+                            var play = action as Tk2dPlayAnimationWithEvents;
+                            if (play?.clipName != null) AddAlias("PersistentAnimator/clip-name/" + actionKey + "/" + play.clipName.Value, play.clipName);
+                            var watch = action as Tk2dWatchAnimationEvents;
+                            var triggerEvent = play != null ? play.animationTriggerEvent : watch!.animationTriggerEvent;
+                            var completeEvent = play != null ? play.animationCompleteEvent : watch!.animationCompleteEvent;
+                            foreach (var complete in new[] { true, false }) {
+                                var method = CanonicalHeroAnimationCallbacks.Method(action.GetType(), complete);
+                                var type = complete ? typeof(Action<tk2dSpriteAnimator, tk2dSpriteAnimationClip>) : typeof(Action<tk2dSpriteAnimator, tk2dSpriteAnimationClip, int>);
+                                var candidate = Delegate.CreateDelegate(type, action, method);
+                                var existing = actual.SingleOrDefault(value => value.Equals(candidate));
+                                var del = existing ?? candidate;
+                                var fieldName = complete ? "AnimationCompleted" : "AnimationEventTriggered";
+                                var desc = actionKey + "/" + method.MetadataToken + "/" + play?.clipName?.Value + "/" + triggerEvent?.Name + "/" + completeEvent?.Name;
+                                var descriptor = "PersistentAnimator/callback/" + pair.Key + "/" + fieldName + "/" + desc;
+                                if (!result.ContainsKey(descriptor) && !result.Values.Any(v => ReferenceEquals(v, del)))
+                                    result.Add(descriptor, del);
+                            }
+                        }
+                    }
+                }
                 foreach (var field in AnimatorFields().Where(field => typeof(Delegate).IsAssignableFrom(field.FieldType))) {
                     var callback = (Delegate?)field.GetValue(pair.Value); if (callback == null) continue;
+                    if (result.Values.Any(value => ReferenceEquals(value, callback))) continue;
                     var calls = callback.GetInvocationList();
                     if (calls.Length != 1) throw new InvalidDataException("Persistent animator callback count differs.");
                     var descriptions = new List<string>();
@@ -187,7 +235,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                             || !ReferenceEquals(action.GetType().GetField("_sprite", Flags)!.GetValue(action), pair.Value))
                             throw new InvalidDataException("Persistent animator callback original owner alias differs.");
                         // Only FSMs on this exact persistent body can subscribe.
-                        var fsms = pair.Value.GetComponents<PlayMakerFSM>();
                         var matches = Enumerable.Range(0, fsms.Length).Where(index => ReferenceEquals(fsms[index], fsmOwner)).ToArray();
                         var states = (FsmState[])States.GetValue(action.Fsm);
                         var stateMatches = Enumerable.Range(0, states.Length).Where(index => ReferenceEquals(states[index], actionState)).ToArray();
@@ -199,11 +246,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                         var arguments = CallbackArguments(call);
                         var clipName = arguments[2] as FsmString;
                         descriptions.Add(actionKey + "/" + call.Method.MetadataToken + "/" + clipName?.Value + "/" + ((FsmEvent?)arguments[3])?.Name + "/" + ((FsmEvent?)arguments[4])?.Name);
-                        void AddAlias(string key, object value) {
-                            if (result.TryGetValue(key, out var previous) ? !ReferenceEquals(previous, value) : result.Values.Any(other => ReferenceEquals(other, value)))
-                                throw new InvalidDataException("Persistent callback argument binding is ambiguous.");
-                            result[key] = value;
-                        }
                         AddAlias("PersistentAnimator/action/" + actionKey, action);
                         if (clipName != null) AddAlias("PersistentAnimator/clip-name/" + actionKey + "/" + clipName.Value, clipName);
                     }

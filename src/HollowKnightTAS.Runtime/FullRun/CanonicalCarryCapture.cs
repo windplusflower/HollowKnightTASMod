@@ -517,7 +517,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 domainActions.Add(() => {
                     ActualTargetStage = "geo-source-producer";
                     var envelope = actualSourceValidation ?? throw new InvalidOperationException("Post-main Geo has no sealed source envelope.");
-                    void RequireMain() { main.VerifyReadback(); sdk.VerifyReadback(); }
+                    void RequireMain() {
+
+
+                        main.VerifyReadback(); sdk.VerifyReadback();
+                    }
                     Action? applyGeo = null;
                     Action? beginGeoLifecycle = null;
                     Action? requireGeoNative = null;
@@ -565,7 +569,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 domainActions.Add(() => {
                     ActualTargetStage = "marker-source-producer";
                     var envelope = actualSourceValidation ?? throw new InvalidOperationException("Post-main Marker has no sealed source envelope.");
-                    void RequireMain() { main.VerifyReadback(); sdk.VerifyReadback(); }
+                    void RequireMain() {
+
+
+                        main.VerifyReadback(); sdk.VerifyReadback();
+                    }
                     Action? applyMarker = null;
                     Action? beginMarkerLifecycle = null;
                     Action? requireMarkerNative = null;
@@ -626,7 +634,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var leafIncoming = consumeMapKeyIncoming();
                     var parentIncoming = consumeMapKeyParentIncoming();
                     var oldParents = parentIncoming.OwnedDirectory();
-                    void RequireMain() { main.VerifyReadback(); sdk.VerifyReadback(); }
+                    void RequireMain() {
+
+
+                        main.VerifyReadback(); sdk.VerifyReadback();
+                    }
                     var parent = mapKeyParentDomain.Prepare(envelope.MapKeyParents, keys, parentIncoming,
                         mainView!, RequireMain, bindings.ResolveTarget, admitted);
                     // Resolve all old external identities while the old native
@@ -670,8 +682,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                             parent.CompleteColdCanon();
                         });
                         var coldReadback = verifyColdIncoming ?? throw new InvalidOperationException("Dependent Map Key Canon did not expose its real incoming verifier.");
+
+                        CanonicalEventDataCarry.PrepareSourceReapply(mainView!, admitted)();
                         var produced = LoadingGeoIncomingReferences.BuildMapKeyDirectory(keys);
+
                         parent.RebindLeaves(produced);
+
                         ActualTargetStage = "map-key-text-source-graph";
                         IReadOnlyDictionary<string, object>? finalLeaves = null;
                         var applyMapKey = mapKeyDomain.Prepare(envelope.MapKeyText, keys, mainView!, RequireMain,
@@ -679,7 +695,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (finalLeaves == null) throw new InvalidDataException("Map Key final prepared leaf directory is absent.");
                         var mainChanges = Replacements(mainOriginal, oldLeaves, finalLeaves);
                         var sdkChanges = Replacements(sdkOriginal, oldLeaves, finalLeaves);
+
                         if (mainChanges.Count != 0) mainRebinding!.PrepareMapKey(mainChanges).Apply();
+
                         if (sdkChanges.Count != 0) sdkRebinding!.PrepareMapKey(sdkChanges).Apply();
                         RequireMain();
                         CanonicalEventDataCarry.PrepareSourceReapply(mainView!, admitted)();
@@ -695,7 +713,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     ActualTargetStage = "hud-presentation-original-border-producer";
                     var envelope = actualSourceValidation!;
                     var inventory = CanonicalHudPresentationDirectory.Current();
-                    void RequireMain() { main.VerifyReadback(); sdk.VerifyReadback(); }
+                    void RequireMain() {
+
+
+                        main.VerifyReadback(); sdk.VerifyReadback();
+                    }
                     Action? applySource = null; Action? verifySource = null;
                     var restore = restoreBorderSource ?? throw new InvalidOperationException("Original Border source producer is not wired.");
                     restore(borderSource, (old, produced, roots) => {
@@ -731,7 +753,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     ActualTargetStage = "persistent-sprite-source-values";
                     var incoming = (snapshotSpriteIncoming ?? throw new InvalidOperationException("Persistent sprite managed proof absent."))();
                     var native = spriteNative ?? throw new InvalidOperationException("Persistent sprite native proof was not prepared.");
-                    void RequireMain() { main.VerifyReadback(); sdk.VerifyReadback(); }
+                    void RequireMain() {
+
+
+                        main.VerifyReadback(); sdk.VerifyReadback();
+                    }
                     void RequireIncoming() {
                         (spriteRequiredAssets ?? throw new InvalidOperationException("Persistent sprite required assets were not prepared.")).RequireCurrent();
                         (spriteMainRootWitness ?? throw new InvalidOperationException("Persistent sprite main-root witness absent.")).RequirePrepared(mainView!);

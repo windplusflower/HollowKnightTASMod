@@ -56,6 +56,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return () => {
                 if (consumed || !admitted()) throw new InvalidOperationException("EventData source replay was consumed or lost pause.");
                 consumed = true; RequireOwner();
+
                 using var transaction = CanonicalFieldWriteTransaction.Begin(fields.Select(field => new CanonicalFieldWriteTransaction.Target(owner, field)));
                 for (var i = 0; i < fields.Length; i++) fields[i].SetValue(owner, values[i]);
                 for (var i = 0; i < fields.Length; i++)
