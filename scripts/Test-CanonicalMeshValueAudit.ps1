@@ -1,10 +1,10 @@
-$ErrorActionPreference='Stop'
+﻿$ErrorActionPreference='Stop'
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $bin=Join-Path $repo 'src/HollowKnightTAS.Runtime/bin/Release'
 $managed='D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/Managed'
 $resolver=[ResolveEventHandler]{param($sender,$e) $n=([Reflection.AssemblyName]$e.Name).Name+'.dll';foreach($d in @($bin,$managed)){$p=Join-Path $d $n;if([IO.File]::Exists($p)){return [Reflection.Assembly]::LoadFrom($p)}};return $null}
 [AppDomain]::CurrentDomain.add_AssemblyResolve($resolver)
-Add-Type 'public sealed class MeshAuditProjectionFixture { public int vertexCount; public object[] uv; public object[] submeshes; public object[] blendShapes; public object vertices; } public sealed class MeshAuditCopiedHashFixture { public int count, stride; public string sha256; }'
+Add-Type 'public struct MeshAuditDescriptorFixture { public int indexStart, indexCount; public float bound; } public sealed class MeshAuditSubmeshFixture { public MeshAuditDescriptorFixture description; public object indices; } public sealed class MeshAuditProjectionFixture { public int vertexCount; public object[] uv; public object[] submeshes; public object[] blendShapes; public object vertices; } public sealed class MeshAuditCopiedHashFixture { public int count, stride; public string sha256; }'
 try {
  $asm=[Reflection.Assembly]::LoadFrom((Join-Path $bin 'HollowKnightTAS.dll'));$flags=[Reflection.BindingFlags]'Instance,Public,NonPublic'
  $selector=$asm.GetType('HollowKnightTAS.Runtime.FullRun.LoadingGameplayOracle',$true).GetMethod('MeshAuditSelected',[Reflection.BindingFlags]'Static,Public,NonPublic')
@@ -25,5 +25,10 @@ try {
  $copy=[MeshAuditCopiedHashFixture]::new();$copy.count=4;$copy.stride=12;$copy.sha256='a'*64;$a.vertices=$copy
  $z=$read.Invoke($audit,[object[]]@($a,0));$v=$z.fields|Where-Object name -eq 'vertices'
  if($v.digest-ne$copy.sha256-or$v.copiedArrayCount-ne4-or$v.copiedArrayStride-ne12){throw 'Original geometry hash was not reused exactly'}
+ $detailRead=$type.GetMethod('CaptureProjectionWithDetails',$flags)
+ $sub=[MeshAuditSubmeshFixture]::new();$desc=[MeshAuditDescriptorFixture]::new();$desc.indexStart=3;$desc.indexCount=6;$desc.bound=-0.5;$sub.description=$desc;$sub.indices=$copy;$a.submeshes=[object[]]@($sub)
+ $detail=$detailRead.Invoke($audit,[object[]]@($a,0,$true))
+ if($detail.heroSubmeshDetails.Count-ne1-or$detail.heroSubmeshDetails[0].indices.sha256-ne$copy.sha256-or$detail.heroSubmeshDetails[0].descriptor.Count-ne3){throw 'Copied Hero descriptor/index detail incomplete'}
+ $normal=$detailRead.Invoke($audit,[object[]]@($a,0,$false));if($null-ne$normal.heroSubmeshDetails){throw 'Hero details leaked to unselected projection'}
  $audit.Dispose();Write-Output 'Independent Mesh projection field values and same/distinct empty-array alias contracts passed.'
 } finally {[AppDomain]::CurrentDomain.remove_AssemblyResolve($resolver)}

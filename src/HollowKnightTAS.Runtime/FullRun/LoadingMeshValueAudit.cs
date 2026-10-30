@@ -40,8 +40,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             return digest != null && digest.Length == 64;
         }
 
-        internal object Capture(Mesh mesh, object snapshot) => CaptureProjection(snapshot, (int)mesh.hideFlags);
-        internal object CaptureProjection(object snapshot, int hideFlags)
+        internal object Capture(Mesh mesh, object snapshot, bool heroSubmesh = false) => CaptureProjectionWithDetails(snapshot, (int)mesh.hideFlags, heroSubmesh);
+        internal object CaptureProjection(object snapshot, int hideFlags) => CaptureProjectionWithDetails(snapshot, hideFlags, false);
+        internal object CaptureProjectionWithDetails(object snapshot, int hideFlags, bool heroSubmesh)
         {
             var fields = Fields(snapshot.GetType());
             if (fields.Length > 64) throw new InvalidOperationException("Mesh value projection field bound exceeded.");
@@ -78,8 +79,38 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             Visit(snapshot, "projection");
             return new { hideFlags, fields = values.ToArray(), channels = channels.ToArray(),
+                heroSubmeshDetails = heroSubmesh ? SubmeshDetails(snapshot) : null,
                 emptyArrayAliasGroups = empty.Values.Select(paths => paths.OrderBy(path => path, StringComparer.Ordinal).ToArray()).OrderBy(paths => paths[0], StringComparer.Ordinal).ToArray(),
                 independentPerField = true, copiedExistingProjection = true };
+        }
+        private object[] SubmeshDetails(object snapshot)
+        {
+            var field = Fields(snapshot.GetType()).Single(f => Name(f.Name) == "submeshes");
+            var array = (Array)field.GetValue(snapshot);
+            if (array.Length > 256) throw new InvalidOperationException("Hero submesh diagnostic bound exceeded.");
+            var result = new List<object>();
+            for (var index = 0; index < array.Length; index++) {
+                var item = array.GetValue(index)!;
+                var description = Fields(item.GetType()).Single(f => Name(f.Name) == "description").GetValue(item);
+                var indices = Fields(item.GetType()).Single(f => Name(f.Name) == "indices").GetValue(item);
+                if (!CopiedHash(indices, out var digest, out var count, out var stride))
+                    throw new InvalidOperationException("Hero copied index projection missing.");
+                var scalars = new List<object>();
+                void Walk(object value, string path, int depth) {
+                    if (depth > 4 || scalars.Count >= 64) throw new InvalidOperationException("Hero descriptor scalar bound exceeded.");
+                    var type = value.GetType();
+                    if (type.IsPrimitive || type.IsEnum) {
+                        scalars.Add(new { path, type = type.FullName, value,
+                            floatBits = value is float number ? (int?)BitConverter.ToInt32(BitConverter.GetBytes(number), 0) : null });
+                        return;
+                    }
+                    if (!type.IsValueType) throw new InvalidOperationException("Hero descriptor must contain only copied value fields.");
+                    foreach (var child in Fields(type)) Walk(child.GetValue(value)!, path + "." + child.Name, depth + 1);
+                }
+                Walk(description!, "description", 0);
+                result.Add(new { index, descriptor = scalars.ToArray(), indices = new { count, stride, sha256 = digest } });
+            }
+            return result.ToArray();
         }
         public void Dispose() => reader.Dispose();
     }

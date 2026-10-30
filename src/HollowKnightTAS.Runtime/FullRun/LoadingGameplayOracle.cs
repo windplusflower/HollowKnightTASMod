@@ -62,6 +62,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private LoadingMeshValueAudit? meshValueReader;
         private int meshValueBytes, meshValueSamples;
         private bool meshValueRefused;
+        private readonly HashSet<string> heroMeshAuditAssets = new HashSet<string>(StringComparer.Ordinal);
         internal static bool MeshAuditSelected(bool enabled, bool suffix, long movie, long firstFrame) => enabled && suffix && movie == firstFrame;
         private bool MeshValueAuditActive => MeshAuditSelected(meshValueAuditEnabled, suffixCapture, movieFrame(), first);
         private bool MeshReferenceAuditActive => meshReferenceAuditEnabled && (!meshValueAuditEnabled || MeshAuditSelected(true, suffixCapture, movieFrame(), first));
@@ -81,6 +82,18 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (Encoding.UTF8.GetByteCount(audit) > 8 * 1024 * 1024)
                 audit = JsonConvert.SerializeObject(new { diagnosticOnly = true, refused = true, reason = "mesh-value-and-reference-audit-byte-limit", completeStateCoverage = false });
             File.WriteAllText(Path.Combine(directory, "mesh-value-audit-1.json"), audit, new UTF8Encoding(false));
+            var priorGameplay = gameplayRng(); var priorParticles = CaptureParticleRandomState();
+            // Diagnostics must not append bindings to the already sealed raw
+            // sample. Unexpected consumers keep a clearly local diagnostic ID.
+            var batch = LoadingVisualMeshBatchAudit.Capture(unity => unityIds.TryGetValue(unity, out var known) ? known
+                : "unobserved-local-instance:" + unity.GetType().FullName + ":" + unity.GetInstanceID(), meshReferenceAudit.Values);
+            if (priorGameplay != gameplayRng() || !priorParticles.SequenceEqual(CaptureParticleRandomState()))
+                throw new InvalidOperationException("Visual batch reader changed RNG state.");
+            var batchJson = JsonConvert.SerializeObject(new { movieFrame = movie, nativeFrame = native,
+                sampleOrdinal = ordinal, runtimeSha256 = runtimeSha, rngReadOnly = true, batch });
+            if (Encoding.UTF8.GetByteCount(batchJson) > 2 * 1024 * 1024)
+                throw new InvalidOperationException("Visual batch audit byte bound exceeded.");
+            File.WriteAllText(Path.Combine(directory, "visual-mesh-batch-audit-1.json"), batchJson, new UTF8Encoding(false));
         }
         private readonly CanonicalCoverageCatalog coverage = new CanonicalCoverageCatalog();
         private readonly List<CanonicalS0Observation.Root> s0Roots = new List<CanonicalS0Observation.Root>();
@@ -853,7 +866,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             assetArrays.Clear();
             assetValues.BeginSample();
             meshReferenceAudit.Clear(); meshReferenceAuditRefused = false;
-            meshValueAudit.Clear(); meshValueBytes = 0; meshValueRefused = false;
+            meshValueAudit.Clear(); meshValueBytes = 0; meshValueRefused = false; heroMeshAuditAssets.Clear();
             if (soulCopiedMembers != null) soulCopiedIncoming.BeginSoulCopiedSample(UnityId, soulCopiedMembers());
             if (persistentSpriteSample) persistentSpriteIncoming.BeginPersistentSpriteSample(UnityId);
             textCacheDetails.Clear();
@@ -1230,7 +1243,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     else {
                         try {
                             meshValueReader ??= new LoadingMeshValueAudit();
-                            var audit = new { asset = entry.Item2, value = meshValueReader.Capture(mesh, snapshot) };
+                            var audit = new { asset = entry.Item2, value = meshValueReader.Capture(mesh, snapshot, heroMeshAuditAssets.Contains(entry.Item2)) };
                             meshValueBytes = checked(meshValueBytes + Encoding.UTF8.GetByteCount(JsonConvert.SerializeObject(audit)));
                             if (meshValueBytes > 8 * 1024 * 1024) { meshValueRefused = true; meshValueAudit.Clear(); }
                             else meshValueAudit.Add(audit);
@@ -1477,6 +1490,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var id = UnityId(unity);
                 if (MeshReferenceAuditActive && fields.Capturing && unity is Mesh) {
                     var root = fields.DiagnosticRoot; var path = fields.DiagnosticPath;
+                    if (root.StartsWith("DontDestroyOnLoad:Knight[", StringComparison.Ordinal)
+                        && root.EndsWith("]|tk2dSprite[0]", StringComparison.Ordinal)
+                        && root.IndexOf('/') < 0) heroMeshAuditAssets.Add(id);
                     var key = id + " <- " + root + ":" + path;
                     if (meshReferenceAudit.ContainsKey(key)) { }
                     else if (meshReferenceAudit.Count >= 8192) meshReferenceAuditRefused = true;

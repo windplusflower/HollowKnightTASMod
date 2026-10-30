@@ -33,6 +33,15 @@ def inventory(row):
     return result
 
 
+def unmatched_consumers(assets, references):
+    """An unpaired consumer is not an absent consumer (notably Shadow Recharge)."""
+    return [{"asset": asset,
+             "hasObservedConsumers": bool(references.get(asset)),
+             "consumers": [{"root": root, "path": path}
+                           for root, path in sorted(references.get(asset, ()))]}
+            for asset in sorted(assets)]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("evidence", type=Path)
@@ -96,6 +105,8 @@ def main():
             "sameFrameReference": bool(headers) and left["movieFrame"] == headers["source"]["movieFrame"] and left["nativeFrame"] == headers["source"]["nativeFrame"],
             "mappedPairs": len(mapping), "sourceWithoutMappedConsumer": sorted(set(meshes_a) - source_mapped),
             "targetWithoutMappedConsumer": sorted(set(meshes_b) - target_mapped),
+            "sourceUnmatchedConsumerEvidence": unmatched_consumers(set(meshes_a) - source_mapped, references["source"]),
+            "targetUnmatchedConsumerEvidence": unmatched_consumers(set(meshes_b) - target_mapped, references["target"]),
             "ambiguousSource": {asset: others for asset, others in pairs.items() if len(others) != 1},
             "ambiguousTarget": sorted(asset for asset, count in reverse.items() if count != 1),
             "sameConsumerSetAndRawDigest": sum(row["sameConsumerSet"] and row["sameRawDigest"] for row in mapping),
