@@ -62,6 +62,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (colors.Length != 1) throw new InvalidOperationException("Canonical HeroLight color_fader binding differs.");
                 templates.ResetLight(colors[0]);
             }
+            CanonicalAreaTitleBoundaryPolicy.Reset();
             var tweens = Resources.FindObjectsOfTypeAll<iTween>().Where(tween => tween != null
                 && tween.gameObject.scene.IsValid() && tween.gameObject.scene.isLoaded).ToArray();
             if (tweens.Length > 4096) throw new InvalidOperationException("Canonical Tween budget exceeded.");

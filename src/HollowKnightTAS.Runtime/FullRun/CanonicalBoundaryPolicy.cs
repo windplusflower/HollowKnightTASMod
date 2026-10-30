@@ -431,6 +431,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             using var bossContext = bossAssets == null ? null : new CanonicalBossChallengePolicy(bossAssets);
             var destroyed = pools.Reset();
+            pools.AlignGhostHitEffect(source, target);
             Progress("R1-pools-rebuilt", new { destroyed });
             Progress("R1-original-journal-directory-rebuilt", journal.Reset());
             Progress("R1-source-and-pool-meshes-retired", new { removedDelayedDestroyCallbacks = retiredMeshes.Flush() });

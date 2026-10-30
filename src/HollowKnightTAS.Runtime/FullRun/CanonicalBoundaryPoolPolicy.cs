@@ -25,6 +25,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         private GameObject[] prefabs = Array.Empty<GameObject>();
         private int[] sizes = Array.Empty<int>();
         private readonly Dictionary<int, MonoBehaviour> newPoolStartOwners = new Dictionary<int, MonoBehaviour>();
+        private readonly Dictionary<int, MonoBehaviour> retiredPendingStartOwners = new Dictionary<int, MonoBehaviour>();
+        internal bool OwnsRetiredPendingStart(int instance)
+            => retiredPendingStartOwners.TryGetValue(instance, out var component) && component == null
+                && retiredOwners.ContainsKey(instance) && !newPoolStartOwners.ContainsKey(instance);
         private readonly Dictionary<int, string> retiredOwners = new Dictionary<int, string>();
         internal string? RetiredOwner(int instance) => retiredOwners.TryGetValue(instance, out var identity) ? identity : null;
 
@@ -39,6 +43,10 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal int Reset()
         {
+            retiredPendingStartOwners.Clear();
+            foreach (var pair in newPoolStartOwners)
+                if (OwnsNewPoolStart(pair.Key)) retiredPendingStartOwners.Add(pair.Key, pair.Value);
+            if (retiredPendingStartOwners.Count > 4096) throw new InvalidOperationException("Retired canonical Start registry exceeds native queue budget.");
             newPoolStartOwners.Clear();
             retiredOwners.Clear();
             var pools = Resources.FindObjectsOfTypeAll<ObjectPool>().Where(pool => pool != null
@@ -128,7 +136,41 @@ namespace HollowKnightTAS.Runtime.FullRun
                         foreach (var component in actor.GetComponents<MonoBehaviour>())
                             if (component is PlayMakerFSM || component is tk2dSpriteAnimator)
                                 newPoolStartOwners.Add(component.GetInstanceID(), component);
+            if (retiredPendingStartOwners.Keys.Any(newPoolStartOwners.ContainsKey))
+                throw new InvalidOperationException("A retired canonical Start ID was reused by a new pool owner.");
             return actors.Length;
+        }
+
+        internal void AlignGhostHitEffect(string source, string target)
+        {
+            if (owner == null) return;
+            // When exiting a ghost encounter room (e.g. GG_Ghost_Marmu_V) or entering non-ghost scenes like GG_Workshop,
+            // vanilla ParticleSystemAutoRecycle destroys the unborrowed Ghost Hit Pt pool instance.
+            if (!source.StartsWith("GG_Ghost_", StringComparison.Ordinal) && target != "GG_Workshop") return;
+            var free = (Dictionary<GameObject, List<GameObject>>)Free.GetValue(owner);
+            if (free == null) return;
+            GameObject? ghostPrefab = null;
+            List<GameObject>? ghostInstances = null;
+            foreach (var pair in free)
+            {
+                if (pair.Key != null && pair.Key.name == "Ghost Hit Pt")
+                {
+                    ghostPrefab = pair.Key;
+                    ghostInstances = pair.Value;
+                    break;
+                }
+            }
+            if (ghostPrefab != null && ghostInstances != null)
+            {
+                free.Remove(ghostPrefab);
+                foreach (var go in ghostInstances)
+                {
+                    if (go != null)
+                    {
+                        UnityEngine.Object.DestroyImmediate(go);
+                    }
+                }
+            }
         }
     }
 }
