@@ -39,6 +39,7 @@ param(
     [switch] $RecanonicalizeAppliedClock,
     [switch] $ActualDExperiment,
     [switch] $ActualDSuffix,
+    [switch] $ActualDSuffixToEnd,
     [ValidateRange(1,64)][int] $SourceBoundaryOrdinal = 1,
     [switch] $PhysicsFollowOn,
     [switch] $DiscardInstallation,
@@ -56,6 +57,9 @@ param(
     [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
 )
 $ErrorActionPreference = 'Stop'
+if ($ActualDSuffixToEnd -and (-not $ActualDExperiment -or -not $ActualDSuffix -or -not $CanonicalBoundary)) {
+    throw 'Full Movie suffix requires the protected canonical actual-D route.'
+}
 if ($CanonicalD0Route -and (-not $CanonicalPhaseOneTrace -or $S0ObservationTarget -or $ActualDExperiment -or $ClockCarryExperiment -or $ClockApplySource -or $DerivedFixtureManifest)) {
     throw 'D0 route requires complete Phase 1 recording/cold evidence and excludes S0 preparation, D transactions and derived fixtures.'
 }
@@ -372,6 +376,7 @@ try {
         if ($RecanonicalizeAppliedClock) { $arguments += '--probe-clock-recanon' }
         if ($ActualDExperiment) { $arguments += '--probe-actual-d-experiment' }
         if ($ActualDExperiment) { $arguments += ('--probe-actual-d-ordinal=' + $SourceBoundaryOrdinal) }
+        if ($ActualDSuffixToEnd) { $arguments += '--probe-actual-d-suffix-to-end' }
         if ($ActualDSuffix) { $arguments += '--probe-actual-d-suffix' }
         if ($PhysicsFollowOn) { $arguments += '--probe-physics-follow-on' }
         if ($DerivedFixtureManifest) { $arguments += ('--probe-derived-fixture="{0}"' -f ([IO.Path]::GetFullPath($DerivedFixtureManifest))) }

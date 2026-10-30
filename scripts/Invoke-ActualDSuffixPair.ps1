@@ -5,6 +5,7 @@ param(
     [switch] $PhysicsFollowOn,
     [switch] $ContactImpulseProbe,
     [switch] $DiscardInstallation,
+    [switch] $ActualDSuffixToEnd,
     [ValidateRange(1,64)][int] $SourceBoundaryOrdinal = 1,
     [string] $DerivedFixtureManifest = ''
 )
@@ -44,6 +45,7 @@ $taskOptions = @{
     SourceBoundaryOrdinal=$SourceBoundaryOrdinal
     PhysicsFollowOn=$PhysicsFollowOn
     DiscardInstallation=$DiscardInstallation
+    ActualDSuffixToEnd=$ActualDSuffixToEnd
     DerivedFixtureManifest=$DerivedFixtureManifest
 }
 $taskPriorImpulse = $env:HKTAS_CONTACT_IMPULSE_PROBE
@@ -64,6 +66,23 @@ try {
         (Join-Path $taskOutput 'target/run-01/actual-d-target-suffix-oracle/loading-gameplay-oracle.jsonl') `
         --output (Join-Path $taskOutput 'suffix-comparison.json')
     if ($LASTEXITCODE -ne 0) { throw 'The strict suffix diagnostic comparison failed to validate its traces.' }
+    $taskComparison = Get-Content -Raw -LiteralPath (Join-Path $taskOutput 'suffix-comparison.json') | ConvertFrom-Json
+    $taskApplication = Get-Content -Raw -LiteralPath (Join-Path $taskOutput 'target/run-01/actual-d-application.json') | ConvertFrom-Json
+    $taskSourceEnd = Get-Content -Raw -LiteralPath (Join-Path $taskOutput 'source/run-01/actual-d-original-suffix-state.json') | ConvertFrom-Json
+    $taskTargetEnd = Get-Content -Raw -LiteralPath (Join-Path $taskOutput 'target/run-01/actual-d-suffix-state.json') | ConvertFrom-Json
+    $taskReadback = $taskApplication.applicationExecuted -and $taskApplication.consumedSamples -eq 0 -and
+        $taskApplication.registeredR2R6S0SourceContractSatisfied -and $taskApplication.rawClockReadbackEqual -and
+        $taskApplication.unityRandomRawReadbackEqual -and $taskApplication.particleManagerRandomRawReadbackEqual -and
+        $taskApplication.applicationElapsedMilliseconds -lt 9000
+    $taskEndpoint = ($taskSourceEnd | ConvertTo-Json -Compress) -eq ($taskTargetEnd | ConvertTo-Json -Compress) -and
+        $taskTargetEnd.mismatchCount -eq '0' -and $taskTargetEnd.faultCode -eq '0' -and $taskTargetEnd.error -eq ''
+    $taskFullSuffix = $ActualDSuffixToEnd -and $taskSourceEnd.movieFrame -eq '3150' -and $taskTargetEnd.movieFrame -eq '3150'
+    [ordered]@{ comparisonContract=$taskComparison.comparisonContract; activeK3Passed=$taskComparison.comparisonPassed;
+        rawComparisonPassed=$taskComparison.rawComparisonPassed; completeDReadbackPassed=$taskReadback;
+        suffixEndpointPassed=$taskEndpoint; fullMovieSuffixPassed=$taskFullSuffix;
+        targetRestoreAndSuffixPassed=($taskReadback -and $taskEndpoint -and $taskComparison.comparisonPassed -and (-not $ActualDSuffixToEnd -or $taskFullSuffix));
+        derivedDiagnostic=[bool]$DerivedFixtureManifest; completeStateCoverage=$false; restoreQualified=$false
+    } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $taskOutput 'active-k3-acceptance.json') -Encoding utf8
 }
 finally {
     $env:HKTAS_CONTACT_IMPULSE_PROBE = $taskPriorImpulse

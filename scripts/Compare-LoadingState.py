@@ -9,6 +9,32 @@ from pathlib import Path
 from loading_inventory import decode_roots
 from loading_trace_windows import expected_gameplay_samples, validate_sample_scope
 
+V15_PROFILE = "hktas-unity-input-playerloop-serial-scene-canonical-boundary-2026-v15-experimental"
+ACTIVE_K3_CONTRACT = "v15-canonical-active-k3-equivalence-v1"
+SUFFIX_SCOPE = "actual-d-suffix-all-loaded-three-after-v1"
+ACTIVE_K3_GATES = (
+    "gameplayRng", "particleManagerRandom", "nativeScheduler", "nativePhysics/body",
+    "physicsBodies", "nativePhysics/contact-active-points",
+    "nativePhysics/contact-control-initialized", "nativePhysics/polygon-active",
+)
+# User-approved 2026-10-30 process-history observations. These values remain
+# in the original trace and raw comparison; no live state is ever rewritten.
+PROCESS_HISTORY_PROJECTIONS = frozenset((
+    "assetBindings", "assetValues", "fsmFields", "monoFields", "nativePhysics",
+    "nativePhysics/broadphase", "nativePhysics/contact",
+    "nativePhysics/contact-current-manifold", "nativePhysics/contact-inactive-points",
+    "nativePhysics/contact-old-manifold", "nativePhysics/contact-toi-cache",
+    "nativePhysics/polygon", "nativePhysics/polygon-unused-capacity",
+    "nativePhysics/tree-free", "nativePhysics/tree-node", "registeredStatics",
+    "sessionAchievements", "unityHierarchy", "unsupported", "rootInventory",
+))
+
+
+def root_identities(row):
+    # Preserve duplicates and concrete types as well as the complete identity set.
+    return collections.Counter((root["id"], root.get("type"))
+                               for root in row["inventory"]["roots"])
+
 
 def decode_suffix_inventory(value):
     if not isinstance(value, dict) or value.get("encoding") != "gzip-base64-utf8-json-v1":
@@ -70,9 +96,14 @@ def sample_key(row):
     return tuple(row[name] for name in ("movieFrame", "phase", "boundary", "scene"))
 
 
-def compare(paths):
+def compare(paths, contract="auto"):
     traces = [read_trace(path) for path in paths]
     header, base = traces[0]
+    active = contract != "raw" and header.get("nativeProfile") == V15_PROFILE and header.get("samplingScope") == SUFFIX_SCOPE
+    if contract not in ("auto", "raw", ACTIVE_K3_CONTRACT) or contract == ACTIVE_K3_CONTRACT and not active:
+        raise ValueError("active K3 contract requires the exact v15 three-sample suffix scope")
+    if active and (len(base) != 3 or any(len(rows) != 3 for _, rows in traces)):
+        raise ValueError("active K3 contract requires all three original samples")
     comparisons = []
     for path, (other_header, other) in zip(paths[1:], traces[1:]):
         header_differences = sorted(key for key in header.keys() | other_header.keys()
@@ -81,7 +112,11 @@ def compare(paths):
         if header.get("samplingScope") == "actual-d-suffix-all-loaded-three-after-v1":
             order_equal = order_equal and [row["nativeFrame"] for row in base] == [row["nativeFrame"] for row in other]
         first_by_field = {}
+        blocking = {}
+        gates = {key: True for key in ACTIVE_K3_GATES} if active else {}
+        same_roots = True
         mismatch_count = 0
+        active_mismatch_count = 0
         if not header_differences and order_equal:
             for left, right in zip(base, other):
                 changed = sorted(key for key in left["state"].keys() | right["state"].keys()
@@ -89,6 +124,21 @@ def compare(paths):
                 if header.get("samplingScope") == "actual-d-suffix-all-loaded-three-after-v1" and left["inventory"] != right["inventory"]:
                     changed.append("rootInventory")
                 mismatch_count += bool(changed)
+                blocked = list(changed)
+                if active:
+                    blocked = [key for key in changed if key not in PROCESS_HISTORY_PROJECTIONS]
+                    for key in ACTIVE_K3_GATES:
+                        equal = key in left["state"] and key in right["state"] and left["state"][key] == right["state"][key]
+                        gates[key] &= equal
+                        if not equal and key not in blocked:
+                            blocked.append(key)
+                    roots_equal = root_identities(left) == root_identities(right)
+                    same_roots &= roots_equal
+                    if not roots_equal:
+                        blocked.append("sameRootIdentitySets")
+                active_mismatch_count += bool(blocked)
+                for key in blocked:
+                    blocking.setdefault(key, {"movieFrame": left["movieFrame"], "sequence": left["sequence"]})
                 for key in changed:
                     first_by_field.setdefault(key, {
                         "movieFrame": left["movieFrame"], "phase": left["phase"],
@@ -98,12 +148,20 @@ def compare(paths):
         comparisons.append({"path": str(path), "headerDifferences": header_differences,
                             "sampleOrderEqual": order_equal, "comparedSamples": len(base) if order_equal else 0,
                             "mismatchedSamples": mismatch_count if order_equal else None,
-                            "firstDifferences": first_by_field})
+                            "firstDifferences": first_by_field,
+                            "blockingDifferences": blocking,
+                            "activeMismatchedSamples": active_mismatch_count if order_equal else None,
+                            "allThreeK3Equal": gates,
+                            "sameRootIdentitySets": same_roots if active and order_equal and not header_differences else None,
+                            "diagnosticProcessHistoryProjections": sorted(set(first_by_field) & PROCESS_HISTORY_PROJECTIONS) if active else []})
     return {"schema": "hktas-p0-state-comparison-v1", "first": header["first"], "end": header["end"],
             "coverage": header["coverage"], "samplingScope": header["samplingScope"],
             "phases": dict(collections.Counter(row["phase"] for row in base)),
+            "comparisonContract": ACTIVE_K3_CONTRACT if active else "raw-exact-v1",
+            "rawComparisonPassed": all(not item["headerDifferences"] and item["sampleOrderEqual"]
+                                       and item["mismatchedSamples"] == 0 for item in comparisons),
             "comparisonPassed": all(not item["headerDifferences"] and item["sampleOrderEqual"]
-                                    and item["mismatchedSamples"] == 0 for item in comparisons),
+                                    and item["activeMismatchedSamples"] == 0 for item in comparisons),
             "completeStateCoverage": False, "phaseP0Passed": False, "comparisons": comparisons}
 
 
@@ -111,11 +169,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("traces", nargs="+", type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--contract", choices=("auto", "raw", ACTIVE_K3_CONTRACT), default="auto")
     args = parser.parse_args()
     if len(args.traces) < 2:
         parser.error("at least two independently collected traces are required")
-    report = compare(args.traces)
+    report = compare(args.traces, args.contract)
     args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps({"comparisonPassed": report["comparisonPassed"],
+                      "rawComparisonPassed": report["rawComparisonPassed"], "comparisonContract": report["comparisonContract"],
                       "comparedSamples": [item["comparedSamples"] for item in report["comparisons"]],
                       "firstDifferenceFields": [list(item["firstDifferences"]) for item in report["comparisons"]]}))

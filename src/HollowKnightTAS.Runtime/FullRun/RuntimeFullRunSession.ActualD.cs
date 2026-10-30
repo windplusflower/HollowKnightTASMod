@@ -17,6 +17,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private byte[]? actualDImport;
         private int actualDImportOffset;
         private string actualDImportHash = "";
+        // Full suffix stays bounded by this exact, already verified Movie.
+        // It changes only Replay's endpoint; K3 still samples the first 3 frames.
+        private long ActualDSuffixLimit => Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_SUFFIX_TO_END") == "1"
+            && NativeExecutionProfile.SelectedProfileId == NativeExecutionProfile.CanonicalBoundaryProfileId
+                ? replayLength : Math.Min(replayLength, movieFrame + 64);
         private CanonicalActualDExperiment? actualDSource;
         private bool actualDApplicationStarted;
         private CanonicalSealedSource<CanonicalActualDExperiment>? actualDExport;
@@ -84,7 +89,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidOperationException("Source D is not sealed at its original paused boundary.");
                     if (phase == "d-exp-source-resume") {
                         if (fields.Count != 3 || !long.TryParse(Get("endMovie"), out var end) || end <= movieFrame
-                            || end > Math.Min(replayLength, movieFrame + 64)) throw new InvalidDataException("Source suffix endpoint is not bounded.");
+                            || end > ActualDSuffixLimit) throw new InvalidDataException("Source suffix endpoint is not bounded.");
                         source.Clock.RequireReadback(clock); StartActualDSuffixOracle("source", end); SetPauseTarget(end, frame); mode = "Replay";
                         reply["status"] = "ResumingOriginalSourceSuffix"; return reply;
                     }
@@ -111,7 +116,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                             || !clock.IsPaused || clock.IsFinished || frame != actualDSource.NativeFrame
                             || movieFrame != actualDSource.MovieFrame || input.ConsumedSamples != 0
                             || !long.TryParse(Get("endMovie"), out var end) || end <= movieFrame
-                            || end > Math.Min(replayLength, movieFrame + 64))
+                            || end > ActualDSuffixLimit)
                             throw new InvalidOperationException("Actual D suffix requires the single applied paused boundary and a bounded future endpoint.");
                         actualDSource.Clock.RequireReadback(clock);
                         LoadingSerialSceneProbe.GetProtectedObservationBoundary();

@@ -126,7 +126,7 @@ def analyze(evidence):
                 differences=[dict(path=key, source=x.get(key), target=y.get(key))
                              for key in sorted(x.keys() | y.keys()) if x.get(key) != y.get(key)]))
     raw = strict.compare([evidence / role / "run-01" / f"actual-d-{role}-suffix-oracle/loading-gameplay-oracle.jsonl"
-                          for role in ("source", "target")])
+                          for role in ("source", "target")], contract="raw")
     exact_guards = {key: all(a["state"][key] == b["state"][key] for a, b in zip(traces["source"][1], traces["target"][1]))
                     for key in ("gameplayRng", "particleManagerRandom", "nativeScheduler")}
     return dict(diagnosticOnly=True, comparisonRulesUnchanged=True, rawComparison=raw,

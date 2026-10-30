@@ -77,6 +77,10 @@ internal static partial class StudioScenarioHarness
             "actual D uses a bounded in-memory source packet and a fresh zero-Movie target");
         Environment.SetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_EXPERIMENT", actualDExperiment ? "1" : null);
         Environment.SetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_SOURCE", actualDExperiment && actualDStage != "target" ? "1" : null);
+        var suffixToEnd = args.Contains("--probe-actual-d-suffix-to-end");
+        Require(!suffixToEnd || actualDExperiment && args.Contains("--probe-actual-d-suffix") && args.Contains("--probe-canonical-boundary"),
+            "full Movie suffix requires the protected actual-D canonical route");
+        Environment.SetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_SUFFIX_TO_END", suffixToEnd ? "1" : null);
         // All canonical diagnostics capture the actual clock portion of D.
         // This enables the existing bounded native codec, never qualification.
         if (args.Contains("--probe-canonical-boundary")) Environment.SetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT", "1");
@@ -381,7 +385,7 @@ internal static partial class StudioScenarioHarness
                     Require(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(actualDBytes)).ToLowerInvariant() == actualDHeader["sha256"],
                         "complete in-memory source D hash");
                     if (args.Contains("--probe-actual-d-suffix")) {
-                        var originalEnd = long.Parse(actualDHeader["movieFrame"], System.Globalization.CultureInfo.InvariantCulture) + 32;
+                        var originalEnd = suffixToEnd ? end : long.Parse(actualDHeader["movieFrame"], System.Globalization.CultureInfo.InvariantCulture) + 32;
                         await Call(new Dictionary<string, string> { ["phase"] = "d-exp-source-resume", ["endMovie"] = originalEnd.ToString() });
                         boot.Refresh(); await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
                         await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("source suffix native fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
@@ -455,7 +459,7 @@ internal static partial class StudioScenarioHarness
                     await File.WriteAllTextAsync(Path.Combine(output, "actual-d-receipt.json"), JsonSerializer.Serialize(new {
                         source = actualDHeader, result, diagnosticOnly = true, snapshotsWrittenToDisk = false, restoreQualified = false }));
                     if (args.Contains("--probe-actual-d-suffix")) {
-                        var suffixEnd = long.Parse(actualDHeader["movieFrame"], System.Globalization.CultureInfo.InvariantCulture) + 32;
+                        var suffixEnd = suffixToEnd ? end : long.Parse(actualDHeader["movieFrame"], System.Globalization.CultureInfo.InvariantCulture) + 32;
                         await Call(new Dictionary<string, string> { ["phase"] = "d-exp-resume", ["endMovie"] = suffixEnd.ToString() });
                         boot.Refresh(); await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
                         await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("actual D suffix native fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
