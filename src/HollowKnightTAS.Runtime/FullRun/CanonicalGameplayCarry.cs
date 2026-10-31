@@ -213,8 +213,38 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var heroBoxCol = heroBox.GetComponent<BoxCollider2D>();
                     if (heroBoxCol != null)
                     {
-                        heroBoxCol.offset = new Vector2(0.005573273f, -0.70312494f);
+                        heroBoxCol.offset = new Vector2(0.005573273f, -0.703125f);
                         heroBoxCol.size = new Vector2(0.45541382f, 1.1875f);
+                    }
+                }
+                var attacks = currentHero.transform.Find("Attacks");
+                if (attacks != null)
+                {
+                    var slashPaths = new[] { "Slash", "Slash/Clash Tink", "UpSlash", "UpSlash/Clash Tink" };
+                    var slashScaleBytes = new byte[] {
+                        0x00, 0x00, 0x80, 0xbf,
+                        0x00, 0x00, 0x80, 0x3f,
+                        0x00, 0x00, 0x80, 0x3f
+                    };
+                    var cachedPtrField = typeof(UnityEngine.Object).GetField("m_CachedPtr", BindingFlags.Instance | BindingFlags.NonPublic);
+                    if (cachedPtrField != null)
+                    {
+                        foreach (var path in slashPaths)
+                        {
+                            var node = attacks.Find(path);
+                            if (node != null)
+                            {
+                                var poly = node.GetComponent<PolygonCollider2D>();
+                                if (poly != null)
+                                {
+                                    var ptr = (IntPtr)cachedPtrField.GetValue(poly);
+                                    if (ptr != IntPtr.Zero)
+                                    {
+                                        System.Runtime.InteropServices.Marshal.Copy(slashScaleBytes, 0, IntPtr.Add(ptr, 184), 12);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 // The original body/property writers can update the tree and

@@ -40,7 +40,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly List<object> contactRawEvidence = new List<object>();
         private readonly bool detailed = Environment.GetEnvironmentVariable("HKTAS_LOADING_NATIVE_PHYSICS_DETAILS") == "1";
         private static readonly HashSet<string> DiagnosticKinds = new HashSet<string>(new[] {
-            "body", "fixture", "fixture-proxy", "shape", "polygon-active", "body-fixture-order",
+            "body", "collider", "fixture", "fixture-proxy", "shape", "polygon-active", "body-fixture-order",
             "body-contact-order", "world-body-order", "world-contact-order", "contact",
             "contact-control-initialized", "contact-toi-cache", "contact-current-manifold", "contact-active-points"
         }, StringComparer.Ordinal);
@@ -121,6 +121,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var id = identity(collider);
                 colliderBindings[pointer] = new LoadingContactUserDataBindings.ColliderBinding { Id = id, InstanceId = I32(native, 8) };
                 Line("collider", id, Hex(native, 120, 76), shapes.Length.ToString(CultureInfo.InvariantCulture));
+                inventory.Add(new { kind = "collider-storage-evidence", binding = id, hex = Hex(native, 120, 76), shapes = shapes.Length });
                 for (var index = 0; index < shapes.Length / 8; index++)
                 { var fixture = Pointer(shapes, index * 8); Bind(fixtureIds, fixture, id + "/fixture[" + index + "]", "fixture"); fixtureOwners[fixture] = pointer; }
                 if (Pointer(native, 200) != IntPtr.Zero) unsupported.Add("collider-effector-native-state");
