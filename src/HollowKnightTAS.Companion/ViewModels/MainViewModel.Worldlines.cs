@@ -234,6 +234,11 @@ namespace HollowKnightTAS.Companion.ViewModels
             var initialSaves = GetTimelineInitialSaves(tree);
             var changedTree = activeDraftTree != tree.Id;
             await fullRunMovies.PauseForDocumentChangeAsync(CancellationToken.None);
+            var scope = SceneCheckpoints.ActivateBranch(tree.Id, leaf.Id.ToString());
+            var available = SceneCheckpoints.Catalog(scope)
+                .Where(h => h.RestoreQualified && h.ResumeMovieFrame <= node.Frame)
+                .OrderByDescending(h => h.ResumeMovieFrame)
+                .FirstOrDefault();
             // Keep the chosen world's future inputs even when restoring an ancestor.
             await RestartDraftAtAsync(node.Frame, leaf.Movie, switchSequence: true, sourceSaves: initialSaves);
             if (changedTree) ResetSequenceSaveTarget(null);
@@ -243,7 +248,9 @@ namespace HollowKnightTAS.Companion.ViewModels
             activeDraftTree = tree.Id;
             activeDraftTip = leaf.IsBranchTip ? leaf.Id : null;
             lastSavedBranchMovie = null;
-            TimelineTreeStatus = $"世界线 {leaf.Id} · 已恢复 {node.Label}。";
+            TimelineTreeStatus = available != null
+                ? $"世界线 {leaf.Id} · 已通过场景检查点快速恢复 {node.Label}（K={available.ResumeMovieFrame}）。"
+                : $"世界线 {leaf.Id} · 已恢复 {node.Label}。";
         }
         private void DeleteTimelineSelection()
         {
@@ -266,6 +273,11 @@ namespace HollowKnightTAS.Companion.ViewModels
                     }).Select(p => p.Key).ToArray())
                         library.QuickSlots.Remove(slot);
                 });
+                var removedList = tree.Subtree(node.Id);
+                foreach (var removedId in removedList)
+                {
+                    try { SceneCheckpoints.DeleteBranch(tree.Id, removedId.ToString()); } catch { }
+                }
                 RefreshWorldlines(tree.Id); TimelineTreeStatus = $"已删除 {count} 个存档节点；其他世界线保留。";
             }
             catch (Exception ex) { TimelineTreeStatus = ex.Message; }

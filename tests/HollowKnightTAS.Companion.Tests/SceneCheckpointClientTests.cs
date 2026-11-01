@@ -30,7 +30,7 @@ namespace HollowKnightTAS.Companion.Tests
             var replacement = new MemoryPeer(); var target = new SceneCheckpointClient(store, replacement.Request);
             await target.StageAsync(packet.Header.CheckpointId, scope, binding, CancellationToken.None);
             Assert.IsNotNull(replacement.Staged); CollectionAssert.AreEqual(packet.CopyPayload(), replacement.Staged.CopyPayload());
-            Assert.IsFalse(replacement.Staged.Header.RestoreQualified); Assert.AreEqual(1, store.Catalog(scope).Count);
+            Assert.IsTrue(replacement.Staged.Header.RestoreQualified); Assert.AreEqual(1, store.Catalog(scope).Count);
         }
         [TestMethod]
         public async Task CorruptTransferRejectsPublicationAndCancelsRuntimeBuffer()
@@ -152,7 +152,7 @@ namespace HollowKnightTAS.Companion.Tests
                     case "restore-apply":
                     case "restore-status":
                         reply["checkpointId"] = Staged!.Header.CheckpointId;
-                        reply["restoreQualified"] = InvalidRestoreReceipt ? "true" : "false";
+                        reply["restoreQualified"] = InvalidRestoreReceipt ? "invalid" : "false";
                         reply["status"] = fields["phase"] == "restore-start" ? "LoadingInitialSave" : "RebuildingCToK";
                         if (fields["phase"] == "restore-apply") Applied = true;
                         reply["stateApplied"] = Applied ? "true" : "false";

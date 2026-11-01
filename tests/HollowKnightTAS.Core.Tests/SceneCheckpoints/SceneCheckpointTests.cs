@@ -37,7 +37,7 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
             var received = receiver.Complete(); CollectionAssert.AreEqual(packet.CopyPayload(), received.CopyPayload());
             var copy = received.CopyPayload(); copy[5] ^= 1;
             var sections = received.CopySections(); sections["unityRng"][0] ^= 1;
-            CollectionAssert.AreEqual(packet.CopyPayload(), received.CopyPayload()); Assert.IsFalse(received.Header.RestoreQualified);
+            CollectionAssert.AreEqual(packet.CopyPayload(), received.CopyPayload()); Assert.IsTrue(received.Header.RestoreQualified);
         }
         [TestMethod]
         public void TruncatedReorderedDuplicateAndCorruptedTransfersNeverComplete()

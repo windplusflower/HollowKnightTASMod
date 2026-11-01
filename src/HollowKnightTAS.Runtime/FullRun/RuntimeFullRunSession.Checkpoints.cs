@@ -181,7 +181,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                             continuation.Validate(imported.Header.CaptureMovieFrame, imported.Header.CaptureNativeFrame);
                             RequireCheckpointExecutionIdentity(continuation);
                             stagedCheckpoint = imported; reply["status"] = "Staged"; reply["checkpointId"] = imported.Header.CheckpointId;
-                            reply["restoreQualified"] = "false";
+                            reply["restoreQualified"] = imported.Header.RestoreQualified ? "true" : "false";
                         }
                         finally { receiver.Dispose(); checkpointImport = null; }
                         break;
@@ -259,7 +259,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var bytes = SceneCheckpointPacket.EncodeSections(frozen.Sections);
                     var header = new SceneCheckpointHeader(frozen.Arm.CaptureId, frozen.Arm.Scope, frozen.Arm.Binding,
                         frozen.Arm.Trigger, frozen.TransitionId, frozen.MovieFrame, frozen.NativeFrame, resumeFrame, nativeFrame,
-                        bytes.Length, Sha256Utility.ComputeHex(bytes));
+                        bytes.Length, Sha256Utility.ComputeHex(bytes), restoreQualified: true);
                     return new SceneCheckpointPacket(header, bytes);
                 });
                 frozenCheckpoint = null;

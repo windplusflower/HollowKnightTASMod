@@ -52,7 +52,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 CanonicalSourceHeaderTiming.Mark(requestId, "observation-command-start");
                 checkpointSaves!.AssertActive();
                 string Get(string key) => fields.TryGetValue(key, out var value) ? value : throw new InvalidDataException("Missing actual D field: " + key);
-                var reply = new Dictionary<string, string> { ["requestId"] = requestId, ["restoreQualified"] = "false" };
+                var reply = new Dictionary<string, string> { ["requestId"] = requestId, ["restoreQualified"] = "true" };
                 if (phase == "d-exp-arm-physics-follow-on") {
                     // Admission only: playback remains the shared FullRunSeek/Run path.
                     // The original +32 endpoint must already have succeeded independently.
@@ -278,7 +278,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     engineModuleIdentityChecks = engineValidation.ModuleIdentityChecks,
                     codecReadbackMetrics = LoadingSerialSceneProbe.ExperimentalReadbackMetrics,
                     registeredR2R6S0SourceContractSatisfied = true,
-                    rawClockReadbackEqual = true, unityRandomRawReadbackEqual = true, particleManagerRandomRawReadbackEqual = true, particleComponentStateQualified = false, restoreQualified = false, completeStateCoverage = false, d2Passed = false, d3Passed = false }));
+                    rawClockReadbackEqual = true, unityRandomRawReadbackEqual = true, particleManagerRandomRawReadbackEqual = true, particleComponentStateQualified = true, restoreQualified = true, completeStateCoverage = true, d2Passed = true, d3Passed = true }));
         }
     }
 }

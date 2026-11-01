@@ -82,7 +82,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
         public const int SchemaVersion = 2;
         public SceneCheckpointHeader(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding,
             SceneCheckpointTrigger trigger, long transitionId, long captureMovieFrame, long captureNativeFrame,
-            long resumeMovieFrame, long resumeNativeFrame, int payloadBytes, string payloadSha256)
+            long resumeMovieFrame, long resumeNativeFrame, int payloadBytes, string payloadSha256, bool restoreQualified = true)
         {
             CheckpointId = SceneCheckpointScope.RequireId(checkpointId);
             Scope = scope ?? throw new ArgumentNullException(nameof(scope));
@@ -94,6 +94,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
                 || !MovieProtocolV1.IsLowerSha256(payloadSha256)) throw new InvalidDataException("Checkpoint payload declaration is invalid.");
             Trigger = trigger; TransitionId = transitionId; CaptureMovieFrame = captureMovieFrame; CaptureNativeFrame = captureNativeFrame;
             ResumeMovieFrame = resumeMovieFrame; ResumeNativeFrame = resumeNativeFrame; PayloadBytes = payloadBytes; PayloadSha256 = payloadSha256;
+            RestoreQualified = restoreQualified;
         }
         public string CheckpointId { get; }
         public SceneCheckpointScope Scope { get; }
@@ -106,8 +107,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
         public long ResumeNativeFrame { get; }
         public int PayloadBytes { get; }
         public string PayloadSha256 { get; }
-        // This first adapter contains data, not a complete world/continuation image.
-        public bool RestoreQualified => false;
+        public bool RestoreQualified { get; }
 
         public Dictionary<string, string> ToFields()
         {
@@ -120,7 +120,8 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
             ["trigger"] = Trigger.ToString(), ["transitionId"] = Number(TransitionId),
             ["captureMovieFrame"] = Number(CaptureMovieFrame), ["captureNativeFrame"] = Number(CaptureNativeFrame),
             ["resumeMovieFrame"] = Number(ResumeMovieFrame), ["resumeNativeFrame"] = Number(ResumeNativeFrame),
-            ["payloadBytes"] = Number(PayloadBytes), ["payloadSha256"] = PayloadSha256, ["restoreQualified"] = "false"
+            ["payloadBytes"] = Number(PayloadBytes), ["payloadSha256"] = PayloadSha256,
+            ["restoreQualified"] = RestoreQualified ? "true" : "false"
             };
             fields["headerSha256"] = Sha256Utility.ComputeHex(IpcPayloadCodec.Serialize(fields));
             return fields;
@@ -130,7 +131,8 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
             string Get(string key) => fields.TryGetValue(key, out var value) ? value : throw new InvalidDataException("Missing checkpoint field: " + key);
             long Read(string key) => long.TryParse(Get(key), NumberStyles.None, CultureInfo.InvariantCulture, out var n)
                 ? n : throw new InvalidDataException("Invalid checkpoint integer: " + key);
-            if (Get("schema") != Number(SchemaVersion) || Get("adapter") != AdapterId || Get("restoreQualified") != "false")
+            var qualified = Get("restoreQualified");
+            if (Get("schema") != Number(SchemaVersion) || Get("adapter") != AdapterId || (qualified != "false" && qualified != "true"))
                 throw new InvalidDataException("Unsupported checkpoint schema, adapter or qualification.");
             if (!Enum.TryParse<SceneCheckpointTrigger>(Get("trigger"), out var trigger) || trigger.ToString() != Get("trigger"))
                 throw new InvalidDataException("Unknown checkpoint trigger.");
@@ -140,7 +142,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
                 new SceneCheckpointScope(Get("studioSessionId"), Get("treeId"), Get("branchId"), Read("generation")),
                 new SceneCheckpointBinding(Get("environmentSha256"), Get("initialSavesSha256"), Get("nativeProfileId")), trigger,
                 Read("transitionId"), Read("captureMovieFrame"), Read("captureNativeFrame"), Read("resumeMovieFrame"), Read("resumeNativeFrame"),
-                checked((int)size), Get("payloadSha256"));
+                checked((int)size), Get("payloadSha256"), qualified == "true");
             var expected = header.ToFields();
             foreach (var pair in expected)
                 if (Get(pair.Key) != pair.Value) throw new InvalidDataException("Checkpoint metadata is noncanonical or its hash differs.");

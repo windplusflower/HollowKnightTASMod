@@ -119,7 +119,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     return new Dictionary<string, string>
                     {
                         ["requestId"] = fields["requestId"], ["checkpointId"] = id, ["status"] = job.Phase,
-                        ["restoreQualified"] = "false", ["stateApplied"] = job.Applied ? "true" : "false",
+                        ["restoreQualified"] = job.Packet.Header.RestoreQualified ? "true" : "false", ["stateApplied"] = job.Applied ? "true" : "false",
                         ["movieFrame"] = movieFrame.ToString(CultureInfo.InvariantCulture),
                         ["nativeFrame"] = clock.CurrentFrameIndex.ToString(CultureInfo.InvariantCulture),
                         ["firstConsumedMovieFrame"] = job.FirstConsumed.ToString(CultureInfo.InvariantCulture),
@@ -166,7 +166,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     try { manager.LoadGameFromUI(slot); }
                     catch (Exception exception) { RejectCheckpointRestore(job, exception); throw; }
                     return new Dictionary<string, string> { ["requestId"] = fields["requestId"], ["checkpointId"] = id,
-                        ["status"] = job.Phase, ["restoreQualified"] = "false" };
+                        ["status"] = job.Phase, ["restoreQualified"] = job.Packet.Header.RestoreQualified ? "true" : "false" };
                 }
                 if (phase != "restore-apply") throw new InvalidDataException("Unknown checkpoint restore phase.");
                 var pending = checkpointRestore;
@@ -202,10 +202,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     resumeInvulnerability(); resumeProjectiles();
                     pending.Applied = true; pending.Phase = "RebuildingCToK";
                     Modding.Logger.Log("[HKTAS] Checkpoint C apply complete: wallMs=" + applyElapsed.ElapsedMilliseconds);
-                    Modding.Logger.Log("[HKTAS] Experimental checkpoint state applied: id=" + id
-                        + " C=" + movieFrame + "/" + expectedNativeStart + " qualified=false");
+                    Modding.Logger.Log("[HKTAS] Checkpoint state applied: id=" + id
+                        + " C=" + movieFrame + "/" + expectedNativeStart + " qualified=" + (pending.Packet.Header.RestoreQualified ? "true" : "false"));
                     return new Dictionary<string, string> { ["requestId"] = fields["requestId"], ["checkpointId"] = id,
-                        ["status"] = pending.Phase, ["stateApplied"] = "true", ["restoreQualified"] = "false" };
+                        ["status"] = pending.Phase, ["stateApplied"] = "true", ["restoreQualified"] = pending.Packet.Header.RestoreQualified ? "true" : "false" };
                 }
                 catch (Exception exception) { RejectCheckpointRestore(pending, exception); throw; }
             });

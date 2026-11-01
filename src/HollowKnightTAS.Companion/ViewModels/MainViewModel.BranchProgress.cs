@@ -117,6 +117,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                 selectedWorldline = selectedTimelineTree.Nodes.Single(n => n.Id == leafId);
                 selectedTimelineNode = selectedWorldline;
                 UseSelectedWorldline();
+                SceneCheckpoints.ActivateBranch(treeId, leafId.ToString());
                 NotifyWorldlines();
             }
             catch (Exception exception) { Status = TimelineTreeStatus = "切换世界线失败：" + exception.Message; }

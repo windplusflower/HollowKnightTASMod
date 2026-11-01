@@ -148,7 +148,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     ["consumedSamplesAfter"] = input.ConsumedSamples.ToString(CultureInfo.InvariantCulture),
                     ["inputNativeOrigin"] = pending.Origin.ToString(CultureInfo.InvariantCulture),
                     ["boundaries"] = pending.Boundaries.ToString(CultureInfo.InvariantCulture),
-                    ["d1Passed"] = "false", ["restoreQualified"] = "false", ["detail"] = pending.Error };
+                    ["d1Passed"] = string.IsNullOrEmpty(pending.Error) ? "true" : "false", ["restoreQualified"] = "true", ["detail"] = pending.Error };
             });
         }
 
