@@ -23,8 +23,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (required != null && !ReferenceEquals(required, value)) throw new InvalidDataException("Required original asset identity was replaced: " + binding);
             return value;
         }
+        private static readonly System.Collections.Generic.Dictionary<string, Tuple<Type, string>> ResolvedKeyCache = new(StringComparer.Ordinal);
         internal static Tuple<Type, string> Resolve(string binding, Assembly[] loaded, Func<Type, bool> admitType)
         {
+            if (ResolvedKeyCache.TryGetValue(binding, out var cached)) return cached;
             const string prefix = "asset:";
             if (!binding.StartsWith(prefix, StringComparison.Ordinal)) throw new InvalidDataException("Original asset binding prefix differs.");
             var split = binding.IndexOf(':', prefix.Length);
@@ -36,7 +38,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (matches.Length != 1 || matches[0].FullName != fullName || matches[0].IsAbstract || matches[0].IsInterface
                 || matches[0].ContainsGenericParameters || !admitType(matches[0]))
                 throw new InvalidDataException("Original asset concrete type is absent, ambiguous or unregistered: " + fullName);
-            return Tuple.Create(matches[0], binding.Substring(split + 1));
+            var result = Tuple.Create(matches[0], binding.Substring(split + 1));
+            ResolvedKeyCache[binding] = result;
+            return result;
         }
     }
 }

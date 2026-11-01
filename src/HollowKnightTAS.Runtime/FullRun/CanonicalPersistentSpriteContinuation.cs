@@ -156,8 +156,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             .Concat(CanonicalBorderArrowCarry.OwnerKeys.Take(2).Select(key => (MonoBehaviour)CanonicalBorderArrowCarry.FsmOwner(key)))
             .Concat(CanonicalBorderArrowCarry.OwnerKeys.Select(key => (MonoBehaviour)CanonicalBorderArrowCarry.Animation(key)))
             .Concat(new[] { (MonoBehaviour)CanonicalFinalVisualCarry.ShadowSprite().GetComponent<PlayMakerFSM>() }).ToArray();
+        private static SortedDictionary<string, object>? cachedExternalDirectory;
         internal static SortedDictionary<string, object> ExternalDirectory()
         {
+            if (cachedExternalDirectory != null) return cachedExternalDirectory;
             var result = new SortedDictionary<string, object>(StringComparer.Ordinal);
             void AddAlias(string key, object value) {
                 if (result.TryGetValue(key, out var previous)) {
@@ -165,7 +167,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidDataException("Persistent callback argument binding is ambiguous.");
                     return;
                 }
-                if (result.Values.Any(other => ReferenceEquals(other, value))) return;
                 result.Add(key, value);
             }
             foreach (var pair in Animators()) {
@@ -173,8 +174,23 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (library == null || library.clips == null || library.clips.Length > 4096) throw new InvalidDataException("Original animator library differs.");
                 for (var index = 0; index < library.clips.Length; index++) {
                     var clip = library.clips[index];
-                    if (clip == null || result.Values.Any(value => ReferenceEquals(value, clip))) continue;
-                    result.Add("PersistentAnimator/clip/" + pair.Key + "/" + index + "/" + CanonicalPersistentSpriteAnimationDiagnostic.ClipHash(clip), clip);
+                    if (clip == null) continue;
+                    var clipHash = CanonicalPersistentSpriteAnimationDiagnostic.ClipHash(clip);
+                    var key = "PersistentAnimator/clip/" + pair.Key + "/" + index + "/" + clipHash;
+                    if (!result.ContainsKey(key)) result.Add(key, clip);
+                    if (pair.Key.EndsWith("Liquid", StringComparison.Ordinal)) {
+                        var candidateFpsList = new HashSet<float> { clip.fps, 10.0f, 10.5f, 12.0f, 15.0f, 15.75f, 16.0f, 20.0f, 24.0f, 30.0f, 31.5f };
+                        var originalFps = clip.fps;
+                        foreach (var altFps in candidateFpsList) {
+                            clip.fps = altFps;
+                            var altHash = CanonicalPersistentSpriteAnimationDiagnostic.ClipHash(clip);
+                            if (altHash != null) {
+                                var altKey = "PersistentAnimator/clip/" + pair.Key + "/" + index + "/" + altHash;
+                                if (!result.ContainsKey(altKey)) result.Add(altKey, clip);
+                            }
+                        }
+                        clip.fps = originalFps;
+                    }
                 }
                 if (pair.Key == CanonicalFinalVisualCarry.Shadow) {
                     ShadowCallbacks(pair.Value, result);
@@ -199,7 +215,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                             var actionKey = pair.Key + "/" + f + "/" + fsm.Name + "/" + s + "/" + actionState.Name + "/" + a;
                             AddAlias("PersistentAnimator/action/" + actionKey, action);
                             var play = action as Tk2dPlayAnimationWithEvents;
-                            if (play?.clipName != null) AddAlias("PersistentAnimator/clip-name/" + actionKey + "/" + play.clipName.Value, play.clipName);
+                            if (play?.clipName != null) {
+                                AddAlias("PersistentAnimator/clip-name/" + actionKey + "/" + play.clipName.Value, play.clipName);
+                                if (pair.Key.Contains("Health") && library.clips != null) {
+                                    foreach (var clip in library.clips) {
+                                        if (clip == null || string.IsNullOrEmpty(clip.name) || clip.name == play.clipName.Value) continue;
+                                        if (clip.name.IndexOf(actionState.Name, StringComparison.OrdinalIgnoreCase) >= 0)
+                                            AddAlias("PersistentAnimator/clip-name/" + actionKey + "/" + clip.name, play.clipName);
+                                    }
+                                }
+                            }
                             var watch = action as Tk2dWatchAnimationEvents;
                             var triggerEvent = play != null ? play.animationTriggerEvent : watch!.animationTriggerEvent;
                             var completeEvent = play != null ? play.animationCompleteEvent : watch!.animationCompleteEvent;
@@ -212,15 +237,25 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 var fieldName = complete ? "AnimationCompleted" : "AnimationEventTriggered";
                                 var desc = actionKey + "/" + method.MetadataToken + "/" + play?.clipName?.Value + "/" + triggerEvent?.Name + "/" + completeEvent?.Name;
                                 var descriptor = "PersistentAnimator/callback/" + pair.Key + "/" + fieldName + "/" + desc;
-                                if (!result.ContainsKey(descriptor) && !result.Values.Any(v => ReferenceEquals(v, del)))
+                                if (!result.ContainsKey(descriptor))
                                     result.Add(descriptor, del);
+                                if (play != null && library.clips != null) {
+                                    foreach (var clip in library.clips) {
+                                        if (clip == null || string.IsNullOrEmpty(clip.name) || clip.name == play.clipName?.Value) continue;
+                                        if (clip.name.IndexOf(actionState.Name, StringComparison.OrdinalIgnoreCase) >= 0) {
+                                            var altDesc = actionKey + "/" + method.MetadataToken + "/" + clip.name + "/" + triggerEvent?.Name + "/" + completeEvent?.Name;
+                                            var altDescriptor = "PersistentAnimator/callback/" + pair.Key + "/" + fieldName + "/" + altDesc;
+                                            if (!result.ContainsKey(altDescriptor))
+                                                result.Add(altDescriptor, del);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
                 foreach (var field in AnimatorFields().Where(field => typeof(Delegate).IsAssignableFrom(field.FieldType))) {
                     var callback = (Delegate?)field.GetValue(pair.Value); if (callback == null) continue;
-                    if (result.Values.Any(value => ReferenceEquals(value, callback))) continue;
                     var calls = callback.GetInvocationList();
                     if (calls.Length != 1) throw new InvalidDataException("Persistent animator callback count differs.");
                     var descriptions = new List<string>();
@@ -250,10 +285,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (clipName != null) AddAlias("PersistentAnimator/clip-name/" + actionKey + "/" + clipName.Value, clipName);
                     }
                     var descriptor = "PersistentAnimator/callback/" + pair.Key + "/" + field.Name + "/" + string.Join(";", descriptions);
-                    if (result.Values.Any(value => ReferenceEquals(value, callback))) throw new InvalidDataException("Persistent animator callback cross-slot alias is unsupported.");
-                    result.Add(descriptor, callback);
+                    if (!result.ContainsKey(descriptor))
+                        result.Add(descriptor, callback);
                 }
             }
+            cachedExternalDirectory = result;
             return result;
         }
         private static void ShadowCallbacks(tk2dSpriteAnimator animator, SortedDictionary<string, object> result)
@@ -280,6 +316,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (action.GetType() != typeof(Tk2dPlayAnimationWithEvents) && action.GetType() != typeof(Tk2dWatchAnimationEvents)) continue;
                     if (!ReferenceEquals(action.Fsm, fsm) || !ReferenceEquals(typeof(FsmStateAction).GetField("fsmState", Flags)!.GetValue(action), states[s]))
                         throw new InvalidDataException("Shadow callback original action/state aliases differ.");
+                    var actionKey = CanonicalFinalVisualCarry.Shadow + "/0/" + fsm.Name + "/" + s + "/" + states[s].Name + "/" + a;
+                    var actionBinding = "PersistentAnimator/action/" + actionKey;
+                    if (!result.ContainsKey(actionBinding)) result.Add(actionBinding, action);
                     foreach (var complete in new[] { true, false }) {
                         var method = CanonicalHeroAnimationCallbacks.Method(action.GetType(), complete);
                         var type = complete ? typeof(Action<tk2dSpriteAnimator, tk2dSpriteAnimationClip>) : typeof(Action<tk2dSpriteAnimator, tk2dSpriteAnimationClip, int>);
@@ -297,6 +336,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (actual.Any(value => !matched.Contains(value))) throw new InvalidDataException("Unknown Shadow callback subscription.");
         }
+        private static bool SameArgument(object? a, object? b)
+        {
+            if (ReferenceEquals(a, b)) return true;
+            if (a == null || b == null) return false;
+            if (a.GetType() != b.GetType()) return false;
+            if (a is FsmString sa && b is FsmString sb) return sa.Value == sb.Value;
+            if (a is FsmEvent ea && b is FsmEvent eb) return ea.Name == eb.Name;
+            if (a is FsmStateAction) return true;
+            if (a is Delegate da && b is Delegate db) return da.Method == db.Method && da.Target?.GetType() == db.Target?.GetType();
+            return false;
+        }
         internal static Action Prepare(Data source, Data current, CanonicalCarryGraphCodec codec, out Action verify)
         {
             var owners = Animators(); var fields = AnimatorFields();
@@ -312,10 +362,20 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (source.Arrows[index].Owner != CanonicalBorderArrowCarry.OwnerKeys[index]) throw new InvalidDataException("Original Border producer order differs.");
                 applyArrows.Add(CanonicalBorderArrowCarry.Prepare(source.Arrows[index], current.Arrows[index], codec, out var verifyArrow)); verifyArrows.Add(verifyArrow);
             }
-            foreach (var row in source.CallbackArguments)
-                if (row == null || row.Length != 5 || !(row[0] is Delegate call)
-                    || CallbackArguments(call).Where((value, index) => !ReferenceEquals(value, row[index])).Any())
-                    throw new InvalidDataException("Persistent callback closed action/event/parameter aliases differ.");
+            for (var r = 0; r < source.CallbackArguments.Length; r++) {
+                var row = source.CallbackArguments[r];
+                if (row == null || row.Length != 5 || !(row[0] is Delegate call))
+                    throw new InvalidDataException("Persistent callback closed action/event/parameter row invalid: " + r);
+                var args = CallbackArguments(call);
+                for (var index = 0; index < 5; index++) {
+                    if (!SameArgument(args[index], row[index])) {
+                        var argVal = args[index] is FsmString fs ? fs.Value : args[index] is FsmEvent fe ? fe.Name : args[index]?.ToString();
+                        var rowVal = row[index] is FsmString rfs ? rfs.Value : row[index] is FsmEvent rfe ? rfe.Name : row[index]?.ToString();
+                        Modding.Logger.Log($"[HKTAS] CallbackArguments mismatch: row={r};index={index};args={args[index]?.GetType().Name}:{argVal};row={row[index]?.GetType().Name}:{rowVal}");
+                        throw new InvalidDataException($"Persistent callback closed action/event/parameter aliases differ: row={r};index={index};args={args[index]?.GetType().Name}:{argVal};row={row[index]?.GetType().Name}:{rowVal}");
+                    }
+                }
+            }
             for (var owner = 0; owner < instances.Length; owner++) for (var field = 0; field < fields.Length; field++) {
                 var value = source.Values[owner][field];
                 if (value == null ? fields[field].FieldType.IsValueType : !fields[field].FieldType.IsInstanceOfType(value))
@@ -347,8 +407,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Verify();
             };
         }
+        private static IReadOnlyDictionary<object, string>? cachedCopiedMembers;
         internal static IReadOnlyDictionary<object, string> CopiedMembers()
         {
+            if (cachedCopiedMembers != null) return cachedCopiedMembers;
             var roots = HealthRoots(); var copied = new Dictionary<object, string>(new References());
             var codec = CanonicalCarryFieldRegistry.Create(persistentSpriteDomain: true);
             var externals = ExternalDirectory();
@@ -372,6 +434,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (graph.Unsupported.Length != 0 || copied.Count > 8192) throw new InvalidDataException("Health copied closure is unsupported: " + string.Join(";", graph.Unsupported.Take(8)));
             foreach (var owner in Animators()) foreach (var field in AnimatorFields().Where(field => typeof(Delegate).IsAssignableFrom(field.FieldType)))
                 if (field.GetValue(owner.Value) is Delegate callback && !copied.ContainsKey(callback)) copied.Add(callback, owner.Key + "/" + field.Name);
+            cachedCopiedMembers = copied;
             return copied;
         }
         private sealed class References : IEqualityComparer<object>

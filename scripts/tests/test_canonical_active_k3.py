@@ -33,7 +33,7 @@ class CanonicalActiveK3Tests(unittest.TestCase):
         result = self.compare(a, b)
         self.assertTrue(result["comparisonPassed"])
         self.assertFalse(result["rawComparisonPassed"])
-        self.assertEqual(20, len(result["comparisons"][0]["diagnosticProcessHistoryProjections"]))
+        self.assertEqual(len(state.PROCESS_HISTORY_PROJECTIONS), len(result["comparisons"][0]["diagnosticProcessHistoryProjections"]))
         self.assertFalse(result["completeStateCoverage"])
         self.assertFalse(self.compare(a, b, "raw")["comparisonPassed"])
 

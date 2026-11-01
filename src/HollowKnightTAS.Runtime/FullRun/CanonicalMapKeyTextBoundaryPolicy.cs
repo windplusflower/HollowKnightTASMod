@@ -37,14 +37,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             // The existing managed incoming walk cannot read native MeshFilter /
             // collider slots. Check those real consumers before native retirement.
             var filters = directory.Values.OfType<MeshFilter>().ToArray();
+            var meshSet = new HashSet<Mesh>(meshes);
             foreach (var filter in Resources.FindObjectsOfTypeAll<MeshFilter>())
-                if (filter != null && meshes.Any(mesh => mesh == filter.sharedMesh) && !filters.Any(owner => ReferenceEquals(owner, filter)))
+                if (filter != null && meshSet.Contains(filter.sharedMesh) && !filters.Any(owner => ReferenceEquals(owner, filter)))
                     throw new InvalidOperationException("Map Key owned mesh has an external native MeshFilter consumer.");
             foreach (var collider in Resources.FindObjectsOfTypeAll<MeshCollider>())
-                if (collider != null && meshes.Any(mesh => mesh == collider.sharedMesh))
+                if (collider != null && meshSet.Contains(collider.sharedMesh))
                     throw new InvalidOperationException("Map Key owned mesh has an external native MeshCollider consumer.");
             foreach (var renderer in Resources.FindObjectsOfTypeAll<SkinnedMeshRenderer>())
-                if (renderer != null && meshes.Any(mesh => mesh == renderer.sharedMesh))
+                if (renderer != null && meshSet.Contains(renderer.sharedMesh))
                     throw new InvalidOperationException("Map Key owned mesh has an external native skinned-renderer consumer.");
             // TMP's original OnDestroy unregisters both queues. An inactive
             // hint must already be absent; all unrelated queue storage remains
@@ -57,10 +58,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!tmpType.GetFields(Instance).Select(field => field.Name).OrderBy(name => name, StringComparer.Ordinal).SequenceEqual(queueNames))
                 throw new InvalidOperationException("Original TMP queue field ABI differs.");
             var textIds = new HashSet<int>(texts.Select(owner => owner.GetInstanceID()));
+            var textSet = new HashSet<object>(texts);
             foreach (var name in queueNames) {
                 var value = tmpType.GetField(name, Instance)!.GetValue(tmp);
                 if (value is IDictionary lookup && lookup.Keys.Cast<object>().Any(key => key is int id && textIds.Contains(id))
-                    || value is IList queue && queue.Cast<object>().Any(item => texts.Any(owner => ReferenceEquals(owner, item))))
+                    || value is IList queue && queue.Cast<object>().Any(item => textSet.Contains(item)))
                     throw new InvalidOperationException("Inactive Map Key Text retains a TMP rebuild entry; natural queue retirement is required.");
             }
             using var fields = new LoadingFieldDigest(value => value is UnityEngine.Object native ? "marker-canon-native:" + native.GetInstanceID() : null,

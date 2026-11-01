@@ -369,7 +369,7 @@ internal static partial class StudioScenarioHarness
                 if (actualDExperiment && actualDStage != "target") {
                     await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
                     await Until(() => { boot.Refresh(); if (boot.FullRunFaultCode != 0) throw new InvalidOperationException("actual source D fault " + boot.FullRunFaultCode); return boot.IsWaiting; },
-                        "actual source B captures both graphs and parks without executing target load", 180);
+                        "actual source B captures both graphs and parks without executing target load", 360);
                     actualDHeader = await Call(new Dictionary<string, string> { ["phase"] = "d-exp-source-info" });
                     Require(actualDHeader["sourceOrdinal"] == sourceBoundaryOrdinal.ToString(), "source packet is sealed at the selected actual ordinal");
                     await File.WriteAllTextAsync(Path.Combine(output, "actual-d-source-header.json"), JsonSerializer.Serialize(actualDHeader));

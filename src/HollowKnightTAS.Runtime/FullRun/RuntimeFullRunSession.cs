@@ -512,7 +512,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (LoadingSerialSceneProbe.ObserveNativeBoundary(movieFrame, completed, sessionDirectory, movieInputNativeOrigin, movieInputControlOrigin, input, mouse))
                 {
                     loadingGameplayOracle?.Sample("candidate", "serial-source-unloaded");
-                    if (CanonicalActualDExperiment.CaptureSource && LoadingSerialSceneProbe.ExperimentalSource != null)
+                    if (CanonicalActualDExperiment.CaptureSource && LoadingSerialSceneProbe.ExperimentalSource != null && actualDExport == null)
                     {
                         var sealElapsed = System.Diagnostics.Stopwatch.StartNew();
                         CanonicalSourceHeaderTiming.Lifecycle(20);

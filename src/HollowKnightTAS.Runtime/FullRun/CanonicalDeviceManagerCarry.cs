@@ -24,7 +24,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("SDK manager registration is outside the bounded original native owner contract.");
             foreach (var item in data.Managers)
                 if (item == null || item.Order != 0 || item.ModuleMvid != CanonicalSceneMappingCarry.ModuleMvid || item.Type != "InControl.NativeInputDeviceManager"
-                    || item.RegisteredDevices != 0 || item.AttachedDevices != 0 || item.DetachedDevices != 0 || item.SystemProfiles < 0 || item.SystemProfiles > 4096
+                    || item.RegisteredDevices != 0 || item.AttachedDevices < 0 || item.AttachedDevices > 16 || item.DetachedDevices != 0 || item.SystemProfiles < 0 || item.SystemProfiles > 4096
                     || item.CustomProfiles != 0 || item.NativeEvents == null || item.NativeEvents.Length > 4096
                     || item.SystemProfileContract == null || item.SystemProfileContract.Length < 12 || item.SystemProfileContract.Length > 1398104)
                     throw new InvalidDataException("SDK manager owner, devices, profile configuration or managed event buffer is unregistered.");

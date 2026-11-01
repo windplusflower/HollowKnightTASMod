@@ -64,6 +64,28 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (!owned.ContainsKey(items)) owned.Add(items, "$/PersistentSprite/" + pair.Key + "/" + field.Name + "/_items");
                 }
             }
+            var fsmField = typeof(PlayMakerFSM).GetField("fsm", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            var statesField = typeof(Fsm).GetField("states", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            var activeField = typeof(FsmState).GetField("activeActions", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            var finishedField = typeof(FsmState).GetField("_finishedActions", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            foreach (var owner in CanonicalPersistentSpriteContinuation.NativeOwners().OfType<PlayMakerFSM>()) {
+                if (fsmField?.GetValue(owner) is Fsm fsm && statesField?.GetValue(fsm) is FsmState[] fsmStates) {
+                    foreach (var state in fsmStates) {
+                        if (state == null) continue;
+                        persistentInternalContainers.Add(state);
+                        if (activeField?.GetValue(state) is System.Collections.IList active) {
+                            persistentInternalContainers.Add(active);
+                            var items = active.GetType().GetField("_items", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(active);
+                            if (items != null) persistentInternalContainers.Add(items);
+                        }
+                        if (finishedField?.GetValue(state) is System.Collections.IList finished) {
+                            persistentInternalContainers.Add(finished);
+                            var items = finished.GetType().GetField("_items", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(finished);
+                            if (items != null) persistentInternalContainers.Add(items);
+                        }
+                    }
+                }
+            }
         }
         internal void RequirePersistentSpriteNoExternalManagedHolders(Func<object, bool>? mainNode = null)
         {

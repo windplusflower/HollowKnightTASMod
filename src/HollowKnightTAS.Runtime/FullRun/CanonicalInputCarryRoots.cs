@@ -76,7 +76,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 ["R6/InputManager-ActiveDevices-view"] = activeWrapper, ["R6/InputDevice-Null"] = nullDevice!,
                 ["R6/InputManager-activeDevice"] = activeDevice! };
             proposed.Add("R6/InputManager-scalars", CanonicalInputManagerScalars.Capture());
-            foreach (var device in deviceAudits) proposed.Add(device.Binding, devices.Items[device.Ordinal]);
+            foreach (var device in deviceAudits.Where(device => device.RuntimeType == CanonicalCarryGraphCodec.Identity(typeof(InputDevice)))) proposed.Add(device.Binding, devices.Items[device.Ordinal]);
             var setReferences = new HashSet<object>(new References());
             var actionReferences = new HashSet<object>(new References());
             var setAudits = new List<SetAudit>();

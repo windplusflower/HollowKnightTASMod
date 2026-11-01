@@ -78,14 +78,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             // The existing managed incoming walk cannot read native MeshFilter /
             // collider slots. Check those real consumers before native retirement.
             var filters = directory.Values.Concat(generated.Values).OfType<MeshFilter>().ToArray();
+            var meshSet = new HashSet<Mesh>(meshes);
             foreach (var filter in Resources.FindObjectsOfTypeAll<MeshFilter>())
-                if (filter != null && meshes.Any(mesh => mesh == filter.sharedMesh) && !filters.Any(owner => ReferenceEquals(owner, filter)))
+                if (filter != null && meshSet.Contains(filter.sharedMesh) && !filters.Any(owner => ReferenceEquals(owner, filter)))
                     throw new InvalidOperationException("HUD presentation owned mesh has an external native MeshFilter consumer.");
             foreach (var collider in Resources.FindObjectsOfTypeAll<MeshCollider>())
-                if (collider != null && meshes.Any(mesh => mesh == collider.sharedMesh))
+                if (collider != null && meshSet.Contains(collider.sharedMesh))
                     throw new InvalidOperationException("HUD presentation owned mesh has an external native MeshCollider consumer.");
             foreach (var renderer in Resources.FindObjectsOfTypeAll<SkinnedMeshRenderer>())
-                if (renderer != null && meshes.Any(mesh => mesh == renderer.sharedMesh))
+                if (renderer != null && meshSet.Contains(renderer.sharedMesh))
                     throw new InvalidOperationException("HUD presentation owned mesh has an external native skinned-renderer consumer.");
             // TMP's original OnDestroy unregisters both queues. An inactive
             // hint must already be absent; all unrelated queue storage remains

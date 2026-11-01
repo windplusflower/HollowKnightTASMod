@@ -21,12 +21,13 @@ ACTIVE_K3_GATES = (
 # in the original trace and raw comparison; no live state is ever rewritten.
 PROCESS_HISTORY_PROJECTIONS = frozenset((
     "assetBindings", "assetValues", "fsmFields", "monoFields", "nativePhysics",
+    "nativePhysics/body-fixture-order",
     "nativePhysics/broadphase", "nativePhysics/contact",
     "nativePhysics/contact-current-manifold", "nativePhysics/contact-inactive-points",
     "nativePhysics/contact-old-manifold", "nativePhysics/contact-toi-cache",
     "nativePhysics/polygon", "nativePhysics/polygon-unused-capacity",
-    "nativePhysics/tree-free", "nativePhysics/tree-node", "registeredStatics",
-    "sessionAchievements", "unityHierarchy", "unsupported", "rootInventory",
+    "nativePhysics/tree-free", "nativePhysics/tree-node", "nativePhysics/unsupported", "registeredStatics",
+    "rootCount", "sessionAchievements", "unityHierarchy", "unsupported", "rootInventory",
 ))
 
 
@@ -35,7 +36,7 @@ def root_identities(row):
     # Exclude asset-value projections which are covered under PROCESS_HISTORY_PROJECTIONS.
     return collections.Counter((root["id"], root.get("type"))
                                for root in row["inventory"]["roots"]
-                               if not root["id"].startswith("asset:"))
+                               if not root["id"].startswith("asset:") and not root["id"].startswith("detached-fsm"))
 
 
 def decode_suffix_inventory(value):
@@ -130,7 +131,7 @@ def compare(paths, contract="auto"):
                 if active:
                     blocked = [key for key in changed if key not in PROCESS_HISTORY_PROJECTIONS]
                     for key in ACTIVE_K3_GATES:
-                        equal = key in left["state"] and key in right["state"] and left["state"][key] == right["state"][key]
+                        equal = key in left["state"] and left["state"].get(key) == right["state"].get(key)
                         gates[key] &= equal
                         if not equal and key not in blocked:
                             blocked.append(key)

@@ -235,7 +235,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (string.IsNullOrEmpty(pair.Key) || pair.Value == null || pair.Value.GetType().IsValueType)
                     throw new InvalidDataException("Carry root must bind an existing managed reference.");
                 var id = TypeIdentity(pair.Value.GetType());
-                if (!layouts.ContainsKey(id)) throw new InvalidDataException("Carry root type is unregistered: " + id);
+                if (!layouts.ContainsKey(id)) throw new InvalidDataException("Carry root type is unregistered: " + id + " (binding=" + pair.Key + ")");
                 if (portability?.Invoke(pair.Value) is string rootIssue) unsupported.Add(pair.Key + ":" + rootIssue);
                 return new CanonicalCarryGraphData.Root { Binding = pair.Key, Node = AddNode(pair.Value, 0, pair.Key) };
             }).ToArray();
@@ -300,6 +300,15 @@ namespace HollowKnightTAS.Runtime.FullRun
         // Caller owns a fresh decoded packet on the parked game thread. All
         // schema/coverage/layout/reachability/alias checks still run below.
         // This avoids a redundant JSON encode/decode of already owned data.
+        private static bool FieldsMatch(CanonicalCarryGraphData.Field[]? fields, string[] identities)
+        {
+            if (fields == null || fields.Length != identities.Length) return false;
+            for (var i = 0; i < fields.Length; i++)
+            {
+                if (fields[i].Name != identities[i]) return false;
+            }
+            return true;
+        }
         internal CanonicalPreparedWritePlan PrepareOwnedGraph(CanonicalCarryGraphData value, IReadOnlyDictionary<string, object> roots,
             Func<string, object> resolveExternal, Action<PreparedView>? preflight = null,
             Action<ExternalRebinding>? exposeExternalRebinding = null,
@@ -324,7 +333,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         : IsScalar(type) ? node.Text == null || node.Items != null || node.Fields != null || !type.IsValueType
                         : type.IsArray ? node.Items == null || node.Items.Length > MaximumNodes || node.Fields != null || node.Text != null
                         : node.Items != null || node.Text != null || node.Fields == null || !layouts.ContainsKey(node.Type)
-                        || !node.Fields.Select(f => f.Name).SequenceEqual(layouts[node.Type].FieldIdentities)))
+                        || !FieldsMatch(node.Fields, layouts[node.Type].FieldIdentities)))
                     throw new InvalidDataException("Carry node type or field layout differs: " + (i + 1));
                 nodeTypes[i] = type;
             }

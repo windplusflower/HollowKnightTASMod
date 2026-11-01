@@ -190,6 +190,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || seconds.Any(value => double.IsNaN(value) || double.IsInfinity(value)) || seconds[0] < 0 || seconds[2] < 0
                 || session.LastGameUpdateNativeFrame < -1 || session.LastGameUpdateNativeFrame > source.NativeFrame)
                 throw new InvalidDataException("Actual D TAS cursor or raw timing fields differ.");
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
             var ownerAdmission = LoadingSerialSceneProbe.FreezeExperimentalOwnerAdmission();
             var applicationBudget = System.Diagnostics.Stopwatch.StartNew();
             var applicationStage = "prepare-target";

@@ -19,7 +19,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var additions = new SortedDictionary<string, object>(StringComparer.Ordinal);
             void AddOwner(string key, object? owner)
             {
-                if (owner == null || !(owner is OneAxisInputControl || owner is TwoAxisInputControl) || !seen.Add(owner)) return;
+                if (owner == null || owner is InputControl || !(owner is OneAxisInputControl || owner is TwoAxisInputControl) || !seen.Add(owner)) return;
                 if (additions.Count >= 10000) throw new InvalidDataException("Canonical input control roots exceed their bound.");
                 additions.Add(key, owner);
                 if (owner is TwoAxisInputControl)
@@ -28,7 +28,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         AddOwner(key + "/" + field.Name, field.GetValue(owner));
             }
             foreach (var pair in roots.OrderBy(pair => pair.Key, StringComparer.Ordinal).ToArray()) {
-                if (pair.Value is HeroActions || pair.Value is InputDevice)
+                if (pair.Value is HeroActions)
                     foreach (var field in CanonicalCarryGraphCodec.Fields(pair.Value.GetType()).Where(field =>
                         typeof(OneAxisInputControl).IsAssignableFrom(field.FieldType) || typeof(TwoAxisInputControl).IsAssignableFrom(field.FieldType)))
                         AddOwner("R6/InputControl/" + pair.Key + "/" + field.DeclaringType!.FullName + "/" + field.Name, field.GetValue(pair.Value));

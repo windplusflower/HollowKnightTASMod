@@ -33,15 +33,21 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static object Collection(tk2dSpriteCollectionData? value) => value == null ? new { absent = true } : (object)new {
             value.name, value.spriteCollectionGUID, module = value.GetType().Module.ModuleVersionId.ToString("D") };
+        private static readonly Dictionary<(tk2dSpriteAnimationClip clip, string fpsBits), string> ClipHashCache = new();
         internal static string? ClipHash(tk2dSpriteAnimationClip? clip)
         {
             if (clip == null) return null;
+            var fpsBits = Bits(clip.fps);
+            var cacheKey = (clip, fpsBits);
+            if (ClipHashCache.TryGetValue(cacheKey, out var cached)) return cached;
             if (clip.frames == null || clip.frames.Length > 4096 || clip.frames.Any(frame => frame == null || frame.eventInfo?.Length > 1024))
                 throw new InvalidDataException("Sprite diagnostic clip metadata bounds differ.");
-            var text = JsonConvert.SerializeObject(new { clip.name, fps = Bits(clip.fps), clip.loopStart, wrapMode = (int)clip.wrapMode,
+            var text = JsonConvert.SerializeObject(new { clip.name, fps = fpsBits, clip.loopStart, wrapMode = (int)clip.wrapMode,
                 frames = clip.frames.Select(frame => new { collection = frame.spriteCollection == null ? null : frame.spriteCollection.spriteCollectionGUID,
                     frame.spriteId, frame.triggerEvent, frame.eventInfo, frame.eventInt, eventFloat = Bits(frame.eventFloat) }).ToArray() });
-            return HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(System.Text.Encoding.UTF8.GetBytes(text));
+            var hash = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(System.Text.Encoding.UTF8.GetBytes(text));
+            ClipHashCache[cacheKey] = hash;
+            return hash;
         }
         private object Snapshot(string name, tk2dSprite sprite)
         {

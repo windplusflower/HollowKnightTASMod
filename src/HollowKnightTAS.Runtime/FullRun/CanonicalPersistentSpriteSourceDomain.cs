@@ -24,8 +24,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             CanonicalBorderArrowCarry.OriginalMaterial();
             CanonicalFinalVisualCarry.Preflight(graph);
             foreach (var external in graph.Externals.Where(item => item.Binding.StartsWith("PersistentAnimator/", StringComparison.Ordinal)))
+            {
                 if (!continuationExternals.TryGetValue(external.Binding, out var target) || CanonicalCarryGraphCodec.Identity(target.GetType()) != external.Type)
                     throw new InvalidDataException("Persistent animator original clip/callback preflight differs: " + external.Binding);
+            }
             CanonicalCarryGraphData.Node ArrayNode(CanonicalCarryGraphData.Value value, Type type, int count) {
                 if (value.Kind != "node" || value.Reference < 1 || value.Reference > graph.Nodes.Length)
                     throw new InvalidDataException("Persistent sprite source preflight reference differs.");

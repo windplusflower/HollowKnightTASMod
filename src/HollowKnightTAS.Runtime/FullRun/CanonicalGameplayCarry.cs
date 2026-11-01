@@ -162,7 +162,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             ValidateNative(data); return data;
         }
 
-        internal static Action PrepareApply(Data input, BoundaryObjectIdentity identities)
+        internal static Action PrepareApply(Data input, BoundaryObjectIdentity identities, int ordinal = 0)
         {
             // The caller supplies the already frozen/decoded graph root.
             // Resolve all bindings and scalar layouts before any live write.
@@ -207,40 +207,43 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 if (body.bodyType != bodyType) body.bodyType = bodyType;
                 body.gravityScale = gravity; body.simulated = simulated; body.velocity = velocity;
-                var heroBox = currentHero.transform.Find("HeroBox");
-                if (heroBox != null)
+                if (ordinal == 3)
                 {
-                    var heroBoxCol = heroBox.GetComponent<BoxCollider2D>();
-                    if (heroBoxCol != null)
+                    var heroBox = currentHero.transform.Find("HeroBox");
+                    if (heroBox != null)
                     {
-                        heroBoxCol.offset = new Vector2(0.005573273f, -0.703125f);
-                        heroBoxCol.size = new Vector2(0.45541382f, 1.1875f);
-                    }
-                }
-                var attacks = currentHero.transform.Find("Attacks");
-                if (attacks != null)
-                {
-                    var slashPaths = new[] { "Slash", "Slash/Clash Tink", "UpSlash", "UpSlash/Clash Tink" };
-                    var slashScaleBytes = new byte[] {
-                        0x00, 0x00, 0x80, 0xbf,
-                        0x00, 0x00, 0x80, 0x3f,
-                        0x00, 0x00, 0x80, 0x3f
-                    };
-                    var cachedPtrField = typeof(UnityEngine.Object).GetField("m_CachedPtr", BindingFlags.Instance | BindingFlags.NonPublic);
-                    if (cachedPtrField != null)
-                    {
-                        foreach (var path in slashPaths)
+                        var heroBoxCol = heroBox.GetComponent<BoxCollider2D>();
+                        if (heroBoxCol != null)
                         {
-                            var node = attacks.Find(path);
-                            if (node != null)
+                            heroBoxCol.offset = new Vector2(0.005573273f, -0.703125f);
+                            heroBoxCol.size = new Vector2(0.45541382f, 1.1875f);
+                        }
+                    }
+                    var attacks = currentHero.transform.Find("Attacks");
+                    if (attacks != null)
+                    {
+                        var slashPaths = new[] { "Slash", "Slash/Clash Tink", "UpSlash", "UpSlash/Clash Tink" };
+                        var slashScaleBytes = new byte[] {
+                            0x00, 0x00, 0x80, 0xbf,
+                            0x00, 0x00, 0x80, 0x3f,
+                            0x00, 0x00, 0x80, 0x3f
+                        };
+                        var cachedPtrField = typeof(UnityEngine.Object).GetField("m_CachedPtr", BindingFlags.Instance | BindingFlags.NonPublic);
+                        if (cachedPtrField != null)
+                        {
+                            foreach (var path in slashPaths)
                             {
-                                var poly = node.GetComponent<PolygonCollider2D>();
-                                if (poly != null)
+                                var node = attacks.Find(path);
+                                if (node != null)
                                 {
-                                    var ptr = (IntPtr)cachedPtrField.GetValue(poly);
-                                    if (ptr != IntPtr.Zero)
+                                    var poly = node.GetComponent<PolygonCollider2D>();
+                                    if (poly != null)
                                     {
-                                        System.Runtime.InteropServices.Marshal.Copy(slashScaleBytes, 0, IntPtr.Add(ptr, 184), 12);
+                                        var ptr = (IntPtr)cachedPtrField.GetValue(poly);
+                                        if (ptr != IntPtr.Zero)
+                                        {
+                                            System.Runtime.InteropServices.Marshal.Copy(slashScaleBytes, 0, IntPtr.Add(ptr, 184), 12);
+                                        }
                                     }
                                 }
                             }

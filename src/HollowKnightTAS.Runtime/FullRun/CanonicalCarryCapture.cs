@@ -355,7 +355,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     LoadingSerialSceneProbe.PrepareCanonicalLoadScalars(source.SceneLoad);
                     loadCallbacks.RequireSource(CanonicalSceneLoadCallbacks.FromPrepared(view), source.SceneLoad);
                     SceneLoadCallbacksPrepared = true;
-                    CanonicalGameplayCarry.PrepareApply(CanonicalGameplayCarry.FromPrepared(view), identities);
+                    CanonicalGameplayCarry.PrepareApply(CanonicalGameplayCarry.FromPrepared(view), identities, actualSourceValidation?.Ordinal ?? 0);
                     CanonicalHeroAnimationCallbacks.PrepareApply(CanonicalHeroAnimationCallbacks.FromPrepared(view), identities, () => true, view);
                     CanonicalHeroTriggerCallbacks.PrepareApply(CanonicalHeroTriggerCallbacks.FromPrepared(view), identities, () => true, view);
                     GameplayPrepared = true;
@@ -432,7 +432,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     loadCallbacks.RequireSource(callbacks, source.SceneLoad);
                     sourceChecks.Add(() => loadCallbacks.RequireAppliedSource(callbacks));
                     var gameplay = CanonicalGameplayCarry.FromPrepared(view);
-                    domainActions.Add(CanonicalGameplayCarry.PrepareApply(gameplay, identities));
+                    domainActions.Add(CanonicalGameplayCarry.PrepareApply(gameplay, identities, actualSourceValidation?.Ordinal ?? 0));
                     var heroCallbacks = CanonicalHeroAnimationCallbacks.FromPrepared(view);
                     domainActions.Add(CanonicalHeroAnimationCallbacks.PrepareApply(heroCallbacks, identities, admitted, view));
                     var triggerCallbacks = CanonicalHeroTriggerCallbacks.FromPrepared(view);
@@ -1058,11 +1058,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (reflective != null) { Remember(value, reflective); return reflective; }
                 return null;
             }
+            private static readonly Dictionary<Type, UnityEngine.Object[]> SharedAssetCandidatesCache = new();
             private UnityEngine.Object[] AssetCandidates(Type type)
             {
                 if (!assets.TryGetValue(type, out var candidates)) {
-                    candidates = Resources.FindObjectsOfTypeAll(type).Where(owner => owner != null && owner.GetType() == type).ToArray();
-                    if (candidates.Length > 100000) throw new InvalidDataException("asset-binding-candidate-budget");
+                    if (!SharedAssetCandidatesCache.TryGetValue(type, out candidates)) {
+                        candidates = Resources.FindObjectsOfTypeAll(type).Where(owner => owner != null && owner.GetType() == type).ToArray();
+                        if (candidates.Length > 100000) throw new InvalidDataException("asset-binding-candidate-budget");
+                        SharedAssetCandidatesCache.Add(type, candidates);
+                    }
                     assets.Add(type, candidates);
                 }
                 return candidates;
