@@ -144,7 +144,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (expected.Any(filter => !components.Contains(filter)))
                     throw new InvalidOperationException("Persistent sprite original native consumer is absent.");
                 var meshes = expected.Select(filter => filter.sharedMesh).Concat(finalOwners.Values.Select(CanonicalFinalVisualCarry.Mesh)).ToArray();
-                var meshCount = CanonicalPersistentSpriteDirectory.OwnerCount + 5;
+                var meshCount = CanonicalPersistentSpriteDirectory.OwnerCount + finalOwners.Count;
                 if (meshes.Any(mesh => mesh == null) || meshes.Distinct().Count() != meshCount)
                     throw new InvalidOperationException("Persistent sprite native mesh identity differs.");
                 var data = meshes.Select(mesh => BitConverter.ToInt64(Native(mesh, 64), 56)).ToArray();

@@ -16,7 +16,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         internal const string Binding = "PersistentSprites/FinalVisual/";
         internal const string Shadow = "Hero/Effects/Shadow Recharge";
-        internal const string Schema = "three-original-TMP-223-and-two-submesh13:full-fields-aliases-readonly:original-font-glyph-slots:source-buffer-refresh:hero-and-shadow-source-renderer:v3";
+        internal const string Schema = "three-original-TMP-223-and-optional-slot1-submesh13:full-fields-aliases-readonly:original-font-glyph-slots:source-buffer-refresh:hero-and-shadow-source-renderer:v4";
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         internal static readonly Type[] DataTypes = { typeof(Data), typeof(int[]), typeof(string[]), typeof(object[][]), typeof(object[]) };
         internal static Type[] OriginalDataTypes()
@@ -75,10 +75,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidDataException("Final visual TMP owner is absent, foreign or active.");
                 result.Add(path, texts[0]);
                 var children = node.Cast<Transform>().SelectMany(child => child.GetComponents<TMP_SubMesh>()).ToArray();
-                if (children.Length != (path == paths[2] ? 0 : 1)) throw new InvalidDataException("Final visual original TMP submesh directory differs.");
+                // A fallback-font submesh depends on the actual text, not on
+                // this label's path. Carry the existing owner without creating
+                // one; preflight still requires the identical target directory.
+                var slots = typeof(TextMeshPro).GetField("m_subTextObjects", Flags)!.GetValue(texts[0]) as TMP_SubMesh[];
+                if (children.Length > 1 || slots == null || slots.Length < 2 || slots.Length > 16
+                    || slots.Where((child, index) => index != 1).Any(child => !ReferenceEquals(child, null))
+                    || (children.Length == 0 ? !ReferenceEquals(slots[1], null)
+                        : children[0].GetType() != typeof(TMP_SubMesh) || !ReferenceEquals(slots[1], children[0])
+                            || !ReferenceEquals(typeof(TMP_SubMesh).GetField("m_TextComponent", Flags)!.GetValue(children[0]), texts[0])))
+                    throw new InvalidDataException("Final visual original TMP submesh directory/slot alias differs: " + path + ";children=" + children.Length);
                 foreach (var child in children) result.Add(path + "/submesh", child);
             }
-            if (result.Count != 5) throw new InvalidDataException("Final visual directory size differs.");
+            if (result.Count < 3 || result.Count > 6) throw new InvalidDataException("Final visual directory size differs.");
             return result;
         }
         internal static FieldInfo[] Fields(Type type)
@@ -98,7 +107,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var directory = Directory();
             var result = new SortedDictionary<string, object>(StringComparer.Ordinal);
             result.Add(Binding + "original-default-int-comparer", EqualityComparer<int>.Default);
-            // The two original inactive TMP_SubMesh owners retain their exact
+            // The original inactive TMP_SubMesh owners retain their exact
             // destroyed fallback-material wrappers after the common HUD Canon.
             // These are existing S0 slot aliases, never newly made Unity ghosts.
             // Bind only that finite anchored alias set; unknown dead materials
@@ -121,7 +130,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var pair in CanonicalMarkerReadonlyCarry.FinalVisualDirectory(directory)) result.Add(Binding + pair.Key, pair.Value);
             foreach (var pair in directory) {
                 var mesh = Mesh(pair.Value);
-                if (mesh == null) throw new InvalidDataException("Final visual original managed mesh absent.");
+                if (mesh == null) {
+                    var states = directory.Select(item => {
+                        var value = Mesh(item.Value);
+                        return item.Key + "=" + (ReferenceEquals(value, null) ? "null" : value == null ? "destroyed" : "live");
+                    });
+                    throw new InvalidDataException("Final visual original managed mesh absent: " + pair.Key
+                        + ";directory=" + string.Join(";", states));
+                }
                 result.Add(Binding + pair.Key + "/mesh", mesh);
             }
             return result;
@@ -223,7 +239,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static Action Prepare(Data source, Data current, CanonicalCarryGraphCodec codec, Func<bool> admitted, out Action verify)
         {
             if (source.Schema != Schema || !source.Owners.SequenceEqual(current.Owners) || !source.Fields.SequenceEqual(current.Fields)
-                || !source.Native.SequenceEqual(current.Native) || source.Values.Length != 5 || source.HeroActivity != current.HeroActivity)
+                || !source.Native.SequenceEqual(current.Native) || source.Values.Length != current.Owners.Length || source.HeroActivity != current.HeroActivity)
                 throw new InvalidDataException("Final visual source ABI/native lifecycle/pose differs.");
             var directory = Directory(); var owners = directory.Values.ToArray();
             var fields = owners.Select(owner => Fields(owner.GetType())).ToArray();
@@ -236,10 +252,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (field.IsInitOnly && !ReferenceEquals(value, field.GetValue(owners[i]))) throw new InvalidDataException("Final visual readonly owner identity differs.");
                 }
             }
-            // All five meshes also belong to the shared persistent native
+            // All carried meshes also belong to the shared persistent native
             // consumer guard. SourceDomain checks that guard before writes,
             // after this refresh and on final source readback. Re-enumerating
-            // every native consumer separately for these same five meshes on
+            // every native consumer separately for these same meshes on
             // each field readback would duplicate the same synchronous proof.
             void Verify() {
                 using var validation = LoadingEngineClockProbe.ReadOnlyCheckpointScope();

@@ -171,6 +171,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             CaptureSharedCallback(managerState, 152, 160, "contacts", fields);
             foreach (var scene in scenes.OrderBy(value => value.Value)) CaptureScene(scene.Key, scene.Value);
             Line("unsupported", string.Join(";", unsupported));
+            // Publish successfully observed empty collections as empty digests.
+            // Missing groups must still mean missing evidence to the K3 comparer.
+            // Do this only after every registered physics scene was traversed;
+            // do not add synthetic entries to the raw aggregate observation.
+            foreach (var kind in new[] { "body", "contact-active-points", "contact-control-initialized", "polygon-active" })
+                if (!groups.ContainsKey(kind)) groups.Add(kind, new StringBuilder());
             using (var sha = SHA256.Create())
             {
                 foreach (var group in groups) groupDigests[group.Key] = Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(group.Value.ToString())));

@@ -131,7 +131,7 @@ def compare(paths, contract="auto"):
                 if active:
                     blocked = [key for key in changed if key not in PROCESS_HISTORY_PROJECTIONS]
                     for key in ACTIVE_K3_GATES:
-                        equal = key in left["state"] and left["state"].get(key) == right["state"].get(key)
+                        equal = key in left["state"] and key in right["state"] and left["state"][key] == right["state"][key]
                         gates[key] &= equal
                         if not equal and key not in blocked:
                             blocked.append(key)
