@@ -16,7 +16,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         internal const string Binding = "PersistentSprites/FinalVisual/";
         internal const string Shadow = "Hero/Effects/Shadow Recharge";
-        internal const string Schema = "three-original-TMP-223-and-optional-slot1-submesh13:full-fields-aliases-readonly:original-font-glyph-slots:source-buffer-refresh:hero-and-shadow-source-renderer:v4";
+        internal const string Schema = "three-original-TMP-223-and-optional-slot1-submesh13:uncreated-empty-or-buffered-mesh:full-fields-aliases-readonly:original-font-glyph-slots:source-buffer-refresh:hero-and-shadow-source-renderer:v6";
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         internal static readonly Type[] DataTypes = { typeof(Data), typeof(int[]), typeof(string[]), typeof(object[][]), typeof(object[]) };
         internal static Type[] OriginalDataTypes()
@@ -39,6 +39,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             public string Schema = CanonicalFinalVisualCarry.Schema;
             public string[] Owners = Array.Empty<string>(), Fields = Array.Empty<string>(), Native = Array.Empty<string>();
+            public string[] TextMeshRefresh = Array.Empty<string>();
             public object?[][] Values = Array.Empty<object?[]>();
             public CanonicalMarkerReadonlyCarry.Data Readonly = new CanonicalMarkerReadonlyCarry.Data();
             public bool ShadowRenderer, HeroRenderer;
@@ -102,6 +103,76 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static string FieldName(FieldInfo field) => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName;
         internal static Mesh Mesh(UnityEngine.Object owner) => (Mesh)(typeof(TMP_Text).IsInstanceOfType(owner)
             ? typeof(TMP_Text).GetField("m_mesh", Flags)!.GetValue(owner) : typeof(TMP_SubMesh).GetField("m_mesh", Flags)!.GetValue(owner))!;
+        // Never use TMP's mesh property here: both original getters allocate.
+        // A never-awakened label may carry serialized text buffers but has no
+        // native Mesh to bind or refresh. A destroyed wrapper is NOT that state.
+        private static bool RequireMeshLifecycle(UnityEngine.Object owner)
+        {
+            var mesh = Mesh(owner);
+            if (!ReferenceEquals(mesh, null)) {
+                if (mesh == null) throw new InvalidDataException("Final visual owned Mesh was destroyed: " + owner.name);
+                return true;
+            }
+            var component = (MonoBehaviour)owner;
+            var lifecycle = BoundaryMonoLifecycle.ObserveUnstartedUi(component);
+            var registered = owner.GetType().GetField("m_isRegisteredForEvents", Flags)!;
+            if (component.gameObject.activeInHierarchy || lifecycle[0] != 0 || lifecycle[1] != 0
+                || (bool)registered.GetValue(owner)!
+                || !ReferenceEquals(component.GetComponent<MeshFilter>().sharedMesh, null))
+                throw new InvalidDataException("Final visual null Mesh has an initialized native owner: " + owner.name);
+            if (owner is TextMeshPro text) {
+                if ((bool)typeof(TMP_Text).GetField("m_isAwake", Flags)!.GetValue(text)!)
+                    throw new InvalidDataException("Final visual awakened text has no Mesh: " + owner.name);
+                var info = (TMP_TextInfo?)typeof(TMP_Text).GetField("m_textInfo", Flags)!.GetValue(text);
+                RequireUncreatedBuffers(info, owner.name);
+            }
+            return false;
+        }
+        internal static Mesh[] LiveMeshes(IEnumerable<UnityEngine.Object> owners)
+            => owners.Where(RequireMeshLifecycle).Select(Mesh).ToArray();
+
+        private static void RequireUncreatedBuffers(TMP_TextInfo? info, string owner)
+        {
+            if (info == null) return;
+            var cached = (TMP_MeshInfo[]?)typeof(TMP_TextInfo).GetField("m_CachedMeshInfo", Flags)!.GetValue(info);
+            if ((info.meshInfo ?? Array.Empty<TMP_MeshInfo>()).Concat(cached ?? Array.Empty<TMP_MeshInfo>())
+                .Any(item => !ReferenceEquals(item.mesh, null)))
+                throw new InvalidDataException("Final visual unawakened text retains a Mesh buffer: " + owner);
+        }
+
+        private static string TextMeshRefresh(TextMeshPro text, TMP_TextInfo? info, TMP_SubMesh[] slots, bool requireEmptyNative)
+        {
+            if (!RequireMeshLifecycle(text)) {
+                RequireUncreatedBuffers(info, text.name);
+                if (slots.Any(child => !ReferenceEquals(child, null) && RequireMeshLifecycle(child)))
+                    throw new InvalidDataException("Final visual unawakened text has a generated submesh: " + text.name);
+                return "uncreated";
+            }
+            // TMP_TextInfo is serialized. Awake does not replace an existing
+            // instance: it can still have zero materials, a null textComponent,
+            // or unallocated channel arrays until the first GenerateTextMesh.
+            if (info == null || info.materialCount < 0 || info.materialCount > 2
+                || info.meshInfo == null || info.meshInfo.Length < info.materialCount
+                || !ReferenceEquals(info.textComponent, null) && !ReferenceEquals(info.textComponent, text))
+                throw new InvalidDataException("Final visual source mesh-info layout/owner differs: " + text.name
+                    + ";materials=" + info?.materialCount + ";rows=" + info?.meshInfo?.Length);
+            var unrendered = info.materialCount == 0;
+            for (var i = 0; i < info.materialCount; i++) {
+                var expected = i == 0 ? Mesh(text) : slots.Length > i && slots[i] != null && RequireMeshLifecycle(slots[i])
+                    ? Mesh(slots[i]) : throw new InvalidDataException("Final visual source submesh has no live Mesh: " + text.name);
+                var item = info.meshInfo[i];
+                if (!ReferenceEquals(item.mesh, null) && !ReferenceEquals(item.mesh, expected))
+                    throw new InvalidDataException("Final visual source text buffer Mesh alias differs: " + text.name + "/" + i);
+                unrendered |= ReferenceEquals(item.mesh, null) || item.vertices == null || item.normals == null
+                    || item.tangents == null || item.triangles == null || item.uvs0 == null || item.uvs2 == null || item.colors32 == null;
+            }
+            if (!unrendered) return "buffers";
+            if (requireEmptyNative && TextMeshes(text, slots).Any(mesh => mesh.vertexCount != 0))
+                throw new InvalidDataException("Final visual unallocated buffers have nonempty native geometry: " + text.name);
+            return "empty";
+        }
+        private static Mesh[] TextMeshes(TextMeshPro text, TMP_SubMesh[] slots)
+            => LiveMeshes(new UnityEngine.Object[] { text }.Concat(slots.Where(child => !ReferenceEquals(child, null)).Cast<UnityEngine.Object>()));
         internal static IReadOnlyDictionary<string, object> Externals()
         {
             var directory = Directory();
@@ -129,6 +200,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             foreach (var pair in CanonicalMarkerReadonlyCarry.FinalVisualDirectory(directory)) result.Add(Binding + pair.Key, pair.Value);
             foreach (var pair in directory) {
+                if (!RequireMeshLifecycle(pair.Value)) continue;
                 var mesh = Mesh(pair.Value);
                 if (mesh == null) {
                     var states = directory.Select(item => {
@@ -150,14 +222,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Final visual inactive original filter/collider ownership differs.");
             return component.enabled + ":" + component.gameObject.activeSelf + ":" + component.gameObject.activeInHierarchy + ":" + renderer.enabled + ":"
                 + string.Join(",", BoundaryMonoLifecycle.ObserveUnstartedUi(component)) + ":"
-                + string.Join(",", LoadingVisualMeshBatchAudit.PoseBits(t.localPosition, t.localRotation, t.localScale));
+                + string.Join(",", LoadingVisualMeshBatchAudit.PoseBits(t.localPosition, t.localRotation, t.localScale)) + ":"
+                + (RequireMeshLifecycle(owner) ? "live-mesh" : "unawakened-null-mesh");
         }
         internal static Data Capture()
         {
             using var validation = LoadingEngineClockProbe.ReadOnlyCheckpointScope();
             var directory = Directory(); CanonicalMarkerEventCarry.RequireEmpty(directory);
+            var refresh = directory.Values.OfType<TextMeshPro>().Select(text => TextMeshRefresh(text,
+                (TMP_TextInfo?)typeof(TMP_Text).GetField("m_textInfo", Flags)!.GetValue(text),
+                (TMP_SubMesh[])typeof(TextMeshPro).GetField("m_subTextObjects", Flags)!.GetValue(text), requireEmptyNative: true)).ToArray();
             return new Data { Owners = directory.Keys.ToArray(), Fields = directory.SelectMany(pair => Fields(pair.Value.GetType()).Select(field => pair.Key + "/" + FieldName(field))).ToArray(),
                 Values = directory.Values.Select(owner => Fields(owner.GetType()).Select(field => field.GetValue(owner)).ToArray()).ToArray(),
+                TextMeshRefresh = refresh,
                 Native = directory.Values.Select(Native).ToArray(), Readonly = CanonicalMarkerReadonlyCarry.CaptureFinalVisual(directory),
                 ShadowRenderer = ShadowSprite().GetComponent<MeshRenderer>().enabled,
                 HeroRenderer = HeroController.SilentInstance!.GetComponent<MeshRenderer>().enabled, HeroActivity = HeroActivity() };
@@ -187,7 +264,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!Strings("Owners").SequenceEqual(directory.Keys)
                 || !Strings("Fields").SequenceEqual(directory.SelectMany(pair => Fields(pair.Value.GetType()).Select(field => pair.Key + "/" + FieldName(field))))
                 || !Strings("Native").SequenceEqual(directory.Values.Select(Native)))
-                throw new InvalidDataException("Final visual source ownership/ABI/native flags differ before producers.");
+                throw new InvalidDataException("Final visual source ownership/ABI/native flags differ before producers. Source="
+                    + string.Join(";", Strings("Owners").Zip(Strings("Native"), (owner, state) => owner + "=" + state))
+                    + ";Target=" + string.Join(";", directory.Select(pair => pair.Key + "=" + Native(pair.Value))));
             var externals = Externals();
             var glyphs = new CanonicalFinalVisualGlyphs();
             foreach (var external in graph.Externals.Where(item => item.Binding.StartsWith(Binding, StringComparison.Ordinal)))
@@ -195,7 +274,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     ? glyphs.Resolve(external.Binding).GetType() : externals.TryGetValue(external.Binding, out var value) ? value.GetType()
                         : throw new InvalidDataException("Final visual source original external absent.")) != external.Type)
                     throw new InvalidDataException("Final visual source readonly/mesh binding differs before producers.");
-            CanonicalPersistentSpriteNativeGuard.ProtectFinalVisual(directory.Values.Select(Mesh).ToArray());
+            var meshes = LiveMeshes(directory.Values);
+            if (meshes.Length != 0) CanonicalPersistentSpriteNativeGuard.ProtectFinalVisual(meshes);
         }
         internal static IReadOnlyDictionary<object, string> CopiedMembers()
         {
@@ -243,13 +323,22 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Final visual source ABI/native lifecycle/pose differs.");
             var directory = Directory(); var owners = directory.Values.ToArray();
             var fields = owners.Select(owner => Fields(owner.GetType())).ToArray();
+            if (source.TextMeshRefresh.Length != 3) throw new InvalidDataException("Final visual source mesh refresh directory differs.");
             var readonlyApply = CanonicalMarkerReadonlyCarry.PrepareFinalVisual(source.Readonly, directory, codec, admitted);
+            var textIndex = 0;
             for (var i = 0; i < owners.Length; i++) {
                 if (source.Values[i].Length != fields[i].Length) throw new InvalidDataException("Final visual field row differs.");
                 for (var f = 0; f < fields[i].Length; f++) {
                     var value = source.Values[i][f]; var field = fields[i][f];
                     if (value == null ? field.FieldType.IsValueType : !field.FieldType.IsInstanceOfType(value)) throw new InvalidDataException("Final visual source field type differs.");
                     if (field.IsInitOnly && !ReferenceEquals(value, field.GetValue(owners[i]))) throw new InvalidDataException("Final visual readonly owner identity differs.");
+                    if (field.Name == "m_mesh" && !ReferenceEquals(value, Mesh(owners[i])))
+                        throw new InvalidDataException("Final visual source Mesh lifecycle/identity differs before writes.");
+                }
+                if (owners[i] is TextMeshPro text) {
+                    object? Value(string name) => source.Values[i][Array.FindIndex(fields[i], field => field.Name == name)];
+                    var refresh = TextMeshRefresh(text, (TMP_TextInfo?)Value("m_textInfo"), (TMP_SubMesh[])Value("m_subTextObjects")!, requireEmptyNative: false);
+                    if (refresh != source.TextMeshRefresh[textIndex++]) throw new InvalidDataException("Final visual source mesh refresh contract differs.");
                 }
             }
             // All carried meshes also belong to the shared persistent native
@@ -266,6 +355,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                     for (var f = 0; f < fields[i].Length; f++) if (!codec.SameRawSlot(source.Values[i][f], fields[i][f].GetValue(owners[i]), fields[i][f].FieldType, 0))
                         throw new InvalidOperationException("Final visual full source field/alias readback differs: " + directory.Keys.ElementAt(i) + "/" + fields[i][f].Name);
                 }
+                var refresh = owners.OfType<TextMeshPro>().Select(text => TextMeshRefresh(text,
+                    (TMP_TextInfo?)typeof(TMP_Text).GetField("m_textInfo", Flags)!.GetValue(text),
+                    (TMP_SubMesh[])typeof(TextMeshPro).GetField("m_subTextObjects", Flags)!.GetValue(text), requireEmptyNative: true));
+                if (!refresh.SequenceEqual(source.TextMeshRefresh)) throw new InvalidOperationException("Final visual mesh lifecycle readback differs.");
                 if (ShadowSprite().GetComponent<MeshRenderer>().enabled != source.ShadowRenderer) throw new InvalidOperationException("Shadow source renderer readback differs.");
                 if (HeroActivity() != source.HeroActivity || HeroController.SilentInstance!.GetComponent<MeshRenderer>().enabled != source.HeroRenderer)
                     throw new InvalidOperationException("Hero source activity/renderer readback differs.");
@@ -276,7 +369,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 for (var i = 0; i < owners.Length; i++) for (var f = 0; f < fields[i].Length; f++)
                     if (!fields[i][f].IsInitOnly) fields[i][f].SetValue(owners[i], source.Values[i][f]);
                 readonlyApply();
+                var refreshedText = 0;
                 foreach (var text in owners.OfType<TextMeshPro>()) {
+                    var refresh = source.TextMeshRefresh[refreshedText++];
+                    if (refresh == "uncreated") {
+                        if (RequireMeshLifecycle(text)) throw new InvalidOperationException("Final visual uncreated Mesh was allocated during apply.");
+                        continue;
+                    }
+                    if (refresh == "empty") {
+                        var slots = (TMP_SubMesh[])typeof(TextMeshPro).GetField("m_subTextObjects", Flags)!.GetValue(text);
+                        foreach (var mesh in TextMeshes(text, slots)) mesh.Clear(false);
+                        continue;
+                    }
                     var info = (TMP_TextInfo)typeof(TMP_Text).GetField("m_textInfo", Flags)!.GetValue(text);
                     if (info == null || info.materialCount < 1 || info.materialCount > 2 || info.meshInfo == null || info.meshInfo.Length < info.materialCount)
                         throw new InvalidOperationException("Final visual source mesh-info layout differs.");
