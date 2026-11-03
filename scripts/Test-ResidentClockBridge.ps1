@@ -31,6 +31,7 @@ try {
     foreach ($scenario in @('normal','drain','orphan-main','orphan-worker','wrong-owner','wrong-handle','wrong-readback','escaped','unpaired-set','abort','stale','tamper','drift')) {
         Run-Harness 'particles.exe' @($player,$scenario)
     }
+    & (Join-Path $PSScriptRoot 'Test-ResidentDirectorFence.ps1') -UnityPlayerPath $player -CompilerPath $cc
     Run-Harness 'clock.exe' @($player)
     Write-Output "Verified offline clock bridge: $(Join-Path $build 'HollowKnightTAS.ClockBridge.dll')"
 } finally { $env:PATH = $priorPath }

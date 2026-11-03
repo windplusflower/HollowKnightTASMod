@@ -96,8 +96,13 @@ static BOOL finish_contact_impulse_policy(void);
 #include "contact_impulse_probe.h"
 #include "startup_frame_hook.h"
 #include "full_run_continuation.h"
+/* The production bridge has one commit authority. Standalone producer
+ * fixtures include their domain header directly and exercise its local end. */
+#define HKTAS_JOINT_RESIDENT_GATE 1
+static LONG hktas_reject_individual_end(void);
 #include "resident_audio_fence.h"
 #include "resident_particle_producer.h"
+#include "resident_director_producers.h"
 /* Keep the exact first audio failure in the shared fault word. It survives
  * termination; reporting only 66 also obscured explicit abort (reason 37). */
 static void __cdecl hktas_resident_audio_fault(LONG family)
@@ -109,6 +114,11 @@ static void __cdecl hktas_resident_particle_fault(LONG family)
 {
     /* Called with the producer lock held. Do not re-enter its status export. */
     LONG reason = g_ps_reason;
+    hktas_v2_fault(reason > 0 && reason < 100 ? family * 100 + reason : family);
+}
+static void __cdecl hktas_resident_director_fault(LONG family)
+{
+    LONG reason = g_dn_fault;
     hktas_v2_fault(reason > 0 && reason < 100 ? family * 100 + reason : family);
 }
 #include "resident_boundary_clock.h"
@@ -1335,7 +1345,8 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         }
         if (g_v2_gate_enabled && (!g_guard_required || !g_startup_latch_enabled
             || !install_resident_audio_fence((BYTE *)GetModuleHandleW(L"UnityPlayer.dll"), g_startup_hook_thread_id, hktas_resident_audio_fault)
-            || !install_resident_particle_producer((BYTE *)GetModuleHandleW(L"UnityPlayer.dll"), g_startup_hook_thread_id, hktas_resident_particle_fault)))
+            || !install_resident_particle_producer((BYTE *)GetModuleHandleW(L"UnityPlayer.dll"), g_startup_hook_thread_id, hktas_resident_particle_fault)
+            || !install_resident_director_producers((BYTE *)GetModuleHandleW(L"UnityPlayer.dll"), g_startup_hook_thread_id, hktas_resident_director_fault)))
         {
             InterlockedExchange(&g_status, -17);
             TerminateProcess(GetCurrentProcess(), ERROR_INVALID_FUNCTION);

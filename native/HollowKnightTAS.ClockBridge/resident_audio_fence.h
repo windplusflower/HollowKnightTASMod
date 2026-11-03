@@ -561,10 +561,14 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_RequireResidentAudioFence(ui
 
 __declspec(dllexport) LONG __cdecl HktasClockBridge_EndResidentAudioFence(uint64_t token, LONG complete)
 {
+#ifdef HKTAS_JOINT_RESIDENT_GATE
+    (void)token; (void)complete; return hktas_reject_individual_end();
+#else
     if (complete != 1 || !HktasClockBridge_RequireResidentAudioFence(token)) { hktas_audio_fail(37); return 0; }
     if ((uint64_t)InterlockedCompareExchange64(&g_audio_state, 0, (LONG64)HKTAS_AUDIO_CLOSED) != HKTAS_AUDIO_CLOSED) { hktas_audio_fail(38); return 0; }
     if (!SetEvent(g_audio_open_event)) { hktas_audio_fail(39); return 0; }
     return 1;
+#endif
 }
 
 __declspec(dllexport) uint32_t __cdecl HktasClockBridge_GetResidentAudioFenceCoverageGaps(void)

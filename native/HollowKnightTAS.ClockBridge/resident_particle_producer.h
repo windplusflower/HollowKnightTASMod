@@ -283,11 +283,15 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_RequireResidentParticleFence
 }
 __declspec(dllexport) LONG __cdecl HktasClockBridge_EndResidentParticleFence(uint64_t token, LONG complete)
 {
+#ifdef HKTAS_JOINT_RESIDENT_GATE
+    (void)token; (void)complete; return hktas_reject_individual_end();
+#else
     AcquireSRWLockExclusive(&g_ps_lock);
     if (complete != 1 || !hktas_ps_held_locked(token)) {
         hktas_ps_fault_locked(22); ReleaseSRWLockExclusive(&g_ps_lock); return 0;
     }
     g_ps_closed = FALSE; WakeAllConditionVariable(&g_ps_changed); ReleaseSRWLockExclusive(&g_ps_lock); return 1;
+#endif
 }
 typedef struct {
     uint32_t magic, version, bytes, installed;

@@ -53,7 +53,9 @@ function Assert-ClockBridgeExports {
             'RequireResidentWritableBoundary','ExportResidentContinuation','ImportResidentContinuation','EndResidentBoundary',
             'BeginResidentFrameObservation','RequireResidentFrameObservation','GetResidentFrameClockBytes','ExportResidentFrameClock',
             'CopyResidentAudioFenceStatus','CopyResidentAudioWorkers','CopyResidentParticleFenceStatus',
-            'BeginResidentParticleFence','RequireResidentParticleFence','EndResidentParticleFence') {
+            'BeginResidentParticleFence','RequireResidentParticleFence','EndResidentParticleFence',
+            'CopyResidentDirectorFenceStatus','BeginResidentDirectorFence','RequireResidentDirectorFence',
+            'VerifyResidentDirectorQueues','EndResidentDirectorFence') {
             if (-not $names.Contains('HktasClockBridge_' + $entry)) { throw "Resident bridge export missing before installation: $entry" }
         }
     }
