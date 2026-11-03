@@ -6,12 +6,11 @@
 #include <stddef.h>
 #include <string.h>
 
-/* Scoped, fixed-image admission. The pinned direct CALL/JMP sites below
- * delegate to compiled Win64 wrappers around entire original functions.
- * The originals, their stack/unwind information and exception handlers
- * remain at their native addresses. Leaf jump relays allocate no frame.
- * Unproven indirect/inlined/worker routes are reported even when all
- * enrolled calls are drained. A partial guard never authorizes restore. */
+#include "resident_director_entry_hooks.h"
+/* Guard the native method entries, including indirect calls and the actual
+ * PrepareFrameJobFunc callback. The retained measured call sites provide
+ * an independent consistency check. Inline writers, outstanding worker
+ * ownership and other mutator domains still block complete admission. */
 #define HKTAS_DN_GAP_ADDRESS_OR_INLINE 1u
 #define HKTAS_DN_GAP_WORKER_DISPATCH 2u
 #define HKTAS_DN_GAP_UNENROLLED_MUTATORS 4u
@@ -21,48 +20,6 @@
 #define HKTAS_DN_MANAGER 0x196f0c0u
 #define HKTAS_DN_IMAGE 0x1bc7000u
 /* Generated for UnityPlayer RSDS 0334be90-63dd-4644-bee1-fc8d56c840c2/1. */
-#define HKTAS_DIR_FUNCTIONS(X) \
- X(manager_ScheduleGraphCommand, VIP, 0x899db0u, 115u, UINT64_C(0x4a166218dc714b23)) \
- X(manager_ScheduleGraphDestroy, VP, 0x899e30u, 116u, UINT64_C(0x6b116a11b0f47aa3)) \
- X(manager_ConstructPlayableGraph, PP, 0x8967e0u, 164u, UINT64_C(0x80aff438c7ed057f)) \
- X(manager_ProcessAndClearForShutdown, V0, 0x899120u, 238u, UINT64_C(0x226a93b06e4f6fa5)) \
- X(manager_ProcessPlayStateChanges, V0, 0x899210u, 1660u, UINT64_C(0xad546f813b63053e)) \
- X(manager_QueueAndEvaluateGraph, VP, 0x899890u, 81u, UINT64_C(0x229c864bdb74a16b)) \
- X(manager_ExecutePrepareFrames, VI, 0x8977f0u, 768u, UINT64_C(0x8281cf03129fef16)) \
- X(manager_ExecuteStage, VI, 0x897af0u, 379u, UINT64_C(0x43ff4762587174ce)) \
- X(manager_RegisterProcessJobs, VP, 0x899b30u, 585u, UINT64_C(0xd67d758a40967d6e)) \
- X(manager_RebuildPrepareFrameJobs, V0, 0x8998f0u, 569u, UINT64_C(0x62c1ac6982834fc0)) \
- X(manager_BumpFrameIDs, VI, 0x8960c0u, 170u, UINT64_C(0xbb6b8225bd08cc5c)) \
- X(manager_AcquireNode, P0, 0x895f30u, 84u, UINT64_C(0x0c38834fb16c5c49)) \
- X(manager_AcquireOutputNode, P0, 0x895f90u, 110u, UINT64_C(0x420223e234177da1)) \
- X(manager_FreeNode, VP, 0x898290u, 24u, UINT64_C(0x223afeb6c0c73248)) \
- X(manager_FreeOutputNode, VP, 0x8982b0u, 46u, UINT64_C(0xdc55d9f80945b2a8)) \
- X(manager_CacheScriptingMethodsForClass, SP, 0x896170u, 795u, UINT64_C(0x6e8918cdce2c7dd7)) \
- X(manager_SetApplicationPause, VB, 0x89a230u, 200u, UINT64_C(0xee75033b34023253)) \
- X(manager_ResetFrameTiming, V0, 0x899d80u, 35u, UINT64_C(0x91d095e149e44e79)) \
- X(manager_EvaluateGraph, VPD, 0x8977b0u, 56u, UINT64_C(0x5cee8db7f0d98992)) \
- X(pool_AllocateInBucket, PI, 0x896060u, 96u, UINT64_C(0xfaf2bf6a78cef84a)) \
- X(pool_CreateItem, PI, 0x896980u, 263u, UINT64_C(0x16bd4d8ead40d702)) \
- X(pool_Free, VP, 0x898270u, 26u, UINT64_C(0xb1093ce00f6fe9e0)) \
- X(pool_SwitchBucket, PP, 0x89a850u, 381u, UINT64_C(0x1436321ac12eb416)) \
- X(pool_Destruct, V0, 0x896f30u, 197u, UINT64_C(0x1f544e1a3074a86b)) \
- X(graph_Play, V0, 0x898de0u, 294u, UINT64_C(0x0f6a0dff74c5f5fc)) \
- X(graph_Stop, V0, 0x89a780u, 197u, UINT64_C(0x3b10464dc824fe7c)) \
- X(graph_DestroyPendingPlayables, V0, 0x896b00u, 459u, UINT64_C(0x178117d4db23203c)) \
- X(graph_DestroyPlayableDeferred, VP, 0x896cd0u, 194u, UINT64_C(0x0df58b64edd6440b)) \
- X(graph_DestroySubGraphDeferred, VP, 0x896e40u, 194u, UINT64_C(0xd3527b912be27821)) \
- X(graph_DisableMultithread, V0, 0x897000u, 220u, UINT64_C(0xf5bb7773f12c57ed)) \
- X(graph_SetTimeUpdateMode, VI, 0x89a580u, 231u, UINT64_C(0xf39123802b4f84ca)) \
- X(graph_EvaluateDeferred, V0, 0x897670u, 308u, UINT64_C(0x090b7ff42703ec5e)) \
- X(graph_DispatchOutputNotifications, V0, 0x8970e0u, 385u, UINT64_C(0x0e019f867f604b4d)) \
- X(graph_PrepareFrame, VPREP, 0x898f10u, 373u, UINT64_C(0x0709d568e7540d11)) \
- X(graph_Evaluate, VEVAL, 0x8972d0u, 913u, UINT64_C(0x15c6942d19eb640e)) \
- X(graph_FireConnectionHashChanged, V0, 0x897c70u, 124u, UINT64_C(0x2dd25e2452198fcc)) \
- X(graph_DestroyOutput, VP, 0x896a90u, 111u, UINT64_C(0x3177fab518dd1edc)) \
- X(graph_UpdateRootPlayableCache, V0, 0x89ab70u, 374u, UINT64_C(0x102413bd6e81b4d1)) \
- X(graph_SchedulePlayableDestruction, VP, 0x899eb0u, 158u, UINT64_C(0xad277748debef09a)) \
- X(graph_ScheduleSubgraphDestruction, VP, 0x899f50u, 178u, UINT64_C(0x2ef1e69d6c7de70d)) \
- X(graph_SetHasPendingNotifications, V0, 0x89a300u, 274u, UINT64_C(0x30ce2f4127b065b9))
 #define HKTAS_DIR_EDGES(X) \
  X(0xd94e7u, 0xe9u, graph_Play) \
  X(0xd94f3u, 0xe9u, graph_Play) \
@@ -218,13 +175,9 @@
  X(0xcdf665u, 0xe8u, graph_EvaluateDeferred) \
  X(0xcdfea8u, 0xe8u, graph_DisableMultithread)
 
-#define DN_ENUM(id,abi,rva,length,hash) DN_##id,
-enum hktas_dn_site { HKTAS_DIR_FUNCTIONS(DN_ENUM) DN_FUNCTION_COUNT };
+#define DN_ENUM(id,abi,rva,length,hash,cut,bytes,unwind) DN_##id=HKTAS_DE_##id,
+enum hktas_dn_site { HKTAS_DE_ENTRIES(DN_ENUM) DN_FUNCTION_COUNT=HKTAS_DE_COUNT };
 #undef DN_ENUM
-typedef struct { DWORD rva, bytes; uint64_t hash; } hktas_dn_func;
-#define DN_FUNC(id,abi,rva,length,hash) {rva,length,hash},
-static const hktas_dn_func g_dn_funcs[] = { HKTAS_DIR_FUNCTIONS(DN_FUNC) };
-#undef DN_FUNC
 typedef struct { DWORD rva; BYTE opcode, id; } hktas_dn_edge;
 #define DN_EDGE(rva,opcode,id) {rva,opcode,DN_##id},
 static const hktas_dn_edge g_dn_edges[] = { HKTAS_DIR_EDGES(DN_EDGE) };
@@ -323,10 +276,10 @@ static void hktas_dn_leave(unsigned site)
  * wrapper calls C, adjusts RSP, or needs a fabricated UNWIND_INFO. */
 #define DN_WRAP_VOID(id,params,args) static void __cdecl dn_##id params { \
     typedef void (__cdecl *fn_t) params; BOOL entered=hktas_dn_enter(DN_##id); \
-    ((fn_t)(g_dn_base+g_dn_funcs[DN_##id].rva))args; if (entered) hktas_dn_leave(DN_##id); }
+    ((fn_t)(void*)hktas_de_original_##id)args; if (entered) hktas_dn_leave(DN_##id); }
 #define DN_WRAP_RET(id,type,params,args) static type __cdecl dn_##id params { \
     typedef type (__cdecl *fn_t) params; BOOL entered=hktas_dn_enter(DN_##id); \
-    type result=((fn_t)(g_dn_base+g_dn_funcs[DN_##id].rva))args; if (entered) hktas_dn_leave(DN_##id); return result; }
+    type result=((fn_t)(void*)hktas_de_original_##id)args; if (entered) hktas_dn_leave(DN_##id); return result; }
 #define DN_V0(id) DN_WRAP_VOID(id,(void *p),(p))
 #define DN_VI(id) DN_WRAP_VOID(id,(void *p,int i),(p,i))
 #define DN_VB(id) DN_WRAP_VOID(id,(void *p,BYTE b),(p,b))
@@ -339,11 +292,11 @@ static void hktas_dn_leave(unsigned site)
 #define DN_PP(id) DN_WRAP_RET(id,void *,(void *p,void *q),(p,q))
 #define DN_PI(id) DN_WRAP_RET(id,void *,(void *p,int i),(p,i))
 #define DN_SP(id) DN_WRAP_RET(id,short,(void *p,void *q),(p,q))
-#define DN_DEF(id,abi,rva,length,hash) DN_##abi(id)
-HKTAS_DIR_FUNCTIONS(DN_DEF)
+#define DN_DEF(id,abi,rva,length,hash,cut,bytes,unwind) DN_##abi(id)
+HKTAS_DE_ENTRIES(DN_DEF)
 #undef DN_DEF
-#define DN_ADDR(id,abi,rva,length,hash) (void *)dn_##id,
-static void *const g_dn_wrappers[]={ HKTAS_DIR_FUNCTIONS(DN_ADDR) };
+#define DN_ADDR(id,abi,rva,length,hash,cut,bytes,unwind) (void *)dn_##id,
+static void *const g_dn_wrappers[]={ HKTAS_DE_ENTRIES(DN_ADDR) };
 #undef DN_ADDR
 
 static BOOL hktas_dn_signature(BYTE *base)
@@ -371,47 +324,12 @@ static BOOL hktas_dn_rel(BYTE *at, BYTE *target, int32_t *rel)
 }
 static BOOL hktas_dn_verify(BOOL installed)
 {
-    if (!hktas_dn_signature(g_dn_base)) return FALSE;
-    for (unsigned i=0;i<DN_EDGE_COUNT;++i) {
-        hktas_dn_edge e=g_dn_edges[i]; BYTE *at=g_dn_base+e.rva;int32_t actual,wanted;
-        BYTE *target=installed ? g_dn_relay+16u*e.id : g_dn_base+g_dn_funcs[e.id].rva;
-        memcpy(&actual,at+1,4);
-        if (at[0]!=e.opcode || !hktas_dn_rel(at,target,&wanted) || actual!=wanted) return FALSE;
-    }
-    for (unsigned i=0;i<DN_FUNCTION_COUNT;++i) {
-        hktas_dn_func f=g_dn_funcs[i]; uint64_t hash=UINT64_C(14695981039346656037);unsigned edge=0;
-        if (installed) {
-            BYTE *stub=g_dn_relay+16u*i;void *target;
-            memcpy(&target,stub+6,8);
-            if (memcmp(stub,"\xff\x25\0\0\0\0",6) || target!=g_dn_wrappers[i]) return FALSE;
-        }
-        while(edge<DN_EDGE_COUNT && g_dn_edges[edge].rva<f.rva) ++edge;
-        for (DWORD j=0;j<f.bytes;++j) {
-            BYTE value=g_dn_base[f.rva+j];
-            if(installed && edge<DN_EDGE_COUNT) {
-                hktas_dn_edge e=g_dn_edges[edge];DWORD pos=f.rva+j-e.rva;
-                if (pos>0 && pos<=4) {
-                    int32_t r=(int32_t)(g_dn_funcs[e.id].rva-(e.rva+5));
-                    value=(BYTE)((uint32_t)r>>(8*(pos-1)));if (pos==4) ++edge;
-                }
-            }
-            hash=(hash^value)*UINT64_C(1099511628211);
-        }
-        if(hash!=f.hash) return FALSE;
+    if(!hktas_dn_signature(g_dn_base) || !hktas_de_verify(g_dn_base,g_dn_relay,(const void *const*)g_dn_wrappers,installed)) return FALSE;
+    for(unsigned i=0;i<DN_EDGE_COUNT;++i) {
+        hktas_dn_edge edge=g_dn_edges[i];BYTE *site=g_dn_base+edge.rva;int32_t delta;
+        if(site[0]!=edge.opcode || !hktas_dn_rel(site,g_dn_base+hktas_de_entries[edge.id].rva,&delta) || memcmp(site+1,&delta,4)) return FALSE;
     }
     return TRUE;
-}
-static BOOL hktas_dn_patch(unsigned index, BOOL install)
-{
-    hktas_dn_edge e=g_dn_edges[index];BYTE *at=g_dn_base+e.rva;int32_t from,to,actual;
-    BYTE *body=g_dn_base+g_dn_funcs[e.id].rva,*relay=g_dn_relay+16u*e.id;
-    if (!hktas_dn_rel(at,install?body:relay,&from) || !hktas_dn_rel(at,install?relay:body,&to)) return FALSE;
-    memcpy(&actual,at+1,4);if(at[0]!=e.opcode || actual!=from) return FALSE;
-    DWORD old,ignored;
-    if (!VirtualProtect(at,5,PAGE_EXECUTE_READWRITE,&old)) return FALSE;
-    memcpy(at+1,&to,4);
-    return VirtualProtect(at,5,old,&ignored) && FlushInstructionCache(GetCurrentProcess(),at,5)
-        && !memcmp(at+1,&to,4);
 }
 /* Primary startup APC / DLL_PROCESS_ATTACH only. Windows may have already
  * created genuine OS loader-pool workers. Do not patch code concurrently
@@ -523,21 +441,12 @@ static BOOL hktas_dn_install_in_exclusive_image(BYTE *base,DWORD main_thread,hkt
     for (uintptr_t off=0;off<0x60000000u && !g_dn_relay;off+=65536u)
         g_dn_relay=(BYTE *)VirtualAlloc((void *)(start+off),4096,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);
     if (!g_dn_relay) { FlsFree(g_dn_fls);g_dn_fls=FLS_OUT_OF_INDEXES;return FALSE; }
-    for (unsigned i=0;i<DN_FUNCTION_COUNT;++i) {
-        BYTE *stub=g_dn_relay+16u*i;
-        memcpy(stub,"\xff\x25\0\0\0\0",6);memcpy(stub+6,&g_dn_wrappers[i],8);
-    }
-    DWORD old;
-    if(!VirtualProtect(g_dn_relay,4096,PAGE_EXECUTE_READ,&old) || !FlushInstructionCache(GetCurrentProcess(),g_dn_relay,4096)) goto clean;
-    for (unsigned i=0;i<DN_EDGE_COUNT;++i) if (!hktas_dn_patch(i,TRUE)) {
-        /* A protection/cache/readback failure after publication is terminal.
-         * Retain the relay for any still-reachable patched call. */
+    if(!hktas_de_install(base,g_dn_relay,(const void *const*)g_dn_wrappers) || !hktas_dn_verify(TRUE)) {
+        /* Publication may already be visible. Keep the static trampolines,
+         * relays and FLS alive until the owner terminates this process. */
         hktas_dn_fault_locked(6);return FALSE;
     }
-    if (!hktas_dn_verify(TRUE)) { hktas_dn_fault_locked(7);return FALSE; }
     g_dn_installed=TRUE;return TRUE;
-clean:
-    VirtualFree(g_dn_relay,0,MEM_RELEASE);g_dn_relay=NULL;FlsFree(g_dn_fls);g_dn_fls=FLS_OUT_OF_INDEXES;return FALSE;
 }
 static BOOL install_resident_director_producers(BYTE *base,DWORD main_thread,hktas_dn_sink sink)
 {
@@ -759,7 +668,7 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_CopyResidentDirectorFenceSta
 {
     if(!buffer || length!=sizeof(hktas_dn_status)) return 0;
     AcquireSRWLockShared(&g_dn_lock);
-    hktas_dn_status v={0x31464452u,1u,sizeof(hktas_dn_status),g_dn_installed,g_dn_epoch,g_dn_started,g_dn_begun,g_dn_ended,
+    hktas_dn_status v={0x31464452u,2u,sizeof(hktas_dn_status),g_dn_installed,g_dn_epoch,g_dn_started,g_dn_begun,g_dn_ended,
         g_dn_waiting,g_dn_peak,g_dn_witness.count,g_dn_active,g_dn_closed,g_dn_held,(uint32_t)g_dn_fault,g_dn_main,GetCurrentThreadId(),
         DN_EDGE_COUNT,DN_FUNCTION_COUNT,HKTAS_DN_GAPS,0u};
     memcpy(buffer,&v,sizeof(v));ReleaseSRWLockShared(&g_dn_lock);return sizeof(v);

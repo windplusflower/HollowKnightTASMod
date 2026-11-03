@@ -190,6 +190,6 @@ int wmain(int argc,wchar_t **argv)
     CHECK(argc==2 || (argc==3 && !wcscmp(argv[2],L"normal")));
     drain_and_resume();pool_cycle();
     CHECK(!HktasClockBridge_BeginResidentDirectorFence(3,GetTickCount64()) && status().fault && status().closed && faults==1);
-    printf("PASS %u patched edges/%u methods, nested drain, actual graph generation/queue consumer, blocked worker, bucket ABA, stale epoch; required gaps=%u\n",
+    printf("PASS %u direct edges checked/%u native entries guarded, nested drain, actual graph generation/queue consumer, blocked worker, bucket ABA, stale epoch; required gaps=%u\n",
         DN_EDGE_COUNT,(unsigned)DN_FUNCTION_COUNT,HKTAS_DN_GAPS);return 0;
 }
