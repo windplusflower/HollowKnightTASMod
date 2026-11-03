@@ -16,7 +16,7 @@ static void reset_director_fixture(void)
 {
     /* initialize() models a fresh process. No engine or fixture worker can
      * retain one of the old relays after its owning test has joined it. */
-    AUDIO_IMAGE_CHECK(!g_dn_active && !g_dn_waiting);
+    AUDIO_IMAGE_CHECK(!g_dn_active && !g_dn_waiting && !g_dn_job_tickets && !g_dn_job_rows && !g_dn_job_count);
     if(g_dn_fls!=FLS_OUT_OF_INDEXES) AUDIO_IMAGE_CHECK(FlsFree(g_dn_fls));
     if(g_dn_relay) AUDIO_IMAGE_CHECK(VirtualFree(g_dn_relay,0,MEM_RELEASE));
     if(g_dn_witness.data) AUDIO_IMAGE_CHECK(HeapFree(GetProcessHeap(),0,g_dn_witness.data));
@@ -25,6 +25,7 @@ static void reset_director_fixture(void)
     g_dn_fault_sink=NULL;g_dn_main=0;g_dn_attempt=g_dn_fault=0;
     g_dn_installed=g_dn_closed=g_dn_held=FALSE;
     g_dn_epoch=g_dn_started=g_dn_begun=g_dn_ended=g_dn_peak=0;
+    g_dn_job_published=g_dn_job_retired=g_dn_job_started=g_dn_job_finished=0;
 }
 static void initialize_director_fixture(void)
 {
@@ -332,7 +333,8 @@ static int director_joint_scenarios(void)
     hktas_dn_status s;
     CHECK(HktasClockBridge_CopyResidentDirectorFenceStatus((BYTE*)&s,sizeof(s))==sizeof(s));
     CHECK(s.installed && s.epoch==token && s.started==g_resident_boundary_started && s.held && s.closed && !s.fault
-        && s.version==2 && s.required_gaps==7 && !s.complete && s.edges==153 && s.functions==45);
+        && s.version==3 && s.required_gaps==7 && !s.complete && s.edges==153 && s.functions==49
+        && s.groups_published==s.groups_retired && s.callbacks_started==s.callbacks_returned && !s.outstanding_groups && !s.outstanding_rows);
     HANDLE worker=CreateThread(NULL,0,director_reset_time,NULL,0,NULL);CHECK(worker);
     uint64_t start=GetTickCount64();do {
         CHECK(HktasClockBridge_CopyResidentDirectorFenceStatus((BYTE*)&s,sizeof(s))==sizeof(s));

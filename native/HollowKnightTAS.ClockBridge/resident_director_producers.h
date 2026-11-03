@@ -184,7 +184,7 @@ static const hktas_dn_edge g_dn_edges[] = { HKTAS_DIR_EDGES(DN_EDGE) };
 #undef DN_EDGE
 #define DN_EDGE_COUNT ((unsigned)(sizeof(g_dn_edges)/sizeof(g_dn_edges[0])))
 typedef void (__cdecl *hktas_dn_sink)(LONG family);
-typedef struct { unsigned depth; BYTE frames[64]; } hktas_dn_thread;
+typedef struct { unsigned depth,tickets; void *publishing,*executing; BYTE frames[64]; } hktas_dn_thread;
 typedef struct { BYTE *data; size_t count, capacity; } hktas_dn_image;
 static SRWLOCK g_dn_lock = SRWLOCK_INIT;
 static CONDITION_VARIABLE g_dn_cv = CONDITION_VARIABLE_INIT;
@@ -220,23 +220,22 @@ static VOID CALLBACK hktas_dn_thread_exit(PVOID storage)
     hktas_dn_thread *t = (hktas_dn_thread *)storage;
     if (!t) return;
     AcquireSRWLockExclusive(&g_dn_lock);
-    if (t->depth) {
-        if (g_dn_active) --g_dn_active;
+    if (t->depth || t->tickets) {
+        if (t->depth && g_dn_active) --g_dn_active;
         hktas_dn_fault_locked(1);
     }
     ReleaseSRWLockExclusive(&g_dn_lock);
-    HeapFree(GetProcessHeap(),0,t);
+    if(!t->tickets) HeapFree(GetProcessHeap(),0,t);
 }
-static BOOL hktas_dn_enter(unsigned site)
+static BOOL hktas_dn_enter_locked(unsigned site,BOOL inherited)
 {
-    AcquireSRWLockExclusive(&g_dn_lock);
     hktas_dn_thread *t = g_dn_fls == FLS_OUT_OF_INDEXES ? NULL : (hktas_dn_thread *)FlsGetValue(g_dn_fls);
     if (t && t->depth && !g_dn_fault) {
         /* Only a writer already counted before closure may finish its nested
          * work. The boundary owner never gets an implicit reentrancy permit. */
         if (g_dn_held || t->depth >= sizeof(t->frames)) { hktas_dn_reject_locked(2); return FALSE; }
     } else {
-        while (g_dn_closed && !g_dn_fault) {
+        while (g_dn_closed && !g_dn_fault && !inherited) {
             uint64_t elapsed = GetTickCount64() - g_dn_started;
             if (GetCurrentThreadId() == g_dn_main || elapsed >= HKTAS_DN_WALL) break;
             ++g_dn_waiting;
@@ -244,7 +243,7 @@ static BOOL hktas_dn_enter(unsigned site)
             --g_dn_waiting;
             if (!woke && GetLastError()!=ERROR_TIMEOUT) break;
         }
-        if (g_dn_closed) { hktas_dn_reject_locked(3); return FALSE; }
+        if (g_dn_held || (g_dn_closed && !inherited)) { hktas_dn_reject_locked(3); return FALSE; }
         if (g_dn_fault || !g_dn_installed) { hktas_dn_reject_locked(3); return FALSE; }
         if (!t) {
             t=(hktas_dn_thread *)HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*t));
@@ -259,6 +258,10 @@ static BOOL hktas_dn_enter(unsigned site)
     if (t->depth>g_dn_peak) g_dn_peak=t->depth;
     ++g_dn_begun; ReleaseSRWLockExclusive(&g_dn_lock); return TRUE;
 }
+static BOOL hktas_dn_enter(unsigned site)
+{
+    AcquireSRWLockExclusive(&g_dn_lock);return hktas_dn_enter_locked(site,FALSE);
+}
 static void hktas_dn_leave(unsigned site)
 {
     AcquireSRWLockExclusive(&g_dn_lock);
@@ -270,6 +273,12 @@ static void hktas_dn_leave(unsigned site)
     if (!t->depth) { --g_dn_active; WakeAllConditionVariable(&g_dn_cv); }
     ReleaseSRWLockExclusive(&g_dn_lock);
 }
+#include "resident_director_job_tickets.h"
+#define DN_JOB(id)
+#define DN_SCHED(id)
+#define DN_GROUP(id)
+#define DN_EXEC(id)
+#define DN_FENCE(id)
 /* ScriptingClassPtr and all reference arguments in this selection occupy
  * one native pointer register. C++ bool is one byte. PrepareFrame includes
  * the two stack parameters after RCX/RDX/XMM2/R9. No generated executable
@@ -493,8 +502,10 @@ static BOOL hktas_dn_handle(hktas_dn_image *out,const BYTE *handle)
 static BOOL hktas_dn_observe_owner_node(hktas_dn_image *out,uintptr_t object,unsigned offset)
 {
     uintptr_t node=0;BYTE owner[16];
-    return object && hktas_dn_read(object+offset,&node,sizeof(node)) && node && hktas_dn_read(node+32,owner,sizeof(owner))
-        && hktas_dn_ptr(owner+8)==object && hktas_dn_append(out,node+32,sizeof(owner));
+    if(!object || !hktas_dn_read(object+offset,&node,sizeof(node)) || !hktas_dn_append(out,object+offset,sizeof(node))) return FALSE;
+    /* Native handles are lazily issued by PlayableGraph::Handle. Witness a
+     * genuinely unissued slot without calling the mutating handle getter. */
+    return !node || (hktas_dn_read(node+32,owner,sizeof(owner)) && hktas_dn_ptr(owner+8)==object && hktas_dn_append(out,node+32,sizeof(owner)));
 }
 static BOOL hktas_dn_array(hktas_dn_image *out,const BYTE *header,size_t stride,int handle_offset)
 {
@@ -611,23 +622,23 @@ static BOOL hktas_dn_unchanged_locked(void)
 static BOOL hktas_dn_held_locked(uint64_t token)
 {
     return g_dn_installed && !g_dn_fault && g_dn_closed && g_dn_held && token && token==g_dn_epoch
-        && g_dn_main==GetCurrentThreadId() && !g_dn_active && g_dn_begun==g_dn_ended && GetTickCount64()-g_dn_started<HKTAS_DN_WALL;
+        && g_dn_main==GetCurrentThreadId() && !g_dn_active && !g_dn_job_tickets && g_dn_job_published==g_dn_job_retired && g_dn_job_started==g_dn_job_finished && !g_dn_job_rows && g_dn_begun==g_dn_ended && GetTickCount64()-g_dn_started<HKTAS_DN_WALL;
 }
 __declspec(dllexport) LONG __cdecl HktasClockBridge_BeginResidentDirectorFence(uint64_t token,uint64_t started)
 {
     AcquireSRWLockExclusive(&g_dn_lock);
     hktas_dn_thread *own=g_dn_fls==FLS_OUT_OF_INDEXES ? NULL : (hktas_dn_thread *)FlsGetValue(g_dn_fls);
     if(!g_dn_installed || g_dn_fault || g_dn_closed || !token || token<=g_dn_epoch || GetCurrentThreadId()!=g_dn_main
-        || (own && own->depth) || GetTickCount64()-started>=HKTAS_DN_WALL || !hktas_dn_verify(TRUE)) {
+        || (own && (own->depth || own->tickets)) || GetTickCount64()-started>=HKTAS_DN_WALL || !hktas_dn_verify(TRUE)) {
         hktas_dn_fault_locked(10);ReleaseSRWLockExclusive(&g_dn_lock);return 0;
     }
     g_dn_epoch=token;g_dn_started=started;g_dn_closed=TRUE;
-    while(g_dn_active && !g_dn_fault) {
+    while((g_dn_active || g_dn_job_tickets) && !g_dn_fault) {
         uint64_t elapsed=GetTickCount64()-started;
         if(elapsed>=HKTAS_DN_WALL) break;
         if(!SleepConditionVariableSRW(&g_dn_cv,&g_dn_lock,(DWORD)(HKTAS_DN_WALL-elapsed),0) && GetLastError()!=ERROR_TIMEOUT) break;
     }
-    if(g_dn_active || g_dn_fault || g_dn_begun!=g_dn_ended || !hktas_dn_capture(&g_dn_witness) || !hktas_dn_unchanged_locked()) {
+    if(g_dn_active || g_dn_job_tickets || g_dn_job_published!=g_dn_job_retired || g_dn_job_started!=g_dn_job_finished || g_dn_job_rows || g_dn_fault || g_dn_begun!=g_dn_ended || !hktas_dn_capture(&g_dn_witness) || !hktas_dn_unchanged_locked()) {
         hktas_dn_fault_locked(11);ReleaseSRWLockExclusive(&g_dn_lock);return 0;
     }
     g_dn_held=TRUE;ReleaseSRWLockExclusive(&g_dn_lock);return 1;
@@ -662,15 +673,18 @@ typedef struct {
     uint64_t epoch, started, begun, ended, waiting, max_depth, witness_bytes;
     uint32_t active, closed, held, fault, main_thread, caller_thread;
     uint32_t edges, functions, required_gaps, complete;
+    uint64_t groups_published,groups_retired,callbacks_started,callbacks_returned;
+    uint32_t outstanding_groups,outstanding_rows;
 } hktas_dn_status;
-typedef char hktas_dn_status_check[(sizeof(hktas_dn_status)==112 && offsetof(hktas_dn_status,required_gaps)==104)?1:-1];
+typedef char hktas_dn_status_check[(sizeof(hktas_dn_status)==152 && offsetof(hktas_dn_status,required_gaps)==104 && offsetof(hktas_dn_status,outstanding_groups)==144)?1:-1];
 __declspec(dllexport) LONG __cdecl HktasClockBridge_CopyResidentDirectorFenceStatus(BYTE *buffer,uint32_t length)
 {
     if(!buffer || length!=sizeof(hktas_dn_status)) return 0;
     AcquireSRWLockShared(&g_dn_lock);
-    hktas_dn_status v={0x31464452u,2u,sizeof(hktas_dn_status),g_dn_installed,g_dn_epoch,g_dn_started,g_dn_begun,g_dn_ended,
+    hktas_dn_status v={0x31464452u,3u,sizeof(hktas_dn_status),g_dn_installed,g_dn_epoch,g_dn_started,g_dn_begun,g_dn_ended,
         g_dn_waiting,g_dn_peak,g_dn_witness.count,g_dn_active,g_dn_closed,g_dn_held,(uint32_t)g_dn_fault,g_dn_main,GetCurrentThreadId(),
-        DN_EDGE_COUNT,DN_FUNCTION_COUNT,HKTAS_DN_GAPS,0u};
+        DN_EDGE_COUNT,DN_FUNCTION_COUNT,HKTAS_DN_GAPS,0u,g_dn_job_published,g_dn_job_retired,g_dn_job_started,g_dn_job_finished,
+        (uint32_t)g_dn_job_count,g_dn_job_rows};
     memcpy(buffer,&v,sizeof(v));ReleaseSRWLockShared(&g_dn_lock);return sizeof(v);
 }
 #endif

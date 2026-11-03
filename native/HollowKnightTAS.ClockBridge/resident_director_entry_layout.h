@@ -48,5 +48,9 @@
  X(graph_InvalidateMultithread, V0, 0x898c40u, 190u, UINT64_C(0xac6bf490c4c1d17a), 6u, "64,83,72,131,236,64", "1,17,2,0,6,114,2,48") \
  X(hgraph_Create, PP, 0x896890u, 227u, UINT64_C(0x89e5aed4f4b66e83), 5u, "72,137,92,36,8", "1,16,0,0") \
  X(graph_Handle, PP, 0x898780u, 163u, UINT64_C(0x3a519a9cbfa605b4), 5u, "72,137,92,36,16", "1,16,0,0") \
- X(job_PrepareFrame, VI, 0x899090u, 131u, UINT64_C(0x64835f4edec19cee), 6u, "72,131,236,56,139,194", "1,17,1,0,4,98")
+ X(job_PrepareFrame, JOB, 0x899090u, 131u, UINT64_C(0x64835f4edec19cee), 6u, "72,131,236,56,139,194", "1,17,1,0,4,98") \
+ X(job_Schedule, SCHED, 0x725da0u, 176u, UINT64_C(0x9908abea8207f7fd), 5u, "72,137,92,36,8", "1,16,0,0") \
+ X(job_Complete, FENCE, 0x725510u, 63u, UINT64_C(0xbf113a787aa2ec1e), 5u, "72,137,92,36,8", "1,16,0,0") \
+ X(job_Group, GROUP, 0x727780u, 349u, UINT64_C(0x903041bea2a0bcd9), 5u, "72,137,92,36,24", "1,16,0,0") \
+ X(job_Exec, EXEC, 0x726de0u, 275u, UINT64_C(0x65f5869a0a8451c9), 5u, "72,137,92,36,8", "1,16,0,0")
 #endif
