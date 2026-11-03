@@ -1,5 +1,6 @@
 #ifndef HKTAS_RESIDENT_PARTICLE_PRODUCER_H
 #define HKTAS_RESIDENT_PARTICLE_PRODUCER_H
+#include "resident_fatal_evidence.h"
 #include <windows.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -55,6 +56,7 @@ static void hktas_ps_fault_locked(LONG reason)
 }
 static void hktas_ps_forbidden(void)
 {
+    hktas_resident_record_fatal("particle",g_ps_reason);
     TerminateProcess(GetCurrentProcess(), ERROR_INVALID_STATE);
     for (;;) Sleep(1000);
 }

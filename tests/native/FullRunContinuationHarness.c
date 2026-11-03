@@ -50,6 +50,8 @@ static void initialize_particle_fixture(void)
     g_ps_tls=TLS_OUT_OF_INDEXES; g_ps_attempted=g_ps_reason=0; g_ps_closed=g_ps_installed=FALSE;
     g_ps_epoch=g_ps_started=g_ps_completed=0;
     particle_image=hktas_ps_test_image_from_file(particle_image_file);
+    AUDIO_IMAGE_CHECK(particle_image && hktas_audio_kind_at(particle_image,(uintptr_t)(particle_image+0x10d2560))==6);
+    AUDIO_IMAGE_CHECK(hktas_audio_kind_at(particle_image,(uintptr_t)(particle_image+0x10d3960))==0);
     AUDIO_IMAGE_CHECK(install_resident_particle_producer(particle_image,GetCurrentThreadId(),hktas_resident_particle_fault));
 }
 static void initialize_audio_fixture(void)

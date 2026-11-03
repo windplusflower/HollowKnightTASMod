@@ -1,5 +1,6 @@
 #ifndef HKTAS_RESIDENT_AUDIO_FENCE_H
 #define HKTAS_RESIDENT_AUDIO_FENCE_H
+#include "resident_fatal_evidence.h"
 #include <windows.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -192,6 +193,7 @@ static void hktas_audio_fatal(LONG reason)
     hktas_audio_fail(reason);
     /* A callback cannot return fabricated FMOD success, or park Unity's main
      * thread indefinitely. This is an owned, permanently failed process. */
+    hktas_resident_record_fatal("audio",g_audio_fault_reason);
     TerminateProcess(GetCurrentProcess(), ERROR_INVALID_STATE);
     for (;;) Sleep(1000);
 }
@@ -199,13 +201,21 @@ static void hktas_audio_fatal(LONG reason)
 static BOOL hktas_audio_deadline(void)
 { return GetTickCount64() - hktas_audio_atomic(&g_audio_started) < HKTAS_AUDIO_WALL_LIMIT; }
 
-static DWORD hktas_audio_kind(uintptr_t callback)
+static DWORD hktas_audio_kind_at(BYTE *image, uintptr_t callback)
 {
-    if (callback == (uintptr_t)(g_audio_base + 0x1143ee0u)) return 1; /* WASAPI feeder */
-    if (callback == (uintptr_t)(g_audio_base + 0x11453f0u)) return 2; /* WASAPI mixer */
-    if (callback == (uintptr_t)(g_audio_base + 0x11464a0u)) return 3; /* WASAPI record */
-    if (callback == (uintptr_t)(g_audio_base + 0x10b8540u)) return 4; /* stream */
-    if (callback == (uintptr_t)(g_audio_base + 0x10d5a10u)) return 5; /* async decoder/file */
+    if (callback == (uintptr_t)(image + 0x1143ee0u)) return 1; /* WASAPI feeder */
+    if (callback == (uintptr_t)(image + 0x11453f0u)) return 2; /* WASAPI mixer */
+    if (callback == (uintptr_t)(image + 0x11464a0u)) return 3; /* WASAPI record */
+    if (callback == (uintptr_t)(image + 0x10b8540u)) return 4; /* stream */
+    if (callback == (uintptr_t)(image + 0x10d5a10u)) return 5; /* async decoder/file */
+    /* fileThreadFunc tail-calls FileThread::threadFunc. This is distinct
+     * from the async decoder. Recognition does not cover queued file I/O. */
+    if (callback == (uintptr_t)(image + 0x10d2560u)) {
+        static const BYTE tail[] = {0xe9,0xfb,0x13,0,0};
+        static const BYTE target[] = {0x41,0x56,0x48,0x83,0xec,0x60,0x80,0xb9,0x70,0x01,0,0};
+        if (!memcmp(image + 0x10d2560u,tail,sizeof(tail)) &&
+            !memcmp(image + 0x10d3960u,target,sizeof(target))) return 6;
+    }
     return 0;
 }
 
@@ -250,7 +260,7 @@ static hktas_audio_worker *hktas_audio_register(BYTE *thread)
         row->callback = hktas_audio_pointer(thread + 320);
         row->user_data = hktas_audio_pointer(thread + 288);
         row->system_callback = row->system ? hktas_audio_pointer(row->system + 38800) : 0;
-        row->kind = hktas_audio_kind(row->callback); row->phase = 1; row->depth = 1;
+        row->kind = hktas_audio_kind_at(g_audio_base,row->callback); row->phase = 1; row->depth = 1;
         row->last_epoch = hktas_audio_atomic(&g_audio_epoch);
         if (!row->kind) InterlockedExchange(&g_audio_unknown_callback, 1);
         if (!TlsSetValue(g_audio_tls, row)) hktas_audio_fatal(2);

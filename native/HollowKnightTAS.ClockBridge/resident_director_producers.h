@@ -1,5 +1,6 @@
 #ifndef HKTAS_RESIDENT_DIRECTOR_PRODUCERS_H
 #define HKTAS_RESIDENT_DIRECTOR_PRODUCERS_H
+#include "resident_fatal_evidence.h"
 #include <windows.h>
 #include <tlhelp32.h>
 #include <stdint.h>
@@ -207,6 +208,7 @@ static void hktas_dn_forbidden(void)
 {
     /* The call cannot be skipped or replayed and original execution must
      * never reenter a partially restored world. The boundary remains closed. */
+    hktas_resident_record_fatal("director",g_dn_fault);
     TerminateProcess(GetCurrentProcess(), ERROR_INVALID_STATE);
     for (;;) Sleep(1000);
 }
