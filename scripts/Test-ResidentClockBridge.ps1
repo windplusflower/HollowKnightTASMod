@@ -25,9 +25,11 @@ try {
     . (Join-Path $PSScriptRoot 'Assert-ClockBridgeExports.ps1')
     Assert-ClockBridgeExports -Path (Join-Path $build 'HollowKnightTAS.ClockBridge.dll') -RequireResidentBoundary -RequireContactImpulsePolicy
     Build-Binary 'tests/native/ResidentAudioFenceHarness.c' 'audio.exe' $libs
+    Build-Binary 'tests/native/ResidentFatalEvidenceHarness.c' 'fatal-evidence.exe' @()
     Build-Binary 'tests/native/ResidentParticleProducerHarness.c' 'particles.exe' $libs
     Build-Binary 'tests/native/FullRunContinuationHarness.c' 'clock.exe' $libs
     Run-Harness 'audio.exe' @()
+    Run-Harness 'fatal-evidence.exe' @($build)
     foreach ($scenario in @('normal','drain','orphan-main','orphan-worker','wrong-owner','wrong-handle','wrong-readback','escaped','unpaired-set','abort','stale','tamper','drift')) {
         Run-Harness 'particles.exe' @($player,$scenario)
     }
