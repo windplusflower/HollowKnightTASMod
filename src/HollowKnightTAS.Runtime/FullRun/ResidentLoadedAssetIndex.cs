@@ -107,24 +107,40 @@ namespace HollowKnightTAS.Runtime.FullRun
             byte[] Read(IntPtr address, int size) { var bytes = M.Read(address, size); witness[address] = bytes; return bytes; }
             var map = M.Ptr(Read(IntPtr.Add(engine, 0x1a16440), 8), 0);
             if (map == IntPtr.Zero) throw Error("texture resource registry absent");
-            var header = Read(map, 16); var head = M.Ptr(header, 0); var count = M.U64(header, 8);
+            var found = FindTextureResourceInTree(id,Read(map,16),Read,(pointer,resource) => {
+                var registered=RegisteredPointer(M.I32(Read(IntPtr.Add(pointer,8),4),0),out var verify);
+                if(registered!=pointer)throw Error("texture resource Object registration differs");
+                var slots=ResidentNativeAssetDirectory.ReadTextureResourceIds(pointer,out var actual);
+                _=ResidentNativeAssetDirectory.TextureResourceMask(actual,slots,resource);
+                verify();
+            });
+            foreach (var pair in witness) if (!M.Read(pair.Key, pair.Value.Length).SequenceEqual(pair.Value)) throw Error("texture resource lookup changed during observation");
+            return found;
+        }
+        // Injectable byte reader exercises the exact native lookup invariants
+        // offline without constructing a Unity object or calling its API.
+        internal static IntPtr FindTextureResourceInTree(int id,byte[] header,Func<IntPtr,int,byte[]> read,Action<IntPtr,int> validateOwner)
+        {
+            if(id==0||header==null||header.Length!=16)throw Error("texture resource lookup shape differs");
+            var head = M.Ptr(header, 0); var count = M.U64(header, 8);
             if (count > 100000 || head == IntPtr.Zero) throw Error("texture resource registry shape differs");
-            var sentinel = Read(head, 48); if (sentinel[25] != 1) throw Error("texture resource sentinel differs");
+            var sentinel = read(head, 48); if (sentinel.Length!=48||sentinel[25] != 1||sentinel[24]!=1) throw Error("texture resource sentinel differs");
             var current = M.Ptr(sentinel, 8); var seen = new HashSet<IntPtr>(); var found = IntPtr.Zero;
+            if((count==0)!=(current==head)||current==IntPtr.Zero||count==0&&(M.Ptr(sentinel,0)!=head||M.Ptr(sentinel,16)!=head))throw Error("texture resource root/count differs");
+            var parent=head;ulong lower=0,upper=1UL<<32;
             while (current != head) {
                 if (current == IntPtr.Zero || !seen.Add(current) || seen.Count > 128 || (ulong)seen.Count > count) throw Error("texture resource tree is invalid");
-                var node = Read(current, 48); if (node[25] != 0) throw Error("texture resource node differs");
+                var node = read(current, 48); if (node.Length!=48||node[25] != 0||node[24]>1||M.Ptr(node,8)!=parent) throw Error("texture resource node differs");
                 var key = M.U32(node, 32);
+                if(key<lower||key>=upper)throw Error("texture resource tree key order differs");
                 if (key == unchecked((uint)id)) {
                     var pointer = M.Ptr(node, 40); if (pointer == IntPtr.Zero) throw Error("texture resource has no native owner");
-                    found = RegisteredPointer(M.I32(Read(IntPtr.Add(pointer, 8),4),0),out var verify);
-                    if (found != pointer || M.I32(Read(IntPtr.Add(pointer, 80), 4), 0) != id) throw Error("texture resource back-reference differs");
-                    verify();
+                    validateOwner(pointer,id);found=pointer;
                     break;
                 }
-                current = M.Ptr(node, unchecked((uint)id) < key ? 0 : 16);
+                parent=current;
+                if(unchecked((uint)id)<key){upper=key;current=M.Ptr(node,0);}else{lower=(ulong)key+1;current=M.Ptr(node,16);}
             }
-            foreach (var pair in witness) if (!M.Read(pair.Key, pair.Value.Length).SequenceEqual(pair.Value)) throw Error("texture resource lookup changed during observation");
             return found;
         }
         // Native per-type set, not the managed Resources enumeration. This

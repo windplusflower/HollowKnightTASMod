@@ -17,6 +17,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
         [DllImport("kernel32.dll")] private static extern ulong GetTickCount64();
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ReadProcessMemory(IntPtr process, IntPtr address, byte[] bytes, UIntPtr count, out UIntPtr read);
+        [DllImport("msvcrt.dll", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        private static extern int memcmp([In] byte[] left, [In] byte[] right, UIntPtr count);
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool WriteProcessMemory(IntPtr process, IntPtr address, byte[] bytes, UIntPtr count, out UIntPtr written);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void ReserveArray(IntPtr header, UIntPtr capacity, UIntPtr stride, UIntPtr alignment);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr AssignString(IntPtr storage, IntPtr first, IntPtr last);
@@ -36,6 +38,26 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (count != 0 && (!ReadProcessMemory(GetCurrentProcess(), address, result, new UIntPtr((uint)count), out var read)
                 || read.ToUInt64() != (ulong)count)) throw Error("native state is unreadable");
             return result;
+        }
+        // The comparison buffer belongs to one synchronous readback pass.
+        // Every witness is still checked at its exact address and extent.
+        internal sealed class Readback
+        {
+            private readonly IntPtr process = GetCurrentProcess();
+            private byte[] bytes = Array.Empty<byte>();
+            internal bool Matches(IntPtr address, byte[] expected)
+            {
+                int count = expected.Length;
+                if (count == 0) return true;
+                if (address == IntPtr.Zero || count > 32 * 1024 * 1024) throw Error("native comparison exceeds bounds");
+                if (bytes.Length < count) bytes = new byte[Math.Max(128, count)];
+                var size = new UIntPtr((uint)count);
+                if (!ReadProcessMemory(process, address, bytes, size, out var read) || read != size)
+                    throw Error("native state is unreadable during independent comparison");
+                if (count >= 256) return memcmp(expected, bytes, size) == 0;
+                for (var i = 0; i < count; i++) if (expected[i] != bytes[i]) return false;
+                return true;
+            }
         }
         internal static void Write(IntPtr address, byte[] bytes)
         {

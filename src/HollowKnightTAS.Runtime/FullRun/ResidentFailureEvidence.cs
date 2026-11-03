@@ -54,10 +54,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             try {
                 var output = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT");
                 if (string.IsNullOrEmpty(output) || !Path.IsPathRooted(output) || !Directory.Exists(output)) return;
+                var cause = failure.GetBaseException();
+                var summary = cause.GetType().Name + ": " + cause.Message;
+                if (summary.Length > 2048) summary = summary.Substring(0,2048);
+                Mark("fault " + summary);
+                var firstLine = Encoding.UTF8.GetBytes(summary + Environment.NewLine);
                 using var process = Process.GetCurrentProcess();
                 var path = Path.Combine(output, "resident-first-fault-" + process.Id + ".txt");
-                using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-                Mark("fault"); var message = failure.ToString() + (stamps == null ? "" : Environment.NewLine + string.Join(Environment.NewLine,stamps));
+                using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 1);
+                file.Write(firstLine,0,firstLine.Length);
+                var message = failure.ToString() + (stamps == null ? "" : Environment.NewLine + string.Join(Environment.NewLine,stamps));
                 var bytes = Encoding.UTF8.GetBytes(message.Length > 32768 ? message.Substring(0, 32768) : message);
                 file.Write(bytes, 0, bytes.Length); file.Flush(true);
             } catch { /* Best-effort diagnostic; always continue native retirement. */ }

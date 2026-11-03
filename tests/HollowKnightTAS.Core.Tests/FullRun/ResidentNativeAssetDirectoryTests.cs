@@ -2,6 +2,7 @@
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace HollowKnightTAS.Core.Tests.FullRun;
@@ -9,6 +10,38 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
 [TestClass]
 public sealed class ResidentNativeAssetDirectoryTests
 {
+    [DllImport("kernel32.dll", SetLastError=true)]
+    private static extern IntPtr VirtualAlloc(IntPtr address, UIntPtr size, uint allocation, uint protection);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool VirtualProtect(IntPtr address, UIntPtr size, uint protection, out uint previous);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool VirtualFree(IntPtr address, UIntPtr size, uint flags);
+    [TestMethod]
+    public void NativeNamesStopAtPageBoundaryAndReadbackChecksOnlyWitnessedBytes()
+    {
+        if (!OperatingSystem.IsWindows()) Assert.Inconclusive("Pinned Windows memory-reader fixture.");
+        var page = Environment.SystemPageSize;
+        var memory = VirtualAlloc(IntPtr.Zero,(UIntPtr)(page*2),0x3000,4);
+        Assert.AreNotEqual(IntPtr.Zero,memory);
+        try {
+            var end = IntPtr.Add(memory,page);
+            Assert.IsTrue(VirtualProtect(end,(UIntPtr)page,1,out _));
+            var api = new Api(); var live = api.Row("Live"); var row = api.Row("Row");
+            Set(live,"Admitted",(Action)(() => { }));
+            var data = Enumerable.Repeat((byte)97,320).Append((byte)0).ToArray();
+            var name = IntPtr.Subtract(end,data.Length);
+            Marshal.Copy(data,0,name,data.Length); api.Call("ReadName",live,row,name);
+            CollectionAssert.AreEqual(data[..^1],Get<byte[]>(row,"Name"));
+            var witness = Get<System.Collections.Generic.List<Tuple<IntPtr,byte[]>>>(live,"Witness").Single();
+            Assert.AreEqual(name,witness.Item1); CollectionAssert.AreEqual(data,witness.Item2);
+            var verifier = Activator.CreateInstance(api.Runtime.GetType("HollowKnightTAS.Runtime.FullRun.ResidentNativeMemory+Readback",true)!,true)!;
+            var matches = verifier.GetType().GetMethod("Matches", All)!;
+            Assert.IsTrue((bool)matches.Invoke(verifier,new object[]{name,data})!);
+            Marshal.WriteByte(name,319,98);
+            Assert.IsFalse((bool)matches.Invoke(verifier,new object[]{name,data})!);
+            Assert.IsTrue((bool)matches.Invoke(verifier,new object[]{name,data[..16]})!);
+        } finally { VirtualFree(memory,UIntPtr.Zero,0x8000); }
+    }
     private const BindingFlags All = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
     [TestMethod]
     public void SerializedProvenanceDoesNotAuthorizeUnknownNativeBody()
@@ -116,6 +149,8 @@ public sealed class ResidentNativeAssetDirectoryTests
         internal object Data()
         {
             var data = Row("Data"); var row = Row("Row"); Set(row, "TypeRva", 0x1986550); Set(row, "TypeKey", "1986550/Physics2D//PhysicsMaterial2D");
+            var slots = (string[])Runtime.GetType("HollowKnightTAS.Runtime.FullRun.ResidentBuiltinTextureRoots",true)!.GetMethod("DeclaredOrigins", All)!.Invoke(null,null)!;
+            Set(data,"BuiltinSlotOwners",slots.Select(_ => "").ToArray());
             Set(row, "Size", 72); Set(row, "Vtable", 0x1701768); Set(row, "Kind", "physics-material-2d"); Set(row, "Persistent", true); Set(row, "Values", new byte[8]); Set(row, "Padding", new byte[4]);
             var source = Activator.CreateInstance(Runtime.GetType("HollowKnightTAS.Runtime.FullRun.ResidentSerializedAssetImage+Data", true)!, true)!;
             Set(source, "SourcePath", "actual/source-file"); Set(source, "LocalIdentifier", 987654321L); Set(source, "NativeTypeRva", 0x1986550); Set(source, "Hash", new string('a', 64)); Set(source, "TypeHash", new byte[16]); Set(source, "Length", 64);

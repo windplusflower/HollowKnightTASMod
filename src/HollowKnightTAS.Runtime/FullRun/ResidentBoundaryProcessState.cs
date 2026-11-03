@@ -150,13 +150,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             var known = KnownPointers(globals);
             ResidentFailureEvidence.Mark("native resource images and bodies");
             var resources = ResidentNativeAssetDirectory.Capture(globals, known, RequireAdmission);
-            var projected = resources.ProjectGlobalDirectory();
+            var projected = resources.ProjectCapturedDirectory();
             ResidentFailureEvidence.Mark("global services");
             var services = ResidentSceneServiceSettings.Capture(globals, resources, projected, RequireAdmission);
+            ResidentFailureEvidence.Mark("ResourceManager dependencies and references");
             var manager = ResidentResourceManagerState.Capture(globals, SourceBinding(globals, resources), RequireAdmission);
             ResidentS0Projection.RequireClockBodyBinding(globals, input.Snapshot, RequireAdmission);
+            ResidentFailureEvidence.Mark("physics service settings");
             var physicsSettings = ResidentPhysicsSettingsState.Capture(globals, bind, RequireAdmission);
+            ResidentFailureEvidence.Mark("tag manager");
             var tags = ResidentTagManagerState.Capture(globals, RequireAdmission);
+            ResidentFailureEvidence.Mark("build settings");
             var build = BuildSettingsOwner(globals.Snapshot) == null ? null : ResidentBuildSettingsState.Capture(globals, RequireAdmission);
             ResidentFailureEvidence.Mark("platform input");
             var nativeInput = ResidentNativeInputState.Capture(globals, RequireAdmission, clock.RequireInputOwner);
@@ -424,6 +428,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static void ValidateNativeAssetDirectory(ResidentNativeGlobalObjects.Data directory, ResidentNativeAssetDirectory.Data assets)
         {
             ResidentNativeAssetDirectory.Validate(assets);
+            ResidentBuiltinTextureRoots.ValidateBindings(assets.BuiltinSlotOwners,directory);
             var global = directory.Rows.Where(row => row.Kind == "native-asset").ToDictionary(row => row.Binding, StringComparer.Ordinal);
             var classes = directory.Classes.ToDictionary(type => type.Rva);
             foreach (var row in assets.Rows.Where(row => row.Binding.Length != 0)) {

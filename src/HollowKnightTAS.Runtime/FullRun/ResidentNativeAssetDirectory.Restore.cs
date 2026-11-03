@@ -55,13 +55,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static void RequireReadonlyDependencies(Data source, Data target)
         {
             RequireCompleteBodies(source); RequireCompleteBodies(target);
+            if (!source.BuiltinSlotOwners.SequenceEqual(target.BuiltinSlotOwners))
+                throw Error("builtin texture slot occupancy, ownership or alias topology differs");
             if (source.Rows.Length != target.Rows.Length) throw Error("native asset membership differs; allocation/loading is unsupported");
             var targetRows = target.Rows.ToDictionary(row => row.Binding, StringComparer.Ordinal);
             foreach (var row in source.Rows) {
                 if (!targetRows.TryGetValue(row.Binding, out var actual) || row.TypeKey != actual.TypeKey || row.TypeRva != actual.TypeRva || row.Size != actual.Size
                     || row.Kind != actual.Kind || row.Owner != actual.Owner || row.Persistent != actual.Persistent || row.NamePresent != actual.NamePresent || !row.Name.SequenceEqual(actual.Name))
                     throw Error("native asset readonly identity/name dependency differs");
-                ResidentSerializedAssetImage.RequireEqual(row.Source, actual.Source);
+                if (!row.Binding.StartsWith(ResidentBuiltinTextureRoots.Prefix,StringComparison.Ordinal))
+                    ResidentSerializedAssetImage.RequireEqual(row.Source, actual.Source);
                 if(row.Texture!=null)RequireTextureReadonlyDependencies(row,actual);
             }
         }

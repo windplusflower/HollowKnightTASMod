@@ -73,7 +73,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             ResidentFailureEvidence.Mark("component coverage");
             result.CoverageGaps = RequiredGaps(result);
             ResidentFailureEvidence.Mark("component validation");
-            Validate(result, snapshot);
+            // Both manifests above were just derived from this private observation.
+            // Check every owner and body; decoded packets independently rebuild
+            // the type and gap manifests in Validate.
+            ValidateOwnersAndBodies(result, snapshot, result.Types);
             return new Observation(result, physics, transientAssets);
         }
 
@@ -155,7 +158,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || value.Animation == null || value.Particles == null || value.Presentation == null
                 || value.Properties == null || value.Renderers == null || value.CameraCanvas == null || value.Audio == null || value.Mono == null || value.MonoNative == null || value.CoverageGaps == null) throw Error("component snapshot shape differs");
             var expected = DescribeTypes(directory);
-            if (JsonConvert.SerializeObject(value.Types) != JsonConvert.SerializeObject(expected)) throw Error("complete actual component type/owner coverage differs");
+            if (value.Types.Length != expected.Length) throw Error("complete actual component type/owner coverage differs");
+            for (var index = 0; index < expected.Length; index++) {
+                var actual = value.Types[index]; var required = expected[index];
+                if (actual?.Type == null || actual.Owners == null || actual.Domains == null || actual.Gaps == null)
+                    throw Error("component type manifest is incomplete");
+                actual.Type.Validate();
+                if (actual.Type.Key != required.Type.Key || !actual.Owners.SequenceEqual(required.Owners)
+                    || !actual.Domains.SequenceEqual(required.Domains) || !actual.Gaps.SequenceEqual(required.Gaps))
+                    throw Error("complete actual component type/owner coverage differs");
+            }
+            ValidateOwnersAndBodies(value, directory, expected);
+            if (!value.CoverageGaps.SequenceEqual(RequiredGaps(value))) throw Error("serialized component coverage differs from required coverage");
+        }
+        private static void ValidateOwnersAndBodies(Data value, ResidentObjectDirectory.Snapshot directory, TypeCoverage[] expected)
+        {
             ResidentTransformState.Validate(value.Transforms);
             ResidentPhysicsState.Validate(value.Physics);
             ResidentRendererPropertyBlocks.Validate(value.Properties);
@@ -182,7 +199,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             ResidentMonoNativeState.ValidateMany(value.MonoNative);
             if (value.Mono.Length != 0 && value.Mono.Any(row => !ReferenceEquals(row.Registry, value.Mono[0].Registry)))
                 throw Error("complete Mono registry alias differs");
-            if (!value.CoverageGaps.SequenceEqual(RequiredGaps(value))) throw Error("serialized component coverage differs from required coverage");
         }
         internal static void RequireComplete(Data value, ResidentObjectDirectory.Snapshot directory)
         {

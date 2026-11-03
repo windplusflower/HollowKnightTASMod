@@ -47,6 +47,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             private bool disposed;
             private readonly Dictionary<IntPtr, string> strings;
             private readonly Dictionary<(IntPtr manager, IntPtr path), string> resolvedPaths;
+            private readonly Dictionary<int,Data> diskObjects;
             private ulong indexMs, bodyMs, hashMs;
             private int diskIndexes, closedImages;
             private long closedBytes;
@@ -138,10 +139,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                 files = previous?.files ?? new Dictionary<string, FilePair>(StringComparer.Ordinal);
                 strings = previous?.strings ?? new Dictionary<IntPtr, string>();
                 resolvedPaths = previous?.resolvedPaths ?? new Dictionary<(IntPtr,IntPtr),string>();
+                diskObjects = previous?.diskObjects ?? new Dictionary<int,Data>();
                 remappings = previous?.remappings ?? new Dictionary<int, Tuple<IntPtr,IntPtr,bool,Identifier>>();
                 activeBatch = this;
             }
             internal string Hash(byte[] bytes) => hasher.Value.Hex(bytes);
+            internal bool TryFileObject(int instance, int? expectedType, out Data data) {
+                if (!diskObjects.TryGetValue(instance,out var saved)) { data = null!; return false; }
+                if (expectedType.HasValue && saved.NativeTypeRva != expectedType.Value)
+                    throw Error("same disk object was requested with a different registered type");
+                data = saved.Copy(); return true;
+            }
+            internal void RememberFileObject(int instance, Data data) {
+                RequireComplete(data);
+                diskObjects.Add(instance,data.Copy());
+            }
             internal string ResolveSourcePath(IntPtr engine, IntPtr manager, IntPtr storage, string namespacePath) {
                 var key = (manager, storage);
                 if (!resolvedPaths.TryGetValue(key, out var path)) {
@@ -180,7 +192,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (disposed || !ReferenceEquals(activeBatch, this)) throw Error("serialized observation scope is not current");
                 classObservation?.Frozen();
                 Memory.Frozen(); RequireRemappings(); foreach (var text in strings) if (ResidentNativeMemory.String(text.Key) != text.Value) throw Error("serialized source pathname changed");
-                foreach (var file in files.Values) file.Frozen();
+                foreach (var file in files.Values) file.RequirePath();
             }
             internal void RecordIndex(ulong elapsed) { ++diskIndexes; indexMs += elapsed; }
             internal void RecordBody(int bytes, ulong readTime, ulong hashTime) {
@@ -202,8 +214,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             internal readonly FileStream First, Second;
             private readonly FileIdentity identity;
+            private readonly string path;
             private ResidentSerializedFileIndex.Index? index;
             internal FilePair(string path) {
+                this.path = path;
                 First = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.RandomAccess);
                 try {
                     identity = Identity(First);
@@ -212,6 +226,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 } catch { First.Dispose(); throw; }
             }
             internal void Frozen() { RequireFileIdentity(identity, Identity(First)); RequireFileIdentity(identity, Identity(Second)); }
+            internal void RequirePath() { Frozen(); RequireFileIdentity(identity,ReadFileIdentity(path)); }
             internal Data ReadObject(long id, string namespacePath, Batch batch, out int classId)
             {
                 var timed = ResidentFailureEvidence.Collecting;
@@ -237,6 +252,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public void Dispose() { Second.Dispose(); First.Dispose(); }
         }
         internal static Batch BeginObservation() => new Batch();
+        internal static Batch? BeginIfAbsent() => activeBatch == null ? BeginObservation() : null;
         internal static byte[] ReadFilesystemSlice(string path, long expectedLength, ulong offset, int length)
         {
             if (!AbsoluteFilesystemPath(path)) throw Error("source is not an absolute filesystem path");

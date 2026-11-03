@@ -41,11 +41,21 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Stack<ScriptableConstructionWindow> assetConstruction = new Stack<ScriptableConstructionWindow>();
         private readonly Action admission;
         private Dictionary<string,ResidentObjectNativeState.GlobalOwner>? nativeAssets;
+        private Dictionary<IntPtr,string>? builtinAssets;
         internal void BindNativeAssets(IEnumerable<ResidentObjectNativeState.GlobalOwner> owners)
         {
             Require();
             nativeAssets = owners.Where(x => x.Key.StartsWith(ResidentNativeAssetReference.Prefix,StringComparison.Ordinal))
                 .ToDictionary(x => x.Key,StringComparer.Ordinal);
+            builtinAssets = nativeAssets.Values.Where(owner => owner.Key.StartsWith(ResidentBuiltinTextureRoots.Prefix,StringComparison.Ordinal))
+                .ToDictionary(owner => owner.Pointer, owner => owner.Key);
+        }
+        internal static string? CurrentBuiltinKey(IntPtr pointer)
+        {
+            var scope = activeScope;
+            if (scope?.builtinAssets == null || !scope.builtinAssets.TryGetValue(pointer,out var key)) return null;
+            if (RequireNativeAsset(key,ResidentLoadedAssetIndex.TextureClass) != pointer) throw Error("builtin texture owner changed");
+            return key;
         }
         internal static IntPtr RequireNativeAsset(string key,int family)
         {
@@ -56,7 +66,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             var id = ResidentNativeMemory.I32(ResidentNativeMemory.Read(IntPtr.Add(owner.Pointer,8),4),0);
             if (ResidentLoadedAssetIndex.RegisteredPointer(id,out var check) != owner.Pointer) throw Error("native asset ID has another owner");
             var origin = new LoadingAssetProvenanceObservation().Capture(id);
-            if (origin.kind != "serialized" || ResidentNativeAssetDirectory.ProvenanceKey(type,origin.sourcePath,origin.localIdentifier) != key)
+            if (key.StartsWith(ResidentBuiltinTextureRoots.Prefix,StringComparison.Ordinal)) {
+                var roots = ResidentBuiltinTextureRoots.Observe(scope.Require);
+                if (origin.kind != "unmapped" || roots.Candidate(owner.Pointer) != key)
+                    throw Error("target builtin texture static owners changed");
+                roots.RequireUnchanged();
+            } else if (origin.kind != "serialized" || ResidentNativeAssetDirectory.ProvenanceKey(type,origin.sourcePath,origin.localIdentifier) != key)
                 throw Error("target native asset provenance differs");
             check(); scope.Require(); return owner.Pointer;
         }

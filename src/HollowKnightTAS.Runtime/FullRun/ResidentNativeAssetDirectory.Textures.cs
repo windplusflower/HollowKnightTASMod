@@ -39,7 +39,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public byte[] Fields = Array.Empty<byte>(), Padding = Array.Empty<byte>(), UnusedFlags = Array.Empty<byte>();
             public TextStorage StreamPath = new TextStorage();
             public string StreamImageHash = "";
-            public bool[] ResourcePresent = Array.Empty<bool>(), AsyncPresent = new bool[3], SurfacePresent = Array.Empty<bool>();
+            public bool[] ResourcePresent = Array.Empty<bool>(), ResourceMapped = Array.Empty<bool>(), AsyncPresent = new bool[3], SurfacePresent = Array.Empty<bool>();
             public int[] ResourceAliases = Array.Empty<int>(), SurfaceAliases = Array.Empty<int>();
             public bool MainResourceMapped, RenderRegistryLinked, RenderRegistryBackref, RenderPoolPresent;
             public TextureBuffer Platform = new TextureBuffer(), Standalone = new TextureBuffer();
@@ -73,6 +73,36 @@ namespace HollowKnightTAS.Runtime.FullRun
             new TextureProfile(0x19645a0,0x1686788,288,"lower-res-blit-texture",Array.Empty<int>())
         };
         private static TextureProfile? TextureType(int rva) => TextureProfiles.SingleOrDefault(profile => profile.Rva == rva);
+        internal static int[] TextureResourceOffsets(int rva)
+            => (int[])(TextureType(rva) ?? throw Error("texture resource role type is unsupported")).Resources.Clone();
+        internal static int TextureResourceMask(int rva, int[] ids, int resource)
+        {
+            if (ids == null || ids.Length != TextureResourceOffsets(rva).Length || resource == 0) throw Error("texture resource role shape differs");
+            var mask = 0; for (var i = 0; i < ids.Length; i++) if (ids[i] == resource) mask |= 1 << i;
+            if (mask == 0) throw Error("texture resource does not belong to any actual owner slot");
+            return mask;
+        }
+        internal static int[] TextureResourcePartition(int rva, int[] ids)
+        {
+            if (ids == null || ids.Length != TextureResourceOffsets(rva).Length) throw Error("texture resource role shape differs");
+            return AliasIds(ids);
+        }
+        internal static int[] ReadTextureResourceIds(IntPtr pointer, out int rva)
+        {
+            rva = ResidentNativeAssetReference.NativeClass(pointer, ResidentLoadedAssetIndex.TextureClass);
+            var profile = TextureType(rva) ?? throw Error("texture resource owner has an unsupported actual type");
+            var engine = LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress;
+            ResidentLoadedAssetIndex.RequireCode(engine,0x69bfe0,364,"7f3d7abdb710fc7dcb46da44f0f6f29d061080c41cc409f8a8cf131bdcd62587");
+            if(profile.Kind=="texture-2d"||profile.Kind=="cubemap")ResidentLoadedAssetIndex.RequireCode(engine,0x67b610,31,"245f2be19ef72c4c8352df518d1da94393811a844f12a2bb1572bff5fa0d2a6b");
+            if(profile.Kind=="render-texture")ResidentLoadedAssetIndex.RequireCode(engine,0x657120,161,"bdb282481deb68f8a60026e6f988533424fcef3bb8a4b1985a59ff5bc59f6148");
+            var bytes = M.Read(pointer, profile.Size);
+            if (M.Ptr(bytes,0) != IntPtr.Add(engine,profile.Vtable)) throw Error("texture resource owner vtable differs");
+            var owner = ResidentLoadedAssetIndex.RegisteredPointer(M.I32(bytes,8),out var verify);
+            if (owner != pointer) throw Error("texture resource owner registration differs");
+            var ids = profile.Resources.Select(offset => M.I32(bytes,offset)).ToArray();
+            foreach (var offset in profile.Resources) if (M.I32(M.Read(IntPtr.Add(pointer,offset),4),0) != M.I32(bytes,offset)) throw Error("texture resource slots changed during observation");
+            verify(); return ids;
+        }
         internal sealed class TextureLocal
         {
             internal IntPtr Pointer, Platform, Standalone, Shared, SharedData;
@@ -89,12 +119,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 UnusedFlags = (profile.Kind=="texture-2d"||profile.Kind=="cubemap") ? new[]{(byte)(bytes[114]&0xfe),(byte)(bytes[320]&0xfc)} : new[]{(byte)(bytes[114]&0xfe)},
                 StreamPath = ReadTextureString(live, IntPtr.Add(pointer, 144)), AsyncPresent = new[] { M.Ptr(bytes,184)!=IntPtr.Zero,M.Ptr(bytes,200)!=IntPtr.Zero,M.Ptr(bytes,216)!=IntPtr.Zero } };
             var ids = profile.Resources.Select(offset => M.U32(bytes, offset)).ToArray(); body.ResourcePresent = ids.Select(id => id != 0).ToArray(); body.ResourceAliases = AliasIds(ids);
-            if (ids[0] != 0) {
-                var registered = ResidentLoadedAssetIndex.FindTextureResourcePointer(unchecked((int)ids[0]));
-                if (registered != IntPtr.Zero && registered != pointer)
-                    throw Error("texture resource ID belongs to a different registered native owner: " + row.TypeKey);
-                body.MainResourceMapped = registered == pointer;
-            }
+            body.ResourceMapped = ids.Select(id => {
+                if (id == 0) return false;
+                var registered = ResidentLoadedAssetIndex.FindTextureResourcePointer(unchecked((int)id));
+                if (registered != IntPtr.Zero && registered != pointer) throw Error("texture resource ID belongs to a different registered native owner: " + row.TypeKey);
+                return registered == pointer;
+            }).ToArray();
+            body.MainResourceMapped = body.ResourceMapped[0];
             var local = new TextureLocal { Pointer = pointer, Shared = M.Ptr(bytes, 88), Data = body };
             body.Platform = ReadTextureBuffer(live, M.Slice(bytes,248,32), out local.Platform);
             if (local.Shared != IntPtr.Zero) {
@@ -207,8 +238,27 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static void ReadName(Live live,Row row,IntPtr pointer)
         {
-            row.NamePresent=pointer!=IntPtr.Zero;if(pointer==IntPtr.Zero)return;var bytes=new List<byte>();
-            for(var index=0;;index++){if(index==16384)throw Error("native texture name exceeds bounds");var value=live.Read(IntPtr.Add(pointer,index),1)[0];if(value==0)break;bytes.Add(value);}row.Name=bytes.ToArray();
+            row.NamePresent = pointer != IntPtr.Zero;
+            if (!row.NamePresent) return;
+            // Probe only within the current readable page. The definitive
+            // read and the independent witness stop at the actual terminator.
+            var pageSize = Environment.SystemPageSize;
+            for (var offset = 0; offset < 16384;) {
+                live.Admitted();
+                var address = checked(pointer.ToInt64() + offset);
+                if (address <= 0) throw Error("invalid native asset name address");
+                var count = Math.Min(Math.Min(128, 16384-offset), pageSize-(int)(address%pageSize));
+                var end = Array.IndexOf(M.Read(new IntPtr(address),count),(byte)0);
+                if (end >= 0) {
+                    var size = offset + end;
+                    var actual = live.Read(pointer,size+1);
+                    if (Array.IndexOf(actual,(byte)0) != size) throw Error("native asset name extent changed");
+                    row.Name = M.Slice(actual,0,size);
+                    return;
+                }
+                offset += count;
+            }
+            throw Error("native asset name exceeds bounds");
         }
         private static void ValidateTexture(Row row)
         {
@@ -216,7 +266,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if(profile==null||data==null||row.Size!=profile.Size||row.Vtable!=profile.Vtable||row.Kind!="texture/"+profile.Kind||row.Values.Length!=0||row.Padding.Length!=0||row.Text!=null||row.Owner.Length!=0
                 ||data.Fields==null||data.Fields.Length!=profile.Size-56||data.Padding==null||data.Padding.Length!=profile.Padding.Length||data.UnusedFlags==null||data.UnusedFlags.Length!=(profile.Kind=="texture-2d"||profile.Kind=="cubemap"?2:1)
                 ||data.UnusedFlags[0]%2!=0||data.UnusedFlags.Length==2&&(data.UnusedFlags[1]&3)!=0
-                ||data.ResourcePresent==null||data.ResourcePresent.Length!=profile.Resources.Length||data.ResourceAliases==null||data.ResourceAliases.Length!=profile.Resources.Length
+                ||data.ResourcePresent==null||data.ResourcePresent.Length!=profile.Resources.Length||data.ResourceMapped==null||data.ResourceMapped.Length!=profile.Resources.Length||data.ResourceAliases==null||data.ResourceAliases.Length!=profile.Resources.Length
                 ||data.AsyncPresent==null||data.AsyncPresent.Length!=3||data.SurfacePresent==null||data.SurfaceAliases==null||data.SourceFaces==null||data.SourceFaces.Length>65536||data.SourceFaceUnused==null
                 ||data.SourceFaceCapacity<data.SourceFaces.Length||data.SourceFaceCapacity>65536||data.SourceFaceUnused.Length!=(data.SourceFaceCapacity-data.SourceFaces.Length)*4
                 ||data.SourceFaceCapacity!=0&&!data.SourceFaceStoragePresent||data.StreamImageHash==null||data.StreamImageHash.Length!=0&&(data.StreamImageHash.Length!=64||data.StreamImageHash.Any(value=>value<'0'||value>'9'&&value<'a'||value>'f')))
@@ -230,7 +280,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             int[] dimensions=profile.Kind=="texture-2d"||profile.Kind=="cubemap"?new[]{284,288,308,312}:profile.Kind=="texture-3d"||profile.Kind=="texture-2d-array"?new[]{280,284,288}:profile.Kind=="render-texture"||profile.Kind=="lower-res-blit-texture"||profile.Kind=="cubemap-array"?new[]{280,284}:Array.Empty<int>();
             if(dimensions.Any(offset=>M.I32(data.Fields,offset-56)<0||M.I32(data.Fields,offset-56)>65536))throw Error("texture native dimensions exceed bounds");
             var masked=(byte[])data.Fields.Clone();ClearTextureProcessFields(masked,profile);if(!masked.SequenceEqual(data.Fields))throw Error("texture payload contains process pointers/IDs or inline padding");
-            for(var index=0;index<data.ResourceAliases.Length;index++)if(data.ResourcePresent[index]!=(data.ResourceAliases[index]>=0)||data.ResourceAliases[index]>index)throw Error("texture resource alias role differs");
+            if(data.MainResourceMapped!=data.ResourceMapped[0])throw Error("texture primary resource observation differs");
+            var resourceGroups=new List<bool>();
+            for(var index=0;index<data.ResourceAliases.Length;index++) {
+                var alias=data.ResourceAliases[index];
+                if(data.ResourcePresent[index]!=(alias>=0)||alias < -1||alias>resourceGroups.Count||data.ResourceMapped[index]&&!data.ResourcePresent[index])throw Error("texture resource alias role differs");
+                if(alias==resourceGroups.Count)resourceGroups.Add(data.ResourceMapped[index]);
+                else if(alias>=0&&resourceGroups[alias]!=data.ResourceMapped[index])throw Error("texture aliased resource registration differs");
+            }
             var render=profile.Kind=="render-texture";
             if(data.SurfacePresent.Length!=(render?3:0)||data.SurfaceAliases.Length!=data.SurfacePresent.Length)throw Error("render texture surface role schema differs");
             for(var index=0;index<data.SurfaceAliases.Length;index++)if(data.SurfacePresent[index]!=(data.SurfaceAliases[index]>=0)||data.SurfaceAliases[index]>index)throw Error("render texture surface alias differs");
@@ -274,6 +331,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             // to contain actual device allocation, format/image/sampler state.
             yield return "native-texture/device-resource-entry-image-and-sampler-unproven:"+row.TypeKey;
             if(!data.ResourcePresent[0]||!data.MainResourceMapped)yield return "native-texture/resource-namespace-owner-unproven:"+row.TypeKey;
+            for(var index=0;index<data.ResourcePresent.Length;index++)if(data.ResourcePresent[index]&&!data.ResourceMapped[index])yield return "native-texture/resource-slot-unregistered:"+row.TypeKey+"/"+profile.Resources[index];
             if(data.AsyncPresent.Any(value=>value)||M.I32(data.Fields,232-56)!=0||M.I32(data.Fields,236-56)!=0)yield return "native-texture/async-producer-fence-ownership:"+row.TypeKey;
             if(M.U32(data.Fields,136-56)!=0&&data.StreamImageHash.Length!=64)yield return "native-texture/external-stream-image-unresolved:"+row.TypeKey;
             if((profile.Kind=="texture-2d"||profile.Kind=="cubemap")&&(data.Fields[323-56]!=0||M.I32(data.Fields,336-56)>=0))yield return "native-texture/streaming-manager-residency-unproven:"+row.TypeKey;

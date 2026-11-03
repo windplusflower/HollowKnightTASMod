@@ -70,11 +70,19 @@ namespace HollowKnightTAS.Runtime.FullRun
             private long bytes;
             internal readonly List<Tuple<IntPtr, byte[]>> Witness = new List<Tuple<IntPtr, byte[]>>();
             internal byte[] Read(IntPtr address, int size) {
-                Admitted(); bytes = checked(bytes + size); if (bytes > 32 * 1024 * 1024) throw Error("resource directory observation exceeds bounds");
+                if (size == 0) return Array.Empty<byte>();
+                if ((Witness.Count & 255) == 0) Admitted();
+                bytes = checked(bytes + size); if (bytes > 32 * 1024 * 1024) throw Error("resource directory observation exceeds bounds");
                 var raw = M.Read(address, size); Witness.Add(Tuple.Create(address, raw)); return raw;
             }
             internal void RequireUnchanged() {
-                Globals.RequireUnchanged(); foreach (var item in Witness) { Admitted(); if (!M.Read(item.Item1, item.Item2.Length).SequenceEqual(item.Item2)) throw Error("resource directory changed during observation"); }
+                Globals.RequireUnchanged(); var verify = new M.Readback();
+                for (var index = 0; index < Witness.Count; index++) {
+                    if ((index & 255) == 0) Admitted();
+                    var item = Witness[index];
+                    if (!verify.Matches(item.Item1,item.Item2)) throw Error("resource directory changed during observation");
+                }
+                Admitted();
             }
         }
         internal static bool OwnsManager(ResidentNativeGlobalObjects.NativeClass type)
@@ -84,6 +92,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             => Capture(globals, id => globals.RegisteredRows.TryGetValue(id, out var row) && row.Binding.Length != 0 ? row.Binding : null, admitted);
         internal static Live Capture(ResidentNativeGlobalObjects.CaptureResult globals, Func<int, string?> bindNative, Action admitted)
         {
+            using var images = ResidentSerializedAssetImage.BeginIfAbsent();
             if (globals == null || bindNative == null || admitted == null) throw new ArgumentNullException(); admitted();
             var types = globals.Snapshot.Classes.Where(type => type.Rva == NativeTypeRva).ToArray();
             if (types.Length != 1 || !OwnsManager(types[0])) throw Error("actual ResourceManager RTTI differs");
@@ -97,25 +106,34 @@ namespace HollowKnightTAS.Runtime.FullRun
             int Ref(int id) {
                 if (id == 0) return -1; if (indices.TryGetValue(id, out var existing)) return existing;
                 if (indices.Count == MaximumEntries) throw Error("resource reference bound exceeded");
+                if ((indices.Count & 1023) == 0) {
+                    admitted();
+                    if (ResidentFailureEvidence.Collecting) ResidentFailureEvidence.Mark("ResourceManager distinct references=" + indices.Count);
+                }
                 var loaded = globals.RegisteredPointers.ContainsKey(id); int? nativeType = loaded ? globals.RegisteredRows[id].TypeRva : (int?)null;
                 var source = ResidentSerializedAssetImage.CaptureMappedId(id, nativeType); var reference = new Reference { Source = source, Loaded = loaded };
-                if (source.CoverageGaps.Length == 0) {
-                    reference.Key = ResidentNativeAssetDirectory.SourceKey(source);
+                if (loaded) reference.NativeBinding = bindNative(id) ?? "";
+                if (source.CoverageGaps.Length == 0) reference.Key = ResidentNativeAssetDirectory.SourceKey(source);
+                else if (source.SourcePath.Length == 0 && reference.NativeBinding.StartsWith(ResidentBuiltinTextureRoots.Prefix,StringComparison.Ordinal))
+                    reference.Key = reference.NativeBinding;
+                if (reference.Key.Length != 0) {
                     if (unique.ContainsKey(reference.Key)) throw Error("different resource PPtrs map to one source identity");
                     unique.Add(reference.Key, id);
                 }
-                if (loaded) reference.NativeBinding = bindNative(id) ?? "";
                 var index = references.Count; indices.Add(id, index); references.Add(reference); return index;
             }
             var array = M.Slice(body, 0, 32); var count = Count(array); var dependencies = new Dependency[count];
+            var records = live.Read(M.Ptr(array, 0), checked(count * 40));
+            ResidentFailureEvidence.Mark("ResourceManager dependency rows=" + count);
             for (var index = 0; index < count; index++) {
-                var raw = live.Read(IntPtr.Add(M.Ptr(array, 0), index * 40), 40); var header = M.Slice(raw, 8, 32); var nested = Count(header);
+                var offset = index * 40; var header = M.Slice(records, offset + 8, 32); var nested = Count(header);
                 var values = live.Read(M.Ptr(header, 0), nested * 4);
-                dependencies[index] = new Dependency { Object = Ref(M.I32(raw, 0)), Padding = M.Slice(raw, 4, 4), Storage = CaptureStorage(header),
+                dependencies[index] = new Dependency { Object = Ref(M.I32(records, offset)), Padding = M.Slice(records, offset + 4, 4), Storage = CaptureStorage(header),
                     References = Enumerable.Range(0, nested).Select(item => Ref(M.I32(values, item * 4))).ToArray() };
             }
             var tree = M.Slice(body, 32, 16); var sentinel = M.Ptr(tree, 0); var size = M.U64(tree, 8);
             if (sentinel == IntPtr.Zero || size > MaximumEntries) throw Error("resource tree shape exceeds bounds");
+            ResidentFailureEvidence.Mark("ResourceManager container nodes=" + size + ", dependency refs=" + references.Count);
             var head = live.Read(sentinel, 80); if (head[24] != 1 || head[25] != 1) throw Error("resource tree sentinel differs");
             var nodes = new List<IntPtr>(); var raws = new List<byte[]>(); var entries = new List<Entry>(); var seen = new HashSet<IntPtr>();
             int Walk(IntPtr node, IntPtr parent, bool red, int depth) {
@@ -123,7 +141,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (node == IntPtr.Zero || depth > 64 || (ulong)seen.Count >= size || !seen.Add(node)) throw Error("resource tree cycle/depth differs");
                 var raw = live.Read(node, 80); if (M.Ptr(raw, 8) != parent || raw[24] > 1 || raw[25] != 0 || red && raw[24] == 0) throw Error("resource tree parent/colour differs");
                 var left = Walk(M.Ptr(raw, 0), node, raw[24] == 0, depth + 1);
-                nodes.Add(node); raws.Add(raw); entries.Add(new Entry { Name = ReadText(live, IntPtr.Add(node, 32)), Object = Ref(M.I32(raw, 72)), Padding = M.Slice(raw, 26, 6).Concat(M.Slice(raw, 76, 4)).ToArray() });
+                nodes.Add(node); raws.Add(raw); entries.Add(new Entry { Name = ReadText(live, M.Slice(raw, 32, 40)), Object = Ref(M.I32(raw, 72)), Padding = M.Slice(raw, 26, 6).Concat(M.Slice(raw, 76, 4)).ToArray() });
                 var right = Walk(M.Ptr(raw, 16), node, raw[24] == 0, depth + 1);
                 if (left != right) throw Error("resource tree black height differs"); return left + raw[24];
             }
@@ -139,7 +157,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             var data = new Data { Manager = key, NeedsReload = body[48] != 0, Padding = M.Slice(body, 49, 7), DependencyStorage = CaptureStorage(array), Dependencies = dependencies,
                 References = sorted.Select(item => item.reference).ToArray(), Container = entries.ToArray(), Root = Node(root),
                 Shape = raws.SelectMany(raw => new[] { Node(M.Ptr(raw, 0)), Node(M.Ptr(raw, 8)), Node(M.Ptr(raw, 16)), (int)raw[24] }).ToArray(), SentinelPadding = M.Slice(head, 26, 54) };
-            Validate(data); data.CoverageGaps = RequiredGaps(data); live.Snapshot = data; live.RequireUnchanged(); return live;
+            ResidentFailureEvidence.Mark("ResourceManager validation, refs=" + references.Count);
+            data.CoverageGaps = RequiredGaps(data); live.Snapshot = data; live.RequireUnchanged(); return live;
         }
         private static int Count(byte[] header) {
             var count = M.U64(header, 16); var capacity = M.U64(header, 24) >> 1;
@@ -147,10 +166,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static Storage CaptureStorage(byte[] header) => new Storage { Capacity = (int)(M.U64(header, 24) >> 1), Label = M.I32(header, 8), Owned = (M.U64(header, 24) & 1) == 0,
             Present = M.Ptr(header, 0) != IntPtr.Zero, Padding = M.Slice(header, 12, 4) };
-        private static Text ReadText(Live live, IntPtr address) {
-            var raw = live.Read(address, 40); var pointer = M.Ptr(raw, 0); var size = M.U64(raw, 24); var capacity = pointer == IntPtr.Zero ? 15UL : M.U64(raw, 8);
+        private static Text ReadText(Live live, byte[] raw) {
+            var pointer = M.Ptr(raw, 0); var size = M.U64(raw, 24); var capacity = pointer == IntPtr.Zero ? 15UL : M.U64(raw, 8);
             if (size > 16384 || capacity > 32 * 1024 * 1024 || pointer == IntPtr.Zero && size > 15 || pointer != IntPtr.Zero && capacity != 0 && capacity < size) throw Error("resource key string shape differs");
-            var bytes = live.Read(pointer == IntPtr.Zero ? IntPtr.Add(address, 8) : pointer, checked((int)size + 1)); if (bytes[bytes.Length - 1] != 0) throw Error("resource key terminator differs");
+            var length = checked((int)size + 1);
+            var bytes = pointer == IntPtr.Zero ? M.Slice(raw, 8, length) : live.Read(pointer, length);
+            if (bytes[bytes.Length - 1] != 0) throw Error("resource key terminator differs");
             return new Text { Value = M.Slice(bytes, 0, bytes.Length - 1), Inline = pointer == IntPtr.Zero, Capacity = (int)capacity, Label = M.I32(raw, 32),
                 Unused = (pointer == IntPtr.Zero ? M.Slice(raw, 9 + (int)size, 15 - (int)size) : M.Slice(raw, 16, 8)).Concat(M.Slice(raw, 36, 4)).ToArray() };
         }
@@ -166,7 +187,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var reference in data.References) {
                 if (reference == null || reference.Source == null || reference.Key == null || reference.NativeBinding == null || !reference.Loaded && reference.NativeBinding.Length != 0) throw Error("resource reference schema differs");
                 ResidentSerializedAssetImage.Validate(reference.Source);
-                if (reference.Key.Length != 0 && (reference.Key != ResidentNativeAssetDirectory.SourceKey(reference.Source) || !keys.Add(reference.Key) || previous != null && StringComparer.Ordinal.Compare(previous, reference.Key) > 0)) throw Error("resource source binding/order differs");
+                if (reference.Key.Length != 0) {
+                    if (!keys.Add(reference.Key) || previous != null && StringComparer.Ordinal.Compare(previous,reference.Key) > 0)
+                        throw Error("resource source binding/order differs");
+                    if (reference.Key.StartsWith(ResidentBuiltinTextureRoots.Prefix,StringComparison.Ordinal)) {
+                        if (!reference.Loaded || reference.NativeBinding != reference.Key || reference.Source.SourcePath.Length != 0)
+                            throw Error("builtin resource PPtr lacks matching native ownership");
+                        _ = ResidentBuiltinTextureRoots.Decode(reference.Key);
+                    } else if (reference.Key != ResidentNativeAssetDirectory.SourceKey(reference.Source)) throw Error("serialized resource PPtr identity differs");
+                }
                 previous = reference.Key;
             }
             foreach (var dependency in data.Dependencies) {
@@ -193,7 +222,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (data.Ownership != Policy) gaps.Add("resource-manager/unproven-storage-mutation-policy");
             if (data.NeedsReload) gaps.Add("resource-manager/pending-reload");
             foreach (var reference in data.References) {
-                foreach (var gap in reference.Source.CoverageGaps) gaps.Add("resource-manager/" + gap);
+                foreach (var gap in reference.Source.CoverageGaps)
+                    if (gap != "serialized-image/no-source-identifier" || !reference.Key.StartsWith(ResidentBuiltinTextureRoots.Prefix,StringComparison.Ordinal))
+                        gaps.Add("resource-manager/" + gap);
                 if (reference.Key.Length == 0) gaps.Add("resource-manager/unresolved-source-reference");
                 if (reference.Loaded && reference.NativeBinding.Length == 0) gaps.Add("resource-manager/loaded-native-reference-unbound");
             }
@@ -207,8 +238,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static void RequireEqual(Data expected, Data actual) { if (!EncodeDependencies(expected).SequenceEqual(EncodeDependencies(actual))) throw Error("independent complete resource dependency differs"); }
         internal static void RequireReferenceCoverage(Data data, ResidentNativeGlobalObjects.Data globals) {
             RequireComplete(data); ResidentNativeGlobalObjects.Validate(globals);
-            foreach (var reference in data.References.Where(reference => reference.Loaded)) if (globals.Rows.Count(row => row.Binding == reference.NativeBinding && row.TypeRva == reference.Source.NativeTypeRva) != 1)
-                throw Error("resource reference lacks its independently covered native owner");
+            var owners = globals.Rows.Where(row => row.Binding.Length != 0).ToDictionary(row => row.Binding,StringComparer.Ordinal);
+            foreach (var reference in data.References.Where(reference => reference.Loaded)) {
+                if (!owners.TryGetValue(reference.NativeBinding,out var row)
+                    || (reference.Key.StartsWith(ResidentBuiltinTextureRoots.Prefix,StringComparison.Ordinal)
+                        ? row.Kind != "native-asset" : row.TypeRva != reference.Source.NativeTypeRva))
+                    throw Error("resource reference lacks its independently covered native owner");
+            }
         }
         internal static Live Canon(Live before, ResidentMutationScope scope) {
             RequireCanonicalizable(before.Snapshot); before.RequireUnchanged(); scope.Require(); var after = Capture(before.Globals, before.BindNative, before.Admitted); RequireEqual(before.Snapshot, after.Snapshot); return after;

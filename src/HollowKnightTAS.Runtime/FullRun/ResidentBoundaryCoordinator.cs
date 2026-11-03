@@ -300,7 +300,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             admitted();
             if (ResidentFailureEvidence.Collecting) process.TraceNativeAdmission();
             var assets = new ResidentAssetBindings(directory);
-            using var nativeReferences = new ResidentNativeAssetReference.Observation();
+            using var nativeReferences = new ResidentNativeAssetReference.Observation(admitted);
             ResidentFailureEvidence.Mark("static roots"); var statics = ResidentStaticRoots.Capture(modules);
             var components = ResidentComponentAdapters.CaptureWithManagedRoots(directory, assets.Bind);
             ProcessObservation? runtime = null;

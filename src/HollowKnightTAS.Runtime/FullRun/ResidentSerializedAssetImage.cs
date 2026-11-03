@@ -75,7 +75,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var bytes = M.Read(pointer, length); Reads.Add(Tuple.Create(pointer, bytes)); maps.Add(key, bytes); cachedBytes += length;
                 return bytes;
             }
-            internal void Frozen() { foreach (var item in Reads) if (!item.Item2.SequenceEqual(M.Read(item.Item1, item.Item2.Length))) throw Error("serialized source directory or memory image changed"); }
+            internal void Frozen() {
+                var verify = new M.Readback();
+                foreach (var item in Reads)
+                    if (!verify.Matches(item.Item1, item.Item2)) throw Error("serialized source directory or memory image changed");
+            }
         }
         internal static Data Capture(NativeObject owner)
         {
@@ -143,6 +147,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                     batch.RecordRemapping(manager, remapper, instanceId, mapped, identifier);
                 }
                 if (!mapped) return new Data { CoverageGaps = new[] { "serialized-image/no-source-identifier" } };
+                // Only disk-backed source bytes under this observation's
+                // independent, write/delete-denying file handles are reused.
+                // The remapping and all reader/namespace metadata retain
+                // their own live witnesses. No memory-reader body is cached.
+                if (batch.TryFileObject(instanceId,expectedTypeRva,out var saved)) {
+                    if (!api.LookupId(remapper,instanceId,out var fresh) || fresh.File != identifier.File || fresh.Object != identifier.Object)
+                        throw Error("disk object mapping changed during asset closure");
+                    return saved;
+                }
                 var streamArray = observation.Read(IntPtr.Add(manager, 8), 32); var count = ArrayCount(streamArray, 32);
                 var pathArray = observation.Read(IntPtr.Add(manager, 352), 32); var paths = ArrayCount(pathArray, 40);
                 if (identifier.File < 0 || identifier.File >= count || identifier.File >= paths || identifier.Object == 0) throw Error("serialized source namespace index differs");
@@ -159,7 +172,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     // reopen without repopulating its namespace on the source.
                     try {
                         var path = batch.ResolveSourcePath(engine.BaseAddress, manager, pathStorage, sourcePath);
-                        return batch.ReadClosed(path, sourcePath, identifier.Object, expectedTypeRva);
+                        var closed = batch.ReadClosed(path, sourcePath, identifier.Object, expectedTypeRva);
+                        batch.RememberFileObject(instanceId,closed); return closed;
                     } catch (Exception error) when (error is IOException || error is InvalidDataException || error is UnauthorizedAccessException) {
                         throw new InvalidDataException("Resident serialized image: closed stream at " + sourcePath
                             + " (namespace " + identifier.File + ", local ID " + identifier.Object + ", loadError=0)", error);
@@ -193,7 +207,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (!api.LookupId(remapper, instanceId, out var current)
                     || current.File != identifier.File || current.Object != identifier.Object)
                     throw Error("serialized namespace or original remapping changed");
-                Validate(data); return data;
+                Validate(data);
+                if (body != null && M.Ptr(observation.Read(reader,8),0) == IntPtr.Add(engine.BaseAddress,0x1692c18))
+                    batch.RememberFileObject(instanceId,data);
+                return data;
             } finally { api.Leave(mutex); }
         }
         private static int ArrayCount(byte[] header, int stride)

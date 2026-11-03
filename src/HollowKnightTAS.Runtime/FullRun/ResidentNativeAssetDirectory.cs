@@ -23,7 +23,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private const int Maximum = ResidentObjectDirectory.MaximumComponents;
         internal sealed class Data
         {
-            public int Version = 1;
+            public int Version = 2;
+            [JsonProperty(Required = Required.Always)] public string[] BuiltinSlotOwners = null!;
             public Row[] Rows = Array.Empty<Row>();
             public string[] CoverageGaps = Array.Empty<string>();
             internal Data Copy() => JsonConvert.DeserializeObject<Data>(JsonConvert.SerializeObject(this))!;
@@ -62,17 +63,23 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal readonly List<Tuple<IntPtr, byte[]>> Witness = new List<Tuple<IntPtr, byte[]>>();
             internal Action Admitted = null!;
             internal ResidentNativeGlobalObjects.CaptureResult Globals = null!;
+            internal ResidentBuiltinTextureRoots.Live Builtins = null!;
             private long observed;
+            internal long WitnessBytes => observed;
             internal byte[] Read(IntPtr pointer, int size)
             {
+                if (size == 0) return Array.Empty<byte>();
                 Admitted(); observed = checked(observed + size); if (observed > 32 * 1024 * 1024) throw Error("native asset observation exceeds bounds");
                 var bytes = M.Read(pointer, size); Witness.Add(Tuple.Create(pointer, bytes)); return bytes;
             }
             // Identity projection only. Caller MUST also retain RequiredGaps
             // and independent Object48/type-body proofs in process coverage.
-            internal ResidentNativeGlobalObjects.Data ProjectGlobalDirectory()
+            internal ResidentNativeGlobalObjects.Data ProjectCapturedDirectory()
             {
-                RequireUnchanged(); var result = Globals.Snapshot.Copy(); var rows = result.Rows.ToList();
+                // Capture has independently read back both directories. This
+                // projection uses only their captured rows; the outer world
+                // observation checks the live witnesses again before use.
+                Admitted(); var result = Globals.Snapshot.Copy(); var rows = result.Rows;
                 var indices = IndexRegisteredRows(Globals.Snapshot.Rows);
                 foreach (var asset in Snapshot.Rows.Where(row => row.Binding.Length != 0)) {
                     var exact = OriginalRows[asset.Binding];
@@ -88,11 +95,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var unresolved = new HashSet<string>(rows.Where(row => row.Kind == "unbound").Select(row => "global-object/unbound-native-owner:" + classes[row.TypeRva].Key), StringComparer.Ordinal);
                 result.Rows = rows.OrderBy(row => row.TypeRva).ThenBy(row => row.Binding, StringComparer.Ordinal).ToArray();
                 result.CoverageGaps = result.CoverageGaps.Where(gap => !gap.StartsWith("global-object/unbound-native-owner:", StringComparison.Ordinal) || unresolved.Contains(gap)).ToArray();
-                ResidentNativeGlobalObjects.Validate(result); return result;
+                ResidentNativeGlobalObjects.Validate(result); Admitted(); return result;
             }
             internal void RequireUnchanged()
             {
-                Globals.RequireUnchanged(); foreach (var item in Witness) { Admitted(); if (!M.Read(item.Item1, item.Item2.Length).SequenceEqual(item.Item2)) throw Error("native asset changed during observation"); }
+                Globals.RequireUnchanged(); Builtins.RequireUnchanged();
+                var verify = new M.Readback();
+                foreach (var item in Witness) { Admitted(); if (!verify.Matches(item.Item1,item.Item2)) throw Error("native asset changed during observation"); }
             }
         }
         private static Dictionary<ResidentNativeGlobalObjects.Row,int> IndexRegisteredRows(ResidentNativeGlobalObjects.Row[] rows)
@@ -134,12 +143,18 @@ namespace HollowKnightTAS.Runtime.FullRun
             globals.RequireUnchanged();
             using var images = ResidentSerializedAssetImage.BeginObservation();
             var live = new Live { Globals = globals, Admitted = admitted }; var classes = globals.Snapshot.Classes.ToDictionary(type => type.Rva);
+            live.Builtins = ResidentNativeAssetReference.CompleteBuiltins(globals, admitted);
             var engine = LoadingEngineClockProbe.RequirePinnedEngine(); var rows = new List<Row>();
             var managedTypes = new Dictionary<Type, string>();
             var byId = new Dictionary<int, string>(); var local = new Dictionary<Row, Tuple<int, IntPtr>>();
             images.PrimeRegisteredRemappings(globals.RegisteredRows.Where(pair => pair.Value.Kind == "unbound"
                 && !classes[pair.Value.TypeRva].GlobalManager).Select(pair => pair.Key), admitted);
             if (ResidentFailureEvidence.Collecting) {
+                var builtinUnmapped = live.Builtins.Aliases.Keys.Count(pointer =>
+                    images.ObservedUnmapped(M.I32(M.Read(IntPtr.Add(pointer,8),4),0)));
+                ResidentFailureEvidence.Mark("builtin texture roots=" + live.Builtins.Origins.Count + ", nonnull slots="
+                    + live.Builtins.Origins.Count(pair => pair.Value != IntPtr.Zero) + ", distinct owners=" + live.Builtins.Aliases.Count
+                    + ", observed unmapped=" + builtinUnmapped);
                 var counts = globals.RegisteredRows.Where(pair => pair.Value.Kind == "unbound")
                     .GroupBy(pair => pair.Value.TypeRva).OrderBy(group => group.Key)
                     .Select(group => classes[group.Key].Name + "=" + group.Count() + " (" + group.Count(pair => images.ObservedUnmapped(pair.Key)) + " unmapped)");
@@ -169,9 +184,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var row = new Row { TypeKey = type.Key, TypeRva = type.Rva, Size = type.Size, Persistent = registration.Persistent,
                     Source = source, Vtable = registration.Vtable };
                 // Partial provenance remains recorded but never becomes a binding.
-                if (source.CoverageGaps.Length == 0) {
-                    row.Binding = SourceKey(source);
-                    if (source.NativeTypeRva != type.Rva || live.Pointers.ContainsKey(row.Binding)) throw Error("serialized native asset identity is ambiguous or has another actual type");
+                if (source.CoverageGaps.Length == 0) row.Binding = SourceKey(source);
+                else if (source.SourcePath.Length == 0 && live.Builtins.Aliases.ContainsKey(pair.Value))
+                    row.Binding = live.Builtins.Key(pair.Value);
+                if (row.Binding.Length != 0) {
+                    if (source.NativeTypeRva != 0 && source.NativeTypeRva != type.Rva || live.Pointers.ContainsKey(row.Binding))
+                        throw Error("native asset identity is ambiguous or has another actual type");
                     live.Pointers.Add(row.Binding, pair.Value); byId.Add(pair.Key, row.Binding); live.OriginalRows.Add(row.Binding, Tuple.Create(pair.Key, registration));
                 }
                 rows.Add(row); local.Add(row, Tuple.Create(pair.Key, pair.Value));
@@ -191,9 +209,27 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (ResidentFailureEvidence.Collecting)
                 ResidentFailureEvidence.Mark("native resource bodies=" + rows.Count + ", " + images.DescribeDiskReads());
-            foreach (var row in rows) ReadBody(live, row, local[row].Item2, engine.BaseAddress, byId);
+            var ordered = rows.OrderBy(row => row.TypeRva).ThenBy(row => row.Binding, StringComparer.Ordinal).ToArray();
+            int lastType = 0;
+            foreach (var row in ordered) {
+                if (row.TypeRva != lastType) {
+                    if (ResidentFailureEvidence.Collecting)
+                        ResidentFailureEvidence.Mark("native resource body type=" + row.TypeKey + ", retained bytes=" + live.WitnessBytes);
+                    lastType = row.TypeRva;
+                }
+                ReadBody(live, row, local[row].Item2, engine.BaseAddress, byId);
+            }
             foreach (var type in managedTypes) if (ResidentObjectDirectory.TypeRecord.Capture(type.Key).Key != type.Value) throw Error("native asset managed type metadata changed");
-            live.Snapshot = new Data { Rows = rows.OrderBy(row => row.TypeRva).ThenBy(row => row.Binding, StringComparer.Ordinal).ToArray() };
+            var slots = ResidentBuiltinTextureRoots.DeclaredOrigins().Select(origin => {
+                var pointer = live.Builtins.Origins[origin];
+                if (pointer == IntPtr.Zero) return "";
+                var id = M.I32(live.Read(IntPtr.Add(pointer,8),4),0);
+                if (!globals.RegisteredPointers.TryGetValue(id,out var registered) || registered != pointer || !byId.TryGetValue(id,out var key))
+                    throw Error("builtin texture static slot has no verified asset binding");
+                return key;
+            }).ToArray();
+            live.Snapshot = new Data { BuiltinSlotOwners = slots, Rows = ordered };
+            ResidentFailureEvidence.Mark("native resource validation and independent readback");
             Validate(live.Snapshot); live.Snapshot.CoverageGaps = RequiredGaps(live.Snapshot); live.RequireUnchanged(); return live;
         }
         private static void ReadBody(Live live, Row row, IntPtr pointer, IntPtr engine, IReadOnlyDictionary<int, string> bindings)
@@ -205,12 +241,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var bytes = live.Read(pointer, row.Size);
             if (M.Ptr(bytes, 0) != IntPtr.Add(engine, physics ? 0x1701768 : 0x1696fa8)) throw Error("typed native asset vtable differs");
             row.Kind = physics ? "physics-material-2d" : "text-asset";
-            var name = M.Ptr(bytes, 48); row.NamePresent = name != IntPtr.Zero;
-            if (name != IntPtr.Zero) {
-                var value = new List<byte>();
-                for (var index = 0; ; index++) { if (index == 16384) throw Error("native asset name exceeds bounds"); var character = live.Read(IntPtr.Add(name, index), 1)[0]; if (character == 0) break; value.Add(character); }
-                row.Name = value.ToArray();
-            }
+            ReadName(live, row, M.Ptr(bytes, 48));
             if (physics) {
                 row.Values = M.Slice(bytes, 56, 8); row.Padding = M.Slice(bytes, 68, 4); var owner = M.I32(bytes, 64);
                 row.Owner = owner == 0 ? "" : bindings.TryGetValue(owner, out var key) ? key : "@unresolved-native-owner";
@@ -226,7 +257,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static void Validate(Data data)
         {
-            if (data == null || data.Version != 1 || data.Rows == null || data.Rows.Length > Maximum || data.CoverageGaps == null || data.CoverageGaps.Length > Maximum || data.CoverageGaps.Any(string.IsNullOrEmpty)) throw Error("native asset directory schema differs");
+            var originNames = ResidentBuiltinTextureRoots.DeclaredOrigins();
+            if (data == null || data.Version != 2 || data.Rows == null || data.Rows.Length > Maximum || data.CoverageGaps == null || data.CoverageGaps.Length > Maximum || data.CoverageGaps.Any(string.IsNullOrEmpty)
+                || data.BuiltinSlotOwners == null || data.BuiltinSlotOwners.Length != originNames.Length
+                || data.BuiltinSlotOwners.Any(key => key == null || key.Length > 16384)) throw Error("native asset directory schema differs");
             var keys = new HashSet<string>(StringComparer.Ordinal);
             foreach (var row in data.Rows) {
                 if (row == null || row.Source == null || row.TypeKey == null || row.Binding == null || row.Owner == null || row.Name == null || row.Name.Length > 16384
@@ -234,7 +268,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || !row.TypeKey.StartsWith(row.TypeRva.ToString("x", CultureInfo.InvariantCulture) + "/", StringComparison.Ordinal)) throw Error("native asset row schema differs");
                 ResidentSerializedAssetImage.Validate(row.Source);
                 if (row.Source.NativeTypeRva != 0 && row.Source.NativeTypeRva != row.TypeRva) throw Error("serialized type cannot substitute another native body");
-                if (row.Binding.Length != 0 && (row.Binding != SourceKey(row.Source) || row.TypeRva != row.Source.NativeTypeRva || !keys.Add(row.Binding))) throw Error("native source binding differs");
+                if (row.Binding.Length != 0) {
+                    if (!keys.Add(row.Binding)) throw Error("duplicate native source binding");
+                    if (row.Binding.StartsWith(ResidentBuiltinTextureRoots.Prefix,StringComparison.Ordinal)) {
+                        var aliases = originNames.Where((name,i) => data.BuiltinSlotOwners[i] == row.Binding);
+                        if (row.Source.SourcePath.Length != 0 || TextureType(row.TypeRva) == null
+                            || !ResidentBuiltinTextureRoots.Decode(row.Binding).SequenceEqual(aliases)) throw Error("builtin source binding differs");
+                    } else if (row.Binding != SourceKey(row.Source) || row.TypeRva != row.Source.NativeTypeRva) throw Error("serialized source binding differs");
+                }
                 if (row.Kind.StartsWith("texture/",StringComparison.Ordinal)) { ValidateTexture(row); }
                 else if (row.Kind == "physics-material-2d") {
                     if (row.TypeRva != 0x1986550 || row.Size != 72 || row.Values.Length != 8 || row.Padding.Length != 4 || row.Text != null || row.Texture != null) throw Error("native physics material payload differs");
@@ -246,12 +287,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                         || row.Values.Length != 0 || row.Padding.Length != 0 || row.Owner.Length != 0 || row.Texture != null) throw Error("native text asset payload differs");
                 } else if (row.Kind != "unsupported" || row.Values.Length != 0 || row.Padding.Length != 0 || row.Text != null || row.Texture != null) throw Error("native asset payload union differs");
             }
+            if (data.BuiltinSlotOwners.Any(key => key.StartsWith(ResidentBuiltinTextureRoots.Prefix,StringComparison.Ordinal) && !keys.Contains(key)))
+                throw Error("builtin slot has no matching native resource row");
         }
         internal static string[] RequiredGaps(Data data)
         {
             Validate(data); var gaps = new SortedSet<string>(StringComparer.Ordinal);
             foreach (var row in data.Rows) {
-                foreach (var gap in row.Source.CoverageGaps) gaps.Add("native-asset/" + row.TypeKey + "/" + gap);
+                foreach (var gap in row.Source.CoverageGaps)
+                    if (gap != "serialized-image/no-source-identifier" || !row.Binding.StartsWith(ResidentBuiltinTextureRoots.Prefix,StringComparison.Ordinal))
+                        gaps.Add("native-asset/" + row.TypeKey + "/" + gap);
                 if (row.Binding.Length == 0) gaps.Add("native-asset/unbound-source:" + row.TypeKey);
                 if (row.Texture != null) foreach(var gap in TextureGaps(row)) gaps.Add(gap);
                 if (row.Kind == "unsupported") gaps.Add("native-asset/missing-native-body:" + row.TypeKey);

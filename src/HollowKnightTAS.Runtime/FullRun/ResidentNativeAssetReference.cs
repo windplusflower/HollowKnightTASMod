@@ -75,10 +75,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         [ThreadStatic] private static Observation? recording;
         internal sealed class Observation : IDisposable
         {
+            internal readonly ResidentBuiltinTextureRoots.Observation Builtins;
             private readonly Dictionary<string,IntPtr> pointers = new Dictionary<string,IntPtr>(StringComparer.Ordinal);
             internal readonly HashSet<IntPtr> Retained = new HashSet<IntPtr>();
-            internal Observation() {
+            internal Observation(Action admitted) {
                 if (recording != null) throw new InvalidOperationException("Nested native asset reference observation.");
+                Builtins = ResidentBuiltinTextureRoots.Observe(admitted);
                 recording = this;
             }
             internal void Observe(string key,IntPtr pointer) {
@@ -96,6 +98,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 recording = null;
             }
         }
+        internal static ResidentBuiltinTextureRoots.Live CompleteBuiltins(ResidentNativeGlobalObjects.CaptureResult globals, Action admitted)
+            => recording != null ? recording.Builtins.Complete(globals) : ResidentBuiltinTextureRoots.Capture(globals,admitted);
 
         internal static int NativeClass(IntPtr pointer, int family)
         {
@@ -128,13 +132,88 @@ namespace HollowKnightTAS.Runtime.FullRun
                 key = bind(owner) ?? Missing;
             } else {
                 var source = new LoadingAssetProvenanceObservation().Capture(id);
-                key = source.kind == "serialized" ? ResidentNativeAssetDirectory.ProvenanceKey(type,source.sourcePath,source.localIdentifier) : Missing;
+                key = source.kind == "serialized" ? ResidentNativeAssetDirectory.ProvenanceKey(type,source.sourcePath,source.localIdentifier)
+                    : source.kind == "unmapped" ? (recording?.Builtins.Candidate(pointer) ?? ResidentMutationScope.CurrentBuiltinKey(pointer) ?? Missing) : Missing;
                 if (key != Missing) recording?.Observe(key,pointer);
             }
             verify(); handle.RequireUnchanged(); return key;
         }
         internal static string BindTexture(int texture,Func<object,string?> bind)
-            => texture == 0 ? "" : Bind(ResidentLoadedAssetIndex.TextureResourcePointer(texture),ResidentLoadedAssetIndex.TextureClass,typeof(Texture),bind);
+        {
+            if(texture==0)return "";
+            var pointer=ResidentLoadedAssetIndex.TextureResourcePointer(texture);
+            var slots=ResidentNativeAssetDirectory.ReadTextureResourceIds(pointer,out var actual);
+            var owner=Bind(pointer,ResidentLoadedAssetIndex.TextureClass,typeof(Texture),bind);
+            var key=EncodeTextureBinding(owner,actual,slots,texture);
+            if(ResidentLoadedAssetIndex.TextureResourcePointer(texture)!=pointer)throw new InvalidOperationException("Texture resource binding changed during observation.");
+            RequireTextureSlotsUnchanged(pointer,actual,slots);
+            return key;
+        }
+        private static void RequireTextureSlotsUnchanged(IntPtr pointer,int actual,int[] slots)
+        {
+            var current=ResidentNativeAssetDirectory.ReadTextureResourceIds(pointer,out var type);
+            if(type!=actual||!current.SequenceEqual(slots))throw new InvalidOperationException("Texture resource type or slot aliases changed during observation.");
+        }
+        private const string TexturePrefix="resident-texture-resource/1/";
+        private static string TexturePartition(int actual,int[] slots)
+            => string.Join(".",ResidentNativeAssetDirectory.TextureResourcePartition(actual,slots).Select(value=>value<0?"x":value.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        internal static string EncodeTextureBinding(string owner,int actual,int[] slots,int resource)
+        {
+            if(string.IsNullOrEmpty(owner)||owner==Missing||owner.Length>16384||owner.IndexOf('\0')>=0||owner.StartsWith("resident-texture-resource/",StringComparison.Ordinal))
+                throw new InvalidOperationException("Texture resource has no unambiguous owner origin.");
+            var mask=ResidentNativeAssetDirectory.TextureResourceMask(actual,slots,resource);
+            var key=TexturePrefix+actual.ToString("x",System.Globalization.CultureInfo.InvariantCulture)+"/"+mask.ToString("x",System.Globalization.CultureInfo.InvariantCulture)+"/"+TexturePartition(actual,slots)+"/"+Convert.ToBase64String(new System.Text.UTF8Encoding(false,true).GetBytes(owner));
+            if(key.Length>16384)throw new InvalidOperationException("Texture resource binding exceeds its portable field bound.");
+            return key;
+        }
+        internal static string TextureBindingOwner(string key)
+        {
+            DecodeTextureBinding(key,out var owner,out _,out _,out _);return owner;
+        }
+        private static void DecodeTextureBinding(string key,out string owner,out int actual,out int mask,out string partition)
+        {
+            if(key==null||key.Length==0||key.Length>16384||key.IndexOf('\0')>=0)throw new InvalidOperationException("Texture resource binding shape differs.");
+            owner=key;actual=0;mask=1;partition="";
+            if(!key.StartsWith(TexturePrefix,StringComparison.Ordinal)) {
+                if(key.StartsWith("resident-texture-resource/",StringComparison.Ordinal))throw new InvalidOperationException("Texture resource binding version differs.");
+                return;
+            }
+            var parts=key.Substring(TexturePrefix.Length).Split(new[]{'/'},4);
+            if(parts.Length!=4||!int.TryParse(parts[0],System.Globalization.NumberStyles.AllowHexSpecifier,System.Globalization.CultureInfo.InvariantCulture,out actual)
+                ||!int.TryParse(parts[1],System.Globalization.NumberStyles.AllowHexSpecifier,System.Globalization.CultureInfo.InvariantCulture,out mask)
+                ||parts[0]!=actual.ToString("x",System.Globalization.CultureInfo.InvariantCulture)||parts[1]!=mask.ToString("x",System.Globalization.CultureInfo.InvariantCulture))
+                throw new InvalidOperationException("Texture resource binding roles differ.");
+            var count=ResidentNativeAssetDirectory.TextureResourceOffsets(actual).Length;
+            partition=parts[2];var aliases=partition.Split('.');
+            if(aliases.Length!=count||mask<=0||mask>=(1<<count))throw new InvalidOperationException("Texture resource binding slot count differs.");
+            var roots=new int[count];var groups=0;for(var i=0;i<count;i++) {
+                var text=aliases[i];var value=text=="x"?-1:text.Length==1&&text[0]>='0'&&text[0]<='2'?text[0]-'0':-2;
+                if(value < -1||value>groups)throw new InvalidOperationException("Texture resource binding alias partition differs.");
+                if(value==groups)groups++;
+                roots[i]=value;
+            }
+            var first=0;while((mask&(1<<first))==0)first++;var expected=0;
+            if(roots[first]<0)throw new InvalidOperationException("Texture resource binding names an absent slot.");
+            for(var i=0;i<count;i++)if(roots[i]==roots[first])expected|=1<<i;
+            if(mask!=expected)throw new InvalidOperationException("Texture resource binding omits an aliased slot.");
+            try { owner=new System.Text.UTF8Encoding(false,true).GetString(Convert.FromBase64String(parts[3])); }
+            catch(Exception ex) when(ex is FormatException||ex is System.Text.DecoderFallbackException) { throw new InvalidOperationException("Texture resource owner encoding differs.",ex); }
+            if(string.IsNullOrEmpty(owner)||owner.Length>16384||owner==Missing||owner.IndexOf('\0')>=0||owner.StartsWith("resident-texture-resource/",StringComparison.Ordinal)
+                ||parts[3]!=Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(owner)))throw new InvalidOperationException("Texture resource owner identity differs.");
+        }
+        internal static int ResolveTextureRole(string key,int actual,int[] slots)
+        {
+            DecodeTextureBinding(key,out _,out var sourceType,out var mask,out var partition);
+            var aliases=TexturePartition(actual,slots);
+            if(sourceType==0) {
+                if(slots[0]==0||slots.Skip(1).Any(value=>value!=0))throw new InvalidOperationException("Legacy texture binding has ambiguous additional resource slots.");
+                return slots[0];
+            }
+            if(sourceType!=actual||partition!=aliases)throw new InvalidOperationException("Target texture resource type or full alias partition differs.");
+            var first=Enumerable.Range(0,slots.Length).First(i=>(mask&(1<<i))!=0);var resource=slots[first];
+            if(ResidentNativeAssetDirectory.TextureResourceMask(actual,slots,resource)!=mask)throw new InvalidOperationException("Target texture resource slot mask differs.");
+            return resource;
+        }
         internal static IntPtr Resolve(string key,int family,Type type,Func<string,UnityEngine.Object> resolve)
         {
             if (key.Length == 0) return IntPtr.Zero;
@@ -150,10 +229,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static int ResolveTexture(string key,Func<string,UnityEngine.Object> resolve)
         {
             if (key.Length == 0) return 0;
-            var native = Resolve(key,ResidentLoadedAssetIndex.TextureClass,typeof(Texture),resolve);
-            var resource = M.I32(M.Read(IntPtr.Add(native,80),4),0);
+            var native = Resolve(TextureBindingOwner(key),ResidentLoadedAssetIndex.TextureClass,typeof(Texture),resolve);
+            var slots=ResidentNativeAssetDirectory.ReadTextureResourceIds(native,out var actual);
+            var resource = ResolveTextureRole(key,actual,slots);
             if (resource == 0 || ResidentLoadedAssetIndex.TextureResourcePointer(resource) != native)
                 throw new InvalidOperationException("Target texture resource table does not map to the resolved native Object.");
+            RequireTextureSlotsUnchanged(native,actual,slots);
             return resource;
         }
     }

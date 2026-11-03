@@ -155,9 +155,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             internal void Frozen() {
                 Admitted(); var index = 0;
+                var verify = new M.Readback();
                 foreach (var pair in reads) {
                     if ((index++ & 255) == 0) Admitted();
-                    if (!pair.Item2.SequenceEqual(M.Read(pair.Item1, pair.Item2.Length))) throw Error("native object/type registry changed during observation");
+                    if (!verify.Matches(pair.Item1, pair.Item2)) throw Error("native object/type registry changed during observation");
                 }
                 Admitted();
             }
@@ -410,8 +411,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || row.Binding.Length > 32768 || row.ManagedType.Length > 32768 || row.ManagedPresent != (row.ManagedType.Length != 0)
                     || row.Kind != "directory" && row.Kind != "asset" && row.Kind != "native-asset" && row.Kind != "global" && row.Kind != "unbound"
                     || (row.Kind == "unbound") != (row.Binding.Length == 0) || row.Binding.Length != 0 && !bindings.Add(row.Binding)
-                    || row.Kind == "native-asset" && (type.GlobalManager || !row.Binding.StartsWith("resident-native-asset/" + type.Rva.ToString("x", CultureInfo.InvariantCulture) + "/", StringComparison.Ordinal))
+                    || row.Kind == "native-asset" && type.GlobalManager
                     || row.Kind == "global" && (!type.GlobalManager || row.Binding != GlobalPrefix + type.Key)) throw Error("native Object directory identity/type ownership differs");
+                if (row.Kind == "native-asset") {
+                    if (row.Binding.StartsWith(ResidentBuiltinTextureRoots.Prefix,StringComparison.Ordinal))
+                        ResidentBuiltinTextureRoots.RequireKeyType(row.Binding,type,types);
+                    else if (!row.Binding.StartsWith("resident-native-asset/" + type.Rva.ToString("x", CultureInfo.InvariantCulture) + "/", StringComparison.Ordinal))
+                        throw Error("serialized native asset key does not match its registered type");
+                }
             }
         }
         internal static void RequireCompleteDirectory(Data data)
