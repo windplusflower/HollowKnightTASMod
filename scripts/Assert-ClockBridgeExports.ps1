@@ -1,5 +1,5 @@
 function Assert-ClockBridgeExports {
-    param([Parameter(Mandatory=$true)][string]$Path, [switch]$RequireContactImpulsePolicy)
+    param([Parameter(Mandatory=$true)][string]$Path, [switch]$RequireContactImpulsePolicy, [switch]$RequireResidentBoundary)
     $bytes = [IO.File]::ReadAllBytes([IO.Path]::GetFullPath($Path))
     if ($bytes.Length -lt 256 -or $bytes.Length -gt 32MB -or [BitConverter]::ToUInt16($bytes,0) -ne 0x5a4d) { throw 'Clock bridge PE size or signature differs.' }
     function Read-U32([int]$Offset) {
@@ -47,5 +47,14 @@ function Assert-ClockBridgeExports {
     }
     if ($RequireContactImpulsePolicy -and -not $names.Contains('HktasClockBridge_GetContactImpulsePolicy')) {
         throw 'Clock bridge canonical contact impulse policy export is missing before installation.'
+    }
+    if ($RequireResidentBoundary) {
+        foreach ($entry in 'GetResidentBoundaryCapability','BeginResidentBoundary','RequireResidentBoundary',
+            'RequireResidentWritableBoundary','ExportResidentContinuation','ImportResidentContinuation','EndResidentBoundary',
+            'BeginResidentFrameObservation','RequireResidentFrameObservation','GetResidentFrameClockBytes','ExportResidentFrameClock',
+            'CopyResidentAudioFenceStatus','CopyResidentAudioWorkers','CopyResidentParticleFenceStatus',
+            'BeginResidentParticleFence','RequireResidentParticleFence','EndResidentParticleFence') {
+            if (-not $names.Contains('HktasClockBridge_' + $entry)) { throw "Resident bridge export missing before installation: $entry" }
+        }
     }
 }

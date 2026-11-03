@@ -68,6 +68,7 @@ static volatile LONG *g_boot_frame_state; /* completed, waiting, thread, hooked 
 static BOOL loading_startup_clock_is_frozen(void);
 static BOOL loading_startup_clock_owns_advances(void);
 static BOOL prepare_early_mod_wall_clock(void);
+static BOOL hktas_resident_boundary_released(void);
 
 static void advance_boot_frame_clock(void)
 {
@@ -95,6 +96,23 @@ static BOOL finish_contact_impulse_policy(void);
 #include "contact_impulse_probe.h"
 #include "startup_frame_hook.h"
 #include "full_run_continuation.h"
+#include "resident_audio_fence.h"
+#include "resident_particle_producer.h"
+/* Keep the exact first audio failure in the shared fault word. It survives
+ * termination; reporting only 66 also obscured explicit abort (reason 37). */
+static void __cdecl hktas_resident_audio_fault(LONG family)
+{
+    LONG reason = HktasClockBridge_GetResidentAudioFenceFault();
+    hktas_v2_fault(reason > 0 && reason < 100 ? family * 100 + reason : family);
+}
+static void __cdecl hktas_resident_particle_fault(LONG family)
+{
+    /* Called with the producer lock held. Do not re-enter its status export. */
+    LONG reason = g_ps_reason;
+    hktas_v2_fault(reason > 0 && reason < 100 ? family * 100 + reason : family);
+}
+#include "resident_boundary_clock.h"
+#include "resident_frame_clock.h"
 
 static BOOL loading_startup_clock_is_frozen(void)
 {
@@ -677,8 +695,13 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_GetStatus(void)
     return InterlockedCompareExchange(&g_status, 0, 0);
 }
 
-__declspec(dllexport) LONG __cdecl
-HktasClockBridge_BeginMainThreadPause(void)
+static LONG hktas_writer_BeginMainThreadPause(void);
+__declspec(dllexport) LONG __cdecl HktasClockBridge_BeginMainThreadPause(void)
+{
+    if (!hktas_enter_clock_writer()) return -1;
+    LONG result = hktas_writer_BeginMainThreadPause(); hktas_leave_clock_writer(); return result;
+}
+static LONG hktas_writer_BeginMainThreadPause(void)
 {
     LARGE_INTEGER now;
     DWORD current_thread = GetCurrentThreadId();
@@ -721,8 +744,17 @@ HktasClockBridge_BeginMainThreadPause(void)
     return 1;
 }
 
-__declspec(dllexport) LONG __cdecl
-HktasClockBridge_EnableDeterministicMainThreadClock(
+static LONG hktas_writer_EnableDeterministicMainThreadClock(
+    LONGLONG step_ticks,
+    LONGLONG expected_frequency);
+__declspec(dllexport) LONG __cdecl HktasClockBridge_EnableDeterministicMainThreadClock(
+    LONGLONG step_ticks,
+    LONGLONG expected_frequency)
+{
+    if (!hktas_enter_clock_writer()) return -1;
+    LONG result = hktas_writer_EnableDeterministicMainThreadClock(step_ticks, expected_frequency); hktas_leave_clock_writer(); return result;
+}
+static LONG hktas_writer_EnableDeterministicMainThreadClock(
     LONGLONG step_ticks,
     LONGLONG expected_frequency)
 {
@@ -791,8 +823,13 @@ HktasClockBridge_EnableDeterministicMainThreadClock(
     return 1;
 }
 
-__declspec(dllexport) LONG __cdecl
-HktasClockBridge_ShiftDeterministicMainThreadClock(LONGLONG delta_ticks)
+static LONG hktas_writer_ShiftDeterministicMainThreadClock(LONGLONG delta_ticks);
+__declspec(dllexport) LONG __cdecl HktasClockBridge_ShiftDeterministicMainThreadClock(LONGLONG delta_ticks)
+{
+    if (!hktas_enter_clock_writer()) return -1;
+    LONG result = hktas_writer_ShiftDeterministicMainThreadClock(delta_ticks); hktas_leave_clock_writer(); return result;
+}
+static LONG hktas_writer_ShiftDeterministicMainThreadClock(LONGLONG delta_ticks)
 {
     DWORD current_thread = GetCurrentThreadId();
 
@@ -835,8 +872,13 @@ HktasClockBridge_ShiftDeterministicMainThreadClock(LONGLONG delta_ticks)
     return 1;
 }
 
-__declspec(dllexport) LONG __cdecl
-HktasClockBridge_EndMainThreadPause(void)
+static LONG hktas_writer_EndMainThreadPause(void);
+__declspec(dllexport) LONG __cdecl HktasClockBridge_EndMainThreadPause(void)
+{
+    if (!hktas_enter_clock_writer()) return -1;
+    LONG result = hktas_writer_EndMainThreadPause(); hktas_leave_clock_writer(); return result;
+}
+static LONG hktas_writer_EndMainThreadPause(void)
 {
     DWORD current_thread = GetCurrentThreadId();
 
@@ -867,8 +909,13 @@ HktasClockBridge_EndMainThreadPause(void)
     return 1;
 }
 
-__declspec(dllexport) LONG __cdecl
-HktasClockBridge_CommitMainThreadResume(void)
+static LONG hktas_writer_CommitMainThreadResume(void);
+__declspec(dllexport) LONG __cdecl HktasClockBridge_CommitMainThreadResume(void)
+{
+    if (!hktas_enter_clock_writer()) return -1;
+    LONG result = hktas_writer_CommitMainThreadResume(); hktas_leave_clock_writer(); return result;
+}
+static LONG hktas_writer_CommitMainThreadResume(void)
 {
     LARGE_INTEGER now;
     DWORD current_thread = GetCurrentThreadId();
@@ -915,8 +962,13 @@ HktasClockBridge_CommitMainThreadResume(void)
     return 1;
 }
 
-__declspec(dllexport) LONG __cdecl
-HktasClockBridge_AdvanceDeterministicFrameClock(LONG sequence)
+static LONG hktas_writer_AdvanceDeterministicFrameClock(LONG sequence);
+__declspec(dllexport) LONG __cdecl HktasClockBridge_AdvanceDeterministicFrameClock(LONG sequence)
+{
+    if (!hktas_enter_clock_writer()) return -1;
+    LONG result = hktas_writer_AdvanceDeterministicFrameClock(sequence); hktas_leave_clock_writer(); return result;
+}
+static LONG hktas_writer_AdvanceDeterministicFrameClock(LONG sequence)
 {
     DWORD current_thread = GetCurrentThreadId();
 
@@ -1156,7 +1208,13 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_GetFullRunMode(void)
         &g_v2_state->mode, 0, 0);
 }
 
+static LONG hktas_writer_RequestFramePause(void);
 __declspec(dllexport) LONG __cdecl HktasClockBridge_RequestFramePause(void)
+{
+    if (!hktas_enter_clock_writer()) return 0;
+    LONG result = hktas_writer_RequestFramePause(); hktas_leave_clock_writer(); return result;
+}
+static LONG hktas_writer_RequestFramePause(void)
 {
     if (!g_v2_gate_enabled || g_v2_state == NULL) return 0;
     if (g_v2_state->mode == HKTAS_V2_MODE_FAULT
@@ -1165,7 +1223,13 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_RequestFramePause(void)
     return 1;
 }
 
+static LONG hktas_writer_FinishFullRun(void);
 __declspec(dllexport) LONG __cdecl HktasClockBridge_FinishFullRun(void)
+{
+    if (!hktas_enter_clock_writer()) return 0;
+    LONG result = hktas_writer_FinishFullRun(); hktas_leave_clock_writer(); return result;
+}
+static LONG hktas_writer_FinishFullRun(void)
 {
     if (!g_v2_gate_enabled || g_v2_state == NULL
         || g_v2_state->mode == HKTAS_V2_MODE_FAULT
@@ -1194,7 +1258,13 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_SetBeforeFrameCallback(
     return 1;
 }
 
+static LONG hktas_writer_ReportMovieFrameCompleted(void);
 __declspec(dllexport) LONG __cdecl HktasClockBridge_ReportMovieFrameCompleted(void)
+{
+    if (!hktas_enter_clock_writer()) return 0;
+    LONG result = hktas_writer_ReportMovieFrameCompleted(); hktas_leave_clock_writer(); return result;
+}
+static LONG hktas_writer_ReportMovieFrameCompleted(void)
 {
     if (!g_v2_gate_enabled || g_v2_state == NULL
         || g_v2_completed_callback == NULL) return 0;
@@ -1263,6 +1333,14 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
             g_boot_frame_hook_enabled = TRUE;
             return TRUE;
         }
+        if (g_v2_gate_enabled && (!g_guard_required || !g_startup_latch_enabled
+            || !install_resident_audio_fence((BYTE *)GetModuleHandleW(L"UnityPlayer.dll"), g_startup_hook_thread_id, hktas_resident_audio_fault)
+            || !install_resident_particle_producer((BYTE *)GetModuleHandleW(L"UnityPlayer.dll"), g_startup_hook_thread_id, hktas_resident_particle_fault)))
+        {
+            InterlockedExchange(&g_status, -17);
+            TerminateProcess(GetCurrentProcess(), ERROR_INVALID_FUNCTION);
+            return TRUE;
+        }
         if (!configure_loading_startup_clock_probe()) {
             InterlockedExchange(&g_status, -16);
             TerminateProcess(GetCurrentProcess(), ERROR_INVALID_FUNCTION);
@@ -1294,7 +1372,13 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
     return TRUE;
 }
 
+static LONG hktas_writer_SetFullRunFrameRateRatio(LONG numerator, LONG denominator);
 __declspec(dllexport) LONG __cdecl HktasClockBridge_SetFullRunFrameRateRatio(LONG numerator, LONG denominator)
+{
+    if (!hktas_enter_clock_writer()) return 0;
+    LONG result = hktas_writer_SetFullRunFrameRateRatio(numerator, denominator); hktas_leave_clock_writer(); return result;
+}
+static LONG hktas_writer_SetFullRunFrameRateRatio(LONG numerator, LONG denominator)
 {
     AcquireSRWLockExclusive(&g_clock_lock);
     if (!g_deterministic_clock_enabled || !hktas_fractional_configure(

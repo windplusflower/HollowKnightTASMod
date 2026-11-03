@@ -45,6 +45,9 @@ static BOOL g_v2_hash_latched;
 static void (__cdecl *g_v2_before_callback)(uint64_t completed);
 static void (__cdecl *g_v2_completed_callback)(uint64_t completed);
 static volatile LONG g_v2_step_movie_frame_complete;
+/* A resident transaction may only be opened while the native frame gate owns
+ * the current main-thread callback. This is not a caller-supplied permission. */
+static LONG g_v2_boundary_callback_phase;
 
 static uint64_t hktas_get_completed_player_loops(void)
 {
@@ -96,6 +99,14 @@ static BOOL hktas_v2_bootstrap_valid(void)
         g_v2_hash_latched = TRUE;
     }
     return memcmp(g_v2_armed_hash, g_v2_state->descriptor_sha256, 32) == 0;
+}
+
+static BOOL hktas_v2_observe_latched_bootstrap(void)
+{
+    return hktas_v2_identity_valid() && save_write_guard_is_armed() && g_guard_install_status == 1
+        && g_v2_hash_latched && InterlockedCompareExchange(&g_v2_state->bootstrap_armed, 0, 0) == 1
+        && InterlockedCompareExchange(&g_v2_state->guard_armed, 0, 0) == 1
+        && memcmp(g_v2_armed_hash, g_v2_state->descriptor_sha256, 32) == 0;
 }
 
 static void hktas_v2_apply_command(void)
@@ -210,8 +221,12 @@ static BOOL hktas_v2_before_frame(void)
         /* Read-only work runs on the Unity thread at a completed-frame boundary.
            It does not consume input, acknowledge a command, or execute PlayerLoop. */
         if (InterlockedExchange(&g_v2_observation_requested, 0) != 0
-            && g_v2_observation_callback != NULL)
+            && g_v2_observation_callback != NULL) {
+            g_v2_boundary_callback_phase = 2;
             g_v2_observation_callback(hktas_get_completed_player_loops());
+            g_v2_boundary_callback_phase = 0;
+            if (!hktas_resident_boundary_released()) { hktas_v2_fault(65); return FALSE; }
+        }
         if (mode == HKTAS_V2_MODE_RUN || mode == HKTAS_V2_MODE_STEP)
         {
             if (!hktas_v2_bootstrap_valid())
@@ -221,7 +236,10 @@ static BOOL hktas_v2_before_frame(void)
             }
             if (g_v2_before_callback != NULL)
             {
+                g_v2_boundary_callback_phase = 1;
                 g_v2_before_callback(hktas_get_completed_player_loops());
+                g_v2_boundary_callback_phase = 0;
+                if (!hktas_resident_boundary_released()) { hktas_v2_fault(65); return FALSE; }
                 LONG after_callback = InterlockedCompareExchange(&g_v2_state->mode, 0, 0);
                 if (after_callback == HKTAS_V2_MODE_FAULT) return FALSE;
                 if (after_callback != mode) continue;
@@ -241,7 +259,10 @@ static void hktas_v2_after_frame(void)
     LONGLONG completed = InterlockedIncrement64(&g_v2_state->completed_frames);
     if (g_v2_completed_callback != NULL)
     {
+        g_v2_boundary_callback_phase = 3;
         g_v2_completed_callback((uint64_t)completed);
+        g_v2_boundary_callback_phase = 0;
+        if (!hktas_resident_boundary_released()) { hktas_v2_fault(65); return; }
         InterlockedIncrement64(&g_v2_state->callback_sequence);
     }
     if (InterlockedCompareExchange(&g_v2_state->mode, 0, 0) == HKTAS_V2_MODE_STEP

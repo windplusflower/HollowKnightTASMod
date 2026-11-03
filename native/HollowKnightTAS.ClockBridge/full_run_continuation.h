@@ -19,16 +19,18 @@ static LONGLONG *g_continuation_counter_origin;
 static double *g_continuation_scripting_origin;
 static BOOL g_continuation_imported;
 
-static BOOL hktas_continuation_context(void)
+static BOOL hktas_clock_engine_context(LONG observation_phase)
 {
-    wchar_t enabled[4];
-    if (GetEnvironmentVariableW(L"HKTAS_SCENE_CHECKPOINT_EXPERIMENT", enabled, 4) != 1
-        || enabled[0] != L'1' || !g_v2_gate_enabled || !hktas_v2_bootstrap_valid()
+    if (!g_v2_gate_enabled || !(observation_phase ? hktas_v2_observe_latched_bootstrap() : hktas_v2_bootstrap_valid())
         || !g_loading_startup_clock_initialized || !g_loading_startup_clock_released
-        || g_loading_startup_clock_frozen_frame || g_boot_frame_prepared || g_boot_player_loop_active
+        || g_loading_startup_clock_frozen_frame
+        || (observation_phase == 3 ? (!g_boot_frame_prepared || !g_boot_player_loop_active)
+                                   : (g_boot_frame_prepared || g_boot_player_loop_active))
+        || (observation_phase && (!g_boot_loop_active || g_v2_boundary_callback_phase != observation_phase))
         || GetCurrentThreadId() != g_virtual_clock_main_thread_id
         || !loading_startup_writable(g_loading_startup_time_manager, 0x430)) return FALSE;
     if (!g_continuation_counter_origin || !g_continuation_scripting_origin) {
+        if (observation_phase) return FALSE;
         BYTE *engine = (BYTE *)GetModuleHandleW(L"UnityPlayer.dll");
         if (!engine) return FALSE;
         g_continuation_counter_origin = (LONGLONG *)(engine + 0x1a41260);
@@ -36,6 +38,13 @@ static BOOL hktas_continuation_context(void)
     }
     return loading_startup_writable(g_continuation_counter_origin, 8)
         && loading_startup_writable(g_continuation_scripting_origin, 8);
+}
+static BOOL hktas_continuation_engine_context(void) { return hktas_clock_engine_context(0); }
+static BOOL hktas_continuation_context(void)
+{
+    wchar_t enabled[4];
+    return GetEnvironmentVariableW(L"HKTAS_SCENE_CHECKPOINT_EXPERIMENT", enabled, 4) == 1
+        && enabled[0] == L'1' && hktas_continuation_engine_context();
 }
 
 static void hktas_continuation_engine_copy(BYTE *destination, const BYTE *source)
@@ -49,9 +58,9 @@ static void hktas_continuation_engine_copy(BYTE *destination, const BYTE *source
 __declspec(dllexport) uint32_t __cdecl HktasClockBridge_GetContinuationBytes(void)
 { return sizeof(hktas_clock_continuation); }
 
-__declspec(dllexport) LONG __cdecl HktasClockBridge_ExportContinuation(BYTE *output, uint32_t capacity)
+static LONG hktas_export_continuation(BYTE *output, uint32_t capacity)
 {
-    if (!output || capacity != sizeof(hktas_clock_continuation) || !hktas_continuation_context()) return 0;
+    if (!output || capacity != sizeof(hktas_clock_continuation)) return 0;
     hktas_clock_continuation state = {0};
     state.magic = HKTAS_CONTINUATION_MAGIC; state.version = 1; state.size = sizeof(state);
     AcquireSRWLockShared(&g_clock_lock);
@@ -73,12 +82,13 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_ExportContinuation(BYTE *out
     ReleaseSRWLockShared(&g_clock_lock);
     memcpy(output, &state, sizeof(state)); return 1;
 }
+__declspec(dllexport) LONG __cdecl HktasClockBridge_ExportContinuation(BYTE *output, uint32_t capacity)
+{ return hktas_resident_boundary_released() && hktas_continuation_context() ? hktas_export_continuation(output, capacity) : 0; }
 
-__declspec(dllexport) LONG __cdecl HktasClockBridge_ImportContinuation(
+static LONG hktas_import_continuation(
     const BYTE *input, uint32_t length, uint64_t expected_completed)
 {
-    if (!input || length != sizeof(hktas_clock_continuation) || !hktas_continuation_context()
-        || g_continuation_imported || g_v2_state->mode != HKTAS_V2_MODE_PAUSED
+    if (!input || length != sizeof(hktas_clock_continuation) || g_v2_state->mode != HKTAS_V2_MODE_PAUSED
         || hktas_get_completed_player_loops() != expected_completed
         || g_v2_state->command_sequence != g_v2_state->ack_sequence) return 0;
     hktas_clock_continuation state; memcpy(&state, input, sizeof(state));
@@ -113,7 +123,14 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_ImportContinuation(
     InterlockedExchange64(&g_v2_state->expected_frame, (LONGLONG)state.completed);
     if (g_boot_frame_state) InterlockedExchange(&g_boot_frame_state[0], (LONG)state.completed);
     InterlockedExchange(&g_v2_step_movie_frame_complete, 0);
-    g_continuation_imported = TRUE;
     ReleaseSRWLockExclusive(&g_clock_lock); return 1;
+}
+__declspec(dllexport) LONG __cdecl HktasClockBridge_ImportContinuation(
+    const BYTE *input, uint32_t length, uint64_t expected_completed)
+{
+    if (!hktas_resident_boundary_released() || !hktas_continuation_context() || g_continuation_imported) return 0;
+    LONG result = hktas_import_continuation(input, length, expected_completed);
+    if (result == 1) g_continuation_imported = TRUE;
+    return result;
 }
 #endif
