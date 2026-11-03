@@ -75,6 +75,20 @@ internal static class Program
         currentReport = report;
         try
         {
+            // Bind all packaged initial-save files before PrepareLaunch creates
+            // the protected shadow. Interactive route authoring must not silently
+            // pick up the player's current live saves from a bare Movie file.
+            var fixture = SequencePackage.Read(options.Fixture);
+            if (options.Mode == "interactive" && fixture.InitialSaves == null)
+                throw new InvalidDataException("Interactive authoring requires a .hktaspack with bound initial saves.");
+            var movie = LoadMovie(fixture, options.Fixture);
+            report["initialSavesSource"] = fixture.InitialSaves == null ? "protected-live-baseline" : "sequence-package";
+            if (fixture.InitialSaves != null)
+            {
+                report["initialSavesId"] = fixture.InitialSaves.Id;
+                report["initialSaveFileCount"] = fixture.InitialSaves.Hashes.Count;
+            }
+
             // Own the formal current-user Companion mutex before the game starts.
             // The installed Companion then forwards Runtime registration to this
             // pipe, so this harness never handles or prints the registration token.
@@ -91,10 +105,15 @@ internal static class Program
 
             var profile = VerifiedStartupProfile.Load(options.Bundle, options.Game);
             boot = new StartupBootController();
-            movies = new FullRunMovieCoordinator(boot);
+            movies = new FullRunMovieCoordinator(boot) { SequenceInitialSaves = fixture.InitialSaves };
             var gate = movies.PrepareLaunch();
+            if (fixture.InitialSaves != null)
+                Require(movies.SessionInitialSaves?.Id == fixture.InitialSaves.Id,
+                    "protected shadow binds the complete packaged initial-save snapshot");
             report["runId"] = movies.RunId;
             report["shadowRoot"] = movies.ShadowRoot;
+            File.WriteAllText(Path.Combine(options.Output, "probe-shadows.json"),
+                JsonSerializer.Serialize(new { shadows = new[] { movies.ShadowRoot } }));
             var launcher = new VerifiedGameLauncher(profile);
             handle = await launcher.LaunchInteractiveAsync(
                 "world-observe-" + Guid.NewGuid().ToString("N"),
@@ -102,7 +121,6 @@ internal static class Program
             resources.Start(handle);
             await WaitForGateAsync(gate, handle, linked.Token);
 
-            var movie = LoadMovie(options.Fixture);
             boot.Refresh();
             movies.ArmReplay(movie, 1);
             var first = await movies.StepAsync(0, linked.Token);
@@ -374,9 +392,9 @@ internal static class Program
         return population;
     }
 
-    private static MovieV2Document LoadMovie(string path)
+    private static MovieV2Document LoadMovie(SequenceFile fixture, string path)
     {
-        using var reader = File.OpenText(Path.GetFullPath(path));
+        using var reader = new StringReader(fixture.Movie);
         var parsed = new MovieV2Codec().Parse(reader, path);
         if (!parsed.Success || parsed.Document == null)
             throw new InvalidDataException("Fixture is not a canonical v2 movie.");

@@ -12,6 +12,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal static class CanonicalCarryGraphWire
     {
         private const int Magic = 0x44434348; // HCCD
+        private const int ResidentMagic = 0x32474352; // RCG2: graph uses resident-only tags
         private const int MaximumStrings = 1000000;
         private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false, true);
 
@@ -53,9 +54,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             void Require() { if (stream.Length > SceneCheckpointPacket.MaximumPayloadBytes) throw new InvalidDataException("Carry wire payload exceeds its bound."); }
             void Id(string? text) => writer.Write(text == null ? 0 : ids[text]);
             void OptionalCount(int? count) => writer.Write(count ?? -1);
+            var extended = false;
             void Item(CanonicalCarryGraphData.Value item)
             {
-                writer.Write(Kind(item.Kind)); Id(item.Type); Id(item.Text); writer.Write(item.Reference); Require();
+                var tag = Kind(item.Kind); extended |= tag > 5;
+                writer.Write(tag); Id(item.Type); Id(item.Text); writer.Write(item.Reference); Require();
             }
             writer.Write(Magic); writer.Write(value.Version); writer.Write(strings.Length);
             foreach (var text in strings)
@@ -67,7 +70,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             writer.Write(value.Nodes.Length);
             foreach (var node in value.Nodes)
             {
-                writer.Write(node.Id); Id(node.Type); writer.Write(NodeKind(node.Kind)); Id(node.Text);
+                var tag = NodeKind(node.Kind); extended |= tag > 4;
+                writer.Write(node.Id); Id(node.Type); writer.Write(tag); Id(node.Text);
                 OptionalCount(node.Fields?.Length);
                 if (node.Fields != null) foreach (var field in node.Fields) { Id(field.Name); Item(field.Value); }
                 OptionalCount(node.Items?.Length);
@@ -78,6 +82,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var external in value.Externals) { Id(external.Binding); Id(external.Type); }
             writer.Write(value.Unsupported.Length);
             foreach (var issue in value.Unsupported) Id(issue);
+            if (extended) { stream.Position = 0; writer.Write(ResidentMagic); }
             writer.Flush(); Require(); return stream.ToArray();
         }
 
@@ -96,7 +101,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidDataException("Carry wire count is invalid.");
                     return count;
                 }
-                if (reader.ReadInt32() != Magic) throw new InvalidDataException("Carry wire magic differs.");
+                var magic = reader.ReadInt32();
+                if (magic != Magic && magic != ResidentMagic) throw new InvalidDataException("Carry wire magic differs.");
+                var extended = false;
+                byte ReadTag(byte oldMaximum) {
+                    var tag = reader.ReadByte();
+                    if (tag > oldMaximum) {
+                        if (magic != ResidentMagic) throw new InvalidDataException("Resident tag in a legacy carry graph.");
+                        extended = true;
+                    }
+                    return tag;
+                }
                 var version = reader.ReadInt32();
                 var strings = new string[Count(MaximumStrings)]; long characters = 0;
                 var usedStrings = new bool[strings.Length];
@@ -120,7 +135,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 CanonicalCarryGraphData.Value Item()
                 {
                     if (++values > CanonicalCarryGraphCodec.MaximumValues) throw new InvalidDataException("Carry wire value count exceeds its bound.");
-                    return new CanonicalCarryGraphData.Value { Kind = Kind(reader.ReadByte()), Type = Id(), Text = Id(), Reference = reader.ReadInt32() };
+                    return new CanonicalCarryGraphData.Value { Kind = Kind(ReadTag(5)), Type = Id(), Text = Id(), Reference = reader.ReadInt32() };
                 }
                 int? OptionalCount()
                 {
@@ -138,7 +153,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 for (var i = 0; i < value.Nodes.Length; i++)
                 {
                     var node = new CanonicalCarryGraphData.Node { Id = reader.ReadInt32(),
-                        Type = Id() ?? throw new InvalidDataException("Carry node type is null."), Kind = NodeKind(reader.ReadByte()), Text = Id() };
+                        Type = Id() ?? throw new InvalidDataException("Carry node type is null."), Kind = NodeKind(ReadTag(4)), Text = Id() };
                     var fields = OptionalCount();
                     if (fields.HasValue)
                     {
@@ -166,7 +181,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // strings reached by Id, so completeness is the remaining
                 // canonical condition. Preserve the original full acceptance
                 // set without allocating and writing the same packet again.
-                if (stream.Position != stream.Length || usedStrings.Any(used => !used))
+                if (extended != (magic == ResidentMagic) || stream.Position != stream.Length || usedStrings.Any(used => !used))
                     throw new InvalidDataException("Carry wire payload is trailing or noncanonical.");
                 return value;
             }
@@ -175,16 +190,19 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static byte Kind(string value) => value == "null" ? (byte)0 : value == "scalar" ? (byte)1 : value == "value" ? (byte)2
             : value == "node" ? (byte)3 : value == "external" ? (byte)4 : value == "unsupported" ? (byte)5
+            : value == "instance-id" ? (byte)6
             : throw new InvalidDataException("Unknown carry value kind.");
         private static string Kind(byte value) => value == 0 ? "null" : value == 1 ? "scalar" : value == 2 ? "value"
-            : value == 3 ? "node" : value == 4 ? "external" : value == 5 ? "unsupported" : throw new InvalidDataException("Unknown carry value kind.");
+            : value == 3 ? "node" : value == 4 ? "external" : value == 5 ? "unsupported" : value == 6 ? "instance-id" : throw new InvalidDataException("Unknown carry value kind.");
         private static byte NodeKind(string value) => value == "object" ? (byte)0 : value == "array" ? (byte)1 : value == "boxed-scalar" ? (byte)2
             : value == "ease-callback" ? (byte)3
             : value == "boss-challenge-callback" ? (byte)4
+            : value == "destroyed-unity" ? (byte)5 : value == "native-owner" ? (byte)6 : value == "delegate" ? (byte)7
             : throw new InvalidDataException("Unknown carry node kind.");
         private static string NodeKind(byte value) => value == 0 ? "object" : value == 1 ? "array" : value == 2 ? "boxed-scalar"
             : value == 3 ? "ease-callback"
             : value == 4 ? "boss-challenge-callback"
+            : value == 5 ? "destroyed-unity" : value == 6 ? "native-owner" : value == 7 ? "delegate"
             : throw new InvalidDataException("Unknown carry node kind.");
     }
 }

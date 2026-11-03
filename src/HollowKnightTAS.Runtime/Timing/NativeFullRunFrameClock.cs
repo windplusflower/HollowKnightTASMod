@@ -8,7 +8,7 @@ using HollowKnightTAS.Core.Movie;
 
 namespace HollowKnightTAS.Runtime.Timing
 {
-    public sealed class NativeFullRunFrameClock
+    public sealed partial class NativeFullRunFrameClock
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int NativeInt();

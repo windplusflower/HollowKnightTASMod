@@ -97,7 +97,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!NativeExecutionProfile.SupportsSceneCheckpoints(NativeExecutionProfile.SelectedProfileId))
                 throw new InvalidOperationException("This recorded execution profile supports full replay only; scene checkpoints require the canonical boundary profile.");
             if (fields.TryGetValue("phase", out var restorePhase) && restorePhase.StartsWith("restore-", StringComparison.Ordinal))
-                return CheckpointRestoreCommand(fields);
+                throw new InvalidDataException("Legacy managed-only scene checkpoints cannot be restored; a qualified resident boundary packet is required.");
             string Get(string key) => fields.TryGetValue(key, out var value) ? value : throw new InvalidDataException("Missing checkpoint command field: " + key);
             void Require(params string[] keys)
             {
@@ -187,8 +187,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                         break;
                     case "import-cancel":
                         Require("checkpointId");
-                        if (checkpointRestore?.Packet.Header.CheckpointId == Get("checkpointId"))
-                        { checkpointRestore.Phase = "Cancelled"; checkpointRestore.Error = "Restore import cancelled; retire this process."; FaultCanonical(47); }
                         if (checkpointImport?.Header.CheckpointId == Get("checkpointId")) { checkpointImport.Dispose(); checkpointImport = null; }
                         if (stagedCheckpoint?.Header.CheckpointId == Get("checkpointId")) stagedCheckpoint = null;
                         reply["status"] = "ImportCancelled"; break;
@@ -259,7 +257,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var bytes = SceneCheckpointPacket.EncodeSections(frozen.Sections);
                     var header = new SceneCheckpointHeader(frozen.Arm.CaptureId, frozen.Arm.Scope, frozen.Arm.Binding,
                         frozen.Arm.Trigger, frozen.TransitionId, frozen.MovieFrame, frozen.NativeFrame, resumeFrame, nativeFrame,
-                        bytes.Length, Sha256Utility.ComputeHex(bytes), restoreQualified: true);
+                        bytes.Length, Sha256Utility.ComputeHex(bytes));
                     return new SceneCheckpointPacket(header, bytes);
                 });
                 frozenCheckpoint = null;
@@ -271,16 +269,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             On.GameManager.FadeSceneInWithDelay -= OnS0BootstrapFade;
             On.HeroController.Respawn -= OnS0BootstrapRespawn;
-            UnhookCheckpointPreparation();
             lock (checkpointSync) { ClearCheckpointCapture(); checkpointImport?.Dispose(); checkpointImport = null; stagedCheckpoint = null; }
         }
         internal void DiscardCheckpointTransfersOnDisconnect()
         {
             if (s0Observation != null && s0Observation.Phase != "Failed")
             { s0Observation.Phase = "Failed"; s0Observation.Error = "S0 observer disconnected; retire process."; FaultCanonical(47); }
-            lock (checkpointSync)
-                if (checkpointRestore != null && checkpointRestore.Phase != "Failed" && checkpointRestore.Phase != "Cancelled")
-                { checkpointRestore.Phase = "Cancelled"; checkpointRestore.Error = "Restore session disconnected; retire this process."; FaultCanonical(47); }
             DisposeSceneCheckpoints();
         }
         private sealed class CheckpointArm

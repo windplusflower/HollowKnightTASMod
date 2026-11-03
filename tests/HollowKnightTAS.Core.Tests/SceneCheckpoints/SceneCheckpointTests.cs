@@ -37,7 +37,17 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
             var received = receiver.Complete(); CollectionAssert.AreEqual(packet.CopyPayload(), received.CopyPayload());
             var copy = received.CopyPayload(); copy[5] ^= 1;
             var sections = received.CopySections(); sections["unityRng"][0] ^= 1;
-            CollectionAssert.AreEqual(packet.CopyPayload(), received.CopyPayload()); Assert.IsTrue(received.Header.RestoreQualified);
+            CollectionAssert.AreEqual(packet.CopyPayload(), received.CopyPayload()); Assert.IsFalse(received.Header.RestoreQualified);
+        }
+        [TestMethod]
+        public void ValidLegacyHeaderHashCannotGrantFullWorldRestoreEligibility()
+        {
+            var packet = Packet(new SceneCheckpointScope(Id(), Id(), Id(), 1));
+            var fields = packet.Header.ToFields();
+            fields.Remove("headerSha256");
+            fields["restoreQualified"] = "true";
+            fields["headerSha256"] = Sha256Utility.ComputeHex(IpcPayloadCodec.Serialize(fields));
+            Assert.ThrowsExactly<InvalidDataException>(() => SceneCheckpointHeader.FromFields(fields));
         }
         [TestMethod]
         public void TruncatedReorderedDuplicateAndCorruptedTransfersNeverComplete()

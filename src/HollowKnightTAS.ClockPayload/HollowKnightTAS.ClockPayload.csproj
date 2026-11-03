@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\HollowKnightTAS.Runtime\FullRun\ResidentDirectorFence.cs" Link="ResidentDirectorFence.cs" />
     <Compile Include="..\HollowKnightTAS.Core\Ipc\RecordingRootConfiguration.cs" Link="RecordingRootConfiguration.cs" />
     <Compile Include="..\HollowKnightTAS.Core\Movie\NativeExecutionProfile.cs" Link="NativeExecutionProfile.cs" />
     <Compile Include="..\HollowKnightTAS.Core\Movie\ModWallClock.cs" Link="ModWallClock.cs" />

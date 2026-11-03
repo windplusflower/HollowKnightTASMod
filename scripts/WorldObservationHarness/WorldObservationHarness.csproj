@@ -8,13 +8,19 @@
     <SelfContained>false</SelfContained>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <HKTASCompanionCandidateDir Condition="'$(HKTASCompanionCandidateDir)' == ''">D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/Managed/Mods/HollowKnightTAS/Companion/win-x64</HKTASCompanionCandidateDir>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="HollowKnightTAS.Core">
-      <HintPath>D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/Managed/Mods/HollowKnightTAS/Companion/win-x64/HollowKnightTAS.Core.dll</HintPath>
+      <HintPath>$(HKTASCompanionCandidateDir)/HollowKnightTAS.Core.dll</HintPath>
     </Reference>
     <Reference Include="HollowKnightTAS.Companion">
-      <HintPath>D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/Managed/Mods/HollowKnightTAS/Companion/win-x64/HollowKnightTAS.Companion.dll</HintPath>
+      <HintPath>$(HKTASCompanionCandidateDir)/HollowKnightTAS.Companion.dll</HintPath>
     </Reference>
   </ItemGroup>
+  <Target Name="PinSharedCompanionRuntime" BeforeTargets="ProcessFrameworkReferences" Condition="'$(HKTASSharedRuntimeVersion)' != ''">
+    <ItemGroup>
+      <FrameworkReference Update="Microsoft.NETCore.App;Microsoft.WindowsDesktop.App.WPF" RuntimeFrameworkVersion="$(HKTASSharedRuntimeVersion)" />
+    </ItemGroup>
+  </Target>
 </Project>

@@ -23,6 +23,10 @@ namespace HollowKnightTAS.ClockPayload
         public static byte[] ExportCheckpointRandomState()
         {
             RequireCheckpointRandomBoundary();
+            return CapturePortableRandomState();
+        }
+        private static byte[] CapturePortableRandomState()
+        {
             var fields = new[] { RandomState0Field, RandomState1Field, RandomState2Field, RandomState3Field };
             var words = new int[12]; object gameplay = UnityEngine.Random.state, render = fullRunRenderState;
             for (var i = 0; i < 4; i++)
@@ -48,7 +52,13 @@ namespace HollowKnightTAS.ClockPayload
             if (checkpointRandomImported || expectedNativeFrame < 0 || HktasClockBridge_GetFullRunMode() != 0
                 || HktasClockBridge_GetCompletedPlayerLoops() != (ulong)expectedNativeFrame)
                 throw new InvalidOperationException("Random continuation import requires a fresh paused restore transaction.");
-            var state = CheckpointRandomState.Decode(bytes); var words = state.CopyWords();
+            var state = CheckpointRandomState.Decode(bytes);
+            ApplyPortableRandomState(state);
+            checkpointRandomImported = true;
+        }
+        private static void ApplyPortableRandomState(CheckpointRandomState state)
+        {
+            var words = state.CopyWords();
             var fields = new[] { RandomState0Field, RandomState1Field, RandomState2Field, RandomState3Field };
             object gameplay = default(UnityEngine.Random.State), render = default(UnityEngine.Random.State);
             for (var i = 0; i < 4; i++) { fields[i].SetValue(gameplay, words[i]); fields[i].SetValue(render, words[i + 4]); }
@@ -62,7 +72,6 @@ namespace HollowKnightTAS.ClockPayload
             randomSynchronizationResetCount = state.ResetCount; randomSynchronizationSceneEpoch = state.SceneEpoch;
             randomSynchronizationLastAppliedSeed = state.LastSeed; randomSynchronizationLastBoundary = state.Boundary;
             randomSynchronizationLastScene = state.Scene; deterministicClockAdvanceSequence = state.AdvanceSequence;
-            checkpointRandomImported = true;
         }
     }
 }

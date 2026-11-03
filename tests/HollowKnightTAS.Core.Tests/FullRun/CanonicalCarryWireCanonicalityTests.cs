@@ -25,6 +25,25 @@ public sealed class CanonicalCarryWireCanonicalityTests
         Externals = Array.Empty<CanonicalCarryGraphData.External>(), Unsupported = Array.Empty<string>() };
 
     [TestMethod]
+    public void ResidentTagsCannotBeRelabelledAsLegacyAndLegacyBytesRemainUnique()
+    {
+        var old = CanonicalCarryGraphWire.Encode(Empty());
+        foreach (var kind in new[] { "destroyed-unity", "native-owner", "delegate", "object" }) {
+            var graph = Empty();
+            graph.Nodes = new[] { new CanonicalCarryGraphData.Node { Id = 1, Type = "t", Kind = kind,
+                Items = kind == "object" ? new[] { new CanonicalCarryGraphData.Value { Kind = "instance-id", Text = "key" } } : null } };
+            var bytes = CanonicalCarryGraphWire.Encode(graph);
+            CollectionAssert.AreEqual(bytes, CanonicalCarryGraphWire.Encode(CanonicalCarryGraphWire.Decode(bytes)));
+            Assert.ThrowsExactly<InvalidDataException>(() => LegacyCanonicalCarryGraphWire.Decode(bytes));
+            var relabelled = (byte[])bytes.Clone();
+            Buffer.BlockCopy(old, 0, relabelled, 0, 4);
+            Assert.ThrowsExactly<InvalidDataException>(() => CanonicalCarryGraphWire.Decode(relabelled));
+            var promoted = (byte[])old.Clone();
+            Buffer.BlockCopy(bytes, 0, promoted, 0, 4);
+            Assert.ThrowsExactly<InvalidDataException>(() => CanonicalCarryGraphWire.Decode(promoted));
+        }
+    }
+    [TestMethod]
     public void Every_single_byte_substitution_and_truncation_matches_original_reader()
     {
         var graph = Empty();

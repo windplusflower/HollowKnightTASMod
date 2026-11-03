@@ -13,6 +13,77 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         private static LoadingFieldDigest NewDigest() => new LoadingFieldDigest(value => null, type => false);
 
         [TestMethod]
+        public void RawCollectionGuardIncludesBucketsAndUnusedSlotsWithoutChangingDefaultDigest()
+        {
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+            foreach (var owner in new object[] { new Dictionary<int, int>(17) { [1] = 2 }, new HashSet<int>(17) { 1 } }) {
+                using var logical = NewDigest();
+                using var raw = new LoadingFieldDigest(_ => null, _ => false, rawCollectionFields: true);
+                string Hash(LoadingFieldDigest reader) {
+                    var result = reader.Capture(owner, "collection", expandRoot: true);
+                    Assert.AreEqual(0, result.Unsupported.Count);
+                    return result.Sha256;
+                }
+                var logicalBefore = Hash(logical); var rawBefore = Hash(raw);
+                var buckets = (int[])owner.GetType().GetField("_buckets", flags)!.GetValue(owner)!;
+                var originalBucket = buckets[^1]; buckets[^1] = 314;
+                Assert.AreEqual(logicalBefore, Hash(logical));
+                Assert.AreNotEqual(rawBefore, Hash(raw));
+                buckets[^1] = originalBucket;
+                Assert.AreEqual(rawBefore, Hash(raw));
+
+                var entries = (Array)owner.GetType().GetField("_entries", flags)!.GetValue(owner)!;
+                var last = entries.GetValue(entries.Length - 1)!;
+                var value = last.GetType().GetFields(flags).Single(field => field.Name is "value" or "Value");
+                var oldValue = value.GetValue(last); value.SetValue(last, 271);
+                entries.SetValue(last, entries.Length - 1);
+                Assert.AreEqual(logicalBefore, Hash(logical));
+                Assert.AreNotEqual(rawBefore, Hash(raw));
+                value.SetValue(last, oldValue); entries.SetValue(last, entries.Length - 1);
+                Assert.AreEqual(rawBefore, Hash(raw));
+            }
+        }
+
+        [TestMethod]
+        public void ExactCollectionTypeObservesRawEntryFreeAndTailAliasesWithoutChangingOtherCollections()
+        {
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+            var live = new List<Node> { new Node() }; var free = new List<Node> { new Node() }; var tail = live;
+            var owner = new Dictionary<string, List<Node>>(17) { ["live"] = live, ["removed"] = free };
+            owner.Remove("removed");
+            var entries = (Array)owner.GetType().GetField("_entries", flags)!.GetValue(owner)!;
+            var valueField = entries.GetType().GetElementType()!.GetField("value", flags)!;
+            void SetRetainedValue(int index, object value) {
+                var entry = entries.GetValue(index)!; valueField.SetValue(entry, value); entries.SetValue(entry, index);
+            }
+            SetRetainedValue(1, free); SetRetainedValue(entries.Length - 1, tail);
+            var slots = new List<(string Path, object Value)>();
+            using var selected = new LoadingFieldDigest(_ => null, _ => false,
+                slotObservation: (container, field, index, value, path) => {
+                    if (container.GetType().IsValueType && field == valueField && value != null) slots.Add((path, value));
+                }, rawCollectionType: type => type == owner.GetType());
+            using var raw = new LoadingFieldDigest(_ => null, _ => false, rawCollectionFields: true);
+            var captured = selected.Capture(owner, "registry", expandRoot: true);
+            var expectedSlots = new[] { ("registry._entries[0].value", (object)live),
+                ("registry._entries[1].value", (object)free), ($"registry._entries[{entries.Length - 1}].value", (object)tail) };
+            Assert.AreEqual(0, captured.Unsupported.Count);
+            Assert.AreEqual(raw.Capture(owner, "registry", expandRoot: true).Sha256, captured.Sha256);
+            CollectionAssert.AreEqual(expectedSlots, slots.ToArray());
+            slots.Clear();
+            var references = selected.CaptureReferences(owner, "registry", expandRoot: true);
+            Assert.AreEqual(0, references.Unsupported.Count);
+            Assert.AreEqual(captured.Nodes, references.Nodes);
+            CollectionAssert.AreEqual(expectedSlots, slots.ToArray());
+
+            using var logical = NewDigest();
+            foreach (var other in new object[] { new Dictionary<string, object>(17) { ["live"] = live }, new HashSet<Node>(17) { new Node() } })
+                Assert.AreEqual(logical.Capture(other, "other", expandRoot: true).Sha256,
+                    selected.Capture(other, "other", expandRoot: true).Sha256);
+        }
+
+        [TestMethod]
         public void OwnedSlotPathFilterKeepsActualAliasesOrderHashAndBudgetRejection()
         {
             var owned = new Node(); owned.A = owned; owned.B = owned;
@@ -54,7 +125,10 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             var listener = new GameplayListener(7);
             var root = new object[] { cycle, cycle, new EventOwner(listener.First),
                 new Dictionary<string, object> { ["alias"] = cycle, ["listener"] = listener },
-                new Value<float>(BitConverter.Int32BitsToSingle(unchecked((int)0x7fc00123))), new IntPtr(123) };
+                new Value<float>(BitConverter.Int32BitsToSingle(unchecked((int)0x7fc00123))), new IntPtr(123),
+                new byte[] { 0, 9, 10, 99, 100, 255 }, new[] { int.MinValue, 0, int.MaxValue },
+                new[] { -0f, float.NaN, float.PositiveInfinity, 3.25f },
+                new[] { -0d, double.NaN, double.NegativeInfinity, 7.75d } };
             var fullSlots = new List<(object Owner, string? Field, int Index, object? Value, string Path)>();
             var onlySlots = new List<(object Owner, string? Field, int Index, object? Value, string Path)>();
             var fullRefs = new List<object>(); var onlyRefs = new List<object>();
@@ -91,7 +165,9 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         {
             var chain = new Node(); var tail = chain;
             for (var i = 0; i < 45; i++) { tail.A = new Node(); tail = tail.A; }
-            foreach (var root in new object[] { chain, new object[50000], new object[50001], new string('x', 2 * 1024 * 1024) }) {
+            foreach (var root in new object[] { chain, new object[50000], new object[50001],
+                new byte[50000], new int[50000], new float[50000], new double[50000],
+                new string('x', 2 * 1024 * 1024) }) {
                 using var full = NewDigest(); using var only = NewDigest();
                 var expected = Assert.ThrowsExactly<InvalidOperationException>(() => full.Capture(root, "budget", true));
                 var actual = Assert.ThrowsExactly<InvalidOperationException>(() => only.CaptureReferences(root, "budget", true));
@@ -142,7 +218,15 @@ namespace HollowKnightTAS.Core.Tests.FullRun
                 Double = BitConverter.Int64BitsToDouble(unchecked((long)0xfff8123456789abc)), Decimal = -123.4500m };
             var aliases = Enumerable.Range(0, 1200).Select(_ => new Node()).ToArray();
             var root = new object[] { scalars, aliases, aliases.Reverse().ToArray(),
-                -0f, -0d, decimal.MinValue, decimal.MaxValue, new decimal(0, 0, 0, true, 28), "中文\0\ud800" };
+                -0f, -0d, decimal.MinValue, decimal.MaxValue, new decimal(0, 0, 0, true, 28), "中文\0\ud800",
+                true, false, '\0', '\ud800', '中',
+                sbyte.MinValue, sbyte.MaxValue, byte.MinValue, byte.MaxValue,
+                short.MinValue, short.MaxValue, ushort.MinValue, ushort.MaxValue,
+                int.MinValue, int.MaxValue, uint.MinValue, uint.MaxValue,
+                long.MinValue, long.MaxValue, ulong.MinValue, ulong.MaxValue,
+                new[] { uint.MinValue, uint.MaxValue }, new sbyte[] { -128, -1, 0, 127 },
+                new[] { ArrayIntBits.Negative, ArrayIntBits.Maximum }, new[] { ArrayByteBits.All },
+                new[] { -1000, -999, -100, -99, -10, -9, -1, 0, 1, 9, 10, 99, 100, 999, 1000 } };
             var text = typeof(LoadingFieldDigest).GetField("text", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
             using var legacy = NewDigest();
             for (var round = 0; round < 3; round++) {
@@ -155,6 +239,7 @@ namespace HollowKnightTAS.Core.Tests.FullRun
                 CollectionAssert.AreEqual(full.Unsupported.ToArray(), actual.Unsupported.ToArray());
                 Assert.AreEqual(full.Sha256, cached.Capture(root, "scalar-width", true).Sha256);
                 scalars.Single = round; scalars.Double = -round; scalars.Decimal += 1m;
+                ((int[])root[root.Length - 1])[0] = round;
             }
         }
         private sealed class ScalarCell { internal float Single; internal double Double; internal decimal Decimal; }
@@ -601,6 +686,8 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         private sealed class Node { internal Node? A; internal Node? B; }
         private enum UnsignedBits : ulong { All = ulong.MaxValue }
         private enum SignedBits : long { Minimum = long.MinValue }
+        private enum ArrayIntBits : int { Negative = -1, Maximum = int.MaxValue }
+        private enum ArrayByteBits : byte { All = byte.MaxValue }
         private class Base
         {
             private readonly int inherited;

@@ -25,8 +25,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Hook unloadHook;
         private readonly Hook transitionHook;
         private readonly Hook lightingHook;
-        private readonly string report;
-        private readonly CanonicalBoundaryPolicy? canonical;
+        private readonly string? report;
         private static LoadingSerialSceneProbe? instance;
         private SceneLoad? transition;
         private GameManager.SceneLoadInfo? checkpointLoadInfo;
@@ -58,16 +57,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return cached != 0;
         }
         internal static void RequireCanonicalMutationBoundary()
-        {
-            var self = instance;
-            if (self == null || self.canonical == null || !self.awaitingBoundary
-                || self.observedBoundary && self.protectedClockCanonScope == null || !self.sourceUnloaded
-                || self.source.isLoaded || self.transition == null)
-                throw new InvalidOperationException("Canonical cleanup is outside the parked unloaded boundary.");
-            var target = USceneManager.GetSceneByName(self.transition.TargetSceneName);
-            if (target.IsValid() && target.isLoaded) throw new InvalidOperationException("Canonical cleanup target is already loaded.");
-            self.protectedClockCanonScope?.Require();
-        }
+            => throw new InvalidOperationException("Legacy canonical cleanup is retired; use the resident boundary coordinator.");
         private int ordinal;
         private int rows;
         private string? failure;
@@ -76,7 +66,6 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal LoadingSerialSceneProbe()
         {
-            try {
             if (!NativeExecutionProfile.UsesSerialScenes(NativeExecutionProfile.SelectedProfileId))
                 throw new InvalidOperationException("Serial scenes require their own V6 execution profile.");
             if (NativeExecutionProfile.UsesCanonicalBoundary(NativeExecutionProfile.SelectedProfileId))
@@ -84,11 +73,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 HollowKnightTAS.Core.SceneCheckpoints.SceneCheckpointEnvironmentPolicy.ValidateMods(
                     NativeExecutionProfile.SelectedProfileId, Modding.ModHooks.GetAllMods(onlyEnabled: false, allowLoadError: true)
                         .Select(mod => mod.GetName()));
-                canonical = new CanonicalBoundaryPolicy();
+                // The per-object legacy policy is retired. Every serial load
+                // enters the same typed resident coordinator below.
             }
             if (instance != null) throw new InvalidOperationException("Serial scene policy is already installed.");
-            report = Path.Combine(Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT")
-                ?? throw new InvalidOperationException("Serial scene diagnostics need an output directory."),
+            var output = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT");
+            report = string.IsNullOrWhiteSpace(output) ? null : Path.Combine(output,
                 "serial-scenes-" + System.Diagnostics.Process.GetCurrentProcess().Id + ".jsonl");
             var begin = typeof(SceneLoad).GetMethod("BeginRoutine", BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new MissingMethodException("SceneLoad.BeginRoutine");
@@ -106,10 +96,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             instance = this;
             Write("installed", null);
             Modding.Logger.Log("[HKTAS] V6 serial scene experiment installed.");
-            } catch { canonical?.EndUiCallbackPolicy(); throw; }
         }
-        internal static void EndCanonicalUiCallbacks() => instance?.canonical?.EndUiCallbackPolicy();
-        internal static void EndPoolDiagnostic() => instance?.canonical?.EndPoolDiagnostic();
+        // Retained for callers that also support the retired legacy profile.
+        internal static void EndCanonicalUiCallbacks() { }
+        internal static void EndPoolDiagnostic() { }
 
         private IEnumerator Start(OriginalTransition original, GameManager manager, GameManager.SceneLoadInfo info)
         {
@@ -124,7 +114,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             checkpointLoadInfo = info;
             // Bounded route metadata identifies the actual entry family; scene
             // names alone do not establish the gate or leaving direction.
-            File.AppendAllText(report + ".transitions.jsonl", JsonConvert.SerializeObject(new {
+            if (report != null) File.AppendAllText(report + ".transitions.jsonl", JsonConvert.SerializeObject(new {
                 ordinal = ordinal + 1, engineFrame = Time.frameCount,
                 source = USceneManager.GetActiveScene().name, target = info.SceneName,
                 entryGate = info.EntryGateName, leaveDirection = info.HeroLeaveDirection?.ToString(),
@@ -134,6 +124,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         private IEnumerator Begin(OriginalBegin original, SceneLoad load)
+        {
+            if (residentBeginRoutine != null) throw Fail("Serial boundary iterator reentered.");
+            residentBeginRoutine = BeginResidentRoutine(original, load);
+            return residentBeginRoutine;
+        }
+
+        private IEnumerator BeginResidentRoutine(OriginalBegin original, SceneLoad load)
         {
             if (transition != null) throw Fail("Serial scene transition reentered.");
             transition = load;
@@ -146,30 +143,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // is also called by the original loader; the second call sees no pending work.
                 yield return ScenePreloader.FinishPendingOperations();
                 while (!load.IsFetchAllowed || !load.IsActivationAllowed) yield return null;
-                while (!AdvanceCanonicalStartup()) yield return null;
                 source = USceneManager.GetActiveScene();
                 sourceName = source.name;
-                if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") == "1")
-                    checkpointBossBindings = CheckpointBossContext.CaptureBindingsBeforeUnload();
                 if (!source.IsValid() || !source.isLoaded || source.name == StagingName)
                     throw Fail("Serial scene source is invalid.");
                 if (!staging.IsValid() || !staging.isLoaded) staging = USceneManager.CreateScene(StagingName);
                 Inventory("before-unload");
                 if (!USceneManager.SetActiveScene(staging)) throw Fail("Cannot activate staging scene.");
                 Write("unload-requested", new { source = sourceName, target = load.TargetSceneName });
-                if (canonical != null)
-                {
-                    retiredSourceOwners.Clear();
-                    var outgoing = new BoundaryObjectIdentity();
-                    foreach (var root in source.GetRootGameObjects())
-                        foreach (var node in root.GetComponentsInChildren<Transform>(true))
-                        {
-                            retiredSourceOwners[node.gameObject.GetInstanceID()] = "source-unloaded:" + outgoing.Get(node.gameObject);
-                            foreach (var component in node.GetComponents<Component>())
-                                if (component != null) retiredSourceOwners[component.GetInstanceID()] = "source-unloaded:" + outgoing.Get(component);
-                        }
-                    if (retiredSourceOwners.Count > 200000) throw Fail("Outgoing source identity budget exceeded.");
-                }
                 var operation = USceneManager.UnloadSceneAsync(source);
                 if (operation == null) throw Fail("Source unload operation was not created.");
                 // Do not leave the completed native AsyncOperation retained by
@@ -225,6 +206,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 checkpointTransitionRoutine = null;
                 checkpointTransitionFinished = false;
                 checkpointBossBindings = null;
+                residentBeginRoutine = null;
             }
         }
 
@@ -250,7 +232,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (!staging.IsValid() || !staging.isLoaded)
                     throw Fail("Serial staging scene is unavailable.");
                 var temporaryRoots = staging.GetRootGameObjects();
-                File.AppendAllText(report + ".staging.jsonl", JsonConvert.SerializeObject(new {
+                if (report != null) File.AppendAllText(report + ".staging.jsonl", JsonConvert.SerializeObject(new {
                     ordinal, target = target.name, roots = temporaryRoots.Select(root => new {
                         root.name, objects = root.GetComponentsInChildren<Transform>(true).Select(t => new {
                             id = Identity(t.gameObject), t.gameObject.activeSelf, t.gameObject.activeInHierarchy,
@@ -265,9 +247,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return original(name);
         }
 
-        internal static bool ObserveNativeBoundary(long movie, long native, string? sessionDirectory = null, long? movieInputNativeOrigin = null,
-            CanonicalInputEpoch? inputControlOrigin = null, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter? input = null,
-            HollowKnightTAS.Runtime.Input.FullRunMouseBridge? mouse = null)
+        internal static bool ObserveNativeBoundary(RuntimeFullRunSession session, long movie, long native)
         {
             var self = instance;
             if (self?.failure != null) throw new InvalidOperationException(self.failure);
@@ -277,64 +257,21 @@ namespace HollowKnightTAS.Runtime.FullRun
             var target = USceneManager.GetSceneByName(self.transition.TargetSceneName);
             if (target.IsValid() && target.isLoaded)
                 throw new InvalidOperationException("Serial native boundary already has the target scene.");
-            self.canonical?.Apply(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native,
-                sessionDirectory ?? throw new InvalidOperationException("Canonical boundary needs its protected Runtime session binding."),
-                movieInputNativeOrigin ?? throw new InvalidOperationException("Canonical boundary requires the actual StartInputAt frame origin."),
-                inputControlOrigin ?? throw new InvalidOperationException("Canonical boundary requires the actual input tick/scheduler origin."),
-                input ?? throw new InvalidOperationException("Canonical boundary requires its actual input adapter."),
-                mouse ?? throw new InvalidOperationException("Canonical boundary requires its actual mouse bridge."));
+            if (session == null) throw new ArgumentNullException(nameof(session));
             self.Inventory("native-empty-boundary", movie, native);
             LoadingBoundaryInventory.Capture(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native);
+            if (session.TryParkResidentImport(native, self.ordinal, self.sourceName, self.transition.TargetSceneName))
+                return true; // The iterator still cannot advance. Restore enters the same Canon inside its measured transaction.
+            session.EnterResidentBoundary();
             self.observedBoundary = true;
             return true;
         }
 
         internal static bool OwnsBoundaryIterator(IEnumerator iterator)
         {
-            var type = iterator.GetType();
-            if (type.DeclaringType != typeof(LoadingSerialSceneProbe) || !type.Name.StartsWith("<Begin>", StringComparison.Ordinal)) return false;
-            var owner = type.GetField("<>4__this", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-            return instance != null && instance.awaitingBoundary && ReferenceEquals(owner?.GetValue(iterator), instance);
+            return instance != null && instance.awaitingBoundary && ReferenceEquals(iterator, instance.residentBeginRoutine);
         }
-        internal static void RestoreCanonicalInputOrigin(CanonicalInputEpoch source)
-        {
-            GetCheckpointBoundary();
-            var policy = instance!.canonical ?? throw new InvalidOperationException("Canonical input restore policy is absent.");
-            policy.RestoreInputOrigin(source);
-        }
-        internal static byte[]? ExperimentalSource => instance?.canonical?.ExperimentalSource;
-        internal static void RestoreExperimentalInputOrigin(CanonicalInputEpoch source)
-        {
-            if (!CanonicalActualDExperiment.Enabled) throw new InvalidOperationException("Actual D origin restore is disabled.");
-            GetProtectedObservationBoundary();
-            (instance?.canonical ?? throw new InvalidOperationException("Missing original Canon.")).RestoreInputOrigin(source);
-        }
-        internal static CanonicalSealedSource<CanonicalActualDExperiment> SealExperimentalSource(CanonicalActualDExperiment.SessionCarry session)
-            => (instance?.canonical ?? throw new InvalidOperationException("Missing original Canon.")).SealSourceSession(session);
-        internal static Action FreezeExperimentalOwnerAdmission()
-        {
-            var self = instance ?? throw new InvalidOperationException("Missing parked serial loader.");
-            var load = self.transition; var info = self.checkpointLoadInfo; var routine = self.checkpointTransitionRoutine;
-            var ordinal = self.ordinal;
-            void Require() {
-                if (!CanonicalActualDExperiment.Enabled || !ReferenceEquals(instance, self) || !self.awaitingBoundary
-                    || !self.observedBoundary || !self.sourceUnloaded || self.source.isLoaded
-                    || !ReferenceEquals(self.transition, load) || !ReferenceEquals(self.checkpointLoadInfo, info)
-                    || !ReferenceEquals(self.checkpointTransitionRoutine, routine) || self.ordinal != ordinal)
-                    throw new InvalidOperationException("Actual D parked loader owners or original unloaded source changed.");
-            }
-            Require(); return Require;
-        }
-        internal static string ExperimentalTargetStage => instance?.canonical?.ActualTargetStage ?? "no-canon";
-        internal static object? ExperimentalReadbackMetrics => instance?.canonical?.ActualReadbackMetrics;
-        internal static Action PrepareExperimentalTarget(CanonicalActualDExperiment source, HollowKnightTAS.Core.Movie.MovieV2Document movie,
-            long targetNative, long origin, CanonicalInputEpoch controlOrigin,
-            HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input, HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse,
-            Func<bool> admission, Action<CanonicalInputEpoch> restoreEpoch, PlayerData originalBootstrapPlayer,
-            GameManager.EnterSceneEvent? originalTitleCallback)
-            => (instance?.canonical ?? throw new InvalidOperationException("Missing original Canon.")).PrepareActualTargetD(
-                source, movie, targetNative, origin, controlOrigin, input, mouse, admission, restoreEpoch, originalBootstrapPlayer, originalTitleCallback);
-
+        internal static string ExperimentalTargetStage => "no-canon";
         internal static Tuple<int, GameManager.SceneLoadInfo, string> GetCheckpointBoundary()
         {
             CanonicalPhaseOneTrace.RequireCheckpointAllowed(CanonicalPhaseOneTrace.Enabled);
@@ -374,6 +311,24 @@ namespace HollowKnightTAS.Runtime.FullRun
                 meshes.Flush(owner => owner.StartsWith("canonical-equipped-charm-retirement/", StringComparison.Ordinal));
                 requireAdmission(); retireStarts(); requireAdmission();
                 applySourceAndBuild(); requireAdmission();
+                GetProtectedObservationBoundary(); requireAdmission();
+            }
+            finally { self.protectedClockCanonScope = null; }
+        }
+        private bool protectedCompletedCoroutineDerivationConsumed;
+        internal static void DeriveProtectedCompletedCoroutines(Action createOriginalIdentities, Action requireAdmission)
+        {
+            GetProtectedObservationBoundary();
+            var self = instance!;
+            if (!CanonicalActualDExperiment.Enabled || !CanonicalClockApplyExperiment.Enabled || self.protectedClockCanonScope != null
+                || self.protectedCompletedCoroutineDerivationConsumed)
+                throw new InvalidOperationException("Completed Coroutine creation requires its single protected Actual D scope.");
+            self.protectedCompletedCoroutineDerivationConsumed = true;
+            using var scope = new CanonicalBoundaryMutationScope(requireAdmission);
+            scope.Enter(); self.protectedClockCanonScope = scope;
+            try {
+                RequireCanonicalMutationBoundary();
+                createOriginalIdentities(); requireAdmission();
                 GetProtectedObservationBoundary(); requireAdmission();
             }
             finally { self.protectedClockCanonScope = null; }
@@ -447,35 +402,62 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             finally { self.protectedClockCanonScope = null; }
         }
+        private bool protectedFinalVisualVisibilityConsumed;
+        private bool protectedHudControlsConsumed;
+        internal static void ApplyProtectedHudControls(Action applyControls, Action requireAdmission)
+        {
+            GetProtectedObservationBoundary();
+            var self = instance!;
+            if (!CanonicalActualDExperiment.Enabled || !CanonicalClockApplyExperiment.Enabled || self.protectedClockCanonScope != null
+                || self.protectedHudControlsConsumed)
+                throw new InvalidOperationException("HUD controls require their single protected Actual D mutation scope.");
+            if (applyControls == null) throw new ArgumentNullException(nameof(applyControls));
+            self.protectedHudControlsConsumed = true;
+            using var scope = new CanonicalBoundaryMutationScope(requireAdmission);
+            scope.Enter(); self.protectedClockCanonScope = scope;
+            try {
+                RequireCanonicalMutationBoundary();
+                applyControls(); requireAdmission();
+                GetProtectedObservationBoundary(); requireAdmission();
+            }
+            finally { self.protectedClockCanonScope = null; }
+        }
+        internal static void ApplyProtectedFinalVisualVisibility(Action applyVisibility, Action requireAdmission)
+        {
+            GetProtectedObservationBoundary();
+            var self = instance!;
+            if (!CanonicalActualDExperiment.Enabled || !CanonicalClockApplyExperiment.Enabled || self.protectedClockCanonScope != null
+                || self.protectedFinalVisualVisibilityConsumed)
+                throw new InvalidOperationException("Final visual visibility requires its single protected Actual D mutation scope.");
+            if (applyVisibility == null) throw new ArgumentNullException(nameof(applyVisibility));
+            self.protectedFinalVisualVisibilityConsumed = true;
+            using var scope = new CanonicalBoundaryMutationScope(requireAdmission);
+            scope.Enter(); self.protectedClockCanonScope = scope;
+            try {
+                RequireCanonicalMutationBoundary();
+                applyVisibility(); requireAdmission();
+                GetProtectedObservationBoundary(); requireAdmission();
+            }
+            finally { self.protectedClockCanonScope = null; }
+        }
         internal static CanonicalS0ObservationSnapshot RecaptureRegisteredS0(Action admission)
         {
             GetProtectedObservationBoundary();
-            return (instance?.canonical ?? throw new InvalidOperationException("Original Canon is absent.")).RecaptureRegisteredS0(admission);
+            throw new InvalidOperationException("Original Canon is absent; the legacy recapture bridge is retired.");
         }
 
         internal static CanonicalS0ObservationSnapshot ReapplyProtectedClockCanon(long movie, long native, string sessionDirectory, long origin,
             CanonicalInputEpoch controlOrigin, HollowKnightTAS.Runtime.Input.FullRunActionSetAdapter input,
             HollowKnightTAS.Runtime.Input.FullRunMouseBridge mouse, Action requireAdmission)
         {
-            var boundary = GetProtectedObservationBoundary();
-            if (!CanonicalClockApplyExperiment.Enabled) throw new InvalidOperationException("Clock D experiment is disabled.");
-            var self = instance!;
-            if (requireAdmission == null || self.protectedClockCanonScope != null) throw new InvalidOperationException("Clock Canon scope is absent or reentrant.");
-            using var scope = new CanonicalBoundaryMutationScope(requireAdmission);
-            scope.Enter(); self.protectedClockCanonScope = scope;
-            try {
-                RequireCanonicalMutationBoundary();
-                var after = (self.canonical ?? throw new InvalidOperationException("Original Canon is absent.")).RebindProtectedClock(boundary.Item1, requireAdmission);
-                GetProtectedObservationBoundary(); requireAdmission();
-                return after;
-            }
-            finally { self.protectedClockCanonScope = null; }
+            GetProtectedObservationBoundary();
+            throw new InvalidOperationException("Original Canon is absent; the legacy clock reapply bridge is retired.");
         }
 
         private void Inventory(string phase, long? movie = null, long? native = null)
         {
-            var objects = Resources.FindObjectsOfTypeAll<GameObject>()
-                .Where(go => go != null && go.scene.IsValid() && go.scene.isLoaded).ToArray();
+            if (report == null) return;
+            var objects = ResidentSceneMembership.LoadedGameObjects();
             if (objects.Length > 100000) throw new InvalidOperationException("Serial inventory exceeded object budget.");
             var components = objects.SelectMany(go => go.GetComponents<Component>()).Where(c => c != null).ToArray();
             var groups = objects.GroupBy(go => go.scene.name).OrderBy(g => g.Key, StringComparer.Ordinal)
@@ -557,6 +539,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private void RenderState(string phase)
         {
+            if (report == null) return;
             var color = RenderSettings.ambientLight;
             File.AppendAllText(report + ".render.jsonl", JsonConvert.SerializeObject(new {
                 phase, ordinal, engineFrame = Time.frameCount, activeScene = USceneManager.GetActiveScene().name,
@@ -619,25 +602,18 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private void Write(string phase, object? data)
         {
+            if (report == null) return;
             if (++rows > 256) throw new InvalidOperationException("Serial scene diagnostic budget exceeded.");
             File.AppendAllText(report, JsonConvert.SerializeObject(new { phase, ordinal,
                 engineFrame = Time.frameCount, data }) + "\n");
         }
 
-        [ThreadStatic] private static bool canonicalStartupAdmission;
+        [ThreadStatic] private static bool canonicalStartupAdmission = false;
         internal static void RequireCanonicalStartupAdmission()
         {
             if (!canonicalStartupAdmission) throw new InvalidOperationException("Canonical UI close is outside the admitted original pre-unload startup call.");
         }
-        private bool AdvanceCanonicalStartup()
-        {
-            if (canonicalStartupAdmission || transition == null || sourceUnloaded || !transition.IsFetchAllowed || !transition.IsActivationAllowed)
-                throw Fail("Canonical startup has no exact pre-unload loader admission.");
-            canonicalStartupAdmission = true;
-            try { return canonical == null || canonical.AdvanceStartup(); }
-            catch (Exception error) { throw Fail("Canonical startup rejected: " + error.GetType().Name + ": " + error.Message); }
-            finally { canonicalStartupAdmission = false; }
-        }
+
 
         private InvalidOperationException Fail(string message)
         {
@@ -649,7 +625,6 @@ namespace HollowKnightTAS.Runtime.FullRun
         public void Dispose()
         {
             instance = null;
-            canonical?.Dispose();
             USceneManager.sceneLoaded -= TargetLoaded;
             lightingHook.Dispose();
             transitionHook.Dispose();

@@ -20,6 +20,10 @@ namespace HollowKnightTAS.ClockPayload
         private static void RequireCheckpointClockObserverBoundary(bool importing)
         {
             RequireCheckpointRandomBoundary();
+            RequireClockObserverHealth(importing);
+        }
+        private static void RequireClockObserverHealth(bool importing)
+        {
             var mode = HktasClockBridge_GetFullRunMode();
             if (mode < 0 || mode > 2 || importing && mode != 0
                 || !HollowKnightTAS.Core.Movie.NativeExecutionProfile.SupportsSceneCheckpoints(

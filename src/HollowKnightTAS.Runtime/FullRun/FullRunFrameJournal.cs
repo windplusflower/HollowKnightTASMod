@@ -56,15 +56,23 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (failed || active.Count != 0 || completedFrames != nextFrame)
                 throw new InvalidOperationException("Full-run journal is not at a complete frame boundary.");
             if (pending.Count != 0) FlushSegment();
+            return ReadSnapshot(header, completedFrames);
+        }
+
+        // Boundary observation must not flush pending records or mutate the
+        // recording journal merely to establish the Movie-prefix identity.
+        internal MovieV2Document ReadSnapshot(MovieV2Header header, long completedFrames)
+        {
+            if (header == null) throw new ArgumentNullException(nameof(header));
+            if (failed || active.Count != 0 || completedFrames != nextFrame)
+                throw new InvalidOperationException("Full-run journal is not at a complete frame boundary.");
             var runs = new List<NativeFrameRun>();
             IReadOnlyList<GameInputSample>? previous = null;
             long repeat = 0;
             decimal previousFps = 50;
             long readFrames = 0;
-            foreach (var segment in segments)
+            foreach (var frame in ReadRecordedFrames())
             {
-                foreach (var frame in ReadSegment(segment))
-                {
                     if (frame.FrameIndex != readFrames)
                         Fail("Native frame segment index is missing or duplicated.");
                     if (previous != null && previousFps == frame.FramesPerSecond && Same(previous, frame.Samples)) repeat++;
@@ -78,7 +86,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                         repeat = 1;
                     }
                     readFrames++;
-                }
             }
             if (previous != null)
                 runs.Add(new NativeFrameRun(repeat, previous,
@@ -90,6 +97,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             // is returned when disk or source limits are exceeded.
             new MovieV2Codec().WriteCanonical(movie);
             return movie;
+        }
+
+        private IEnumerable<FrameRecord> ReadRecordedFrames()
+        {
+            foreach (var segment in segments) foreach (var frame in ReadSegment(segment)) yield return frame;
+            foreach (var frame in pending) yield return frame;
         }
 
         private void FlushSegment()

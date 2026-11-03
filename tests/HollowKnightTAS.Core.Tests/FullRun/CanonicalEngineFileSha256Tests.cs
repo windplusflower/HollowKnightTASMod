@@ -15,6 +15,16 @@ public sealed class CanonicalEngineFileSha256Tests
         if (!OperatingSystem.IsWindows()) Assert.Inconclusive("The pinned engine validator uses the Windows provider.");
     }
     [TestMethod]
+    public void ReusedAssetProviderHashesEachActualArrayAndRejectsUseAfterClose()
+    {
+        Windows();
+        using var hasher = new CanonicalEngineFileSha256.BufferHasher();
+        foreach (var value in new[] { Array.Empty<byte>(), Encoding.UTF8.GetBytes("shared asset"), new byte[250000] })
+            Assert.AreEqual(Convert.ToHexString(SHA256.HashData(value)).ToLowerInvariant(), hasher.Hex(value));
+        hasher.Dispose();
+        Assert.ThrowsExactly<ObjectDisposedException>(() => hasher.Hex(Array.Empty<byte>()));
+    }
+    [TestMethod]
     [DataRow("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")]
     [DataRow("abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")]
     public void Windows_provider_matches_known_sha256_vectors(string value, string expected)

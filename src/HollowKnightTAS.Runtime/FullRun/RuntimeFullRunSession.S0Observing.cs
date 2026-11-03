@@ -26,12 +26,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal bool ClockApplicationCompleted;
             internal CanonicalClockApplyExperiment? AppliedClock;
             internal CanonicalParkedBoundaryGuard? Parked;
-            internal readonly PlayerData OriginalBootstrapPlayer;
-            internal readonly GameManager.EnterSceneEvent? OriginalTitleMappingCallback;
             internal S0ObservationJob(string target, long movie, long origin, int samples, long native)
-            { Target = target; Movie = movie; Origin = origin; Samples = samples; LastNative = native;
-                OriginalBootstrapPlayer = PlayerData.instance ?? throw new InvalidOperationException("Original title PlayerData is absent before real save loading.");
-                OriginalTitleMappingCallback = CanonicalActualDExperiment.Enabled ? CanonicalSceneMappingBindings.RetainOriginalTitleCallback() : null; }
+            {
+                Target = target; Movie = movie; Origin = origin; Samples = samples; LastNative = native;
+                if (PlayerData.instance == null) throw new InvalidOperationException("Original title PlayerData is absent before real save loading.");
+            }
         }
 
         private Dictionary<string, string> S0ObservationCommand(IReadOnlyDictionary<string, string> fields)
@@ -50,7 +49,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         || target == "Menu_Title" || !UnityEngine.Application.CanStreamedLevelBeLoaded(target)
                         || !checkpointSaves.Descriptor.OriginalFileSha256.Keys.Any(name => name.StartsWith("user" + slot + ".", StringComparison.OrdinalIgnoreCase)))
                         throw new InvalidDataException("S0 observation needs a protected real save slot and a loadable world scene.");
-                    if (s0Observation != null || checkpointRestore != null || mode != "Replay" || !inputReady || movieFrame != 0
+                    if (s0Observation != null || mode != "Replay" || !inputReady || movieFrame != 0
                         || !clock.IsPaused || clock.IsFinished || input.ConsumedSamples != 0 || !movieInputNativeOrigin.HasValue || movieInputControlOrigin == null)
                         throw new InvalidOperationException("S0 observation requires fresh paused Movie zero with its actual StartInputAt origin.");
                     var job = new S0ObservationJob(target, movieFrame, movieInputNativeOrigin.Value, input.ConsumedSamples, frame);
@@ -148,7 +147,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     ["consumedSamplesAfter"] = input.ConsumedSamples.ToString(CultureInfo.InvariantCulture),
                     ["inputNativeOrigin"] = pending.Origin.ToString(CultureInfo.InvariantCulture),
                     ["boundaries"] = pending.Boundaries.ToString(CultureInfo.InvariantCulture),
-                    ["d1Passed"] = string.IsNullOrEmpty(pending.Error) ? "true" : "false", ["restoreQualified"] = "true", ["detail"] = pending.Error };
+                    ["d1Passed"] = "false", ["restoreQualified"] = "false", ["detail"] = pending.Error };
             });
         }
 
@@ -174,7 +173,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // attach zero leases to newly rebound action sets and call the
                 // original update, while never consuming the prepared Movie.
                 clock.SetFrameRate(50); input.SetNativeFrameActive(true);
-                if (LoadingSerialSceneProbe.ObserveNativeBoundary(0, native, sessionDirectory, movieInputNativeOrigin, movieInputControlOrigin, input, mouse))
+                if (LoadingSerialSceneProbe.ObserveNativeBoundary(this, 0, native))
                 {
                     job.Boundaries++;
                     WriteS0Preparation(job, "canonical-boundary");

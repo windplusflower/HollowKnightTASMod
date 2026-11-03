@@ -29,6 +29,8 @@ namespace HollowKnightTAS.ReferenceObserver
     {
         private ReferenceObserverSession? session;
 
+        public static int GetResidentRandomProducerAbi() => 1;
+
         public HollowKnightTASReferenceObserverMod()
             : base("HollowKnightTAS.ReferenceObserver")
         {
@@ -380,7 +382,7 @@ namespace HollowKnightTAS.ReferenceObserver
                 && inputSyncStart?.WaitOne(0) == true)
             {
                 inputSyncActive = true;
-                randomSyncRequest?.Set();
+                SignalRandomRequest(0);
             }
             if (!randomSynchronizationApplied
                 && randomSyncApplied?.WaitOne(0) == true)
@@ -620,7 +622,7 @@ namespace HollowKnightTAS.ReferenceObserver
                             recordingArmBoundaryFrameCount = Time.frameCount;
                             recordingArmBoundaryFramePhase = framePhase;
                             recordingArmBoundaryReached = true;
-                            recordingRandomSyncRequest?.Set();
+                            SignalRandomRequest(1);
                             WriteStatus(
                                 "waiting-for-recording-arm-release",
                                 string.Empty);
@@ -950,7 +952,7 @@ namespace HollowKnightTAS.ReferenceObserver
                     // input. Request it before advertising that input is safe;
                     // otherwise a fast physical edge can reach LateUpdate
                     // before the clock payload has acknowledged the snapshot.
-                    randomSyncRequest?.Set();
+                    SignalRandomRequest(0);
                     WriteStatus(
                         "waiting-for-external-rng-sync",
                         string.Empty);
@@ -1356,6 +1358,22 @@ namespace HollowKnightTAS.ReferenceObserver
                     + exception.Message);
                 return false;
             }
+        }
+
+        private void SignalRandomRequest(int kind)
+        {
+            // Preserve the original disposed/null sender behavior. Actual
+            // requests go through the same authority as Runtime full runs.
+            if ((kind == 0 ? randomSyncRequest : recordingRandomSyncRequest) == null) return;
+            var matches = AppDomain.CurrentDomain.GetAssemblies().Where(assembly => assembly.GetName().Name == "HollowKnightTAS.ClockPayload").ToArray();
+            if (matches.Length != 1) throw new InvalidOperationException("Actual random producer payload is absent or ambiguous.");
+            var controller = TryResolveExternalClockControllerType();
+            if (controller == null || controller.Assembly != matches[0]) throw new InvalidOperationException("Actual random producer payload identity changed.");
+            var abi = controller.GetMethod("GetResidentRandomProducerAbi", BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null);
+            var request = controller.GetMethod("RequestResidentRandom", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(int) }, null);
+            if (abi == null || abi.ReturnType != typeof(int) || request == null || request.ReturnType != typeof(void)
+                || (int)abi.Invoke(null, null)! != 1) throw new InvalidOperationException("Update ClockPayload: shared random producer admission is unavailable.");
+            request.Invoke(null, new object[] { kind });
         }
 
         private Type? TryResolveExternalClockControllerType()

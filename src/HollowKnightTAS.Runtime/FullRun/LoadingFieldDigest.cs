@@ -42,6 +42,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Func<Delegate, bool>? observerCallback;
         private readonly Action<object, FieldInfo?, int, object?, string>? slotObservation;
         private readonly Func<object?, bool>? observeSlotValue;
+        // Same-process mutation guards need buckets, cached hashes, unused
+        // capacity and every alias. The normal cross-process digest keeps its
+        // existing logical collection representation unless explicitly opted in.
+        private readonly bool rawCollectionFields;
+        private readonly Func<Type, bool>? rawCollectionType;
         internal bool Capturing { get; private set; }
         private readonly Dictionary<Type, FieldInfo[]> fieldCache = new Dictionary<Type, FieldInfo[]>();
         private readonly Dictionary<Type, TypeShape> typeShapes = new Dictionary<Type, TypeShape>();
@@ -75,13 +80,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             Func<Delegate, bool>? observerCallback = null, bool? compiledFieldReaders = null,
             Func<Type, bool>? packedArrayElement = null, Func<FieldInfo, bool>? directFloatingField = null,
             Action<object, FieldInfo?, int, object?, string>? slotObservation = null,
-            Func<object?, bool>? observeSlotValue = null, bool sharedFieldReaders = false)
+            Func<object?, bool>? observeSlotValue = null, bool sharedFieldReaders = false, bool rawCollectionFields = false,
+            Func<Type, bool>? rawCollectionType = null)
         {
             this.reference = reference; this.nativeBase = nativeBase;
             this.fieldIdentity = fieldIdentity; this.observerCallback = observerCallback;
             this.directFloatingField = directFloatingField;
             this.slotObservation = slotObservation;
             this.observeSlotValue = observeSlotValue;
+            this.rawCollectionFields = rawCollectionFields;
+            this.rawCollectionType = rawCollectionType;
             fieldReader = new LoadingFieldReader(compiledFieldReaders
                 ?? Environment.GetEnvironmentVariable("HKTAS_LOADING_ORACLE_REFLECTION_FIELDS") != "1", sharedAccessors: sharedFieldReaders);
             if (packedArrayElement != null) packedArrays = new LoadingPackedArrayDigest(packedArrayElement, Fields, typeIdentity.Bind);
@@ -239,6 +247,36 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static int DecimalDigits(int value)
         { var digits = 1; for (; value >= 10; value /= 10) digits++; return digits; }
 
+        private static int UnsignedDecimalDigits(ulong value)
+        { var digits = 1; for (; value >= 10; value /= 10) digits++; return digits; }
+
+        private static int SignedDecimalLength(long value)
+            => value < 0 ? 1 + UnsignedDecimalDigits((ulong)(-(value + 1)) + 1)
+                : UnsignedDecimalDigits((ulong)value);
+
+        // Incoming-reference walks still read and observe every scalar. Their
+        // token budget needs the invariant representation's exact length, but
+        // does not consume the formatted string or its hash.
+        private bool AppendReferencePrimitive(object value)
+        {
+            int length;
+            switch (value) {
+                case bool boolean: length = boolean ? 4 : 5; break;
+                case char _: length = 1; break;
+                case int signed: length = SignedDecimalLength(signed); break;
+                case uint unsigned: length = UnsignedDecimalDigits(unsigned); break;
+                case long signed: length = SignedDecimalLength(signed); break;
+                case ulong unsigned: length = UnsignedDecimalDigits(unsigned); break;
+                case short signed: length = SignedDecimalLength(signed); break;
+                case ushort unsigned: length = UnsignedDecimalDigits(unsigned); break;
+                case byte unsigned: length = UnsignedDecimalDigits(unsigned); break;
+                case sbyte signed: length = SignedDecimalLength(signed); break;
+                default: return false;
+            }
+            ReferenceTokenLength(length);
+            return true;
+        }
+
         internal string DiagnosticPath => CurrentPath;
         internal string DiagnosticRoot => rootPath;
 
@@ -274,6 +312,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 else foreach (var part in decimal.GetBits(m)) Token(part.ToString("x8"));
                 return;
             }
+            if (referenceOnly && AppendReferencePrimitive(value)) return;
             var shape = Shape(type);
             if (shape.Enum)
             {
@@ -334,6 +373,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Token(packedArrays!.Capture(array, layout));
                     return;
                 }
+                if (referenceOnly && AppendReferenceArray(array, depth)) return;
                 for (var i = 0; i < array.Length; i++) {
                     var element = array.GetValue(i);
                     if (slotObservation != null && (observeSlotValue?.Invoke(element) ?? true))
@@ -353,12 +393,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 return;
             }
-            if (shape.Dictionary)
+            if (shape.Dictionary && !rawCollectionFields && !(rawCollectionType?.Invoke(type) ?? false))
             {
                 AppendDictionary(value, depth);
                 return;
             }
-            if (shape.HashSet)
+            if (shape.HashSet && !rawCollectionFields && !(rawCollectionType?.Invoke(type) ?? false))
             {
                 AppendHashSet(value, depth);
                 return;
@@ -370,6 +410,54 @@ namespace HollowKnightTAS.Runtime.FullRun
                 try { AppendField(value, field, depth + 1); }
                 finally { pathSegments.RemoveAt(pathSegments.Count - 1); }
             }
+        }
+
+        private bool AppendReferenceArray(Array array, int depth)
+        {
+            switch (array) {
+                // CLR array compatibility also admits some enums and signed /
+                // unsigned pairs. Their original type tokens must not change.
+                case byte[] values when array.GetType() == typeof(byte[]): AppendReferenceElements(values, depth, AppendByteValue); return true;
+                case int[] values when array.GetType() == typeof(int[]): AppendReferenceElements(values, depth, AppendIntValue); return true;
+                case float[] values when array.GetType() == typeof(float[]): AppendReferenceElements(values, depth, AppendSingleBits); return true;
+                case double[] values when array.GetType() == typeof(double[]): AppendReferenceElements(values, depth, AppendDoubleBits); return true;
+                default: return false;
+            }
+        }
+
+        private void AppendReferenceElements<T>(T[] array, int depth, Action<T, int> append) where T : struct
+        {
+            for (var index = 0; index < array.Length; index++) {
+                var value = array[index];
+                var path = IndexPath(index);
+                if (slotObservation != null) {
+                    // Match Array.GetValue's one boxed copy. The predicate and
+                    // observer see that same copy, before the scalar is read.
+                    object boxed = value;
+                    if (observeSlotValue?.Invoke(boxed) ?? true)
+                        slotObservation(array, null, index, boxed, CurrentPath + path);
+                    value = (T)boxed;
+                }
+                pathSegments.Add(path);
+                try { append(value, depth + 1); }
+                finally { pathSegments.RemoveAt(pathSegments.Count - 1); }
+            }
+        }
+
+        private void AppendByteValue(byte value, int depth)
+        {
+            if (++nodes > MaximumNodes || depth > MaximumDepth)
+                throw new InvalidOperationException("P0 field digest graph budget exceeded at " + CurrentPath);
+            Token("System.Byte");
+            ReferenceTokenLength(UnsignedDecimalDigits(value));
+        }
+
+        private void AppendIntValue(int value, int depth)
+        {
+            if (++nodes > MaximumNodes || depth > MaximumDepth)
+                throw new InvalidOperationException("P0 field digest graph budget exceeded at " + CurrentPath);
+            Token("System.Int32");
+            ReferenceTokenLength(SignedDecimalLength(value));
         }
 
         private void AppendField(object owner, FieldInfo field, int depth)

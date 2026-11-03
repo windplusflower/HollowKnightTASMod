@@ -75,5 +75,17 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
                 || BitConverter.ToInt64(native, 256) != CaptureUnityFrameCount || observedUnityFrame != CaptureUnityFrameCount)
                 throw new InvalidDataException("Checkpoint clock observer native/Unity boundary differs.");
         }
+
+        public void RequireFrameNativeReadback(byte[] native, long expectedNative, int observedUnityFrame)
+        {
+            // RFC1 captures paused/resume, callback phase, and the complete
+            // TimeManager body. It is only a witness and cannot be imported.
+            if (native == null || native.Length != 1192 || expectedNative < 0 || BitConverter.ToUInt32(native, 0) != 0x31434652
+                || BitConverter.ToInt32(native, 4) != 1 || BitConverter.ToInt32(native, 8) != native.Length
+                || (BitConverter.ToInt32(native, 12) != 1 && BitConverter.ToInt32(native, 12) != 3) || BitConverter.ToUInt32(native, 1188) != 0
+                || BitConverter.ToUInt64(native, 80) != (ulong)expectedNative || BitConverter.ToInt32(native, 88) != AdvanceSequence
+                || BitConverter.ToInt64(native, 256) != CaptureUnityFrameCount || observedUnityFrame != CaptureUnityFrameCount)
+                throw new InvalidDataException("Frame clock observer native/Unity readback differs.");
+        }
     }
 }

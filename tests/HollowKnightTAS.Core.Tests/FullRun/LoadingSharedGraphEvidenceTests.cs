@@ -93,8 +93,12 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
         var digestType = assembly.GetType("HollowKnightTAS.Runtime.FullRun.LoadingFieldDigest", true)!;
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
         var oracle = RuntimeHelpers.GetUninitializedObject(oracleType);
-        var digest = Activator.CreateInstance(digestType, flags, null,
-            new object?[] { (Func<object,string?>)(_ => null), (Func<Type,bool>)(_ => false), null, null, false, null, null, null, null }, null)!;
+        var ctor = digestType.GetConstructors(flags).Single();
+        var arguments = ctor.GetParameters().Select(parameter => parameter.Name switch {
+            "reference" => (object)(Func<object,string?>)(_ => null), "nativeBase" => (Func<Type,bool>)(_ => false),
+            "compiledFieldReaders" => false, _ when parameter.HasDefaultValue => parameter.DefaultValue,
+            _ => throw new InvalidOperationException("Unhandled required digest dependency: " + parameter.Name) }).ToArray();
+        var digest = ctor.Invoke(arguments);
         oracleType.GetField("fields", flags)!.SetValue(oracle, digest);
         oracleType.GetField("boundaryCapture", flags)!.SetValue(oracle, false);
         oracleType.GetField("suffixCapture", flags)!.SetValue(oracle, true);

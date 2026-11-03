@@ -19,6 +19,7 @@ namespace HollowKnightTAS.ClockPayload
         private readonly IntPtr managerSlot;
         private readonly IntPtr manager;
         private bool checkpointImported;
+        private ulong residentImportedToken;
         [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ReadProcessMemory(
             IntPtr process, IntPtr address, [Out] byte[] buffer, UIntPtr size, out UIntPtr read);
@@ -95,10 +96,23 @@ namespace HollowKnightTAS.ClockPayload
         {
             if (checkpointImported || source == null || source.Length != 4 || source.All(word => word == 0))
                 throw new InvalidOperationException("Particle random continuation requires one valid source state.");
+            checkpointImported = true;
+            RestoreWords(source);
+        }
+        internal void RestoreResident(uint[] source, ulong token)
+        {
+            ClockController.RequireResidentClockBoundary(token, true);
+            if (token == 0 || token <= residentImportedToken || source == null || source.Length != 4 || source.All(word => word == 0))
+                throw new InvalidOperationException("Particle continuation requires one valid resident epoch.");
+            residentImportedToken = token;
+            RestoreWords(source);
+            ClockController.RequireResidentClockBoundary(token, true);
+        }
+        private void RestoreWords(uint[] source)
+        {
             Capture(); // Retain the actual target manager/slot, never a source address.
             var beforeHeader = Read(manager, 64);
             var bytes = new byte[16]; Buffer.BlockCopy(source, 0, bytes, 0, bytes.Length);
-            checkpointImported = true;
             if (!WriteProcessMemory(GetCurrentProcess(), IntPtr.Add(manager, 192), bytes, (UIntPtr)bytes.Length, out var written)
                 || written.ToUInt64() != (ulong)bytes.Length || !Capture().SequenceEqual(source)
                 || !Read(manager, 64).SequenceEqual(beforeHeader))

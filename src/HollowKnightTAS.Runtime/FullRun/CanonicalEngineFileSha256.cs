@@ -5,8 +5,7 @@ using System.Security.Cryptography;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
-    // Only the repeatedly validated engine file uses the Windows SHA-256
-    // provider. No file/hash cache or wider native validation scope is added.
+    // Windows SHA-256 for the pinned engine and independently read asset images.
     internal static class CanonicalEngineFileSha256
     {
         [DllImport("bcrypt.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
@@ -23,9 +22,34 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static extern int BCryptDestroyHash(IntPtr hash);
         [DllImport("bcrypt.dll")]
         private static extern int BCryptCloseAlgorithmProvider(IntPtr algorithm, uint flags);
+        [DllImport("bcrypt.dll", ExactSpelling = true)]
+        private static extern int BCryptHash(IntPtr algorithm, IntPtr secret, uint secretLength,
+            [In] byte[] input, uint length, [Out] byte[] digest, uint digestLength);
         private static void Require(int status)
         {
             if (status != 0) throw new CryptographicException("Pinned engine SHA-256 provider failed: 0x" + unchecked((uint)status).ToString("x8"));
+        }
+        internal sealed class BufferHasher : IDisposable
+        {
+            private IntPtr algorithm;
+            internal BufferHasher()
+            {
+                Require(BCryptOpenAlgorithmProvider(out algorithm, "SHA256", null, 0));
+                if (algorithm == IntPtr.Zero) throw new CryptographicException("SHA-256 algorithm is absent.");
+            }
+            internal string Hex(byte[] bytes)
+            {
+                if (algorithm == IntPtr.Zero) throw new ObjectDisposedException(nameof(BufferHasher));
+                var digest = new byte[32];
+                Require(BCryptHash(algorithm, IntPtr.Zero, 0, bytes, (uint)bytes.Length, digest, (uint)digest.Length));
+                return BitConverter.ToString(digest).Replace("-", "").ToLowerInvariant();
+            }
+            public void Dispose()
+            {
+                if (algorithm == IntPtr.Zero) return;
+                var owned = algorithm; algorithm = IntPtr.Zero;
+                Require(BCryptCloseAlgorithmProvider(owned, 0));
+            }
         }
         internal static byte[] ComputeHash(Stream stream)
         {

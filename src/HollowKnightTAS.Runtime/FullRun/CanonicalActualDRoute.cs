@@ -15,8 +15,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Invalid experimental source boundary ordinal.");
             return value;
         }
-        public int Ordinal;
-        public long MovieFrame;
+        public int Ordinal = 0;
+        public long MovieFrame = 0;
         public string SourceScene = "", TargetScene = "", ContinuationSha256 = "";
         public SortedDictionary<string, string> LoadFields = new SortedDictionary<string, string>(StringComparer.Ordinal);
         private static readonly string[] Names = { "AlwaysUnloadUnusedAssets", "EntryDelay", "EntryGateName", "HeroLeaveDirection",

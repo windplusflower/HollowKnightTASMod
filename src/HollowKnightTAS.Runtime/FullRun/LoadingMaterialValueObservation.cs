@@ -26,6 +26,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             ?? throw new MissingFieldException("UnityEngine.Object.m_CachedPtr");
 
         internal void BeginSample() { textures = null; textureResources = null; }
+        internal string ReadPropertyName(int id) => Name(id);
 
         internal LoadingMaterialValueObservation()
         {
@@ -106,7 +107,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             textures ??= Resources.FindObjectsOfTypeAll<Texture>().Where(value => value != null)
                 .GroupBy(value => value.GetInstanceID()).ToDictionary(group => group.Key, group => group.First());
             if (!textures.TryGetValue(instance, out var texture))
-                throw new InvalidOperationException("P0 material texture reference is not loaded.");
+                return null;
             return texture;
         }
 
@@ -129,7 +130,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
             }
             if (!textureResources.TryGetValue(resource, out var result))
-                throw new InvalidOperationException("P0 material renderer texture resource is not loaded.");
+                return null;
             return result;
         }
 

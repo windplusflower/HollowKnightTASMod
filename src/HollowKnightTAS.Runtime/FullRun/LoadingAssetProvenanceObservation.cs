@@ -26,14 +26,21 @@ namespace HollowKnightTAS.Runtime.FullRun
             [FieldOffset(8)] internal long Object;
         }
 
-        private readonly Dictionary<int, object> cache = new Dictionary<int, object>();
+        internal sealed class Origin
+        {
+            public string kind { get; }
+            public string sourcePath { get; }
+            public long localIdentifier { get; }
+            internal Origin(string kind,string path,long id) { this.kind=kind; sourcePath=path; localIdentifier=id; }
+        }
+        private readonly Dictionary<int, Origin> cache = new Dictionary<int, Origin>();
         private IntPtr engine;
         private TryLock? tryLock;
         private Unlock? unlock;
         private Lookup? lookup;
         internal void Clear() => cache.Clear();
 
-        internal object Capture(int instance)
+        internal Origin Capture(int instance)
         {
             if (instance == 0) throw new InvalidOperationException("P0 asset provenance requires a live instance.");
             if (cache.TryGetValue(instance, out var known)) return known;
@@ -52,7 +59,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var mutex = IntPtr.Add(manager, 184);
             // Bounded observation: a busy resource manager is not a closed checkpoint.
             if (!tryLock!(mutex)) throw new InvalidOperationException("P0 persistent resource manager is busy.");
-            object result;
+            Origin result;
             try
             {
                 var remapper = Pointer(Read(IntPtr.Add(manager, 88), 8), 0);
@@ -60,7 +67,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // Both this routine and its hash-map lookup at 0x905a50 have no
                 // writes except the caller-owned output/stack (matching PDB + disassembly).
                 if (!lookup!(remapper, instance, out var source))
-                    result = new { kind = "unmapped", sourcePath = "", localIdentifier = 0L };
+                    result = new Origin("unmapped","",0);
                 else
                 {
                     var array = Read(IntPtr.Add(manager, 352), 32);
@@ -79,7 +86,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var bytes = Read(characters, checked((int)length + 1));
                     if (bytes[(int)length] != 0) throw new InvalidOperationException("P0 resource pathname is not terminated.");
                     var sourcePath = new UTF8Encoding(false, true).GetString(bytes, 0, (int)length);
-                    result = new { kind = "serialized", sourcePath, localIdentifier = source.Object };
+                    result = new Origin("serialized",sourcePath,source.Object);
                 }
             }
             finally { unlock!(mutex); }

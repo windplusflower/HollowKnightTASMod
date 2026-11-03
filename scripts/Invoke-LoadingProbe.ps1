@@ -14,6 +14,8 @@ param(
     [switch] $SynchronousFetch,
     [switch] $CanonicalStartupClock,
     [switch] $RecordInputs,
+    [switch] $InputRouteRecording,
+    [switch] $InteractiveRouteAuthoring,
     [switch] $GameplayOracle,
     [string] $OracleWindows = '',
     [switch] $NativeScheduler,
@@ -57,6 +59,27 @@ param(
     [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
 )
 $ErrorActionPreference = 'Stop'
+if ($InputRouteRecording -and ($Runs -ne 1 -or -not $RecordInputs -or -not $CanonicalBoundary -or -not $CanonicalPhaseOneTrace -or
+    $InteractiveRouteAuthoring -or $CanonicalD0Route -or $S0ObservationTarget -or $ClockCarryExperiment -or $ClockApplySource -or $RecanonicalizeAppliedClock -or
+    $ActualDExperiment -or $ActualDSuffix -or $ActualDSuffixToEnd -or $ActualDStage -or $null -ne $ActualDRelayState -or
+    $CheckpointPrototype -or $CheckpointAfterFrame -ne 0 -or $CheckpointWindows -or $ExportVideo -or $DerivedFixtureManifest -or $PhysicsFollowOn -or
+    $Light -or $RandomCalls -or $EngineLayout -or $ClockRoundTrip -or $NativePhysicsOnly -or $NativePhysicsDetails -or
+    $DisablePrimaryProbe -or $FieldDetails -or $BoundaryInventory -or $OracleWindows -or $EndpointHoldSeconds -gt 0 -or
+    $FirstFrame -ne 0 -or $EndFrame -lt 6 -or $EndFrame -gt 10000 -or [IO.Path]::GetExtension($Movie) -ne '.hktaspack')) {
+    throw 'InputRouteRecording requires one protected canonical Phase 1 native recording of 6..10000 frames, without D0, restore, checkpoint, export or extra diagnostic modes.'
+}
+if ($InteractiveRouteAuthoring -and ($Runs -ne 1 -or -not $CanonicalBoundary -or -not $CanonicalPhaseOneTrace -or
+    $RecordInputs -or $S0ObservationTarget -or $ClockCarryExperiment -or $ClockApplySource -or $RecanonicalizeAppliedClock -or
+    $ActualDExperiment -or $ActualDSuffix -or $ActualDSuffixToEnd -or $ActualDStage -or $null -ne $ActualDRelayState -or
+    $CheckpointPrototype -or $ExportVideo -or $CanonicalD0Route -or $DerivedFixtureManifest -or $PhysicsFollowOn -or
+    $Light -or $RandomCalls -or $EngineLayout -or $ClockRoundTrip -or $NativePhysicsOnly -or $NativePhysicsDetails -or
+    $DisablePrimaryProbe -or $FieldDetails -or $BoundaryInventory -or $OracleWindows -or $EndpointHoldSeconds -gt 0 -or
+    $FirstFrame -ne 0 -or [IO.Path]::GetExtension($Movie) -ne '.hktaspack')) {
+    throw 'InteractiveRouteAuthoring requires one protected canonical Phase 1 package route, with no recording, restoration, checkpoint, export or extra diagnostic mode.'
+}
+if ($InteractiveRouteAuthoring -and $PSVersionTable.PSVersion -lt [version]'7.4') {
+    throw 'InteractiveRouteAuthoring requires PowerShell 7.4 or newer for child-only environment isolation.'
+}
 if ($ActualDSuffixToEnd -and (-not $ActualDExperiment -or -not $ActualDSuffix -or -not $CanonicalBoundary)) {
     throw 'Full Movie suffix requires the protected canonical actual-D route.'
 }
@@ -170,7 +193,7 @@ $phaseRoot = 'artifacts/scene-checkpoints/' + $phaseName
 $ownedRoot = [IO.Path]::GetFullPath((Join-Path $repo $phaseRoot)) + [IO.Path]::DirectorySeparatorChar
 if (-not $outputRoot.StartsWith($ownedRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "Output must be under $phaseRoot/." }
 if (Test-Path -LiteralPath $outputRoot) { throw 'Choose a fresh evidence directory.' }
-if (Get-Process hollow_knight,HollowKnightTAS.Companion,StudioScenarioHarness -ErrorAction SilentlyContinue) { throw 'A game or Studio session is already running.' }
+if (Get-Process hollow_knight,HollowKnightTAS.Companion,StudioScenarioHarness,WorldObservationHarness -ErrorAction SilentlyContinue) { throw 'A game or Studio session is already running.' }
 $install = 'D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/Managed/Mods/HollowKnightTAS'
 $modRoot = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($install))
 $modQuarantine = Join-Path (Join-Path $modRoot 'disabled') ('__HKTAS_VanillaProbe_' + [Guid]::NewGuid().ToString('N'))
@@ -180,6 +203,8 @@ $modIsolationStatus = 'not-requested'
 $companion = Join-Path $install 'Companion/win-x64'
 $clockRoot = Join-Path $companion 'ClockStartup'
 $harnessBuild = Join-Path $repo 'scripts/StudioScenarioHarness/bin/Release/net8.0-windows10.0.19041.0/win-x64'
+$hostName = if ($InteractiveRouteAuthoring) { 'WorldObservationHarness' } else { 'StudioScenarioHarness' }
+$hostBuild = if ($InteractiveRouteAuthoring) { Join-Path $repo 'scripts/WorldObservationHarness/bin/Release/net8.0-windows10.0.19041.0/win-x64' } else { $harnessBuild }
 $bundleTool = Join-Path $repo 'src/HollowKnightTAS.BundleTool/bin/Release/net8.0/HollowKnightTAS.BundleTool.dll'
 $runtime = Join-Path $repo 'src/HollowKnightTAS.Runtime/bin/Release/HollowKnightTAS.dll'
 $runtimeCore = Join-Path $repo 'src/HollowKnightTAS.Runtime/bin/Release/HollowKnightTAS.Core.dll'
@@ -188,7 +213,7 @@ $clockBridge = if ($ClockBridgePath) { [IO.Path]::GetFullPath($ClockBridgePath) 
     else { Join-Path $repo 'artifacts/scene-checkpoints/p0/native-clock-build/HollowKnightTAS.ClockBridge.dll' }
 if ($CanonicalBoundary -or $CheckpointPrototype) {
     . (Join-Path $PSScriptRoot 'Assert-ClockBridgeExports.ps1')
-    Assert-ClockBridgeExports -Path $clockBridge -RequireContactImpulsePolicy:$CanonicalBoundary
+    Assert-ClockBridgeExports -Path $clockBridge -RequireContactImpulsePolicy:$CanonicalBoundary -RequireResidentBoundary:$SerialScenes
 }
 $injectorBuild = Join-Path $repo 'src/HollowKnightTAS.ClockInjector/bin/Release/net8.0-windows/win-x64'
 $injectorFiles = @('HollowKnightTAS.ClockInjector.exe','HollowKnightTAS.ClockInjector.dll','HollowKnightTAS.ClockInjector.deps.json','HollowKnightTAS.ClockInjector.runtimeconfig.json')
@@ -216,9 +241,13 @@ $usesClockCandidate = $true
 $clockCandidateFiles = @('HollowKnightTAS.ClockPayload.dll','clock-build-manifest-v1.json','clock-build-whitelist-v1.json')
 if ($stageCompleteCandidate) { $clockCandidateFiles += @('HollowKnightTAS.ClockBridge.dll') + $injectorFiles }
 $saveRoot = Join-Path $env:USERPROFILE 'AppData/LocalLow/Team Cherry/Hollow Knight'
-$hostFiles = @('StudioScenarioHarness.exe','StudioScenarioHarness.dll','StudioScenarioHarness.deps.json','StudioScenarioHarness.runtimeconfig.json')
-foreach ($name in $hostFiles) { if (Test-Path -LiteralPath (Join-Path $companion $name)) { throw "Existing test host: $name" } }
-foreach ($path in @($runtime,$runtimeCore,$bundleTool,$Movie) + @($hostFiles | ForEach-Object { Join-Path $harnessBuild $_ })) {
+$hostFiles = @('.exe','.dll','.deps.json','.runtimeconfig.json' | ForEach-Object { $hostName + $_ })
+foreach ($testHost in @('StudioScenarioHarness','WorldObservationHarness')) {
+    foreach ($suffix in @('.exe','.dll','.deps.json','.runtimeconfig.json')) {
+        if (Test-Path -LiteralPath (Join-Path $companion ($testHost + $suffix))) { throw "Existing test host: $testHost$suffix" }
+    }
+}
+foreach ($path in @($runtime,$runtimeCore,$bundleTool,$Movie) + @($hostFiles | ForEach-Object { Join-Path $hostBuild $_ })) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required file missing: $path" }
 }
 foreach ($entry in $profileCandidateFiles) {
@@ -227,6 +256,21 @@ foreach ($entry in $profileCandidateFiles) {
 if ((Get-FileHash -LiteralPath $runtimeCore -Algorithm SHA256).Hash -ne
     (Get-FileHash -LiteralPath (Join-Path $harnessBuild 'HollowKnightTAS.Core.dll') -Algorithm SHA256).Hash) {
     throw 'Runtime and Studio harness Core assemblies differ. Build both candidates before the protected probe.'
+}
+if ($InteractiveRouteAuthoring -and ((Get-FileHash -LiteralPath $runtimeCore -Algorithm SHA256).Hash -ne
+    (Get-FileHash -LiteralPath (Join-Path $hostBuild 'HollowKnightTAS.Core.dll') -Algorithm SHA256).Hash -or
+    (Get-FileHash -LiteralPath (Join-Path $harnessBuild 'HollowKnightTAS.Companion.dll') -Algorithm SHA256).Hash -ne
+    (Get-FileHash -LiteralPath (Join-Path $hostBuild 'HollowKnightTAS.Companion.dll') -Algorithm SHA256).Hash)) {
+    throw 'Interactive host Core/Companion differ from the candidate. Build the interactive host against the current candidate before launch.'
+}
+if ($InteractiveRouteAuthoring) {
+    $routeHostConfig = Get-Content -LiteralPath (Join-Path $hostBuild ($hostName + '.runtimeconfig.json')) -Raw | ConvertFrom-Json
+    $routeStudioConfig = Get-Content -LiteralPath (Join-Path $companion 'HollowKnightTAS.Companion.runtimeconfig.json') -Raw | ConvertFrom-Json
+    $routeHostFrameworks = @($routeHostConfig.runtimeOptions.includedFrameworks | ForEach-Object { $_.name + ':' + $_.version })
+    $routeStudioFrameworks = @($routeStudioConfig.runtimeOptions.includedFrameworks | ForEach-Object { $_.name + ':' + $_.version })
+    if ($routeHostFrameworks.Count -ne 2 -or ($routeHostFrameworks -join ';') -ne ($routeStudioFrameworks -join ';')) {
+        throw 'Build the interactive host self-contained against the exact installed shared runtime version before launch.'
+    }
 }
 if ($stageCompleteCandidate) {
     foreach ($name in $injectorFiles) { if (-not (Test-Path -LiteralPath (Join-Path $injectorBuild $name) -PathType Leaf)) { throw "Required injector file missing: $name" } }
@@ -254,6 +298,7 @@ function Read-SaveAudit {
 $before = Read-SaveAudit
 [IO.File]::WriteAllText((Join-Path $outputRoot 'saves-before.json'), $before)
 $hostProcess = $null
+$lastLaunchedDestination = $null
 try {
     Isolate-OtherMods
     Copy-Item -LiteralPath $runtime -Destination (Join-Path $install 'HollowKnightTAS.dll')
@@ -321,7 +366,7 @@ try {
         if ($stageCompleteCandidate) { $whitelist.bridgeSha256 = $bridgeHash }
         [IO.File]::WriteAllText($whitelistPath, ($whitelist | ConvertTo-Json -Depth 8))
     }
-    foreach ($name in $hostFiles) { Copy-Item -LiteralPath (Join-Path $harnessBuild $name) -Destination (Join-Path $companion $name) }
+    foreach ($name in $hostFiles) { Copy-Item -LiteralPath (Join-Path $hostBuild $name) -Destination (Join-Path $companion $name) }
     & dotnet $bundleTool sign (Join-Path $repo '.local/signing/companion-private.json') $install (Join-Path $install 'companion.manifest.json')
     if ($LASTEXITCODE -ne 0) { throw 'Candidate signature failed.' }
     & dotnet $bundleTool verify (Join-Path $repo '.local/signing/companion-public.json') $install (Join-Path $install 'companion.manifest.json')
@@ -353,6 +398,7 @@ try {
         if ($SynchronousFetch) { $arguments += '--probe-synchronous-fetch' }
         if ($CanonicalStartupClock) { $arguments += '--probe-canonical-startup-clock' }
         if ($RecordInputs) { $arguments += '--probe-record-inputs' }
+        if ($InputRouteRecording) { $arguments += '--probe-input-route-recording' }
         if ($GameplayOracle) { $arguments += '--probe-gameplay-oracle' }
         if ($OracleWindows) { $arguments += ('--probe-oracle-windows={0}' -f $OracleWindows) }
         if ($NativeScheduler) { $arguments += '--probe-native-scheduler' }
@@ -393,12 +439,49 @@ try {
         if ($EndpointHoldSeconds -gt 0) { $arguments += ('--probe-hold-seconds={0}' -f $EndpointHoldSeconds) }
         if ($DisableLegacyCalibration) { $arguments += '--probe-disable-legacy-calibration' }
         if ($RandomCalls) { $arguments += @('--probe-random-calls', "--probe-call-first=$CallFirst", "--probe-call-end=$CallEnd") }
+        $hostStartOptions = @{}
+        if ($InteractiveRouteAuthoring) {
+            $arguments = @('--mode=interactive', ('--fixture="{0}"' -f [IO.Path]::GetFullPath($Movie)),
+                ('--output="{0}"' -f $destination), ('--bundle="{0}"' -f $clockRoot))
+            # These variables normally belong to RunLoadingProbeAsync. Scope
+            # them to this child; the caller environment is never modified.
+            $routeEnvironment = @{}
+            foreach ($key in @('HKTAS_LOADING_GAMEPLAY_ORACLE','HKTAS_LOADING_NATIVE_SCHEDULER',
+                'HKTAS_LOADING_NATIVE_PHYSICS','HKTAS_LOADING_SERIAL_BOUNDARY_ONLY','HKTAS_LOADING_CANONICAL_BOUNDARY',
+                'HKTAS_LOADING_CANONICAL_PHASE1_TRACE','HKTAS_LOADING_CANONICAL_ROUTE_DISCOVERY',
+                'HKTAS_LOADING_VIRTUAL_AUDIO','HKTAS_LOADING_ISOLATED_ONLINE','HKTAS_LOADING_CANONICAL_PARTICLES',
+                'HKTAS_LOADING_VERIFY_ONLINE','HKTAS_LOADING_SYNCHRONOUS_FETCH','HKTAS_LOADING_CANONICAL_STARTUP_CLOCK',
+                'HKTAS_LOADING_MOD_WALL_CLOCK','HKTAS_LOADING_SERIAL_SCENES','HKTAS_LOADING_DISABLE_LEGACY_CALIBRATION',
+                'HKTAS_SCENE_CHECKPOINT_EXPERIMENT')) { $routeEnvironment[$key] = '1' }
+            foreach ($key in @('HKTAS_LOADING_PROBE','HKTAS_LOADING_ORACLE_WINDOWS','HKTAS_LOADING_NATIVE_PHYSICS_ONLY','HKTAS_LOADING_NATIVE_PHYSICS_DETAILS',
+                'HKTAS_LOADING_BOUNDARY_INVENTORY','HKTAS_LOADING_S0_OBSERVING','HKTAS_LOADING_CLOCK_APPLY_EXPERIMENT',
+                'HKTAS_LOADING_CLOCK_APPLY_SOURCE','HKTAS_LOADING_ACTUAL_D_EXPERIMENT','HKTAS_LOADING_ACTUAL_D_SOURCE',
+                'HKTAS_LOADING_ACTUAL_D_ORDINAL','HKTAS_LOADING_ACTUAL_D_SUFFIX_TO_END','HKTAS_LOADING_CANONICAL_D0_ROUTE',
+                'HKTAS_LOADING_PROBE_RECORD_INPUTS','HKTAS_LOADING_ORACLE_FIELD_DETAILS','HKTAS_LOADING_PROBE_LIGHT',
+                'HKTAS_LOADING_PROBE_CALLS','HKTAS_LOADING_PROBE_CALL_FIRST','HKTAS_LOADING_PROBE_CALL_END',
+                'HKTAS_LOADING_PROBE_CALL_CONTINUOUS','HKTAS_LOADING_PROBE_CHECKPOINT_K',
+                'HKTAS_LOADING_PROBE_FIELDS','HKTAS_LOADING_PROBE_WINDOWS',
+                'HKTAS_LOADING_PROBE_ENGINE_LAYOUT','HKTAS_LOADING_PROBE_CLOCK_ROUNDTRIP',
+                'HKTAS_LOADING_CANONICAL_BOUNDARY_LEGACY','HKTAS_LOADING_CANONICAL_BOUNDARY_V13','HKTAS_LOADING_CANONICAL_BOUNDARY_V14')) {
+                $routeEnvironment[$key] = $null
+            }
+            $routeEnvironment['HKTAS_LOADING_PROBE_FIRST'] = '0'
+            $routeEnvironment['HKTAS_LOADING_PROBE_END'] = $EndFrame.ToString([Globalization.CultureInfo]::InvariantCulture)
+            $routeEnvironment['HKTAS_LOADING_PROBE_OUTPUT'] = $destination
+            $hostStartOptions['Environment'] = $routeEnvironment
+            [ordered]@{ mode='interactive-route-authoring'; diagnosticOnly=$true; authoredCandidateOnly=$true;
+                phaseP0Passed=$false; restoreQualified=$false; sessionTimeoutSeconds=1800 } |
+                ConvertTo-Json | Set-Content -LiteralPath (Join-Path $destination 'route-authoring-mode.json') -Encoding utf8
+        }
         $hostLifetime = [Diagnostics.Stopwatch]::StartNew()
-        $hostProcess = Start-Process -FilePath (Join-Path $companion 'StudioScenarioHarness.exe') -ArgumentList $arguments `
+        $hostProcess = Start-Process -FilePath (Join-Path $companion ($hostName + '.exe')) -ArgumentList $arguments @hostStartOptions `
             -WorkingDirectory $companion -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $destination 'stdout.log') -RedirectStandardError (Join-Path $destination 'stderr.log')
+        $lastLaunchedDestination = $destination
         [ordered]@{ run=$run; pid=$hostProcess.Id; status='running' } | ConvertTo-Json -Compress | Write-Output
-        $probeHostTimeoutMs = if ($ActualDSuffixToEnd) { 600000 } else { 270000 }
+        # InteractiveAsync keeps its existing 30 minute deadline. Allow only
+        # bounded shutdown grace outside it; ordinary acceptance limits stay intact.
+        $probeHostTimeoutMs = if ($InteractiveRouteAuthoring) { 1830000 } elseif ($ActualDSuffixToEnd) { 600000 } else { 270000 }
         if ($ActualDStage) {
             $relayPacket = $null
             if ($ActualDStage -eq 'Target') { $relayPacket = $ActualDRelayState.Packet; $ActualDRelayState.Remove('Packet') }
@@ -489,6 +572,19 @@ finally {
         }
         & dotnet $bundleTool verify (Join-Path $repo '.local/signing/companion-public.json') $install (Join-Path $install 'companion.manifest.json')
         if ($LASTEXITCODE -ne 0) { throw 'Final installation verification failed.' }
+    }
+    # A relay failure can precede normal log collection. Recover only the last
+    # host that this invocation actually launched, without replacing completed
+    # run snapshots or letting optional logs prevent the save audit below.
+    if ($hostProcess -and $lastLaunchedDestination -and (Test-Path -LiteralPath $lastLaunchedDestination -PathType Container)) {
+        foreach ($logName in @('Player.log','ModLog.txt')) {
+            $logSource = Join-Path $saveRoot $logName
+            $logDestination = Join-Path $lastLaunchedDestination $logName
+            if ((Test-Path -LiteralPath $logSource -PathType Leaf) -and -not (Test-Path -LiteralPath $logDestination)) {
+                try { Copy-Item -LiteralPath $logSource -Destination $logDestination }
+                catch { Write-Warning ('Could not recover probe log {0}: {1}' -f $logName, $_.Exception.Message) }
+            }
+        }
     }
     # A relay failure can bypass the normal trace-recovery block. Preserve the
     # exact Runtime fault from the explicitly owned protected shadow as well.

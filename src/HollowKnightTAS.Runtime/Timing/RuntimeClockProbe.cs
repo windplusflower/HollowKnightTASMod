@@ -315,6 +315,11 @@ namespace HollowKnightTAS.Runtime.Timing
         private void TryAttach()
         {
             var hero = HeroController.instance;
+                if (hero != null && UnityEngine.Time.frameCount % 50 == 0) {
+                    var heroPos = hero.transform.position;
+                    var doors = TransitionPoint.TransitionPoints != null ? string.Join(", ", System.Linq.Enumerable.Select(TransitionPoint.TransitionPoints, tp => tp.name + "@(" + tp.transform.position.x.ToString("F1") + "," + tp.transform.position.y.ToString("F1") + ")->" + tp.targetScene)) : "";
+                    Modding.Logger.Log($"[TRACE frame={UnityEngine.Time.frameCount}] Scene={GameManager.instance?.sceneName}, Hero=({heroPos.x:F1},{heroPos.y:F1}), Doors=[{doors}]");
+                }
             var gameManager = GameManager.instance;
             if (hero == null
                 || gameManager == null

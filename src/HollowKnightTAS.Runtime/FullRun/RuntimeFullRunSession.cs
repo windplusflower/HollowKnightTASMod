@@ -111,7 +111,6 @@ namespace HollowKnightTAS.Runtime.FullRun
         private LoadingBoundaryProbe? loadingBoundaryProbe;
         private LoadingGameplayOracle? loadingGameplayOracle;
         private LoadingGameplayOracle? actualDSuffixOracle;
-        private LoadingGameplayOracle? physicsFollowOnOracle;
         private long expectedNativeStart = -1;
         private long? movieInputNativeOrigin;
         private CanonicalInputEpoch? movieInputControlOrigin;
@@ -496,9 +495,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private void OnNativeBeforeFrame(long completed)
         {
             restoreDrawing.Active = false;
-            if (mode == "DSourcePaused") { Fail("Actual D source executed another PlayerLoop; retire this process."); return; }
+            if (mode == "DSourcePaused" || mode == "DTargetPaused") { Fail("Resident D boundary executed another PlayerLoop while parked; retire this process."); return; }
             if (RunS0ObservationFrame(completed)) return;
-            if (RunCheckpointPreparationFrame(completed)) return;
             if (!inputReady || (mode != "Recording" && mode != "Replay")) return;
             try
             {
@@ -509,20 +507,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var ready = IsMovieFrameReady(out var boundary);
                 LoadingAudioLifetimePolicy.CheckFailure();
                 LoadingOnlineIsolationObservation.CheckFailure();
-                if (LoadingSerialSceneProbe.ObserveNativeBoundary(movieFrame, completed, sessionDirectory, movieInputNativeOrigin, movieInputControlOrigin, input, mouse))
+                if (LoadingSerialSceneProbe.ObserveNativeBoundary(this, movieFrame, completed))
                 {
+                    if (residentImportLoader != null || TryParkResidentSource(completed)) return;
                     loadingGameplayOracle?.Sample("candidate", "serial-source-unloaded");
-                    if (CanonicalActualDExperiment.CaptureSource && LoadingSerialSceneProbe.ExperimentalSource != null && actualDExport == null)
-                    {
-                        var sealElapsed = System.Diagnostics.Stopwatch.StartNew();
-                        CanonicalSourceHeaderTiming.Lifecycle(20);
-                        actualDExport = LoadingSerialSceneProbe.SealExperimentalSource(CaptureActualSessionCarry(completed));
-                        CanonicalSourceHeaderTiming.Lifecycle(21);
-                        Modding.Logger.Log("[HKTAS] Actual D source sealing completed: elapsedMilliseconds=" + sealElapsed.ElapsedMilliseconds
-                            + ";sameEncodedEnvelopeExport=true;packetWrittenToDisk=false");
-                        input.SetNativeFrameActive(false); mode = "DSourcePaused";
-                        CanonicalSourceHeaderTiming.Lifecycle(22); clock.RequestPause(); CanonicalSourceHeaderTiming.Lifecycle(23); return;
-                    }
                     CaptureSceneCheckpointAtBoundary(completed);
                 }
                 var sceneHandle = UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;
@@ -541,10 +529,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     }
                     if (!randomSeedHandshakePending)
                     {
-                        randomSeedAcknowledged.Reset();
                         randomSeedRequestNativeFrame = completed;
                         randomSeedHandshakePending = true;
-                        randomSeedRequest.Set();
+                        ResidentRngProducerClient.Request(2);
                     }
                     if (!randomSeedAcknowledged.WaitOne(0))
                     {
@@ -560,7 +547,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                         randomSeedHandshakePending = false;
                     }
                 }
-                if (ready && ParkCheckpointAtK(completed)) return;
                 if (ready) CompleteSceneCheckpointBoundary(completed);
                 activeFrameRate = recordingFrameRate;
                 if (replayMovie != null)
@@ -589,7 +575,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 actualDSuffixOracle?.Sample(ready ? "before" : "loading", boundary);
                 if (ready) TraceMovieRng("before", replayMovie?.Runs[timingRunIndex].RngSeed);
                 frameInputEnabled = ready;
-                physicsFollowOnOracle?.PhysicsBeforeFrame(ready ? movieFrame : -1);
                 // Resume drawing before the target so temporal presentation can
                 // settle using only frames already belonging to the replay.
                 restoreDrawing.Active = ready && mode == "Replay" && !IsVideoExportActive
@@ -601,6 +586,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // Keep the hook chain alive so the clock can acknowledge the seed;
                 // SetFrameInputEnabled above separately suppresses Movie samples.
                 input.SetNativeFrameActive(true);
+                ObserveResidentContinuation(1, completed);
             }
             catch (Exception exception)
             {
@@ -700,6 +686,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (!frameInputEnabled)
                 {
                     skippedLoadFrames++;
+                    ObserveResidentContinuation(3, completed);
                     return;
                 }
                 input.CompleteFrame(movieFrame);
@@ -710,17 +697,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 ObserveBoss();
                 TraceMovieRng("after", null);
-                RecordCheckpointInputConsumption(movieFrame);
                 loadingBoundaryProbe?.Sample("after", frameBoundary);
                 loadingGameplayOracle?.Sample("after", frameBoundary);
                 actualDSuffixOracle?.Sample("after", frameBoundary);
-                physicsFollowOnOracle?.Sample("after", frameBoundary);
                 if (mode == "Recording") journal!.CompleteFrame(movieFrame, activeFrameRate);
                 movieFrame++;
+                ObserveResidentContinuation(3, completed);
                 loadingBoundaryProbe?.Completed();
                 loadingGameplayOracle?.Completed();
                 actualDSuffixOracle?.Completed();
-                physicsFollowOnOracle?.Completed();
                 clock.ReportMovieFrameCompleted();
                 if (movieFrame == pauseAtMovieFrame)
                 {
@@ -813,13 +798,31 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (frame < 0 || movieInputNativeOrigin.HasValue)
                 throw new InvalidOperationException("Runtime input frame origin cannot be invalid or rebound.");
             movieInputNativeOrigin = frame;
-            if (NativeExecutionProfile.UsesCanonicalBoundary(NativeExecutionProfile.SelectedProfileId))
+            if (NativeExecutionProfile.UsesCanonicalBoundary(NativeExecutionProfile.SelectedProfileId)) {
+                // Resolve immutable metadata on the same bootstrap path for
+                // recording and replay, before either publishes Movie zero.
+                // Every later boundary still reads its actual modules, native
+                // class/vtable inventory, initialization and static values.
+                try {
+                    var gained = ResidentStaticRoots.PrepareMetadata(ClassifyResidentModule);
+                    if (gained.Length != 0) Modding.Logger.Log("[HKTAS] Resident metadata dependencies: " + string.Join(";", gained));
+                } catch (Exception failure) {
+                    ResidentFailureEvidence.Record(failure);
+                    // The decision is final. A diagnostic census at this point
+                    // cannot change metadata preparation, gameplay, or eligibility.
+                    try { ResidentNativeGlobalObjects.RecordProbeTypeCounts(() => { }, rejectedBootstrap: true); }
+                    catch (Exception evidenceError) { Modding.Logger.LogWarn("Rejected bootstrap census unavailable: " + evidenceError.Message); }
+                    throw;
+                }
                 movieInputControlOrigin = CanonicalInputEpochRuntime.Capture(frame, frame);
+            }
             loadingBoundaryProbe = LoadingBoundaryProbe.Create(sessionDirectory, () => movieFrame,
                 () => clock.CurrentFrameIndex,
                 () => (bossTraceRngCodec = bossTraceRngCodec ?? UnityRandomStateCodec_1_5_78_11833.Resolve().Codec
                     ?? throw new InvalidOperationException("Loading probe RNG codec unavailable."))!.CaptureCurrent().Sha256);
-            loadingGameplayOracle = LoadingGameplayOracle.Create(sessionDirectory, () => movieFrame,
+            // Interactive authoring collects normal paused world queries; it
+            // makes no full-state observation or checkpoint qualification claim.
+            loadingGameplayOracle = CanonicalPhaseOneTrace.DiscoveryEnabled ? null : LoadingGameplayOracle.Create(sessionDirectory, () => movieFrame,
                 () => clock.CurrentFrameIndex,
                 () => (bossTraceRngCodec = bossTraceRngCodec ?? UnityRandomStateCodec_1_5_78_11833.Resolve().Codec
                     ?? throw new InvalidOperationException("Gameplay oracle RNG codec unavailable."))!.CaptureCurrent().Sha256);
@@ -1011,7 +1014,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             loadingBoundaryProbe?.Dispose();
             loadingGameplayOracle?.Dispose();
             actualDSuffixOracle?.Dispose();
-            physicsFollowOnOracle?.Dispose();
+            residentContinuationTrace?.Dispose();
             restoreDrawing.Dispose();
             videoCapture?.Dispose();
             observationQueue.Dispose();

@@ -31,6 +31,22 @@ public sealed class CanonicalPhaseOneTraceTests
     }
 
     [TestMethod]
+    public void InputAuthoringCannotEnterQualificationOrRestoreModes()
+    {
+        string? Read(string name) => name == "HKTAS_LOADING_PROBE_OUTPUT" ? "protected-probe"
+            : name == CanonicalPhaseOneTrace.DiscoveryVariable || name == CanonicalPhaseOneTrace.Variable
+                || new[] { "HKTAS_LOADING_CANONICAL_BOUNDARY", "HKTAS_LOADING_GAMEPLAY_ORACLE", "HKTAS_LOADING_NATIVE_SCHEDULER",
+                    "HKTAS_LOADING_NATIVE_PHYSICS", "HKTAS_LOADING_SERIAL_BOUNDARY_ONLY" }.Contains(name) ? "1" : null;
+        CanonicalPhaseOneTrace.RequireContext(Read);
+        Assert.ThrowsExactly<InvalidOperationException>(() => CanonicalPhaseOneTrace.RequireContext(
+            name => name == CanonicalPhaseOneTrace.Variable ? null : Read(name)));
+        foreach (var forbidden in new[] { CanonicalPhaseOneTrace.D0RouteVariable, "HKTAS_LOADING_S0_OBSERVING",
+            "HKTAS_LOADING_ACTUAL_D_EXPERIMENT", "HKTAS_LOADING_CLOCK_APPLY_EXPERIMENT" })
+            Assert.ThrowsExactly<InvalidOperationException>(() => CanonicalPhaseOneTrace.RequireContext(
+                name => name == forbidden ? "1" : Read(name)), forbidden);
+    }
+
+    [TestMethod]
     public void D0RouteRejectsPreparationAndMutationModesButPreservesDefaultTrace()
     {
         string? Read(string name) => name == "HKTAS_LOADING_PROBE_OUTPUT" ? "protected-probe"

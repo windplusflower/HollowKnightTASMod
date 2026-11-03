@@ -187,21 +187,8 @@ namespace HollowKnightTAS.Runtime.Companion
 
         private void SignalColdRootEvent(string suffix)
         {
-            var operationId = expectedRunId;
-            using (var signal = new EventWaitHandle(
-                       false,
-                       EventResetMode.AutoReset,
-                       StartupProfileContract
-                           .RandomSynchronizationEventPrefix
-                       + operationId
-                       + suffix))
-            {
-                if (!signal.Set())
-                {
-                    throw new InvalidOperationException(
-                        "Cold recording-root event could not be signaled.");
-                }
-            }
+            if (suffix != ".request" && suffix != ".recording-request") throw new ArgumentOutOfRangeException(nameof(suffix));
+            HollowKnightTAS.Runtime.FullRun.ResidentRngProducerClient.Request(suffix == ".request" ? 0 : 1);
         }
 
         private bool PrepareClockPhase()

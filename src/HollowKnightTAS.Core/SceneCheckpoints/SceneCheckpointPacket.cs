@@ -82,7 +82,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
         public const int SchemaVersion = 2;
         public SceneCheckpointHeader(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding,
             SceneCheckpointTrigger trigger, long transitionId, long captureMovieFrame, long captureNativeFrame,
-            long resumeMovieFrame, long resumeNativeFrame, int payloadBytes, string payloadSha256, bool restoreQualified = true)
+            long resumeMovieFrame, long resumeNativeFrame, int payloadBytes, string payloadSha256)
         {
             CheckpointId = SceneCheckpointScope.RequireId(checkpointId);
             Scope = scope ?? throw new ArgumentNullException(nameof(scope));
@@ -94,7 +94,6 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
                 || !MovieProtocolV1.IsLowerSha256(payloadSha256)) throw new InvalidDataException("Checkpoint payload declaration is invalid.");
             Trigger = trigger; TransitionId = transitionId; CaptureMovieFrame = captureMovieFrame; CaptureNativeFrame = captureNativeFrame;
             ResumeMovieFrame = resumeMovieFrame; ResumeNativeFrame = resumeNativeFrame; PayloadBytes = payloadBytes; PayloadSha256 = payloadSha256;
-            RestoreQualified = restoreQualified;
         }
         public string CheckpointId { get; }
         public SceneCheckpointScope Scope { get; }
@@ -107,7 +106,9 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
         public long ResumeNativeFrame { get; }
         public int PayloadBytes { get; }
         public string PayloadSha256 { get; }
-        public bool RestoreQualified { get; }
+        // This adapter carries only the legacy managed continuation. A matching
+        // payload hash cannot qualify it for a full resident-world restoration.
+        public bool RestoreQualified => false;
 
         public Dictionary<string, string> ToFields()
         {
@@ -132,7 +133,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
             long Read(string key) => long.TryParse(Get(key), NumberStyles.None, CultureInfo.InvariantCulture, out var n)
                 ? n : throw new InvalidDataException("Invalid checkpoint integer: " + key);
             var qualified = Get("restoreQualified");
-            if (Get("schema") != Number(SchemaVersion) || Get("adapter") != AdapterId || (qualified != "false" && qualified != "true"))
+            if (Get("schema") != Number(SchemaVersion) || Get("adapter") != AdapterId || qualified != "false")
                 throw new InvalidDataException("Unsupported checkpoint schema, adapter or qualification.");
             if (!Enum.TryParse<SceneCheckpointTrigger>(Get("trigger"), out var trigger) || trigger.ToString() != Get("trigger"))
                 throw new InvalidDataException("Unknown checkpoint trigger.");
@@ -142,7 +143,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
                 new SceneCheckpointScope(Get("studioSessionId"), Get("treeId"), Get("branchId"), Read("generation")),
                 new SceneCheckpointBinding(Get("environmentSha256"), Get("initialSavesSha256"), Get("nativeProfileId")), trigger,
                 Read("transitionId"), Read("captureMovieFrame"), Read("captureNativeFrame"), Read("resumeMovieFrame"), Read("resumeNativeFrame"),
-                checked((int)size), Get("payloadSha256"), qualified == "true");
+                checked((int)size), Get("payloadSha256"));
             var expected = header.ToFields();
             foreach (var pair in expected)
                 if (Get(pair.Key) != pair.Value) throw new InvalidDataException("Checkpoint metadata is noncanonical or its hash differs.");

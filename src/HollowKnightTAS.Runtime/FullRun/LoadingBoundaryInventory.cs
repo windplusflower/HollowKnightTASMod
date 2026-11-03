@@ -24,8 +24,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_BOUNDARY_INVENTORY") != "1") return;
             if (boundaries.Count >= 64) throw new InvalidOperationException("Boundary inventory exceeded 64 transitions.");
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
-            var objects = Resources.FindObjectsOfTypeAll<GameObject>()
-                .Where(go => go != null && go.scene.IsValid() && go.scene.isLoaded).ToArray();
+            var objects = ResidentSceneMembership.LoadedGameObjects();
             if (objects.Length > 100000) throw new InvalidOperationException("Boundary object budget exceeded.");
             var identities = new Dictionary<int, string>();
             foreach (var scene in objects.Select(go => go.scene).Distinct())
