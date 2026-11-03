@@ -18,13 +18,14 @@ static void __cdecl job_fault(LONG code)
     fprintf(stderr,"PASS rejected job scenario with expected native reason %ld\n",(long)g_dn_fault);fflush(stderr);
 }
 static void* __cdecl get_queue(void) {return queue_body;}
-static void* __cdecl create_group(void *queue,unsigned count,void *dependency)
+static unsigned fixture_job_allocs;
+static void* __cdecl fixture_alloc(size_t size,size_t align,int label,int flags,const char *source,int line)
 {
-    CHECK(queue==queue_body && count==2 && !hktas_dn_ptr(dependency));
-    uint64_t generation=hktas_dn_u64(job_group+8);memset(job_group,0,96);memcpy(job_group+8,&generation,8);
-    memset(native_jobs,0,sizeof(native_jobs));pointer(job_group,native_jobs[0]);pointer(job_group+24,native_jobs[1]);
-    u32(job_group+16,2);pointer(job_group+48,group_pool_node);pointer(native_jobs[0],native_jobs[1]);
-    pointer(native_jobs[0]+32,job_group);pointer(native_jobs[1]+32,job_group);return job_group;
+    (void)label;(void)flags;(void)source;CHECK(align==16);
+    if(line==0x609) return HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,size);
+    if(size==32) {memset(group_pool_node,0,sizeof(group_pool_node));return group_pool_node;}
+    if(size==96) {uint64_t generation=hktas_dn_u64(job_group+8);memset(job_group,0,sizeof(job_group));memcpy(job_group+8,&generation,8);fixture_job_allocs=0;return job_group;}
+    CHECK(size==40 && fixture_job_allocs<2);BYTE *row=native_jobs[fixture_job_allocs++];memset(row,0,48);return row;
 }
 static int run_native_exec(void *job,uint64_t version)
 {
@@ -88,7 +89,7 @@ int wmain(int argc,wchar_t **argv)
 {
     CHECK(argc==3);scenario=argv[2];setup(argv[1]);install();
     g_dn_fault_sink=job_fault;
-    jump(image+0x7271d0,(void*)get_queue);jump(image+0x726860,(void*)create_group);jump(image+0x81a8e0,(void*)enqueue);
+    jump(image+0x7271d0,(void*)get_queue);jump(image+0x56b6a0,(void*)fixture_alloc);jump(image+0x81a8e0,(void*)enqueue);
     jump(image+0x7287d0,(void*)wake);jump(image+0x7275d0,(void*)wake_dependencies);jump(image+0x728340,(void*)wait_group);
     CHECK(FlushInstructionCache(GetCurrentProcess(),image,HKTAS_DN_IMAGE));
     waiting=CreateEventW(NULL,TRUE,FALSE,NULL);run_job=CreateEventW(NULL,TRUE,FALSE,NULL);CHECK(waiting && run_job);
@@ -147,7 +148,7 @@ int wmain(int argc,wchar_t **argv)
     double a=0,b=0;memcpy(&a,graph+48,8);memcpy(&b,graph2+48,8);
     CHECK(a==0.125 && b==0.25 && !graph[184] && !graph2[184]);
     hktas_dn_status s=status();
-    CHECK(s.version==3 && s.bytes==152 && s.functions==49 && s.callbacks_started==2 && s.callbacks_returned==2
+    CHECK(s.version==4 && s.bytes==200 && s.functions==51 && s.callbacks_started==2 && s.callbacks_returned==2
         && s.groups_published==1 && s.groups_retired==1 && !s.outstanding_groups && !s.outstanding_rows
         && !g_dn_job_tickets && s.begun==s.ended && HktasClockBridge_EndResidentDirectorFence(1,1));
     printf("PASS real ExecutePrepareFrames -> ScheduleForEach -> two real indexed PrepareFrame workers -> native JobGroup/JobInfo dispatch -> original fence clear, %s publication\n",

@@ -333,8 +333,10 @@ static int director_joint_scenarios(void)
     hktas_dn_status s;
     CHECK(HktasClockBridge_CopyResidentDirectorFenceStatus((BYTE*)&s,sizeof(s))==sizeof(s));
     CHECK(s.installed && s.epoch==token && s.started==g_resident_boundary_started && s.held && s.closed && !s.fault
-        && s.version==3 && s.required_gaps==7 && !s.complete && s.edges==153 && s.functions==49
-        && s.groups_published==s.groups_retired && s.callbacks_started==s.callbacks_returned && !s.outstanding_groups && !s.outstanding_rows);
+        && s.version==4 && s.required_gaps==7 && !s.complete && s.edges==153 && s.functions==51
+        && s.groups_published==s.groups_retired && s.callbacks_started==s.callbacks_returned && !s.outstanding_groups && !s.outstanding_rows
+        && s.lineage_issued==s.lineage_retired && s.lineage_entered==s.lineage_returned && s.lineage_nested<=s.lineage_issued
+        && !s.outstanding_lineages && !s.outstanding_lineage_rows);
     HANDLE worker=CreateThread(NULL,0,director_reset_time,NULL,0,NULL);CHECK(worker);
     uint64_t start=GetTickCount64();do {
         CHECK(HktasClockBridge_CopyResidentDirectorFenceStatus((BYTE*)&s,sizeof(s))==sizeof(s));

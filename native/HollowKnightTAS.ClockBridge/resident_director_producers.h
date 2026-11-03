@@ -184,7 +184,7 @@ static const hktas_dn_edge g_dn_edges[] = { HKTAS_DIR_EDGES(DN_EDGE) };
 #undef DN_EDGE
 #define DN_EDGE_COUNT ((unsigned)(sizeof(g_dn_edges)/sizeof(g_dn_edges[0])))
 typedef void (__cdecl *hktas_dn_sink)(LONG family);
-typedef struct { unsigned depth,tickets; void *publishing,*executing; BYTE frames[64]; } hktas_dn_thread;
+typedef struct { unsigned depth,tickets; uint64_t lineage; void *publishing,*executing; BYTE frames[64]; } hktas_dn_thread;
 typedef struct { BYTE *data; size_t count, capacity; } hktas_dn_image;
 static SRWLOCK g_dn_lock = SRWLOCK_INIT;
 static CONDITION_VARIABLE g_dn_cv = CONDITION_VARIABLE_INIT;
@@ -276,6 +276,8 @@ static void hktas_dn_leave(unsigned site)
 #include "resident_director_job_tickets.h"
 #define DN_JOB(id)
 #define DN_SCHED(id)
+#define DN_JGROUPS(id)
+#define DN_JCREATE(id)
 #define DN_GROUP(id)
 #define DN_EXEC(id)
 #define DN_FENCE(id)
@@ -622,7 +624,7 @@ static BOOL hktas_dn_unchanged_locked(void)
 static BOOL hktas_dn_held_locked(uint64_t token)
 {
     return g_dn_installed && !g_dn_fault && g_dn_closed && g_dn_held && token && token==g_dn_epoch
-        && g_dn_main==GetCurrentThreadId() && !g_dn_active && !g_dn_job_tickets && g_dn_job_published==g_dn_job_retired && g_dn_job_started==g_dn_job_finished && !g_dn_job_rows && g_dn_begun==g_dn_ended && GetTickCount64()-g_dn_started<HKTAS_DN_WALL;
+        && g_dn_main==GetCurrentThreadId() && !g_dn_active && !g_dn_lineages && !g_dn_lineage_rows && g_dn_lineage_issued==g_dn_lineage_retired && g_dn_lineage_entered==g_dn_lineage_returned && !g_dn_job_tickets && g_dn_job_published==g_dn_job_retired && g_dn_job_started==g_dn_job_finished && !g_dn_job_rows && g_dn_begun==g_dn_ended && GetTickCount64()-g_dn_started<HKTAS_DN_WALL;
 }
 __declspec(dllexport) LONG __cdecl HktasClockBridge_BeginResidentDirectorFence(uint64_t token,uint64_t started)
 {
@@ -633,12 +635,12 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_BeginResidentDirectorFence(u
         hktas_dn_fault_locked(10);ReleaseSRWLockExclusive(&g_dn_lock);return 0;
     }
     g_dn_epoch=token;g_dn_started=started;g_dn_closed=TRUE;
-    while((g_dn_active || g_dn_job_tickets) && !g_dn_fault) {
+    while((g_dn_active || g_dn_job_tickets || g_dn_lineages) && !g_dn_fault) {
         uint64_t elapsed=GetTickCount64()-started;
         if(elapsed>=HKTAS_DN_WALL) break;
         if(!SleepConditionVariableSRW(&g_dn_cv,&g_dn_lock,(DWORD)(HKTAS_DN_WALL-elapsed),0) && GetLastError()!=ERROR_TIMEOUT) break;
     }
-    if(g_dn_active || g_dn_job_tickets || g_dn_job_published!=g_dn_job_retired || g_dn_job_started!=g_dn_job_finished || g_dn_job_rows || g_dn_fault || g_dn_begun!=g_dn_ended || !hktas_dn_capture(&g_dn_witness) || !hktas_dn_unchanged_locked()) {
+    if(g_dn_active || g_dn_lineages || g_dn_lineage_rows || g_dn_lineage_issued!=g_dn_lineage_retired || g_dn_lineage_entered!=g_dn_lineage_returned || g_dn_job_tickets || g_dn_job_published!=g_dn_job_retired || g_dn_job_started!=g_dn_job_finished || g_dn_job_rows || g_dn_fault || g_dn_begun!=g_dn_ended || !hktas_dn_capture(&g_dn_witness) || !hktas_dn_unchanged_locked()) {
         hktas_dn_fault_locked(11);ReleaseSRWLockExclusive(&g_dn_lock);return 0;
     }
     g_dn_held=TRUE;ReleaseSRWLockExclusive(&g_dn_lock);return 1;
@@ -675,16 +677,19 @@ typedef struct {
     uint32_t edges, functions, required_gaps, complete;
     uint64_t groups_published,groups_retired,callbacks_started,callbacks_returned;
     uint32_t outstanding_groups,outstanding_rows;
+    uint64_t lineage_issued,lineage_retired,lineage_entered,lineage_returned,lineage_nested;
+    uint32_t outstanding_lineages,outstanding_lineage_rows;
 } hktas_dn_status;
-typedef char hktas_dn_status_check[(sizeof(hktas_dn_status)==152 && offsetof(hktas_dn_status,required_gaps)==104 && offsetof(hktas_dn_status,outstanding_groups)==144)?1:-1];
+typedef char hktas_dn_status_check[(sizeof(hktas_dn_status)==200 && offsetof(hktas_dn_status,required_gaps)==104 && offsetof(hktas_dn_status,outstanding_groups)==144 && offsetof(hktas_dn_status,lineage_issued)==152 && offsetof(hktas_dn_status,lineage_retired)==160 && offsetof(hktas_dn_status,lineage_entered)==168 && offsetof(hktas_dn_status,lineage_returned)==176 && offsetof(hktas_dn_status,lineage_nested)==184 && offsetof(hktas_dn_status,outstanding_lineages)==192 && offsetof(hktas_dn_status,outstanding_lineage_rows)==196)?1:-1];
 __declspec(dllexport) LONG __cdecl HktasClockBridge_CopyResidentDirectorFenceStatus(BYTE *buffer,uint32_t length)
 {
     if(!buffer || length!=sizeof(hktas_dn_status)) return 0;
     AcquireSRWLockShared(&g_dn_lock);
-    hktas_dn_status v={0x31464452u,3u,sizeof(hktas_dn_status),g_dn_installed,g_dn_epoch,g_dn_started,g_dn_begun,g_dn_ended,
+    hktas_dn_status v={0x31464452u,4u,sizeof(hktas_dn_status),g_dn_installed,g_dn_epoch,g_dn_started,g_dn_begun,g_dn_ended,
         g_dn_waiting,g_dn_peak,g_dn_witness.count,g_dn_active,g_dn_closed,g_dn_held,(uint32_t)g_dn_fault,g_dn_main,GetCurrentThreadId(),
         DN_EDGE_COUNT,DN_FUNCTION_COUNT,HKTAS_DN_GAPS,0u,g_dn_job_published,g_dn_job_retired,g_dn_job_started,g_dn_job_finished,
-        (uint32_t)g_dn_job_count,g_dn_job_rows};
+        (uint32_t)g_dn_job_count,g_dn_job_rows,g_dn_lineage_issued,g_dn_lineage_retired,g_dn_lineage_entered,g_dn_lineage_returned,g_dn_lineage_nested,
+        (uint32_t)g_dn_lineage_count,g_dn_lineage_rows};
     memcpy(buffer,&v,sizeof(v));ReleaseSRWLockShared(&g_dn_lock);return sizeof(v);
 }
 #endif

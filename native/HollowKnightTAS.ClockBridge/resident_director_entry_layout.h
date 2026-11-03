@@ -52,5 +52,7 @@
  X(job_Schedule, SCHED, 0x725da0u, 176u, UINT64_C(0x9908abea8207f7fd), 5u, "72,137,92,36,8", "1,16,0,0") \
  X(job_Complete, FENCE, 0x725510u, 63u, UINT64_C(0xbf113a787aa2ec1e), 5u, "72,137,92,36,8", "1,16,0,0") \
  X(job_Group, GROUP, 0x727780u, 349u, UINT64_C(0x903041bea2a0bcd9), 5u, "72,137,92,36,24", "1,16,0,0") \
- X(job_Exec, EXEC, 0x726de0u, 275u, UINT64_C(0x65f5869a0a8451c9), 5u, "72,137,92,36,8", "1,16,0,0")
+ X(job_Exec, EXEC, 0x726de0u, 275u, UINT64_C(0x65f5869a0a8451c9), 5u, "72,137,92,36,8", "1,16,0,0") \
+ X(job_CreateGroup, JCREATE, 0x726860u, 422u, UINT64_C(0x9ef6d3996267369d), 5u, "72,137,92,36,24", "1,16,0,0") \
+ X(job_ScheduleGroups, JGROUPS, 0x7278e0u, 263u, UINT64_C(0x7105a985eb5c3c08), 5u, "72,139,196,85,86", "1,16,2,0,5,96,4,80")
 #endif

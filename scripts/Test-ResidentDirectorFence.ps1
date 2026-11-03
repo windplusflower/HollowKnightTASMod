@@ -18,6 +18,7 @@ try {
     Build 'ResidentDirectorProducerHarness.c' 'director.exe' @('-municode')
     Build 'ResidentDirectorEntryHarness.c' 'director-entry.exe' @('-municode')
     Build 'ResidentDirectorJobHarness.c' 'director-jobs.exe' @('-municode')
+    Build 'ResidentDirectorLineageHarness.c' 'director-lineage.exe' @('-municode')
     Build 'ResidentDirectorStartupHarness.c' 'director-startup.exe' @('-municode')
     Build 'ResidentDirectorStartupHarness.c' 'director-startup-probe.dll' @('-shared','-DHKTAS_DIRECTOR_STARTUP_DLL')
     & (Join-Path $build 'director-startup.exe') (Join-Path $build 'director-startup-probe.dll')
@@ -30,6 +31,11 @@ try {
         & (Join-Path $build 'director-jobs.exe') $player $case
         $expected = if ($case -in @('async','sync','native-before-return','lazy-handle','unrelated')) { 0 } else { 5023 }
         if ($LASTEXITCODE -ne $expected) { throw "Director job fixture $case returned $LASTEXITCODE, expected $expected." }
+    }
+    foreach ($case in @('normal','batch','multi','pending','substitute','wrong-generation','duplicate')) {
+        & (Join-Path $build 'director-lineage.exe') $player $case
+        $expected = if ($case -in @('substitute','wrong-generation','duplicate')) { 5023 } else { 0 }
+        if ($LASTEXITCODE -ne $expected) { throw "Director lineage fixture $case returned $LASTEXITCODE, expected $expected." }
     }
     foreach ($case in @('normal','startup-worker','timeout','orphan','abort','registration','tamper','drift','owner-entry')) {
         & (Join-Path $build 'director.exe') $player $case
