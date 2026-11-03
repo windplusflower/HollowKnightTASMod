@@ -177,7 +177,7 @@
  X(0xcdfea8u, 0xe8u, graph_DisableMultithread)
 
 #define DN_ENUM(id,abi,rva,length,hash,cut,bytes,unwind) DN_##id=HKTAS_DE_##id,
-enum hktas_dn_site { HKTAS_DE_ENTRIES(DN_ENUM) DN_FUNCTION_COUNT=HKTAS_DE_COUNT };
+enum hktas_dn_site { HKTAS_BOUNDARY_ENTRIES(DN_ENUM) DN_FUNCTION_COUNT=DN_QueueInputEvent };
 #undef DN_ENUM
 typedef struct { DWORD rva; BYTE opcode, id; } hktas_dn_edge;
 #define DN_EDGE(rva,opcode,id) {rva,opcode,DN_##id},
@@ -185,7 +185,7 @@ static const hktas_dn_edge g_dn_edges[] = { HKTAS_DIR_EDGES(DN_EDGE) };
 #undef DN_EDGE
 #define DN_EDGE_COUNT ((unsigned)(sizeof(g_dn_edges)/sizeof(g_dn_edges[0])))
 typedef void (__cdecl *hktas_dn_sink)(LONG family);
-typedef struct { unsigned depth,tickets; uint64_t lineage; void *publishing,*executing; BYTE frames[64]; } hktas_dn_thread;
+typedef struct { unsigned depth,director_depth,tickets; uint64_t lineage; void *publishing,*executing; BYTE frames[64]; } hktas_dn_thread;
 typedef struct { BYTE *data; size_t count, capacity; } hktas_dn_image;
 static SRWLOCK g_dn_lock = SRWLOCK_INIT;
 static CONDITION_VARIABLE g_dn_cv = CONDITION_VARIABLE_INIT;
@@ -197,6 +197,8 @@ static BOOL g_dn_installed, g_dn_closed, g_dn_held;
 static uint64_t g_dn_epoch, g_dn_started, g_dn_begun, g_dn_ended, g_dn_waiting, g_dn_peak;
 static DWORD g_dn_active;
 static hktas_dn_image g_dn_witness;
+static uint64_t g_input_queue_entered,g_input_queue_returned,g_input_accepted,g_input_send_entered,g_input_send_returned;
+static uintptr_t g_input_epoch_owner;
 
 static void hktas_dn_fault_locked(LONG code)
 {
@@ -257,6 +259,9 @@ static BOOL hktas_dn_enter_locked(unsigned site,BOOL inherited)
         ++g_dn_active;
     }
     t->frames[t->depth++]=(BYTE)site;
+    if(site==DN_QueueInputEvent) ++g_input_queue_entered;
+    else if(site==DN_SendInputEventsToScript) ++g_input_send_entered;
+    else ++t->director_depth;
     if (t->depth>g_dn_peak) g_dn_peak=t->depth;
     ++g_dn_begun; ReleaseSRWLockExclusive(&g_dn_lock); return TRUE;
 }
@@ -264,17 +269,22 @@ static BOOL hktas_dn_enter(unsigned site)
 {
     AcquireSRWLockExclusive(&g_dn_lock);return hktas_dn_enter_locked(site,FALSE);
 }
-static void hktas_dn_leave(unsigned site)
+static void hktas_dn_leave_result(unsigned site,BYTE accepted)
 {
     AcquireSRWLockExclusive(&g_dn_lock);
     hktas_dn_thread *t=(hktas_dn_thread *)FlsGetValue(g_dn_fls);
     if (!t || !t->depth || t->frames[t->depth-1] != site || !g_dn_active) {
         hktas_dn_reject_locked(5); return;
     }
+    if(site==DN_QueueInputEvent) {++g_input_queue_returned;if(accepted) ++g_input_accepted;}
+    else if(site==DN_SendInputEventsToScript) ++g_input_send_returned;
+    else if(t->director_depth) --t->director_depth;
+    else {hktas_dn_reject_locked(5);return;}
     --t->depth; ++g_dn_ended;
     if (!t->depth) { --g_dn_active; WakeAllConditionVariable(&g_dn_cv); }
     ReleaseSRWLockExclusive(&g_dn_lock);
 }
+static void hktas_dn_leave(unsigned site) {hktas_dn_leave_result(site,0);}
 #include "resident_director_job_tickets.h"
 #define DN_JOB(id)
 #define DN_SCHED(id)
@@ -308,8 +318,18 @@ static void hktas_dn_leave(unsigned site)
 #define DN_DEF(id,abi,rva,length,hash,cut,bytes,unwind) DN_##abi(id)
 HKTAS_DE_ENTRIES(DN_DEF)
 #undef DN_DEF
+/* InputEventData const& is passed in RCX and the native bool is returned
+ * in AL. Send takes a single int in ECX (unlike Director's two-arg VI). */
+static BYTE __cdecl dn_QueueInputEvent(void *event)
+{
+    hktas_dn_enter(DN_QueueInputEvent);
+    BYTE accepted=((BYTE (__cdecl *)(void *))(void*)hktas_de_original_QueueInputEvent)(event);
+    hktas_dn_leave_result(DN_QueueInputEvent,accepted);
+    return accepted;
+}
+DN_WRAP_VOID(SendInputEventsToScript,(int update_type),(update_type))
 #define DN_ADDR(id,abi,rva,length,hash,cut,bytes,unwind) (void *)dn_##id,
-static void *const g_dn_wrappers[]={ HKTAS_DE_ENTRIES(DN_ADDR) };
+static void *const g_dn_wrappers[]={ HKTAS_BOUNDARY_ENTRIES(DN_ADDR) };
 #undef DN_ADDR
 
 static BOOL hktas_dn_signature(BYTE *base)
@@ -446,7 +466,8 @@ static BOOL hktas_dn_install_in_exclusive_image(BYTE *base,DWORD main_thread,hkt
 {
     if (InterlockedCompareExchange(&g_dn_attempt,1,0) || !sink || !base || GetCurrentThreadId()!=main_thread
         || GetModuleHandleW(L"mono-2.0-bdwgc.dll") || !hktas_dn_signature(base)) return FALSE;
-    void *manager;memcpy(&manager,base+HKTAS_DN_MANAGER,8);if(manager) return FALSE;
+    void *manager,*input;memcpy(&manager,base+HKTAS_DN_MANAGER,8);memcpy(&input,base+0x194e800,8);
+    if(manager || input) return FALSE;
     g_dn_base=base;g_dn_main=main_thread;g_dn_fault_sink=sink;
     if (!hktas_dn_verify(FALSE)) return FALSE;
     g_dn_fls=FlsAlloc(hktas_dn_thread_exit);if(g_dn_fls==FLS_OUT_OF_INDEXES) return FALSE;
@@ -626,6 +647,8 @@ static BOOL hktas_dn_unchanged_locked(void)
 static BOOL hktas_dn_held_locked(uint64_t token)
 {
     return g_dn_installed && !g_dn_fault && g_dn_closed && g_dn_held && token && token==g_dn_epoch
+        && g_input_epoch_owner==hktas_dn_ptr(g_dn_base+0x194e800)
+        && g_input_queue_entered==g_input_queue_returned && g_input_send_entered==g_input_send_returned
         && g_dn_main==GetCurrentThreadId() && !g_dn_active && !g_dn_lineages && !g_dn_lineage_rows && g_dn_lineage_issued==g_dn_lineage_retired && g_dn_lineage_entered==g_dn_lineage_returned && !g_dn_job_tickets && g_dn_job_published==g_dn_job_retired && g_dn_job_started==g_dn_job_finished && !g_dn_job_rows && g_dn_begun==g_dn_ended && GetTickCount64()-g_dn_started<HKTAS_DN_WALL;
 }
 __declspec(dllexport) LONG __cdecl HktasClockBridge_BeginResidentDirectorFence(uint64_t token,uint64_t started)
@@ -645,6 +668,7 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_BeginResidentDirectorFence(u
     if(g_dn_active || g_dn_lineages || g_dn_lineage_rows || g_dn_lineage_issued!=g_dn_lineage_retired || g_dn_lineage_entered!=g_dn_lineage_returned || g_dn_job_tickets || g_dn_job_published!=g_dn_job_retired || g_dn_job_started!=g_dn_job_finished || g_dn_job_rows || g_dn_fault || g_dn_begun!=g_dn_ended || !hktas_dn_capture(&g_dn_witness) || !hktas_dn_unchanged_locked()) {
         hktas_dn_fault_locked(11);ReleaseSRWLockExclusive(&g_dn_lock);return 0;
     }
+    g_input_epoch_owner=hktas_dn_ptr(g_dn_base+0x194e800);
     g_dn_held=TRUE;ReleaseSRWLockExclusive(&g_dn_lock);return 1;
 }
 __declspec(dllexport) LONG __cdecl HktasClockBridge_RequireResidentDirectorFence(uint64_t token)
@@ -687,11 +711,33 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_CopyResidentDirectorFenceSta
 {
     if(!buffer || length!=sizeof(hktas_dn_status)) return 0;
     AcquireSRWLockShared(&g_dn_lock);
-    hktas_dn_status v={0x31464452u,4u,sizeof(hktas_dn_status),g_dn_installed,g_dn_epoch,g_dn_started,g_dn_begun,g_dn_ended,
+    hktas_dn_status v={0x31464452u,4u,sizeof(hktas_dn_status),g_dn_installed,g_dn_epoch,g_dn_started,
+        g_dn_begun-g_input_queue_entered-g_input_send_entered,g_dn_ended-g_input_queue_returned-g_input_send_returned,
         g_dn_waiting,g_dn_peak,g_dn_witness.count,g_dn_active,g_dn_closed,g_dn_held,(uint32_t)g_dn_fault,g_dn_main,GetCurrentThreadId(),
         DN_EDGE_COUNT,DN_FUNCTION_COUNT,HKTAS_DN_GAPS,0u,g_dn_job_published,g_dn_job_retired,g_dn_job_started,g_dn_job_finished,
         (uint32_t)g_dn_job_count,g_dn_job_rows,g_dn_lineage_issued,g_dn_lineage_retired,g_dn_lineage_entered,g_dn_lineage_returned,g_dn_lineage_nested,
         (uint32_t)g_dn_lineage_count,g_dn_lineage_rows};
     memcpy(buffer,&v,sizeof(v));ReleaseSRWLockShared(&g_dn_lock);return sizeof(v);
+}
+/* Epoch-local evidence. No address, lifetime counter or thread ID is a
+ * transferable input value. The same lock encloses both entry admission
+ * and the atomic multi-producer boundary commit. */
+typedef struct {
+    uint32_t magic,version,bytes,installed_mask;
+    uint64_t token,started,owner,engine,queued,returned,accepted,sends,completed;
+    uint32_t main_thread,caller_thread;
+} hktas_input_receipt;
+typedef char hktas_input_size[(sizeof(hktas_input_receipt)==96 && offsetof(hktas_input_receipt,queued)==48)?1:-1];
+__declspec(dllexport) LONG __cdecl HktasClockBridge_CopyResidentInputFenceStatus(uint64_t token,BYTE *buffer,uint32_t length)
+{
+    if(!buffer || length!=sizeof(hktas_input_receipt)) return 0;
+    AcquireSRWLockShared(&g_dn_lock);
+    BOOL ok=hktas_dn_held_locked(token) && hktas_dn_verify(TRUE) && g_input_accepted<=g_input_queue_returned;
+    if(ok) {
+        hktas_input_receipt v={0x31464952u,1,sizeof(v),3,token,g_dn_started,g_input_epoch_owner,(uintptr_t)g_dn_base,
+            g_input_queue_entered,g_input_queue_returned,g_input_accepted,g_input_send_entered,g_input_send_returned,g_dn_main,GetCurrentThreadId()};
+        memcpy(buffer,&v,sizeof(v));
+    }
+    ReleaseSRWLockShared(&g_dn_lock);return ok ? (LONG)sizeof(hktas_input_receipt) : 0;
 }
 #endif

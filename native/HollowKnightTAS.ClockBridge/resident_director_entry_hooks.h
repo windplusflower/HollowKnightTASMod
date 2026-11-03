@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <string.h>
 #include "resident_director_entry_layout.h"
+#include "resident_input_entry_layout.h"
+#ifndef HKTAS_BOUNDARY_ENTRIES
+#define HKTAS_BOUNDARY_ENTRIES(X) HKTAS_DE_ENTRIES(X) HKTAS_INPUT_ENTRIES(X)
+#endif
 
 /* The linker puts the relocated instruction prefix and its x64 unwind
  * metadata in this module's ordinary .text/.pdata/.xdata. Installation
@@ -19,10 +23,10 @@
         ".globl hktas_de_resume_" #id "\nhktas_de_resume_" #id ":\n.quad 0\n" \
         ".section .xdata,\"dr\"\n.p2align 2\nhktas_de_unwind_" #id ":\n.byte " unwind "\n.p2align 2\n" \
         ".section .pdata,\"dr\"\n.p2align 2\n.rva hktas_de_original_" #id ",hktas_de_end_" #id ",hktas_de_unwind_" #id "\n.text\n");
-HKTAS_DE_ENTRIES(HKTAS_DE_THUNK)
+HKTAS_BOUNDARY_ENTRIES(HKTAS_DE_THUNK)
 #undef HKTAS_DE_THUNK
 #define HKTAS_DE_ID(id,abi,rva,length,hash,cut,bytes,unwind) HKTAS_DE_##id,
-enum hktas_de_id { HKTAS_DE_ENTRIES(HKTAS_DE_ID) HKTAS_DE_COUNT };
+enum hktas_de_id { HKTAS_BOUNDARY_ENTRIES(HKTAS_DE_ID) HKTAS_DE_COUNT };
 #undef HKTAS_DE_ID
 typedef struct {
     DWORD rva,length;
@@ -33,7 +37,7 @@ typedef struct {
 } hktas_de_entry;
 #define HKTAS_DE_ROW(id,abi,rva,length,hash,cut,bytes,unwind) \
     {rva,length,hash,cut,hktas_de_original_##id,hktas_de_resume_##id},
-static const hktas_de_entry hktas_de_entries[]={HKTAS_DE_ENTRIES(HKTAS_DE_ROW)};
+static const hktas_de_entry hktas_de_entries[]={HKTAS_BOUNDARY_ENTRIES(HKTAS_DE_ROW)};
 #undef HKTAS_DE_ROW
 
 static BOOL hktas_de_unwind_matches(BYTE *image,const hktas_de_entry *entry,const BYTE *clone)

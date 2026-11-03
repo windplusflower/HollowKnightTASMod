@@ -89,7 +89,7 @@ static void __cdecl dn_job_Schedule(void *fence,hktas_dn_job_fn callback,void *d
     hktas_dn_enter(DN_job_Schedule);
     AcquireSRWLockExclusive(&g_dn_lock);
     hktas_dn_thread *owner=(hktas_dn_thread*)FlsGetValue(g_dn_fls);BYTE before[16];
-    if(!owner || !owner->depth || !fence || !data || count<1 || (unsigned)count>HKTAS_DN_LIMIT-g_dn_job_rows
+    if(!owner || !owner->director_depth || !fence || !data || count<1 || (unsigned)count>HKTAS_DN_LIMIT-g_dn_job_rows
         || done || !hktas_dn_read((uintptr_t)fence,before,16) || hktas_dn_ptr(before) || hktas_dn_u32(before+8)
         || !hktas_dn_job_disjoint(fence,data,(unsigned)count)) {hktas_dn_reject_locked(30);return;}
     size_t size=offsetof(hktas_dn_job_ticket,rows)+(size_t)count*sizeof(hktas_dn_job_row);
@@ -162,7 +162,7 @@ static void* __cdecl dn_job_Group(void *queue,void *out,void *group,int priority
     hktas_dn_supersede_group_locked(queue,group,hktas_dn_u64(body+8)+2);
     if(!matches) {
         hktas_dn_lineage *family=hktas_dn_find_cohort(queue,group,hktas_dn_u64(body+8)+2);
-        if(!family && (!owner || !owner->depth)) {ReleaseSRWLockExclusive(&g_dn_lock);return original(queue,out,group,priority,inline_mode);}
+        if(!family && (!owner || !owner->director_depth)) {ReleaseSRWLockExclusive(&g_dn_lock);return original(queue,out,group,priority,inline_mode);}
         if(!family) family=hktas_dn_lineage_bind_locked(queue,group,body,count,owner,TRUE);
         else if(family->published || !hktas_dn_assemble_lineage_locked(family,body,count)) {hktas_dn_reject_locked(39);return NULL;}
         ++family->publisher_refs;hktas_dn_enter_locked(DN_job_Group,TRUE);

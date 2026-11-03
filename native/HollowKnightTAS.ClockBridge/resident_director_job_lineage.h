@@ -54,7 +54,7 @@ static hktas_dn_lineage *hktas_dn_find_cohort(void *queue,void *group,uint64_t g
 }
 static hktas_dn_lineage *hktas_dn_lineage_bind_locked(void *queue,void *group,const BYTE *body,unsigned count,hktas_dn_thread *owner,BOOL assembled)
 {
-    if(!owner || !owner->depth || (unsigned)g_dn_lineage_count>=HKTAS_DN_LIMIT || count>HKTAS_DN_LIMIT-g_dn_lineage_rows
+    if(!owner || !owner->director_depth || (unsigned)g_dn_lineage_count>=HKTAS_DN_LIMIT || count>HKTAS_DN_LIMIT-g_dn_lineage_rows
         || g_dn_lineage_issued==UINT64_MAX || hktas_dn_u64(body+8)>UINT64_MAX-2u || hktas_dn_find_cohort(queue,group,hktas_dn_u64(body+8)+2)) {
         hktas_dn_reject_locked(39);return NULL;
     }
@@ -144,7 +144,7 @@ static void* __cdecl dn_job_CreateGroup(void *queue,unsigned count,void *depende
     typedef void* (__cdecl *factory)(void*,unsigned,void*);
     factory original=(factory)(void*)hktas_de_original_job_CreateGroup;
     hktas_dn_thread *owner=(hktas_dn_thread*)FlsGetValue(g_dn_fls);
-    if(!owner || !owner->depth) return original(queue,count,dependency);
+    if(!owner || !owner->director_depth) return original(queue,count,dependency);
     hktas_dn_enter(DN_job_CreateGroup);
     void *group=original(queue,count,dependency);
     AcquireSRWLockExclusive(&g_dn_lock);BYTE body[48];
@@ -162,7 +162,7 @@ static void __cdecl dn_job_ScheduleGroups(void *queue,void *first,void *last)
     typedef void (__cdecl *batch_fn)(void*,void*,void*);
     batch_fn original=(batch_fn)(void*)hktas_de_original_job_ScheduleGroups;
     hktas_dn_thread *owner=(hktas_dn_thread*)FlsGetValue(g_dn_fls);
-    if((!owner || !owner->depth) && !InterlockedCompareExchange(&g_dn_lineage_count,0,0)) {original(queue,first,last);return;}
+    if((!owner || !owner->director_depth) && !InterlockedCompareExchange(&g_dn_lineage_count,0,0)) {original(queue,first,last);return;}
     AcquireSRWLockExclusive(&g_dn_lock);
     uintptr_t group=(uintptr_t)first;unsigned n=0,bound=0;char cookie=0;
     while(group) {
@@ -175,7 +175,7 @@ static void __cdecl dn_job_ScheduleGroups(void *queue,void *first,void *last)
         hktas_dn_lineage *g=hktas_dn_find_cohort(queue,(void*)group,generation);
         if(g) {
             if(g->published || g->publisher_refs || !hktas_dn_assemble_lineage_locked(g,body,count)) {hktas_dn_reject_locked(42);return;}
-        } else if(owner && owner->depth) g=hktas_dn_lineage_bind_locked(queue,(void*)group,body,count,owner,TRUE);
+        } else if(owner && owner->director_depth) g=hktas_dn_lineage_bind_locked(queue,(void*)group,body,count,owner,TRUE);
         if(g) {g->batch_cookie=&cookie;++g->publisher_refs;++bound;}
         if(!next_node) {if(group!=(uintptr_t)last) {hktas_dn_reject_locked(42);return;}break;}
         if(group==(uintptr_t)last || !hktas_dn_read(next_node+8,&group,8) || !group) {hktas_dn_reject_locked(42);return;}
