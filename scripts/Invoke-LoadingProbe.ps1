@@ -56,7 +56,13 @@ param(
     [string] $CheckpointWindows = '',
     [string] $ClockBridgePath = '',
     [ValidateSet('', 'p0', 'p3', 'p3a', 'p3b', 'p3c')][string] $EvidencePhase = '',
-    [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0
+    [ValidateRange(0,120)][int] $EndpointHoldSeconds = 0,
+    [switch] $LeanS0,
+    [ValidateSet('', 'source', 'target')][string] $LeanS0Role = '',
+    [string] $LeanS0PacketPath = '',
+    [string] $LeanS0EndMovie = '',
+    [switch] $LeanS0SuffixToEnd,
+    [ValidateRange(1,4)][int] $LeanS0Slot = 4
 )
 $ErrorActionPreference = 'Stop'
 if ($InputRouteRecording -and ($Runs -ne 1 -or -not $RecordInputs -or -not $CanonicalBoundary -or -not $CanonicalPhaseOneTrace -or
@@ -118,7 +124,7 @@ if ($ActualDStage -and -not ('HollowKnightTAS.Diagnostics.ActualDMemoryRelay' -a
 }
 if ($ActualDExperiment -and (-not $CanonicalPhaseOneTrace -or -not $ClockCarryExperiment -or -not $S0ObservationTarget -or $ClockApplySource -or $RecordInputs)) { throw 'Actual D requires the protected in-memory source-to-zero-Movie scenario.' }
 if ($ActualDSuffix -and -not $ActualDExperiment) { throw 'Actual suffix requires the in-memory D transaction.' }
-if ($SourceBoundaryOrdinal -ne 1 -and (-not $ActualDExperiment -or $PhysicsFollowOn)) { throw 'Source boundary selection requires actual D and excludes first-boundary physics follow-on.' }
+if ($SourceBoundaryOrdinal -ne 1 -and (-not ($ActualDExperiment -or $LeanS0) -or $PhysicsFollowOn)) { throw 'Source boundary selection requires actual D or LeanS0 and excludes first-boundary physics follow-on.' }
 if ($PhysicsFollowOn -and -not $ActualDSuffix) { throw 'Physics follow-on requires the independently checked original suffix.' }
 if ($ClockCarryExperiment -and (-not $CanonicalPhaseOneTrace -or (-not $RecordInputs -and -not $S0ObservationTarget))) { throw 'Clock experiment requires a protected source recording or zero-Movie target.' }
 if ($ClockApplySource -and (-not $ClockCarryExperiment -or -not $S0ObservationTarget -or -not (Test-Path -LiteralPath $ClockApplySource -PathType Leaf))) { throw 'Clock D application requires the bounded source and protected zero-Movie target.' }
@@ -447,6 +453,15 @@ try {
             $relayPipe = [HollowKnightTAS.Diagnostics.ActualDMemoryRelay]::CreateServer($relayName)
             $arguments += @(('--probe-actual-d-stage=' + $ActualDStage.ToLowerInvariant()), ('--probe-actual-d-relay=' + $relayName))
         }
+        if ($LeanS0) {
+            $arguments += '--probe-lean-s0'
+            if ($LeanS0Role) { $arguments += ('--probe-lean-s0-role=' + $LeanS0Role.ToLowerInvariant()) }
+            $arguments += ('--probe-lean-s0-ordinal=' + $SourceBoundaryOrdinal)
+            $arguments += ('--probe-lean-s0-slot=' + $LeanS0Slot)
+            if ($LeanS0PacketPath) { $arguments += ('--probe-lean-s0-packet="{0}"' -f ([IO.Path]::GetFullPath($LeanS0PacketPath))) }
+            if ($LeanS0EndMovie) { $arguments += ('--probe-lean-s0-end-movie=' + $LeanS0EndMovie) }
+            if ($LeanS0SuffixToEnd) { $arguments += '--probe-lean-s0-suffix-to-end' }
+        }
         if ($BoundaryInventory) { $arguments += '--probe-boundary-inventory' }
         if ($ExportVideo) { $arguments += '--probe-export-video' }
         if ($CheckpointPrototype) { $arguments += '--checkpoint-prototype' }
@@ -497,7 +512,7 @@ try {
         [ordered]@{ run=$run; pid=$hostProcess.Id; status='running' } | ConvertTo-Json -Compress | Write-Output
         # InteractiveAsync keeps its existing 30 minute deadline. Allow only
         # bounded shutdown grace outside it; ordinary acceptance limits stay intact.
-        $probeHostTimeoutMs = if ($InteractiveRouteAuthoring) { 1830000 } elseif ($ActualDSuffixToEnd) { 7500000 } elseif ($ActualDExperiment) { 2700000 } else { 270000 }
+        $probeHostTimeoutMs = if ($InteractiveRouteAuthoring) { 1830000 } elseif ($ActualDSuffixToEnd -or $LeanS0SuffixToEnd) { 7500000 } elseif ($ActualDExperiment -or $LeanS0) { 2700000 } else { 270000 }
         if ($ActualDStage) {
             $relayPacket = $null
             if ($ActualDStage -eq 'Target') { $relayPacket = $ActualDRelayState.Packet; $ActualDRelayState.Remove('Packet') }

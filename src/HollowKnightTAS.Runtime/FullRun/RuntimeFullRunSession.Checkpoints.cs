@@ -87,6 +87,8 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         public Dictionary<string, string> CheckpointCommand(IReadOnlyDictionary<string, string> fields, string environmentSha256)
         {
+            if (fields.TryGetValue("phase", out var leanS0Phase) && leanS0Phase.StartsWith("lean-s0-", StringComparison.Ordinal))
+                return LeanS0Command(fields);
             if (fields.TryGetValue("phase", out var actualPhase) && actualPhase.StartsWith("d-exp-", StringComparison.Ordinal))
                 return ActualDExperimentCommand(fields);
             if (fields.TryGetValue("phase", out var observationPhase) && observationPhase.StartsWith("s0-", StringComparison.Ordinal))

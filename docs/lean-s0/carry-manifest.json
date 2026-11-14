@@ -18,7 +18,8 @@
       "verifiedImplementation": "src/HollowKnightTAS.Runtime/FullRun/LoadingSerialSceneProbe.cs:126-281",
       "stagingScene": "__HKTAS_SerialBoundary_v6",
       "s0CallbackSite": "LoadingSerialSceneProbe.ObserveNativeBoundary (lines 250-281), after UnloadSceneAsync(source) and 1 PlayerLoop yield return null, before original(load).",
-      "timingNote": "WillActivate (GameManager.DestroyPersonalPools at GameManager.cs:470-473) has not executed yet at ObserveNativeBoundary; T2 S0Gate must normalize/recycle LEVEL_UNLOAD pooled objects explicitly or allow pool cleanup at S0."
+      "timingNote": "WillActivate (GameManager.DestroyPersonalPools at GameManager.cs:470-473) has not executed yet at ObserveNativeBoundary; T2 S0Gate must normalize/recycle LEVEL_UNLOAD pooled objects explicitly or allow pool cleanup at S0.",
+      "b1ScopeNote": "Boundary B1 (Menu_Title -> GG_Workshop / Town, visualization='ContinueFromSave', firstLevel=true) is initial save load rather than an inter-scene transition; target cold-starts from matching initial save into the first scene, and LeanS0 covers all B2+ transitions including doors, Godhome dream entries, dream returns, and cross/same-scene Dream Gate warps."
     }
   },
   "rngAudit": {
@@ -66,7 +67,8 @@
       "evidence": [
         "CameraController.OnLevelUnload releases all lock zones (../hkapi/Assembly-CSharp/CameraController.cs:741-751)",
         "CameraController.SceneInit & CameraTarget.SceneInit reset mode, velocity, lock bounds, startLockedTimer (CameraController.cs:24-66, CameraTarget.cs:19-42)",
-        "HeroController.heroInPosition -> CameraController.DoPositionToHero -> CameraTarget.PositionToStart snaps camera to hero & scene bounds (CameraController.cs:516-600, CameraTarget.cs:505-595)"
+        "HeroController.heroInPosition -> CameraController.DoPositionToHero -> CameraTarget.PositionToStart snaps camera to hero & scene bounds (CameraController.cs:516-600, CameraTarget.cs:505-595)",
+        "CameraParent/CameraShake FSM normalized to Normal at S0 (LeanS0Gate.NormalizeCameraShakeFsm) to prevent residual ShakePositionV2 Random calls during transition loading frames (P3B B8 verification)."
       ]
     },
     "dreamGateSameSceneReload": {
@@ -96,9 +98,10 @@
         "currentData (bindings, timer, knightDamaged, playerData, previousCompletion, previousEquippedCharms, wasOvercharmed, bossSequenceName)",
         "currentSequence (asset name rebind)",
         "bossIndex",
-        "WasCompleted"
+        "WasCompleted",
+        "SetupEvent listener check -> BossSequenceController.SetupBossScene() re-registration when pending"
       ],
-      "evidence": "../hkapi/Assembly-CSharp/BossSequenceController.cs:455,498-549; history-a b04 static dump"
+      "evidence": "../hkapi/Assembly-CSharp/BossSequenceController.cs:170-260,455,498-549; history-a b04 static dump & P3B B4 Soul Orb MP Lose K3 verification"
     },
     {
       "id": "C4",
@@ -114,13 +117,12 @@
       "ddolAutoBoundObjectVarsExcluded": 27,
       "remainingVariables": [
         "bool:Is HUD Out",
-        "go:Orb Target",
-        "go:MenuStagMap",
-        "go:Geo Counter",
-        "go:Track 1",
+        "Hud Canvas/Slide Out.ActiveStateName",
+        "Hud Canvas/Health/Low Health FX.ActiveStateName & float:Wait Time (0.15f set by Slide Out/Come In; controls 1HP iTweenShakePosition RNG frame timing at P3B B4-full movieFrame 4302)",
+        "Soul Orb Control normalized to Idle at S0 (stops residual iTween, destroys iTweenFSMEvents, clears internal FSM event queues via LeanS0Gate.NormalizeHudFsms, LeanS0Gate.cs:245-295)",
         "go:Orbit Shield (re-bound cleanly when Orbit Shield respawns on LEVEL LOADED)"
       ],
-      "evidence": "history-c b02 full globalVars dump & diff-historyA-vs-historyC-b02.json"
+      "evidence": "history-c b02 full globalVars dump & diff-historyA-vs-historyC-b02.json; Hud_Canvas__Slide_Out__fsm_8912.md; Health__Low_Health_FX__fsm_8960.md; LeanS0Gate.cs:245-295; P3B B4-full movieFrame 4302 RNG trace"
     },
     {
       "id": "C6",
@@ -143,7 +145,7 @@
       "name": "HeroController",
       "decision": "trimmed_carry_and_normalize",
       "carryFields": [
-        { "field": "cState.facingRight", "source": "HeroControllerStates.cs:60", "note": "Unreset on GatePosition.top and non-forced bottom gates (HeroController.cs:1805-1906)" },
+        { "field": "cState.facingRight (applied via hero.FaceRight()/FaceLeft())", "source": "HeroControllerStates.cs:60; HeroController.cs:882-897; LeanS0SnapshotRuntime.cs:531-541", "note": "Unreset on GatePosition.top, non-forced bottom gates, and dreamGate (Knight__Dream_Return); FaceRight()/FaceLeft() also syncs transform.localScale.x so HeroBox world collider matches without +0.0111 X shift (P3C B2 660f movieFrame 2443)." },
         { "field": "exitedSuperDashing", "source": "HeroController.cs:5981", "note": "Set at GameManager.cs:429, consumed at EnterScene" },
         { "field": "exitedQuake", "source": "HeroController.cs:5984", "note": "Set at GameManager.cs:433, consumed at EnterScene top gate" },
         { "field": "enterWithoutInput", "source": "HeroController.cs:5855", "note": "Consumed in FinishedEnteringScene (3146-3149)" },
@@ -155,7 +157,8 @@
         { "field": "hitsSinceShielded", "source": "HeroController.cs:5867", "note": "Carefree Melody hit counter" },
         { "field": "wieldingLantern", "source": "HeroController.cs:5915", "note": "Lantern toggle across dark rooms" },
         { "field": "takeNoDamage", "source": "HeroController.cs:5999", "note": "Unreset flag" },
-        { "field": "blockerFix", "source": "HeroController.cs:6014", "note": "Set once in SceneInit" }
+        { "field": "blockerFix", "source": "HeroController.cs:6014", "note": "Set once in SceneInit" },
+        { "field": "jumped_steps", "source": "HeroController.cs:3497,3626,3708", "note": "Not reset by ResetMotion()/CancelJump() or DoDoubleJump(); affects JumpReleased() after double jump (P3B B4-full movieFrame 4128)." }
       ],
       "recomputeViaCharmUpdateOnRestore": [
         "carefreeShieldEquipped (HeroController.cs:5082-5089, 5864)",
@@ -189,7 +192,7 @@
         "Nail Arts": "Inactive (prev: Cancel All)",
         "Surface Water": "Inactive (prev: Cancel All)",
         "Dream Nail": "Inactive (prev: Cancel; normalize float:Queue Timer)",
-        "Dream Return": "Idle (prev: Check)",
+        "Dream Return": "Idle (prev: Check; state and FsmVariables carried for dreamGate entries via LeanS0SnapshotRuntime.cs:568-643)",
         "Spore Cooldown": "Idle (prev: Init; NOTE: lacks LEAVING SCENE transition, so carry Cooldown/Dung state or S0-reset to Idle)",
         "Globalise": "Init (prev: Init)",
         "Control Interpolation": "Idle or Check Pause (Wait 0.1s polling idle)"
@@ -308,5 +311,88 @@
         "summary": "Confirmed Grimmchild, Orbit Shield, Weaverling, and globalVars.go:Orbit Shield behavior at S0."
       }
     ]
-  }
+  },
+  "t6VerificationEvidence": [
+    {
+      "case": "P3B B2 (32f)",
+      "transition": "GG_Workshop -> GG_Atrium (Door_Workshop)",
+      "startMovie": 2195,
+      "endMovie": 2227,
+      "comparedFrames": 32,
+      "floatTolerance": 0.0,
+      "report": "artifacts/scene-checkpoints/p3b/lean-s0-verify-b2-k3-20261114-210926/k3-compare-report.json"
+    },
+    {
+      "case": "P3B B4 (32f)",
+      "transition": "GG_Boss_Door_Entrance -> GG_Crystal_Guardian_2 (door_dreamEnter)",
+      "startMovie": 3736,
+      "endMovie": 3768,
+      "comparedFrames": 32,
+      "floatTolerance": 0.0,
+      "report": "artifacts/scene-checkpoints/p3b/lean-s0-verify-20261114-200925/k3-compare-report.json"
+    },
+    {
+      "case": "P3B B4-full",
+      "transition": "GG_Boss_Door_Entrance -> GG_Crystal_Guardian_2 through B5..B8",
+      "startMovie": 3736,
+      "endMovie": 6738,
+      "comparedFrames": 3002,
+      "floatTolerance": 0.0,
+      "report": "artifacts/scene-checkpoints/p3b/lean-s0-verify-b4-full-20261114-204248/k3-compare-report.json"
+    },
+    {
+      "case": "P3B B8 (32f)",
+      "transition": "GG_Crystal_Guardian_2 -> GG_Atrium (door_dreamReturn)",
+      "startMovie": 6690,
+      "endMovie": 6722,
+      "comparedFrames": 32,
+      "floatTolerance": 0.0,
+      "report": "artifacts/scene-checkpoints/p3b/lean-s0-verify-b8-k3-20261114-210520/k3-compare-report.json"
+    },
+    {
+      "case": "P3B B8-full",
+      "transition": "GG_Crystal_Guardian_2 -> GG_Atrium (door_dreamReturn) to end",
+      "startMovie": 6690,
+      "endMovie": 6738,
+      "comparedFrames": 48,
+      "floatTolerance": 0.0,
+      "report": "artifacts/scene-checkpoints/p3b/lean-s0-verify-p3b-b8-full-20261115-073506/k3-compare-report.json"
+    },
+    {
+      "case": "P3C B2 (32f)",
+      "transition": "Town -> Abyss_12 (dreamGate)",
+      "startMovie": 2060,
+      "endMovie": 2092,
+      "comparedFrames": 32,
+      "floatTolerance": 0.0,
+      "report": "artifacts/scene-checkpoints/p3c/lean-s0-verify-p3c-b2-k3-20261114-211803/k3-compare-report.json"
+    },
+    {
+      "case": "P3C B2 (660f)",
+      "transition": "Town -> Abyss_12 (dreamGate)",
+      "startMovie": 2060,
+      "endMovie": 2720,
+      "comparedFrames": 660,
+      "floatTolerance": 0.0,
+      "report": "artifacts/scene-checkpoints/p3c/lean-s0-verify-p3c-b2-660-20261114-214648/k3-compare-report.json"
+    },
+    {
+      "case": "P3C same-scene route B2-full",
+      "transition": "Town -> Abyss_12 through Abyss_12 -> Abyss_12 (dreamGate) and Abyss_12 -> Abyss_06_Core",
+      "startMovie": 2060,
+      "endMovie": 4000,
+      "comparedFrames": 1940,
+      "floatTolerance": 0.0,
+      "report": "artifacts/scene-checkpoints/p3c/lean-s0-verify-p3c-ss-b2-full-20261115-072945/k3-compare-report.json"
+    },
+    {
+      "case": "P3C same-scene direct B3-full",
+      "transition": "Abyss_12 -> Abyss_12 (dreamGate) through Abyss_12 -> Abyss_06_Core",
+      "startMovie": 2978,
+      "endMovie": 4000,
+      "comparedFrames": 1022,
+      "floatTolerance": 0.0,
+      "report": "artifacts/scene-checkpoints/p3c/lean-s0-verify-p3c-ss-b3-full-20261115-072141/k3-compare-report.json"
+    }
+  ]
 }

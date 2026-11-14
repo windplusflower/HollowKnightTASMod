@@ -495,8 +495,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         private void OnNativeBeforeFrame(long completed)
         {
             restoreDrawing.Active = false;
-            if (mode == "DSourcePaused" || mode == "DTargetPaused") { Fail("Resident D boundary executed another PlayerLoop while parked; retire this process."); return; }
+            if (mode == "DSourcePaused" || mode == "DTargetPaused" || mode == "LeanS0SourcePaused" || mode == "LeanS0TargetPaused")
+            {
+                Fail("Parked boundary executed another PlayerLoop while paused; retire this process.");
+                return;
+            }
             if (RunS0ObservationFrame(completed)) return;
+            if (RunLeanS0TargetLoadingFrame(completed)) return;
             if (!inputReady || (mode != "Recording" && mode != "Replay")) return;
             try
             {
@@ -509,12 +514,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 LoadingOnlineIsolationObservation.CheckFailure();
                 if (LoadingSerialSceneProbe.ObserveNativeBoundary(this, movieFrame, completed))
                 {
-                    if (residentImportLoader != null || TryParkResidentSource(completed)) return;
+                    if (ShouldPauseBeforeNextNativeFrameLeanS0(completed) || residentImportLoader != null || TryParkResidentSource(completed)) return;
                     loadingGameplayOracle?.Sample("candidate", "serial-source-unloaded");
                     CaptureSceneCheckpointAtBoundary(completed);
                 }
-                var sceneHandle = UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;
-                if (ready && sceneHandle != randomSeedSceneHandle)
+                var activeScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+                var sceneHandle = activeScene.handle;
+                SyncLeanS0RandomSeedHandleIfNeeded(sceneHandle, activeScene.name);
+                if (!LeanS0Mode.Enabled && ready && sceneHandle != randomSeedSceneHandle)
                 {
                     if (randomSeedRequest == null || randomSeedAcknowledged == null)
                     {
@@ -685,9 +692,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 actualDSuffixOracle?.ObserveSuffixRandomBoundary("after", frameInputEnabled, frameBoundary);
                 if (!frameInputEnabled)
                 {
+                    SampleLeanS0LoadingDiag(completed, "loading-after", frameBoundary);
                     skippedLoadFrames++;
                     ObserveResidentContinuation(3, completed);
                     return;
+                }
+                if (movieFrame == leanS0K3StartMovie)
+                {
+                    SampleLeanS0LoadingDiag(completed, "first-movie-after", frameBoundary);
                 }
                 input.CompleteFrame(movieFrame);
                 if (input.Fault.Length != 0)
@@ -700,6 +712,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 loadingBoundaryProbe?.Sample("after", frameBoundary);
                 loadingGameplayOracle?.Sample("after", frameBoundary);
                 actualDSuffixOracle?.Sample("after", frameBoundary);
+                leanS0K3Trace?.SampleFrame(movieFrame, completed, frameBoundary);
                 if (mode == "Recording") journal!.CompleteFrame(movieFrame, activeFrameRate);
                 movieFrame++;
                 ObserveResidentContinuation(3, completed);
@@ -711,6 +724,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 {
                     if (actualDSuffixOracle?.CompletedSuccessfully == true && movieFrame == actualDSuffixEnd)
                         LoadingSerialSceneProbe.EndPoolDiagnostic();
+                    FinishLeanS0K3TraceIfActive();
                     infoTiming.FlushTrace(sessionDirectory);
                     // The hidden-launch environment survives after the window is
                     // revealed. Retire these hooks so later visible seeks never

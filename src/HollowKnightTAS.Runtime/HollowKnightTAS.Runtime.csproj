@@ -80,6 +80,10 @@
       <HintPath>$(HKManagedDir)\UnityEngine.AudioModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="UnityEngine.JSONSerializeModule">
+      <HintPath>$(HKManagedDir)\UnityEngine.JSONSerializeModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine.VideoModule">
       <HintPath>$(HKManagedDir)\UnityEngine.VideoModule.dll</HintPath>
       <Private>false</Private>

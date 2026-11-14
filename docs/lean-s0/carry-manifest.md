@@ -16,6 +16,8 @@
      3. `yield return null` 经过一个 PlayerLoop 使销毁回调展开（第 164 行）；
      4. 在 `ObserveNativeBoundary`（第 250–281 行）停靠——**实测 `loadedScenes` 仅剩 `rootCount = 0` 的 `__HKTAS_SerialBoundary_v6` 与 `DontDestroyOnLoad`**，之后才执行 `original(load)` 实例化目标场景。
    - **关键时序细节（本次实证新发现）**：在 `LoadingSerialSceneProbe` 当前顺序中，`ObserveNativeBoundary` 位于 `original(load)` 之前，因此原版在 `SceneLoad.WillActivate` 触发的 `GameManager.DestroyPersonalPools()`（`GameManager.cs:470-473`、`SceneLoad.cs:136-140`）**尚未在 S0 之前执行**。T2 设计 `S0Gate` 时应在写入携带集前先统一调度/清理依赖 `DestroyPersonalPools()` 的常驻残留对象（详见第 3 节 `ObjectPool` 与第 4 节 D2）。
+3. **`B1` 首场景加载（`Menu_Title -> GG_Workshop` / `Town`，`firstLevel=true`）范围说明**：
+   - 边界 `B1` 属于主菜单通过 `ContinueFromSave`（`visualization="ContinueFromSave"`）加载初始存档进入首个场景，并非关卡间场景过渡；在 Lean S0 流程中，目标端直接以对应初始存档（如 Slot 4 / Slot 3）冷启动至首个观察场景（如 `GG_Workshop` 或 `Town`），因此 `LeanS0` 覆盖所有 `B2+` 场景过渡边界（含普通门、神居梦境门、Boss 返回门、Dream Gate 跨场景与同场景传送）。
 
 ---
 
@@ -25,9 +27,9 @@
 |---|---|---|---|---|
 | **C1** | `PlayerData` | **保留（整表携带）** | `GameManager.instance.playerData` 完整序列化（血量、灵魂、Geo、护符、能力、地图、Boss 进度、`bossDoorStateTier*`、hazard respawn、`playTime` 等；其中 `playTime` 为界面显示，不影响玩法，可一并由自带序列化携带） | `../hkapi/Assembly-CSharp/GameManager.cs:2345,2376,2721`；`SaveStats.cs:55-90`；Pair 2 diff `hazardRespawnLocation`/`profileID`/`playTime` |
 | **C2** | `SceneData` | **保留（整表携带）** | `GameManager.instance.sceneData`（`persistentBoolItems`、`persistentIntItems`、`geoRocks`） | 跨场景持久保存已破坏墙体/机关/拾取物状态；Pair 2 同房间二次进入前后一致 |
-| **C3** | 神居连战静态状态 | **保留** | `BossSequenceController.currentData`（`bindings`、`timer`、`knightDamaged`、`playerData` 目标 `PlayerData` 字段名如 `"bossDoorStateTier4"`、`previousCompletion`、`previousEquippedCharms`、`wasOvercharmed`、`bossSequenceName`）、`currentSequence`（按 `BossSequence` 资产名重绑定）、`bossIndex`、`WasCompleted` | `../hkapi/Assembly-CSharp/BossSequenceController.cs:455,498-549`；`history-a` b04 静态 dump 实测全字段在位 |
+| **C3** | 神居连战静态状态 | **保留** | `BossSequenceController.currentData`（`bindings`、`timer`、`knightDamaged`、`playerData` 目标 `PlayerData` 字段名如 `"bossDoorStateTier4"`、`previousCompletion`、`previousEquippedCharms`、`wasOvercharmed`、`bossSequenceName`）、`currentSequence`（按 `BossSequence` 资产名重绑定）、`bossIndex`、`WasCompleted`、`HasPendingSequenceSetup`（若 `BossSceneController.SetupEvent` 待回调，恢复端重新注册 `BossSequenceController.SetupBossScene()`） | `../hkapi/Assembly-CSharp/BossSequenceController.cs:170-260,455,498-549`；`history-a` b04 静态 dump + P3B B4 `Soul Orb MP Lose` 实证 |
 | **C4** | `StaticVariableList.variables` | **保留** | `StaticVariableList.variables` 字典（键值均为基础类型/可序列化数据，仅在 `GameManager.ReturnToMainMenu` 时清空） | `../hkapi/Assembly-CSharp/StaticVariableList.cs:6-46`；`GameManager.cs:3054` |
-| **C5** | PlayMaker 全局变量 | **大幅裁剪（仅携带极少数运行时变量，其余按引用自绑定）** | 实测 `PlayMakerGlobals.Instance.Variables` 共含 32 个变量与 51 个全局事件，其中 **27 个为常驻 DDOL 对象固定引用**（如 `Hero`、`MainCamera`、`HUD Camera`、`GameManager`、`AudioManager`、`Inventory` 等，无需序列化）；其余 `Is HUD Out`、`Orb Target`、`MenuStagMap`、`Geo Counter`、`Track 1`、`Orbit Shield` 仅当非空且有跨场景逻辑时按需处理（若 D2 采纳 S0 重置，`Orbit Shield` 亦不需携带） | `history-c` b02 `globalVars.*` 全量导出（32 项）与 `diff-historyA-vs-historyC-b02.json`（仅 `globalVars.go:Orbit Shield` 存在差异） |
+| **C5** | PlayMaker 全局变量 | **大幅裁剪（仅携带极少数运行时变量，其余按引用自绑定）** | 实测 `PlayMakerGlobals.Instance.Variables` 共含 32 个变量与 51 个全局事件，其中 **27 个为常驻 DDOL 对象固定引用**（如 `Hero`、`MainCamera`、`HUD Camera`、`GameManager`、`AudioManager`、`Inventory` 等，无需序列化）；实际携带 `bool:Is HUD Out` 以及与其联动的跨场景常驻 HUD FSM 状态（`Hud Canvas/Slide Out` 状态、`Health/Low Health FX` 状态与 `float:Wait Time`，因 `Slide Out/Come In` 会写入 `0.15f` 并在首次 1 HP 时决定 `iTweenShakePosition` RNG 时序，P3B B4-full `movieFrame 4302` 实证；`LeanS0SnapshotRuntime.cs:418-464`）；`Soul Orb Control` 在 S0 由 `LeanS0Gate.NormalizeHudFsms()`（`LeanS0Gate.cs:245-295`）停止残留 `iTween`、销毁 `iTweenFSMEvents`、清空内部队列并切回 `Idle` | `history-c` b02 `globalVars.*` 全量导出；`Hud_Canvas__Slide_Out__fsm_8912.md`；`Health__Low_Health_FX__fsm_8960.md`；`LeanS0Gate.cs:245-295`；P3B B4-full `movieFrame 4302` 实证 |
 | **C6** | 过场参数 | **保留** | `SceneLoadInfo`：`SceneName`、`EntryGateName`、`HeroLeaveDirection`、`Visualization`、`EntryDelay`、`AlwaysUnloadUnusedAssets`、`PreventCameraFadeOut`、`IsFirstLevelForPlayer` | `../hkapi/Assembly-CSharp/GameManager.cs:399-468, 613-627`；恢复端用于发起正常 `BeginSceneTransition` |
 | **C7** | `HeroController` | **精细裁剪后保留（剔除 `EnterScene` / `LeaveScene` 重置项；异常旧场景时间戳/泄露委托归入 S0 规范化）** | 见下表 2.1（共 16 项保留或 S0 规范化；`position`、`velocity`、`airDashed`、`doubleJumped`、`attack_time` 等由 `EnterScene` 重置，**全部剔除**） | `../hkapi/Assembly-CSharp/HeroController.cs:193-226, 1787-2083, 3104-3165, 3617-3639, 5055-5091`；Pair 2 diff `Knight.HeroController` 21 项差异 |
 | **C8** | 小骑士身上 FSM | **保留当前状态 + 极少数跨场景未复位字段（并满足 D4 空闲边界前提）** | 小骑士身上共 12 个 FSM；正常场景出口触发 `HeroCtrl-LeavingScene` 后 11 个处于空闲态，`Control Interpolation` 位于 `Idle` 或 `Check Pause`。需注意 **`Spore Cooldown` 没有 `LEAVING SCENE` 转移**（若带毒菌冷却过场则处于 `Cooldown`/`Dung`），以及 **`Dream Nail` 保留 `Queue Timer`**（与 `Time.timeSinceLevelLoad` 比较） | `history-a` b02/b04/b07 `summary.knightFsms` 实测（见第 4 节表） |
@@ -36,7 +38,7 @@
 | **C11** | 时间相关 | **裁剪后仅保留玩法状态** | 不携带 `PlayerData.playTime`（或仅由 C1 顺带）与 `GameManager.sessionPlayTimer` 以外的 wall-clock/引擎时间；若存在正在进行的 `timeSlowedCount` / `Time.timeScale` 慢动作窗口则记录（正常过场边界 `timeSlowedCount == 0`、`timeScale == 1`） | `../hkapi/Assembly-CSharp/GameManager.cs:23-27, 2345-2376, 2810-2901` |
 | **C12** | TAS 控制面 | **保留（复用现有实现）** | 影片帧号、ClockBridge 帧时钟状态、输入队列 | 现有运行时基础设施 |
 
-**明确不携带（精简原则剔除）**：新场景全部对象、相机状态（见第 3 节）、HUD/Inventory 显示节点（由 `PlayerData` 重建，Pair 2 diff 639+179 项全部随入场同步）、音乐与音效本身（按 D3 仅记 cue 标识且不参与 K3 验收）、`ObjectPool` 中 60 个空闲预制体残留位置/颜色（Pair 2 diff 2697 项）、`SceneParticlesController` 粒子区域缓存、`Low Health Vignette` 与 `Hero Damaged Effects` 视听过渡状态、`Fsm.lastRaycastHit2DInfoLUT`（Pair 2 348 项）与 `FsmEvent._eventLookup`（全局事件注册缓存）。
+**明确不携带（精简原则剔除）**：新场景全部对象、相机状态（见第 3 节；另 `CameraParent/CameraShake` FSM 在 S0 由 `LeanS0Gate.NormalizeCameraShakeFsm()` 规范回 `Normal` 并清零 `Rumbling*`，避免旧场景残留震动在加载帧消耗 `UnityEngine.Random`，P3B B8 实证）、HUD/Inventory 显示节点（由 `PlayerData` 重建，Pair 2 diff 639+179 项全部随入场同步；仅保留 `C5` 中的 `Slide Out` / `Low Health FX` 状态与 `Wait Time`）、音乐与音效本身（按 D3 仅记 cue 标识且不参与 K3 验收）、`ObjectPool` 中 60 个空闲预制体残留位置/颜色（Pair 2 diff 2697 项）、`SceneParticlesController` 粒子区域缓存、`Low Health Vignette` 与 `Hero Damaged Effects` 视听过渡状态、`Fsm.lastRaycastHit2DInfoLUT`（Pair 2 348 项）与 `FsmEvent._eventLookup`（全局事件注册缓存）。
 
 ---
 
@@ -49,7 +51,7 @@
 
 | 字段名 | 声明行 | 影响机制与过场行为 | 处理分类 |
 |---|---|---|---|
-| `cState.facingRight` | `HeroControllerStates.cs:60` | 仅从左右门与指定 `alwaysEnterRight/Left` 的门重置；**从 `GatePosition.top` 入口与无固定朝向的 `bottom` 入口进入时不重置**（`HeroController.cs:1805-1906`） | **携带** |
+| `cState.facingRight`（via `FaceRight()`/`FaceLeft()`） | `HeroControllerStates.cs:60`; `HeroController.cs:882-897` | 仅从左右门与指定 `alwaysEnterRight/Left` 的门重置；**从 `GatePosition.top`、无固定朝向的 `bottom` 入口或 `dreamGate`（`Knight__Dream_Return`）进入时不重设朝向与 `transform.localScale.x`**。若仅写入 `cState.facingRight` 而不同步 `transform.localScale.x`，会导致 `HeroBox` 非零局部 X 偏移产生 `+0.0111` 世界碰撞体偏差（P3C B2 660f `movieFrame 2443` 实证），故写回端必须调用 `hero.FaceRight()`/`hero.FaceLeft()`（`LeanS0SnapshotRuntime.cs:531-541`） | **携带** |
 | `exitedSuperDashing` | `HeroController.cs:5981` | `BeginSceneTransitionRoutine`（`GameManager.cs:427-430`）置位；`EnterScene` 左右门分支读取后触发 `HeroCtrl-EnterSuperDash`，`FinishedEnteringScene`（3155-3158）清零 | **携带** |
 | `exitedQuake` | `HeroController.cs:5984` | `BeginSceneTransitionRoutine`（`GameManager.cs:431-434`）置位；`EnterScene` 顶门分支读取后触发 `HeroCtrl-EnterQuake` 保持下砸无敌帧（3138-3141, 3159-3162） | **携带** |
 | `enterWithoutInput` | `HeroController.cs:5855` | `FinishedEnteringScene`（3146-3149）检查是否恢复输入控制，仅在执行后清零 | **携带** |
@@ -64,6 +66,7 @@
 | `cState.nailCharging` | `HeroControllerStates.cs:75` | `EnterScene` 只调用 `ResetAttacksDash()` 而不清 `nailCharging`（`ResetMotion()` 只清 `nailChargeTimer`） | **S0 规范化置 `false`**（与 D4 空闲边界一致） |
 | `carefreeShieldEquipped` / `joniBeam` / `nailChargeTime` | `HeroController.cs:5055-5091, 5864, 5996, 6002` | 仅在 `orig_CharmUpdate()` 时从 `PlayerData` 计算，**过场时不重算**；若仅写 `PlayerData` 而不调用 `CharmUpdate()` 会不同步 | **恢复端在写回 `PlayerData` 后调用 `HeroController.CharmUpdate()` 统一重算** |
 | `wieldingLantern` / `takeNoDamage` / `blockerFix` | `HeroController.cs:1030,1215,5915,5999,6014` | 提灯状态、`takeNoDamage` 标记、一次性 `blockerFix` 修复标记，`EnterScene` 不清零 | **携带**（`blockerFix` 对旧档安全保留） |
+| `jumped_steps` | `HeroController.cs:3497,3626,3708` | `ResetMotion()` → `CancelJump()` 与 `DoDoubleJump()` 均不重置 `jumped_steps`，跨场景二段跳松键时 `JumpReleased()` 会比较 `jumped_steps >= JUMP_STEPS_MIN`（P3B B4-full `movieFrame 4128` 实证） | **携带** |
 | `OnTakenDamage` 事件委托链 | `HeroController.cs:40, 1397-1399`; `BossSceneController.cs:180,209` | **Pair 2 diff 实证关键隐患**：战死离开 `GG_Crystal_Guardian_2` 时未触发 `EndBossScene()`，且 `BossSceneController.OnDestroy()`（112-122）**未退订 `OnTakenDamage -= SetKnightDamaged`**，导致边界 #7 时 `OnTakenDamage` 仍悬挂已销毁场景的 `BossSceneController.SetKnightDamaged` 委托 | **S0 规范化清理**（若 `BossSceneController.Instance == null` 或无活跃场景归属时清空残留委托，防止悬挂跨场景执行） |
 
 （说明：`HeroController` 中的 `recoilVector`、`attackDuration`、`attackQueueSteps` 虽在 Pair 2 diff 出现，但仅在主动触发攻击/受击反冲时由 `DoAttack`/`Recoil` 覆盖写入，`EnterScene` 已重置 `attacking`/`recoiling`；`SpriteFlash` 仅影响视觉闪烁，均可忽略。）
@@ -82,7 +85,7 @@
      - `Nail Arts`: `Inactive`（`prev = Cancel All`）
      - `Surface Water`: `Inactive`（`prev = Cancel All`）
      - `Dream Nail`: `Inactive`（`prev = Cancel`，但其变量 `float:Queue Timer` 在 Pair 2 存在旧时间戳 `-48.76` vs `-82.81`，建议 S0 重置或归零）
-     - `Dream Return`: `Idle`（`prev = Check`）
+     - `Dream Return`: `Idle`（`prev = Check`；在 `dreamGate` 入场前其 `FsmVariables` 与状态会携带至目标端，`LeanS0SnapshotRuntime.cs:568-643`）
      - `Spore Cooldown`: `Idle`（`prev = Init`；**注意**：源码/FSM 中该 FSM 无 `LEAVING SCENE` 转移，若于蘑菇孢子 4.25s 冷却期离开场景，将带着 `Cooldown`/`Dung` 状态穿过 S0，因此需要**携带状态或 S0 重置为 `Idle`**）
      - `Globalise`: `Init`（`prev = Init`）
      - `Control Interpolation`: b02 为 `Idle`，b04/b07 为 `Check Pause`（0.1s 轮询等待态，`activeAction[0](Wait).startTime` 随 `Time.time` 变化，属时间基差异）
@@ -155,3 +158,21 @@
 - 机器可读携带清单：[`docs/lean-s0/carry-manifest.json`](carry-manifest.json)
 - 探针代码与脚本：`src/HollowKnightTAS.Runtime/FullRun/S0SemanticProbe.cs`、`src/HollowKnightTAS.Runtime/FullRun/LoadingSerialSceneProbe.cs`（264–272 行，严格受 `HKTAS_S0_SEMANTIC_PROBE=1` 控制）、`scripts/Invoke-S0SemanticProbe.ps1`、`scripts/Compare-S0SemanticSnapshots.py`。
 - 实机卫生确认：三次运行（`history-a`、`history-b`、`history-c`）均满足 31 份玩家存档 `saves-before.json == saves-after.json`、`mods-isolation.json` 为 `restored`、无残留 `hollow_knight`/`StudioScenarioHarness` 进程、Companion 签名 `Valid`。
+
+---
+
+## 7. T6 多边界实机验收实证汇总
+
+所有检查均在 `floatTolerance = 0.0` 下通过 K3 轨迹逐帧等价比对（`exact_match`），且每次实机前后 31 份用户存档哈希完全一致、`mods-isolation.json` 为 `restored`、无残留进程、Companion 签名 `Valid`：
+
+| 用例 | 边界与入口 | 对比帧区间（总帧数） | 实证目录与报告 |
+|---|---|---|---|
+| **P3B B2 (32f)** | `GG_Workshop -> GG_Atrium` (`Door_Workshop`) | `2195..2227`（`32` 帧） | [`artifacts/scene-checkpoints/p3b/lean-s0-verify-b2-k3-20261114-210926/k3-compare-report.json`](../../artifacts/scene-checkpoints/p3b/lean-s0-verify-b2-k3-20261114-210926/k3-compare-report.json) |
+| **P3B B4 (32f)** | `GG_Boss_Door_Entrance -> GG_Crystal_Guardian_2` (`door_dreamEnter`) | `3736..3768`（`32` 帧） | [`artifacts/scene-checkpoints/p3b/lean-s0-verify-20261114-200925/k3-compare-report.json`](../../artifacts/scene-checkpoints/p3b/lean-s0-verify-20261114-200925/k3-compare-report.json) |
+| **P3B B4-full** | 从 B4 起完整后缀跨越 `B5..B8` 至末尾 | `3736..6738`（`3002` 帧） | [`artifacts/scene-checkpoints/p3b/lean-s0-verify-b4-full-20261114-204248/k3-compare-report.json`](../../artifacts/scene-checkpoints/p3b/lean-s0-verify-b4-full-20261114-204248/k3-compare-report.json) |
+| **P3B B8 (32f)** | `GG_Crystal_Guardian_2 -> GG_Atrium` (`door_dreamReturn`) | `6690..6722`（`32` 帧） | [`artifacts/scene-checkpoints/p3b/lean-s0-verify-b8-k3-20261114-210520/k3-compare-report.json`](../../artifacts/scene-checkpoints/p3b/lean-s0-verify-b8-k3-20261114-210520/k3-compare-report.json) |
+| **P3B B8-full** | 从 B8 起完整后缀至录像末尾 | `6690..6738`（`48` 帧） | [`artifacts/scene-checkpoints/p3b/lean-s0-verify-p3b-b8-full-20261115-073506/k3-compare-report.json`](../../artifacts/scene-checkpoints/p3b/lean-s0-verify-p3b-b8-full-20261115-073506/k3-compare-report.json) |
+| **P3C B2 (32f)** | `Town -> Abyss_12` (`dreamGate`) | `2060..2092`（`32` 帧） | [`artifacts/scene-checkpoints/p3c/lean-s0-verify-p3c-b2-k3-20261114-211803/k3-compare-report.json`](../../artifacts/scene-checkpoints/p3c/lean-s0-verify-p3c-b2-k3-20261114-211803/k3-compare-report.json) |
+| **P3C B2 (660f)** | `Town -> Abyss_12` (`dreamGate`，覆盖受击边界回归) | `2060..2720`（`660` 帧） | [`artifacts/scene-checkpoints/p3c/lean-s0-verify-p3c-b2-660-20261114-214648/k3-compare-report.json`](../../artifacts/scene-checkpoints/p3c/lean-s0-verify-p3c-b2-660-20261114-214648/k3-compare-report.json) |
+| **P3C 同场景路线 B2-full** | `Town -> Abyss_12` (`dreamGate`) 经同场景 `B3` 重载与 `B4` 出图 | `2060..4000`（`1940` 帧） | [`artifacts/scene-checkpoints/p3c/lean-s0-verify-p3c-ss-b2-full-20261115-072945/k3-compare-report.json`](../../artifacts/scene-checkpoints/p3c/lean-s0-verify-p3c-ss-b2-full-20261115-072945/k3-compare-report.json) |
+| **P3C 同场景直采 B3-full** | `Abyss_12 -> Abyss_12` (`dreamGate` 同场景直采，含 `B4` 出图) | `2978..4000`（`1022` 帧） | [`artifacts/scene-checkpoints/p3c/lean-s0-verify-p3c-ss-b3-full-20261115-072141/k3-compare-report.json`](../../artifacts/scene-checkpoints/p3c/lean-s0-verify-p3c-ss-b3-full-20261115-072141/k3-compare-report.json) |

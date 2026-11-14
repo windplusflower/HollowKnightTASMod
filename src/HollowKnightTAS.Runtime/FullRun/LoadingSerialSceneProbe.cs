@@ -247,6 +247,24 @@ namespace HollowKnightTAS.Runtime.FullRun
             return original(name);
         }
 
+        internal static void MarkLeanS0BoundaryObserved()
+        {
+            var self = instance ?? throw new InvalidOperationException("Serial scene probe instance is absent.");
+            if (!self.awaitingBoundary)
+            {
+                throw new InvalidOperationException("Serial scene probe is not awaiting a boundary.");
+            }
+            self.observedBoundary = true;
+        }
+
+        internal static void SetLeanS0Ordinal(int boundaryOrdinal)
+        {
+            if (instance != null)
+            {
+                instance.ordinal = boundaryOrdinal;
+            }
+        }
+
         internal static bool ObserveNativeBoundary(RuntimeFullRunSession session, long movie, long native)
         {
             var self = instance;
@@ -270,6 +288,22 @@ namespace HollowKnightTAS.Runtime.FullRun
                 self.checkpointLoadInfo?.Visualization.ToString() ?? "",
                 movie,
                 native);
+            if (session.TryEnterLeanS0Boundary(
+                    self.ordinal,
+                    self.sourceName,
+                    self.transition.TargetSceneName,
+                    self.checkpointLoadInfo,
+                    movie,
+                    native,
+                    out var parkedForLeanS0))
+            {
+                if (parkedForLeanS0)
+                {
+                    return true;
+                }
+                self.observedBoundary = true;
+                return true;
+            }
             if (session.TryParkResidentImport(native, self.ordinal, self.sourceName, self.transition.TargetSceneName))
                 return true; // The iterator still cannot advance. Restore enters the same Canon inside its measured transaction.
             if (!session.EnterResidentBoundary(self.ordinal, movie, native)) {

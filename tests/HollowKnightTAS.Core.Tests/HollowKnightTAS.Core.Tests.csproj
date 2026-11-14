@@ -95,6 +95,9 @@
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\BoundaryAssetArrayRegistry.cs" Link="FullRun\BoundaryAssetArrayRegistry.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\BoundaryDigestComparison.cs" Link="FullRun\BoundaryDigestComparison.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CheckpointScalarFields.cs" Link="FullRun\CheckpointScalarFields.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0Mode.cs" Link="FullRun\LeanS0Mode.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0Gate.cs" Link="FullRun\LeanS0Gate.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0Packet.cs" Link="FullRun\LeanS0Packet.cs" />
     <Reference Include="Assembly-CSharp"><HintPath>$(HKManagedDir)\Assembly-CSharp.dll</HintPath></Reference>
     <Reference Include="UnityEngine"><HintPath>$(HKManagedDir)\UnityEngine.dll</HintPath></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(HKManagedDir)\UnityEngine.CoreModule.dll</HintPath></Reference>

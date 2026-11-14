@@ -729,12 +729,15 @@ namespace HollowKnightTAS.ClockPayload
             fullRunRandomAcknowledged?.Set();
         }
 
+        private static readonly bool leanS0RenderIsolationActive =
+            string.Equals(Environment.GetEnvironmentVariable("HKTAS_LEAN_S0"), "1", StringComparison.Ordinal);
+
         private static void OnFullRunDrawNoise(
             On.UnityStandardAssets.ImageEffects.FastNoise.orig_DrawNoiseQuadGrid original,
             RenderTexture source, RenderTexture destination, Material material,
             Texture2D noise, int pass, int frameMultiple)
         {
-            if (!fullRunRenderIsolationEnabled || randomSynchronizationResetCount == 0
+            if (!fullRunRenderIsolationEnabled || (randomSynchronizationResetCount == 0 && !leanS0RenderIsolationActive)
                 || fullRunRenderEntered)
             {
                 original(source, destination, material, noise, pass, frameMultiple);

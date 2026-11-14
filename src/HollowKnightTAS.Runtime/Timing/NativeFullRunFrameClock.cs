@@ -201,8 +201,9 @@ namespace HollowKnightTAS.Runtime.Timing
                     if (completed > long.MaxValue) throw new OverflowException("Native frame count overflowed.");
                     completedCallback((long)completed);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Modding.Logger.LogError("[HKTAS] Native completed callback fault(41): " + ex);
                     fault(41);
                     requestPause();
                 }

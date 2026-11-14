@@ -119,6 +119,40 @@ internal static partial class StudioScenarioHarness
             && !args.Any(value => value.StartsWith("--probe-derived-fixture=", StringComparison.Ordinal)),
             "D0 route uses complete boundary digests without S0 preparation, D transactions or derived fixtures");
         Environment.SetEnvironmentVariable("HKTAS_LOADING_CANONICAL_D0_ROUTE", d0Route ? "1" : null);
+        var leanS0Probe = args.Contains("--probe-lean-s0");
+        var leanS0Role = args.Any(a => a.StartsWith("--probe-lean-s0-role=", StringComparison.Ordinal))
+            ? Arg("--probe-lean-s0-role").ToLowerInvariant()
+            : string.Empty;
+        var leanS0Ordinal = args.Any(a => a.StartsWith("--probe-lean-s0-ordinal=", StringComparison.Ordinal))
+            ? int.Parse(Arg("--probe-lean-s0-ordinal"), System.Globalization.CultureInfo.InvariantCulture)
+            : 8;
+        var leanS0PacketPath = args.Any(a => a.StartsWith("--probe-lean-s0-packet=", StringComparison.Ordinal))
+            ? Arg("--probe-lean-s0-packet")
+            : string.Empty;
+        var leanS0EndMovieArg = args.Any(a => a.StartsWith("--probe-lean-s0-end-movie=", StringComparison.Ordinal))
+            ? Arg("--probe-lean-s0-end-movie")
+            : string.Empty;
+        var leanS0Slot = args.Any(a => a.StartsWith("--probe-lean-s0-slot=", StringComparison.Ordinal))
+            ? int.Parse(Arg("--probe-lean-s0-slot"), System.Globalization.CultureInfo.InvariantCulture)
+            : 4;
+        if (leanS0Probe)
+        {
+            Require(leanS0Role == "source" || leanS0Role == "target", "LeanS0 probe requires --probe-lean-s0-role=source|target");
+            Require(s0TargetArgument != null && phaseOneTrace && !actualDExperiment && !clockExperiment,
+                "LeanS0 uses canonical phase1 boundary runtime without Resident actual-D or clock-only experiment.");
+            Environment.SetEnvironmentVariable("HKTAS_LOADING_S0_OBSERVING", null);
+            Environment.SetEnvironmentVariable("HKTAS_LEAN_S0", "1");
+            Environment.SetEnvironmentVariable("HKTAS_LEAN_S0_ROLE", leanS0Role);
+            Environment.SetEnvironmentVariable("HKTAS_LEAN_S0_CAPTURE_ORDINAL", leanS0Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            Environment.SetEnvironmentVariable("HKTAS_LEAN_S0_SUFFIX_TO_END", args.Contains("--probe-lean-s0-suffix-to-end") ? "1" : null);
+        }
+        else
+        {
+            Environment.SetEnvironmentVariable("HKTAS_LEAN_S0", null);
+            Environment.SetEnvironmentVariable("HKTAS_LEAN_S0_ROLE", null);
+            Environment.SetEnvironmentVariable("HKTAS_LEAN_S0_CAPTURE_ORDINAL", null);
+            Environment.SetEnvironmentVariable("HKTAS_LEAN_S0_SUFFIX_TO_END", null);
+        }
         var actualDStageArgument = args.SingleOrDefault(value => value.StartsWith("--probe-actual-d-stage=", StringComparison.Ordinal));
         var actualDStage = actualDStageArgument == null ? "" : Arg("--probe-actual-d-stage");
         var actualDRelayArgument = args.SingleOrDefault(value => value.StartsWith("--probe-actual-d-relay=", StringComparison.Ordinal));
@@ -500,6 +534,118 @@ internal static partial class StudioScenarioHarness
                     Require(state["movieFrame"] == "1706" && state["mismatchCount"] == "0" && state["error"] == "",
                         "original inputs reach exact 1706 without mismatch after independent +32 endpoint");
                     await File.WriteAllTextAsync(Path.Combine(output, "physics-follow-on-state.json"), JsonSerializer.Serialize(state));
+                }
+                if (leanS0Probe)
+                {
+                    if (leanS0Role == "source")
+                    {
+                        await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
+                        await Until(() => ResidentWaiting("LeanS0 source capture"),
+                            "LeanS0 source captures C1-C12+D2+D3 at S0 and parks before scene load", 360);
+                        var info = await Call(new Dictionary<string, string> { ["phase"] = "lean-s0-source-info" });
+                        Require(info["status"] == "LeanS0SourcePaused", "LeanS0 source parked at S0");
+                        Require(info["ordinal"] == leanS0Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            "LeanS0 captured expected boundary ordinal");
+                        int pktLen = int.Parse(info["length"], System.Globalization.CultureInfo.InvariantCulture);
+                        Require(pktLen > 0 && pktLen <= 32 * 1024 * 1024, "LeanS0 packet size within 32 MiB budget");
+                        byte[] downloaded = new byte[pktLen];
+                        for (int off = 0; off < pktLen; off += 262144)
+                        {
+                            var part = await Call(new Dictionary<string, string>
+                            {
+                                ["phase"] = "lean-s0-source-chunk",
+                                ["offset"] = off.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                            });
+                            byte[] chunk = Convert.FromBase64String(part["data"]);
+                            Buffer.BlockCopy(chunk, 0, downloaded, off, chunk.Length);
+                        }
+                        string actualSha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(downloaded)).ToLowerInvariant();
+                        Require(actualSha == info["sha256"], "LeanS0 source IPC chunk hash matches header");
+                        await File.WriteAllBytesAsync(Path.Combine(output, "lean-s0-source-ipc-packet.bin"), downloaded);
+                        await File.WriteAllTextAsync(Path.Combine(output, "lean-s0-source-header.json"), JsonSerializer.Serialize(info));
+
+                        long srcMovie = long.Parse(info["movieFrame"], System.Globalization.CultureInfo.InvariantCulture);
+                        long suffixEnd = args.Contains("--probe-lean-s0-suffix-to-end")
+                            ? end
+                            : (!string.IsNullOrEmpty(leanS0EndMovieArg)
+                                ? long.Parse(leanS0EndMovieArg, System.Globalization.CultureInfo.InvariantCulture)
+                                : srcMovie + 32);
+                        var resumed = await Call(new Dictionary<string, string>
+                        {
+                            ["phase"] = "lean-s0-source-resume",
+                            ["endMovie"] = suffixEnd.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        });
+                        Require(resumed["status"] == "ResumingLeanS0SourceSuffix", "LeanS0 source suffix armed");
+                        boot.Refresh();
+                        await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
+                        await Until(() => ResidentWaiting("LeanS0 source suffix"),
+                            "LeanS0 source suffix reaches exact endpoint", 2400);
+                        var srcEndState = await VideoRuntimeState(vm);
+                        Require(srcEndState["movieFrame"] == suffixEnd.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                            && srcEndState["mismatchCount"] == "0" && srcEndState["error"] == "",
+                            "LeanS0 source suffix finished cleanly without mismatch");
+                        await File.WriteAllTextAsync(Path.Combine(output, "lean-s0-source-suffix-state.json"), JsonSerializer.Serialize(srcEndState));
+                    }
+                    else
+                    {
+                        Require(!string.IsNullOrEmpty(leanS0PacketPath) && File.Exists(leanS0PacketPath),
+                            "LeanS0 target requires existing --probe-lean-s0-packet file");
+                        byte[] pktBytes = await File.ReadAllBytesAsync(leanS0PacketPath);
+                        Require(pktBytes.Length > 0 && pktBytes.Length <= 32 * 1024 * 1024, "LeanS0 target packet size within bounds");
+                        string pktSha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(pktBytes)).ToLowerInvariant();
+                        await Call(new Dictionary<string, string>
+                        {
+                            ["phase"] = "lean-s0-target-upload-init",
+                            ["length"] = pktBytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            ["sha256"] = pktSha
+                        });
+                        for (int off = 0; off < pktBytes.Length; off += 262144)
+                        {
+                            await Call(new Dictionary<string, string>
+                            {
+                                ["phase"] = "lean-s0-target-upload-chunk",
+                                ["offset"] = off.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                                ["data"] = Convert.ToBase64String(pktBytes, off, Math.Min(262144, pktBytes.Length - off))
+                            });
+                        }
+                        var started = await Call(new Dictionary<string, string>
+                        {
+                            ["phase"] = "lean-s0-target-start",
+                            ["slot"] = leanS0Slot.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        });
+                        Require(started["status"] == "LeanS0TargetLoadingStarted", "LeanS0 target save load + C6 transition started");
+                        boot.Refresh();
+                        await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
+                        await Until(() => ResidentWaiting("LeanS0 target park"),
+                            "LeanS0 target parks cleanly at S0 before target scene load", 240);
+                        var tStatus = await Call(new Dictionary<string, string> { ["phase"] = "lean-s0-target-status" });
+                        Require(tStatus["status"] == "LeanS0TargetPaused",
+                            "LeanS0 target parked in LeanS0TargetPaused state (got " + tStatus["status"] + ")");
+
+                        string applyEnd = string.IsNullOrEmpty(leanS0EndMovieArg) ? "end" : leanS0EndMovieArg;
+                        var applied = await Call(new Dictionary<string, string>
+                        {
+                            ["phase"] = "lean-s0-target-apply-and-resume",
+                            ["endMovie"] = applyEnd
+                        });
+                        Require(applied["status"] == "ResumingLeanS0TargetSuffix", "LeanS0 target packet applied and resumed");
+                        long targetEndMovie = long.Parse(applied["endMovie"], System.Globalization.CultureInfo.InvariantCulture);
+                        await File.WriteAllTextAsync(Path.Combine(output, "lean-s0-target-apply-reply.json"), JsonSerializer.Serialize(applied));
+
+                        boot.Refresh();
+                        await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
+                        await Until(() => ResidentWaiting("LeanS0 target suffix"),
+                            "LeanS0 target suffix reaches exact endpoint", 2400);
+                        var tgtEndState = await VideoRuntimeState(vm);
+                        Require(tgtEndState["movieFrame"] == targetEndMovie.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                            && tgtEndState["mismatchCount"] == "0" && tgtEndState["error"] == "",
+                            "LeanS0 target suffix finished cleanly without mismatch");
+                        await File.WriteAllTextAsync(Path.Combine(output, "lean-s0-target-suffix-state.json"), JsonSerializer.Serialize(tgtEndState));
+                    }
+                    await File.WriteAllTextAsync(Path.Combine(output, "target-state.json"), JsonSerializer.Serialize(await VideoRuntimeState(vm)));
+                    Require(sourceHash == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(source))), "input package bytes unchanged");
+                    Log("LEAN S0 " + leanS0Role.ToUpperInvariant() + " COMPLETE");
+                    return;
                 }
                 if (actualDExperiment && actualDStage != "target") {
                     await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
