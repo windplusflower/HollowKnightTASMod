@@ -9,7 +9,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal sealed class CanonicalListEmptyArrayBindings
     {
         private const string Prefix = "framework-list-static-empty-v1/";
-        private readonly Dictionary<Type, FieldInfo> fields = new Dictionary<Type, FieldInfo>();
+        private readonly Dictionary<Type, string> bindings = new Dictionary<Type, string>();
         private readonly Dictionary<Type, FieldInfo> listFields = new Dictionary<Type, FieldInfo>();
         private readonly Dictionary<Type, Array> observedValues = new Dictionary<Type, Array>();
         private readonly Dictionary<string, FieldInfo> keys = new Dictionary<string, FieldInfo>(StringComparer.Ordinal);
@@ -35,7 +35,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var written = type.Module.ResolveField(BitConverter.ToInt32(il, 7), type.GetGenericArguments(), null);
                 if (written == null || written.Module != field.Module || written.MetadataToken != field.MetadataToken)
                     throw new InvalidDataException("Framework List empty-array initializer writes a different field.");
-                fields.Add(field.FieldType, field); listFields.Add(type, field); keys.Add(Key(field), field);
+                var key = Key(field);
+                bindings.Add(field.FieldType, key); listFields.Add(type, field); keys.Add(key, field);
             }
         }
         private static string Key(FieldInfo field) => Prefix + CanonicalCarryGraphCodec.Identity(field.DeclaringType!)
@@ -61,8 +62,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal string? Bind(object value)
         {
-            if (!(value is Array array) || array.Length != 0 || !fields.TryGetValue(value.GetType(), out var field)) return null;
-            return observedValues.TryGetValue(value.GetType(), out var singleton) && ReferenceEquals(value, singleton) ? Key(field) : null;
+            if (!(value is Array array) || array.Length != 0) return null;
+            var type = array.GetType();
+            return observedValues.TryGetValue(type, out var singleton) && ReferenceEquals(array, singleton) ? bindings[type] : null;
         }
         internal object Resolve(string binding, Func<string, object> other)
         {

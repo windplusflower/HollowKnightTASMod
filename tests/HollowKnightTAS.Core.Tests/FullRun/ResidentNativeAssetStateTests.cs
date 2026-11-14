@@ -128,6 +128,23 @@ public sealed class ResidentNativeAssetStateTests
     }
 
     [TestMethod]
+    public void TextureNativeGuardPixelIsPreservedAndPartialPaddingIsRejected()
+    {
+        var api = new Api(); var state = api.Row("TextureState");
+        foreach (var name in new[] { "Width", "Height", "CpuWidth", "CpuHeight" }) Set(state, name, 4);
+        foreach (var name in new[] { "MipmapCount", "CpuMipCount", "CpuImageCount" }) Set(state, name, 1);
+        Set(state, "CpuFormat", 4); Set(state, "Readable", true); Set(state, "CpuDataPresent", true);
+        Set(state, "CpuImageSize", 64UL); Set(state, "CpuCapacity", 68UL);
+        Set(state, "CpuBytes", Enumerable.Range(0, 68).Select(value => (byte)value).ToArray());
+        var saved = api.EncodeTexture(state);
+        ((byte[])Get(state, "CpuBytes"))[67] ^= 0x40;
+        Assert.IsFalse(saved.SequenceEqual(api.EncodeTexture(state)), "Native guard bytes are retained as captured data.");
+        Set(state, "CpuBytes", new byte[67]); api.Reject(() => api.EncodeTexture(state));
+        Set(state, "CpuBytes", new byte[69]); Set(state, "CpuCapacity", 69UL); api.Reject(() => api.EncodeTexture(state));
+        Set(state, "CpuBytes", new byte[64]); api.EncodeTexture(state);
+    }
+
+    [TestMethod]
     public void TextureImageKeepsRawMipPayloadAndRejectsIncompleteNativeImageDirectory()
     {
         var api = new Api();
@@ -211,7 +228,7 @@ public sealed class ResidentNativeAssetStateTests
         Set(material, "RuntimeProperties", api.PropertySheet()); Set(material, "Caches", cache);
         Set(cache, "SharedReferences", 2); Set(cache, "PropertySheetReferences", 1); Set(cache, "BuildStacksEmpty", true); Set(cache, "RuntimeStacksEmpty", true);
         var row = api.Row("Snapshot"); Set(row, "Kind", "Material"); Set(row, "Material", material); Set(row, "Binding", "source/material");
-        Set(row, "CoverageGaps", new[] { "material/common-cold-cache-state" });
+        Set(row, "CoverageGaps", Array.Empty<string>());
         api.Gate(row, "RequireCanonicalizableCoverage");
         Set(row, "CoverageGaps", Array.Empty<string>()); api.Reject(() => api.Gate(row, "RequireCompleteCoverage"));
         Set(cache, "BuildStacksEmpty", false); api.Reject(() => api.Gate(row, "RequireCanonicalizableCoverage")); Set(cache, "BuildStacksEmpty", true);
@@ -229,7 +246,7 @@ public sealed class ResidentNativeAssetStateTests
         foreach (var name in new[] { "PhysicsResourcesEmpty", "AsyncEmpty", "ComputeBindingsEmpty", "AssetUsersEmpty" }) Set(native, name, true);
         Set(native, "RetainedFlags", (byte)0x14); Set(native, "OwnerBinding", "owner/arbitrary-asset"); Set(native, "StreamPath", "captured/source/path");
         Set(native, "StreamOffset", 0x1020304050607080UL); Set(native, "BonePathHashes", new[] { 0U, uint.MaxValue, 17U });
-        var row = api.Row("Snapshot"); Set(row, "Kind", "Mesh"); Set(row, "Mesh", mesh); Set(row, "CoverageGaps", new[] { "mesh/common-cold-cache-state" });
+        var row = api.Row("Snapshot"); Set(row, "Kind", "Mesh"); Set(row, "Mesh", mesh); Set(row, "CoverageGaps", Array.Empty<string>());
         api.Gate(row, "RequireCanonicalizableCoverage");
         Set(row, "CoverageGaps", Array.Empty<string>()); api.Reject(() => api.Gate(row, "RequireCompleteCoverage"));
         Set(native, "PhysicsResourcesEmpty", false); api.Reject(() => api.Gate(row, "RequireCanonicalizableCoverage")); Set(native, "PhysicsResourcesEmpty", true);
@@ -289,6 +306,26 @@ public sealed class ResidentNativeAssetStateTests
         Set(copy, "SharedPresent", true); api.Reject(() => api.EncodeTextureNative(copy));
     }
 
+    [TestMethod]
+    public void AssetWirePreservesUnityStructPrivateFieldsAndFloatBitsWithoutComputedProperties()
+    {
+        var api = new Api(); var sprite = api.Row("SpriteState");
+        var negativeZero = BitConverter.Int32BitsToSingle(unchecked((int)0x80000000));
+        Set(sprite, "PixelsPerUnit", negativeZero);
+        Set(sprite, "Rect", new Rect(2, 3, 32, 64)); Set(sprite, "Pivot", new Vector2(negativeZero, 17));
+        Set(sprite, "Vertices", new[] { new Vector2(negativeZero, BitConverter.Int32BitsToSingle(0x7fc01234)) });
+        var state = api.Row("Snapshot"); Set(state, "Kind", "Sprite"); Set(state, "Sprite", sprite);
+        var copy = api.AssetWireRoundtrip(state); var copied = Get(copy, "Sprite");
+        Assert.AreEqual(new Rect(2, 3, 32, 64), (Rect)Get(copied, "Rect"));
+        Assert.AreEqual(unchecked((int)0x80000000), BitConverter.SingleToInt32Bits((float)Get(copied, "PixelsPerUnit")));
+        Assert.AreEqual(unchecked((int)0x80000000), BitConverter.SingleToInt32Bits(((Vector2)Get(copied, "Pivot")).x));
+        var vertices = (Vector2[])Get(copied, "Vertices");
+        Assert.AreEqual(0x7fc01234, BitConverter.SingleToInt32Bits(vertices[0].y));
+        var mesh = api.Row("Snapshot"); Set(mesh, "Kind", "Mesh"); Set(mesh, "Mesh", api.Mesh());
+        var meshCopy = api.AssetWireRoundtrip(mesh);
+        Assert.AreEqual(Get(Get(mesh, "Mesh"), "Bounds"), Get(Get(meshCopy, "Mesh"), "Bounds"));
+    }
+
     private const BindingFlags All = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
     private static object Get(object owner, string name) => owner.GetType().GetField(name, All)!.GetValue(owner)!;
     private static void Set(object owner, string name, object value) => owner.GetType().GetField(name, All)!.SetValue(owner, value);
@@ -308,6 +345,17 @@ public sealed class ResidentNativeAssetStateTests
             monoNative = runtime.GetType("HollowKnightTAS.Runtime.FullRun.ResidentMonoNativeState", true)!;
             propertySheet = runtime.GetType("HollowKnightTAS.Runtime.FullRun.ResidentShaderPropertySheet", true)!;
             serializedImage = runtime.GetType("HollowKnightTAS.Runtime.FullRun.ResidentSerializedAssetImage", true)!;
+        }
+        internal object AssetWireRoundtrip(object snapshot)
+        {
+            var pipeline = adapter.Assembly.GetType("HollowKnightTAS.Runtime.FullRun.ResidentAssetPipeline", true)!;
+            var data = Activator.CreateInstance(pipeline.GetNestedType("Data", All)!, true)!;
+            Set(data, "Snapshots", Rows("Snapshot", snapshot));
+            var wire = adapter.Assembly.GetType("HollowKnightTAS.Runtime.FullRun.ResidentAssetDataWire", true)!;
+            var bytes = (byte[])wire.GetMethod("Encode", All)!.Invoke(null, new[] { data })!;
+            var result = wire.GetMethod("Decode", All)!.Invoke(null, new object[] { bytes })!;
+            CollectionAssert.AreEqual(bytes, (byte[])wire.GetMethod("Encode", All)!.Invoke(null, new[] { result })!);
+            return ((Array)Get(result, "Snapshots")).GetValue(0)!;
         }
         internal object Row(string name) => Activator.CreateInstance(adapter.GetNestedType(name, All)!, true)!;
         internal Array Rows(string name, params object[] values)

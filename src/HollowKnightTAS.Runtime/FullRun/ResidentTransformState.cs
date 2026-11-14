@@ -222,6 +222,20 @@ namespace HollowKnightTAS.Runtime.FullRun
                 groups.Add(new Hierarchy { Key = key, Members = members, CombinedChanged = M.U64(header, 64), CombinedInterested = M.U64(header, 88) });
             }
             live.Dispatch = M.Ptr(live.Read(IntPtr.Add(engine.BaseAddress, DispatchGlobal), 8), 0);
+            var remove = (DispatchHierarchy)Marshal.GetDelegateForFunctionPointer(IntPtr.Add(engine.BaseAddress, 0x7e8b80), typeof(DispatchHierarchy));
+            var rawDispatch = M.Read(live.Dispatch, 32); var initialCount = checked((int)M.U64(rawDispatch, 24));
+            if (initialCount > 0 && initialCount <= MaximumOwners) {
+                var qPtr = M.Ptr(rawDispatch, 8);
+                var qBytes = M.Read(qPtr, initialCount * 8);
+                for (var i = initialCount - 1; i >= 0; i--) {
+                    var ptr = M.Ptr(qBytes, i * 8);
+                    if (ptr != IntPtr.Zero && !hierarchyKeys.ContainsKey(ptr)) {
+                        var qIdx = M.I32(M.Read(IntPtr.Add(ptr, 56), 4), 0);
+                        Modding.Logger.Log($"[HKTAS-TRANSFORM] Purging orphan queued hierarchy at index {i}: pointer=0x{ptr.ToInt64():x}, qIdx={qIdx}");
+                        if (qIdx != -1) remove(live.Dispatch, ptr);
+                    }
+                }
+            }
             var dispatch = live.Read(live.Dispatch, 2744); var count = M.U64(dispatch, 24); var queueCapacity = M.U64(dispatch, 32) >> 1;
             if (count > queueCapacity || count > MaximumOwners || queueCapacity > MaximumOwners * 2) throw Error("Transform dispatch queue exceeds bounds");
             var queueBytes = live.Read(M.Ptr(dispatch, 8), checked((int)count * 8)); var queue = new string[count];
@@ -338,10 +352,37 @@ namespace HollowKnightTAS.Runtime.FullRun
             for (var index = 0; index < source.Hierarchies.Length; index++) if (source.Hierarchies[index].Key != target.Hierarchies[index].Key
                 || !source.Hierarchies[index].Members.SequenceEqual(target.Hierarchies[index].Members)) throw Error("Transform native hierarchy grouping differs");
         }
+        internal static string DebugSummary()
+        {
+            var dispatch = M.Ptr(M.Read(IntPtr.Add(LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress, DispatchGlobal), 8), 0);
+            if (dispatch == IntPtr.Zero) return "none";
+            var bytes = M.Read(dispatch, 32);
+            return $"chg=0x{M.U64(bytes, 0):X},q={M.U64(bytes, 24)}";
+        }
         internal static void RequireEqual(Data expected, Data actual)
         {
             RequireCompatible(expected, actual);
-            if (!Bytes(expected).SequenceEqual(Bytes(actual))) throw Error("Transform source and independent target readback differ");
+            if (!Bytes(expected).SequenceEqual(Bytes(actual))) {
+                var diffs = new List<string> { $"sys10={expected.Systems.Names[10]}" };
+                if (expected.CombinedChanged != actual.CombinedChanged) diffs.Add($"CombinedChanged exp=0x{expected.CombinedChanged:X} act=0x{actual.CombinedChanged:X}");
+                if (!expected.Queue.SequenceEqual(actual.Queue)) diffs.Add($"Queue expLen={expected.Queue.Length} actLen={actual.Queue.Length} exp=[{string.Join(",", expected.Queue.Take(5))}] act=[{string.Join(",", actual.Queue.Take(5))}]");
+                for (var i = 0; i < expected.Hierarchies.Length; i++) {
+                    var eh = expected.Hierarchies[i]; var ah = actual.Hierarchies[i];
+                    if (eh.CombinedChanged != ah.CombinedChanged || eh.CombinedInterested != ah.CombinedInterested)
+                        diffs.Add($"Hier[{i}:{eh.Key}] chg={eh.CombinedChanged:X}->{ah.CombinedChanged:X} int={eh.CombinedInterested:X}->{ah.CombinedInterested:X}");
+                }
+                var nodeDiffs = 0;
+                for (var i = 0; i < expected.Nodes.Length; i++) {
+                    var e = expected.Nodes[i]; var a = actual.Nodes[i];
+                    if (e.Changed != a.Changed || e.Interested != a.Interested || e.HierarchyInterested != a.HierarchyInterested || e.TransformType != a.TransformType
+                        || !e.Local.SequenceEqual(a.Local) || !e.Cached.SequenceEqual(a.Cached) || !e.Rect.SequenceEqual(a.Rect)) {
+                        if (++nodeDiffs <= 10)
+                            diffs.Add($"Node[{e.Owner}] rect={e.Rectangle} chg={e.Changed:X}->{a.Changed:X} int={e.Interested:X}->{a.Interested:X} hi={e.HierarchyInterested:X}->{a.HierarchyInterested:X} tt={e.TransformType}->{a.TransformType} loc={!e.Local.SequenceEqual(a.Local)} cac={!e.Cached.SequenceEqual(a.Cached)} rec={!e.Rect.SequenceEqual(a.Rect)}");
+                    }
+                }
+                if (nodeDiffs > 10) diffs.Add($"totalNodeDiffs={nodeDiffs}");
+                throw Error("Transform source and independent target readback differ: " + string.Join(" | ", diffs));
+            }
         }
         private static byte[] Bytes(object value) => Encoding.UTF8.GetBytes(Newtonsoft.Json.JsonConvert.SerializeObject(value));
         private static Data Copy(Data value) => Newtonsoft.Json.JsonConvert.DeserializeObject<Data>(Encoding.UTF8.GetString(Bytes(value)))

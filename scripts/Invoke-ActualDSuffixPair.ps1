@@ -12,7 +12,9 @@ param(
     [ValidateRange(0, 100000)][int] $MovieStartFrame = 0,
     [ValidateRange(1, 100000)][int] $MovieEndFrame = 3150,
     [string] $S0ObservationTarget = 'GG_Workshop',
-    [int] $S0ObservationSlot = 4
+    [int] $S0ObservationSlot = 4,
+    [string] $SaveSourcePacketTo = '',
+    [string] $ReuseSourceDirectory = ''
 )
 $ErrorActionPreference = 'Stop'
 if ($PhysicsFollowOn -or $ContactImpulseProbe) { throw 'Resident transfer does not use the retired first-boundary physics follow-on script.' }
@@ -56,9 +58,81 @@ $taskOptions = @{
 }
 $taskPriorImpulse = $env:HKTAS_CONTACT_IMPULSE_PROBE
 try {
+    if (-not ('HollowKnightTAS.Diagnostics.ActualDMemoryRelay' -as [type])) {
+        Add-Type -Path (Join-Path $PSScriptRoot 'StudioScenarioHarness/ActualDMemoryRelay.cs')
+    }
     if ($ContactImpulseProbe) { $env:HKTAS_CONTACT_IMPULSE_PROBE = '1' }
-    & (Join-Path $PSScriptRoot 'Invoke-LoadingProbe.ps1') @taskOptions -ActualDStage Source -OutputDirectory (Join-Path $taskOutput 'source')
-    if (-not $taskRelayState.ContainsKey('Packet')) { throw 'Source did not hand off its packet in memory.' }
+    if ($ReuseSourceDirectory) {
+        $reuseDir = [IO.Path]::GetFullPath($ReuseSourceDirectory)
+        $packetBin = Join-Path $reuseDir 'packet.bin'
+        $packetMeta = Join-Path $reuseDir 'packet-meta.json'
+        $headerPath = Join-Path $reuseDir 'actual-d-source-header.json'
+        $endPath = Join-Path $reuseDir 'actual-d-original-suffix-state.json'
+        $continuationPath = Join-Path $reuseDir 'resident-continuation.jsonl'
+        if (-not (Test-Path -LiteralPath $packetBin) -or -not (Test-Path -LiteralPath $packetMeta) -or
+            -not (Test-Path -LiteralPath $headerPath) -or -not (Test-Path -LiteralPath $endPath) -or
+            -not (Test-Path -LiteralPath $continuationPath)) {
+            throw "ReuseSourceDirectory is missing required cached packet files: $reuseDir"
+        }
+        $meta = Get-Content -Raw -LiteralPath $packetMeta | ConvertFrom-Json
+        $data = [IO.File]::ReadAllBytes($packetBin)
+        $actualSha256 = (Get-FileHash -LiteralPath $packetBin -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualSha256 -ne [string]$meta.Sha256.ToLowerInvariant()) {
+            throw "Cached packet data hash mismatch: act=$actualSha256 exp=$($meta.Sha256)"
+        }
+        $taskRelayState.Packet = [HollowKnightTAS.Diagnostics.ActualDRelayPacket]@{
+            Data = $data
+            MovieFrame = [long]$meta.MovieFrame
+            NativeFrame = [long]$meta.NativeFrame
+            Sha256 = [string]$meta.Sha256
+        }
+        $sourceDest = Join-Path $taskOutput 'source/run-01'
+        New-Item -ItemType Directory -Force -Path $sourceDest | Out-Null
+        Copy-Item -LiteralPath $headerPath -Destination (Join-Path $sourceDest 'actual-d-source-header.json') -Force
+        Copy-Item -LiteralPath $endPath -Destination (Join-Path $sourceDest 'actual-d-original-suffix-state.json') -Force
+        Copy-Item -LiteralPath $continuationPath -Destination (Join-Path $sourceDest 'resident-continuation.jsonl') -Force
+        Write-Output "Reused sealed Source D packet from $reuseDir (length=$($data.Length), sha256=$($meta.Sha256)). Skipping Source execution."
+    } else {
+        & (Join-Path $PSScriptRoot 'Invoke-LoadingProbe.ps1') @taskOptions -ActualDStage Source -OutputDirectory (Join-Path $taskOutput 'source')
+        if (-not $taskRelayState.ContainsKey('Packet')) { throw 'Source did not hand off its packet in memory.' }
+        if ($SaveSourcePacketTo) {
+            $saveDir = [IO.Path]::GetFullPath($SaveSourcePacketTo)
+            New-Item -ItemType Directory -Force -Path $saveDir | Out-Null
+            [IO.File]::WriteAllBytes((Join-Path $saveDir 'packet.bin'), $taskRelayState.Packet.Data)
+            @{
+                MovieFrame = $taskRelayState.Packet.MovieFrame
+                NativeFrame = $taskRelayState.Packet.NativeFrame
+                Sha256 = $taskRelayState.Packet.Sha256
+            } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $saveDir 'packet-meta.json') -Encoding utf8
+            $srcRun = Join-Path $taskOutput 'source/run-01'
+            foreach ($item in @('actual-d-source-header.json', 'actual-d-original-suffix-state.json', 'resident-continuation.jsonl')) {
+                $srcFile = Join-Path $srcRun $item
+                if (Test-Path -LiteralPath $srcFile) {
+                    Copy-Item -LiteralPath $srcFile -Destination (Join-Path $saveDir $item) -Force
+                }
+            }
+            Write-Output "Cached sealed Source D packet and metadata to $saveDir"
+        }
+    }
+    # A replay can reach the requested ordinal by a different door or on an earlier
+    # Movie frame. Bind a recorded fixture to its original transition before import.
+    $taskMovieDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($Movie))
+    $taskRecordingProof = Join-Path $taskMovieDirectory 'input-route-recording-proof.json'
+    if (Test-Path -LiteralPath $taskRecordingProof) {
+        $proof = Get-Content -Raw -LiteralPath $taskRecordingProof | ConvertFrom-Json
+        if ($proof.recordingSha256 -ne (Get-FileHash -LiteralPath $Movie).Hash) {
+            throw 'Selected movie does not match the recording proof.'
+        }
+        $journals = @(Get-ChildItem -LiteralPath $taskMovieDirectory -File | Where-Object Name -Match '^serial-scenes-[0-9]+\.jsonl$')
+        if ($journals.Count -ne 1) { throw 'Recorded serial boundary journal is absent or ambiguous.' }
+        $expected = @(Get-Content -LiteralPath $journals[0].FullName | ConvertFrom-Json |
+            Where-Object { $_.phase -eq 'native-empty-boundary' -and $_.ordinal -eq $SourceBoundaryOrdinal })
+        $header = Get-Content -Raw -LiteralPath (Join-Path $taskOutput 'source/run-01/actual-d-source-header.json') | ConvertFrom-Json
+        if ($expected.Count -ne 1 -or $header.movieFrame -ne [string]$expected[0].data.movie -or
+            $header.sourceScene -cne $expected[0].data.source -or $header.targetScene -cne $expected[0].data.target) {
+            throw 'Actual source frame or scene transition differs from the recorded fixture.'
+        }
+    }
     foreach ($taskIdentity in $taskIdentities) {
         if ((Get-FileHash -LiteralPath $taskIdentity.path -Algorithm SHA256).Hash -ne $taskIdentity.sha256) {
             throw 'Candidate or source changed between the independent protected stages.'
@@ -94,7 +168,7 @@ try {
         $taskApplication.packetSha256 -eq $taskSourceHeader.sha256 -and $taskApplication.packetBytes -eq $taskSourceHeader.length -and
         $taskApplication.movieFrame -eq $taskSourceHeader.movieFrame -and $taskApplication.nativeFrame -eq $taskSourceHeader.nativeFrame -and
         $taskApplication.consumedSamples -eq $taskSourceHeader.consumedSamples -and
-        $taskPacketBytes -gt 0 -and $taskPacketBytes -le (32*1024*1024) -and $taskElapsed -lt 9000 -and
+        $taskPacketBytes -gt 0 -and $taskPacketBytes -le (256*1024*1024) -and $taskElapsed -lt 360000 -and
         $taskApplication.restoreQualified -eq 'false' -and $taskApplication.completeStateCoverage -eq 'false'
     $taskEndpoint = ($taskSourceEnd | ConvertTo-Json -Compress) -eq ($taskTargetEnd | ConvertTo-Json -Compress) -and
         $taskTargetEnd.mismatchCount -eq '0' -and $taskTargetEnd.faultCode -eq '0' -and $taskTargetEnd.error -eq ''

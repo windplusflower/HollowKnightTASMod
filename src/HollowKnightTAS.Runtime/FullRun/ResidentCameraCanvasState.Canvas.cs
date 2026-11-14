@@ -55,7 +55,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal sealed class SubBatch
         {
-            public ResidentShaderPropertySheet.Data? Properties;
+            // Unity rebuilds this draw batch from CanvasRenderer component inputs.
+            // The property block is released with the batch during common Canon.
+            public bool HasDrawProperties;
             public byte[] Range = Array.Empty<byte>();
         }
         internal sealed class DirtyGroup
@@ -130,7 +132,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var subs = Dynamic(reader, IntPtr.Add(native, 320), 40); row.SubBatchCapacity = subs.Capacity;
             row.SubBatches = Enumerable.Range(0, subs.Bytes.Length / 40).Select(index => {
                 var pointer = M.Ptr(subs.Bytes, index * 40);
-                return new SubBatch { Properties = pointer == IntPtr.Zero ? null : ResidentShaderPropertySheet.Capture(pointer, reader.Bind), Range = M.Slice(subs.Bytes, index * 40 + 8, 32) };
+                return new SubBatch { HasDrawProperties = pointer != IntPtr.Zero, Range = M.Slice(subs.Bytes, index * 40 + 8, 32) };
             }).ToArray();
             return row;
         }
@@ -240,7 +242,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || (long)batch.SubBatchStart + batch.SubBatchCount > row.SubBatches.Length) throw Error("Canvas batch range differs");
             foreach (var batch in row.SubBatches) {
                 if (batch == null || batch.Range == null || batch.Range.Length != 32) throw Error("Canvas sub-batch range differs");
-                if (batch.Properties != null) ResidentShaderPropertySheet.Validate(batch.Properties);
             }
         }
         private static void ValidateCanvasRenderer(CanvasRendererRow row)

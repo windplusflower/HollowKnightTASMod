@@ -25,7 +25,7 @@ public sealed class ResidentProcessSlotsTests
         var runtime = Runtime(); var session = runtime.GetType("HollowKnightTAS.Runtime.FullRun.RuntimeFullRunSession", true)!;
         var map = (IReadOnlyDictionary<string, string>)session.GetField("ResidentFieldOwnership", Flags)!.GetValue(null)!;
         var actual = session.GetFields(Flags).Where(field => !field.IsStatic).Select(field => field.Name).OrderBy(name => name).ToArray();
-        CollectionAssert.AreEqual(actual, map.Keys.OrderBy(name => name).ToArray());
+        CollectionAssert.AreEqual(actual, map.Keys.OrderBy(name => name).ToArray(), "Unmapped=" + string.Join(",", actual.Except(map.Keys)) + "; stale=" + string.Join(",", map.Keys.Except(actual)));
         Assert.AreEqual("D", map["boundBosses"]); Assert.AreEqual("D", map["movieFrame"]);
         Assert.AreEqual("Execution", map["clock"]); Assert.AreEqual("Dependency", map["replayMovie"]);
     }
@@ -35,7 +35,7 @@ public sealed class ResidentProcessSlotsTests
         var loader = Runtime().GetType("HollowKnightTAS.Runtime.FullRun.LoadingSerialSceneProbe", true)!;
         var map = (IReadOnlyDictionary<string, string>)loader.GetField("ResidentFieldOwnership", Flags)!.GetValue(null)!;
         var actual = loader.GetFields(Flags).Where(field => !field.IsStatic).Select(field => field.Name).OrderBy(name => name).ToArray();
-        CollectionAssert.AreEqual(actual, map.Keys.OrderBy(name => name).ToArray());
+        CollectionAssert.AreEqual(actual, map.Keys.OrderBy(name => name).ToArray(), "Unmapped=" + string.Join(",", actual.Except(map.Keys)) + "; stale=" + string.Join(",", map.Keys.Except(actual)));
         // Unload suppression after import must use the restored source name;
         // the native unloaded/staging scene handles still belong to the target.
         Assert.AreEqual("D", map["sourceName"]);

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Ref = HollowKnightTAS.Runtime.FullRun.ResidentManagedTypeCatalog.TypeReference;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
@@ -24,6 +25,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (length > 262144 || ids.Count >= 1000000 || buffer.Length + length + 4 > limit)
                     throw new InvalidDataException("Resident metadata string table exceeds its bound.");
                 ids.Add(value, ids.Count); Out.Write(~length); Out.Write(Utf8.GetBytes(value));
+            }
+            internal void Type(Ref t, int depth = 0)
+            {
+                if (t == null || depth > 32 || t.Arguments == null || t.Arguments.Length > 64) throw new InvalidDataException("Static type reference exceeds its bound.");
+                Text(t.Kind); Text(t.Name); Text(t.Assembly); Text(t.Module); Out.Write(t.Token); Out.Write(t.Rank); Out.Write(t.Position);
+                Out.Write(t.SzArray); Out.Write(t.Element != null); if (t.Element != null) Type(t.Element, depth + 1);
+                Out.Write(t.Arguments.Length); foreach (var arg in t.Arguments) Type(arg, depth + 1);
             }
             internal byte[] Finish()
             {
@@ -61,6 +69,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (n < 0 || n > maximum || (long)n * minimumBytes > buffer.Length - buffer.Position)
                     throw new InvalidDataException("Resident metadata count exceeds its bound.");
                 return n;
+            }
+            private int typeNodes;
+            internal Ref Type(int depth = 0)
+            {
+                if (depth > 32 || ++typeNodes > 200000) throw new InvalidDataException("Static type reference exceeds its bound.");
+                var t = new Ref { Kind = Text(), Name = Text(), Assembly = Text(), Module = Text(),
+                    Token = In.ReadInt32(), Rank = In.ReadInt32(), Position = In.ReadInt32(), SzArray = Bit() };
+                if (Bit()) t.Element = Type(depth + 1);
+                t.Arguments = new Ref[Count(64, 34)];
+                for (var j = 0; j < t.Arguments.Length; j++) t.Arguments[j] = Type(depth + 1);
+                return t;
             }
             internal bool Bit() { var b = In.ReadByte(); return b <= 1 ? b != 0 : throw new InvalidDataException("Resident metadata boolean is not canonical."); }
             internal void End() { if (buffer.Position != buffer.Length) throw new InvalidDataException("Resident metadata has trailing bytes."); }

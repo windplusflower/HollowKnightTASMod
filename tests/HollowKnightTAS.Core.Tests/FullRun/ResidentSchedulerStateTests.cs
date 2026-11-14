@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using HollowKnightTAS.Runtime.FullRun;
 
 namespace HollowKnightTAS.Core.Tests.FullRun;
 
@@ -16,14 +17,19 @@ public sealed class ResidentSchedulerStateTests
     private sealed class WrapperRoot { public WrapperLink Value; public WrapperLink[] Values = Array.Empty<WrapperLink>(); }
 
     [TestMethod]
-    public void ManagedPrewalkerFindsReleasedCoroutinesThroughInlineValuesAndReferenceCycles()
+    public void UnifiedGraphFindsReleasedCoroutinesThroughInlineValuesAndReferenceCycles()
     {
         var api = new Api(); var wrapper = (UnityEngine.Coroutine)RuntimeHelpers.GetUninitializedObject(typeof(UnityEngine.Coroutine)); GC.SuppressFinalize(wrapper);
         typeof(UnityEngine.Coroutine).GetField("m_Ptr", All)!.SetValue(wrapper, IntPtr.Zero);
         var root = new WrapperRoot(); root.Value = new WrapperLink { Wrapper = wrapper, Cycle = root }; root.Values = new[] { root.Value };
-        var capture = api.Row("CaptureResult"); Set(capture, "graphRoots", new Dictionary<string, object> { ["root"] = root });
-        Set(capture, "executionBinding", (Func<object, string?>)(_ => null));
-        capture.GetType().GetMethod("FindWrappers", All)!.Invoke(capture, null);
+        var capture = api.Row("CaptureResult");
+        var observe = capture.GetType().GetMethod("DiscoverStoredWrapper", All)!;
+        var roots = new Dictionary<string, object> { ["root"] = root };
+        Action<string, object> noNativeRoot = (_, _) => Assert.Fail("Released wrapper has no native enumerator.");
+        var policy = new ResidentGraphPolicy(_ => null);
+        var catalog = ResidentManagedTypeCatalog.Capture(roots, policy,
+            value => (string?)observe.Invoke(capture, new object[] { value, noNativeRoot }));
+        Assert.IsFalse(catalog.Types.Contains(typeof(UnityEngine.Coroutine)));
         var wrappers = (IDictionary)Get(capture, "wrappers"); Assert.AreEqual(1, wrappers.Count); Assert.AreEqual(IntPtr.Zero, wrappers[wrapper]);
     }
     [TestMethod] public void ActualOwnerListsAndCallbackKindsNeedNoPathOrIteratorWhitelist()

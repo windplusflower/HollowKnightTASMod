@@ -9,7 +9,7 @@ static uint64_t g_resident_boundary_frame, g_resident_boundary_started;
 static LONGLONG g_resident_boundary_command;
 static LONG g_resident_boundary_mode, g_resident_boundary_phase;
 static BOOL g_resident_boundary_failed, g_resident_boundary_imported;
-static BOOL g_resident_boundary_read_only;
+static BOOL g_resident_boundary_read_only, g_resident_boundary_restore;
 /* >0 counts external clock writers, -1 is a read-only frame lease. CAS
  * prevents a writer passing a flag check just before Begin closes the frame.
  * Holding across the whole public operation covers the QPC read as well. */
@@ -38,40 +38,40 @@ static BOOL hktas_resident_clock_valid(uint64_t token, uint64_t frame)
         && g_v2_state->command_sequence == g_resident_boundary_command
         && g_v2_state->ack_sequence == g_resident_boundary_command
         /* QPC is virtualized for gameplay; use the unvirtualized wall clock. */
-        && GetTickCount64() - g_resident_boundary_started < 9000u;
+        && GetTickCount64() - g_resident_boundary_started < g_resident_wall_limit;
 }
 
 static BOOL hktas_resident_boundary_valid(uint64_t token, uint64_t frame)
 {
     return hktas_resident_clock_valid(token,frame)
-        && HktasClockBridge_RequireResidentAudioFence(token)
         && HktasClockBridge_RequireResidentParticleFence(token)
-        && HktasClockBridge_RequireResidentDirectorFence(token);
+        && HktasClockBridge_RequireResidentDirectorFence(token)
+        && hktas_cl_require(token);
 }
-/* All paths needing both locks use particle -> Director. The per-domain
+/* All joint paths use particle -> Director -> Clip. The per-domain
  * failure sinks only publish a fault and never recursively take these locks. */
 static LONG hktas_joint_poison_locked(LONG reason)
 {
     g_resident_boundary_failed = TRUE;
     hktas_v2_fault(reason);
-    hktas_audio_fail(37);
     g_ps_closed = TRUE; hktas_ps_fault_locked(22);
     hktas_dn_fault_locked(14);
+    g_cl_closed = TRUE; hktas_cl_fault_locked(11);
     return 0;
 }
 static LONG hktas_joint_poison(LONG reason)
 {
-    AcquireSRWLockExclusive(&g_ps_lock); AcquireSRWLockExclusive(&g_dn_lock);
+    AcquireSRWLockExclusive(&g_ps_lock); AcquireSRWLockExclusive(&g_dn_lock); AcquireSRWLockExclusive(&g_cl_lock);
     hktas_joint_poison_locked(reason);
-    ReleaseSRWLockExclusive(&g_dn_lock); ReleaseSRWLockExclusive(&g_ps_lock);
+    ReleaseSRWLockExclusive(&g_cl_lock); ReleaseSRWLockExclusive(&g_dn_lock); ReleaseSRWLockExclusive(&g_ps_lock);
     return 0;
 }
 static LONG hktas_reject_individual_end(void) { return hktas_joint_poison(65); }
 
 __declspec(dllexport) uint32_t __cdecl HktasClockBridge_GetResidentBoundaryCapability(void)
-{ return 2u; }
+{ return 4u; }
 
-static uint64_t hktas_begin_resident_epoch(uint64_t expected_completed, LONG observation_phase)
+static uint64_t hktas_begin_resident_epoch(uint64_t expected_completed, LONG observation_phase, BOOL restoring)
 {
     if (observation_phase && InterlockedCompareExchange(&g_resident_frame_writers, -1, 0) != 0) return 0;
     if (!hktas_resident_boundary_released() || g_resident_boundary_serial == UINT64_MAX
@@ -84,6 +84,8 @@ static uint64_t hktas_begin_resident_epoch(uint64_t expected_completed, LONG obs
         if (observation_phase) InterlockedExchange(&g_resident_frame_writers, 0);
         return 0;
     }
+    g_resident_boundary_restore = restoring;
+    g_resident_wall_limit = restoring ? HKTAS_RESIDENT_RESTORE_WALL : HKTAS_RESIDENT_SOURCE_WALL;
     g_resident_boundary_frame = expected_completed;
     g_resident_boundary_started = GetTickCount64();
     g_resident_boundary_command = g_v2_state->command_sequence;
@@ -92,9 +94,10 @@ static uint64_t hktas_begin_resident_epoch(uint64_t expected_completed, LONG obs
     g_resident_boundary_imported = FALSE;
     g_resident_boundary_read_only = observation_phase != 0;
     g_resident_boundary_token = ++g_resident_boundary_serial;
-    if (HktasClockBridge_BeginResidentAudioFence(g_resident_boundary_token, g_resident_boundary_started) != 1) {
-        return hktas_joint_poison(66);
-    }
+    /* Clip invalidation may publish Director commands. Drain those writers
+     * while Director is still open, before sealing downstream producers. */
+    if (!hktas_cl_begin(g_resident_boundary_token,g_resident_boundary_started,FALSE))
+        return hktas_joint_poison(69);
     if (HktasClockBridge_BeginResidentParticleFence(g_resident_boundary_token, g_resident_boundary_started) != 1) {
         return hktas_joint_poison(67);
     }
@@ -104,17 +107,20 @@ static uint64_t hktas_begin_resident_epoch(uint64_t expected_completed, LONG obs
 }
 
 __declspec(dllexport) uint64_t __cdecl HktasClockBridge_BeginResidentBoundary(uint64_t expected_completed)
-{ return hktas_begin_resident_epoch(expected_completed, 0); }
+{ return hktas_begin_resident_epoch(expected_completed, 0, TRUE); }
+
+__declspec(dllexport) uint64_t __cdecl HktasClockBridge_BeginResidentSourceBoundary(uint64_t expected_completed)
+{ return hktas_begin_resident_epoch(expected_completed, 0, FALSE); }
 
 __declspec(dllexport) uint64_t __cdecl HktasClockBridge_BeginResidentFrameObservation(uint64_t expected_completed, LONG phase)
-{ return phase == 1 || phase == 3 ? hktas_begin_resident_epoch(expected_completed, phase) : 0; }
+{ return phase == 1 || phase == 3 ? hktas_begin_resident_epoch(expected_completed, phase, FALSE) : 0; }
 
 __declspec(dllexport) LONG __cdecl HktasClockBridge_RequireResidentBoundary(uint64_t token, uint64_t expected_completed)
 { return hktas_resident_boundary_valid(token, expected_completed) ? 1 : 0; }
 
 __declspec(dllexport) LONG __cdecl HktasClockBridge_RequireResidentWritableBoundary(uint64_t token, uint64_t expected_completed)
 {
-    return !g_resident_boundary_read_only && g_resident_boundary_mode == HKTAS_V2_MODE_PAUSED && g_resident_boundary_phase == 2
+    return g_resident_boundary_restore && !g_resident_boundary_read_only && g_resident_boundary_mode == HKTAS_V2_MODE_PAUSED && g_resident_boundary_phase == 2
         && hktas_resident_boundary_valid(token, expected_completed) ? 1 : 0;
 }
 
@@ -150,24 +156,76 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_ImportResidentContinuation(
 __declspec(dllexport) LONG __cdecl HktasClockBridge_EndResidentBoundary(uint64_t token, LONG complete)
 {
     if (complete != 1 || !hktas_resident_clock_valid(token,g_resident_boundary_frame)) return hktas_joint_poison(65);
-    AcquireSRWLockExclusive(&g_ps_lock); AcquireSRWLockExclusive(&g_dn_lock);
+    AcquireSRWLockExclusive(&g_ps_lock); AcquireSRWLockExclusive(&g_dn_lock); AcquireSRWLockExclusive(&g_cl_lock);
     LONG failed = 0;
-    if (!hktas_ps_held_locked(token)) failed=67;
-    else if (!hktas_dn_held_locked(token) || !hktas_dn_unchanged_locked() || !hktas_dn_verify(TRUE)) failed=68;
-    else if (!HktasClockBridge_RequireResidentAudioFence(token)) failed=66;
-    /* The event is only a wake hint. Prepare it while audio admission is
-     * still CLOSED. After the admission CAS succeeds nothing may fail. */
-    else if (!SetEvent(g_audio_open_event)) { hktas_audio_fail(39); failed=66; }
-    else if (!hktas_resident_clock_valid(token,g_resident_boundary_frame)) failed=65;
-    else if ((uint64_t)InterlockedCompareExchange64(&g_audio_state,0,(LONG64)HKTAS_AUDIO_CLOSED)!=HKTAS_AUDIO_CLOSED) failed=66;
+    if (!hktas_ps_held_locked(token)) {
+        hktas_dn_record_diag("end_fail_ps_held", 67, 0);
+        failed=67;
+    }
+    else if (g_dn_restore_main_window || !hktas_dn_held_locked(token)) {
+        hktas_dn_record_diag("end_fail_dn_held", 68, g_dn_restore_main_window ? 9 : 1);
+        failed=68;
+    }
+    else if (!hktas_dn_unchanged_locked()) {
+        hktas_dn_record_diag("end_fail_dn_unchanged", 68, 2);
+        failed=68;
+    }
+    else if (!hktas_dn_verify(TRUE)) {
+        hktas_dn_record_diag("end_fail_dn_verify", 68, 3);
+        failed=68;
+    }
+    else if (!hktas_cl_held_locked(token)) {
+        hktas_dn_record_diag("end_fail_cl_held", 69, 0);
+        failed=69;
+    }
+    else if (!hktas_resident_clock_valid(token,g_resident_boundary_frame)) {
+        hktas_dn_record_diag("end_fail_clock_valid", 65, 0);
+        failed=65;
+    }
     if (failed) hktas_joint_poison_locked(failed);
     else {
-        g_ps_closed=FALSE; g_dn_closed=FALSE; g_dn_held=FALSE;
+        g_ps_closed=FALSE; g_dn_closed=FALSE; g_dn_held=FALSE; g_dn_restore_main_window=FALSE; g_cl_closed=FALSE; g_cl_held=FALSE;
         g_resident_boundary_token=0;
         if (g_resident_boundary_read_only) InterlockedExchange(&g_resident_frame_writers,0);
-        WakeAllConditionVariable(&g_dn_cv); WakeAllConditionVariable(&g_ps_changed);
+        WakeAllConditionVariable(&g_dn_cv); WakeAllConditionVariable(&g_ps_changed); WakeAllConditionVariable(&g_cl_changed);
     }
-    ReleaseSRWLockExclusive(&g_dn_lock); ReleaseSRWLockExclusive(&g_ps_lock);
+    ReleaseSRWLockExclusive(&g_cl_lock); ReleaseSRWLockExclusive(&g_dn_lock); ReleaseSRWLockExclusive(&g_ps_lock);
     return failed ? 0 : 1;
+}
+
+__declspec(dllexport) LONG __cdecl HktasClockBridge_BeginResidentDirectorRestoreMutation(uint64_t token, uint64_t expected_completed)
+{
+    if (!HktasClockBridge_RequireResidentWritableBoundary(token, expected_completed)) return 0;
+    AcquireSRWLockExclusive(&g_dn_lock);
+    if (g_dn_restore_main_window || !hktas_dn_held_locked(token) || !hktas_dn_verify(TRUE)) {
+        hktas_dn_fault_locked(15); ReleaseSRWLockExclusive(&g_dn_lock);
+        return hktas_joint_poison(68);
+    }
+    g_dn_restore_main_window = TRUE;
+    ReleaseSRWLockExclusive(&g_dn_lock);
+    return 1;
+}
+
+__declspec(dllexport) LONG __cdecl HktasClockBridge_EndResidentDirectorRestoreMutation(uint64_t token, uint64_t expected_completed)
+{
+    if (!HktasClockBridge_RequireResidentWritableBoundary(token, expected_completed)) return 0;
+    AcquireSRWLockExclusive(&g_dn_lock);
+    BOOL ok = g_dn_restore_main_window && hktas_dn_held_locked(token) && hktas_dn_verify(TRUE)
+        && !g_dn_active && !g_dn_lineages && !g_dn_lineage_rows
+        && g_dn_lineage_issued == g_dn_lineage_retired && g_dn_lineage_entered == g_dn_lineage_returned
+        && !g_dn_job_tickets && g_dn_job_published == g_dn_job_retired
+        && g_dn_job_started == g_dn_job_finished && !g_dn_job_rows && g_dn_begun == g_dn_ended;
+    g_dn_restore_main_window = FALSE;
+    if (ok) {
+        if (g_dn_witness.data) { HeapFree(GetProcessHeap(), 0, g_dn_witness.data); g_dn_witness.data = NULL; }
+        g_dn_witness.count = 0; g_dn_witness.capacity = 0;
+        ok = hktas_dn_capture(&g_dn_witness) && hktas_dn_unchanged_locked() && hktas_dn_verify(TRUE);
+    }
+    if (!ok) {
+        hktas_dn_fault_locked(16); ReleaseSRWLockExclusive(&g_dn_lock);
+        return hktas_joint_poison(68);
+    }
+    ReleaseSRWLockExclusive(&g_dn_lock);
+    return 1;
 }
 #endif

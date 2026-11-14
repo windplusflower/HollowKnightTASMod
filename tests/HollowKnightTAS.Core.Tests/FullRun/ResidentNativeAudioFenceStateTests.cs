@@ -68,7 +68,7 @@ public sealed class ResidentNativeAudioFenceStateTests
     {
         var api = new Api();
         var invalid = new Action<byte[]>[] { b => U32(b, 0, 0), b => U32(b, 4, 2), b => U32(b, 8, 88), b => U32(b, 12, 56),
-            b => U32(b, 16, 0), b => U32(b, 20, 0), b => U32(b, 20, 9), b => U64(b, 24, 8), b => U64(b, 40, 99), b => U64(b, 40, 9100),
+            b => U32(b, 16, 0), b => U32(b, 20, 0), b => U32(b, 20, 9), b => U64(b, 24, 8), b => U64(b, 40, 99), b => U64(b, 40, 360100),
             b => U64(b, 48, 0), b => U64(b, 48, Closed | 1), b => U64(b, 48, Closed | (1UL << 38)), b => U64(b, 48, Closed | (1UL << 63)),
             b => U32(b, 56, 36), b => U32(b, 60, 257), b => U32(b, 68, 1), b => U32(b, 72, 0), b => U32(b, 76, 81),
             b => U32(b, 80, 0), b => U32(b, 84, 128), b => U64(b, 88, 1) };
@@ -78,7 +78,7 @@ public sealed class ResidentNativeAudioFenceStateTests
         }
         Reject(() => api.Capture(new byte[95], Worker())); Reject(() => api.Capture(new byte[97], Worker()));
         Reject(() => api.Capture(Header(), Worker(), 0));
-        api.Capture(Header(now: 9099), Worker()); // Exactly one millisecond of native wall budget remains.
+        api.Capture(Header(now: 360099), Worker()); // Exactly one millisecond of native wall budget remains.
     }
     [TestMethod]
     public void MixedPublicationAndLeaseChangesAcrossTheCopyReject()

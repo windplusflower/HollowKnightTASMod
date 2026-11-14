@@ -23,7 +23,7 @@ static void reset_director_fixture(void)
     memset(&g_dn_witness,0,sizeof(g_dn_witness));
     g_dn_fls=FLS_OUT_OF_INDEXES;g_dn_base=g_dn_relay=NULL;
     g_dn_fault_sink=NULL;g_dn_main=0;g_dn_attempt=g_dn_fault=0;
-    g_dn_installed=g_dn_closed=g_dn_held=FALSE;
+    g_dn_installed=g_dn_closed=g_dn_held=g_dn_restore_main_window=FALSE;
     g_dn_epoch=g_dn_started=g_dn_begun=g_dn_ended=g_dn_peak=0;
     g_dn_job_published=g_dn_job_retired=g_dn_job_started=g_dn_job_finished=0;
 }
@@ -32,6 +32,7 @@ static void initialize_director_fixture(void)
     /* Same complete pinned private PE as the particle registration slots.
      * The executable, loader, frame loop and original DllMain never run. */
     AUDIO_IMAGE_CHECK(hktas_dn_install_in_exclusive_image(particle_image,GetCurrentThreadId(),hktas_resident_director_fault));
+    AUDIO_IMAGE_CHECK(install_resident_clip_curve_ledger(particle_image,GetCurrentThreadId(),hktas_resident_clip_curve_fault));
     memset(director_manager,0,sizeof(director_manager));memset(director_commands,0,sizeof(director_commands));
     BYTE *ptr=director_manager;memcpy(particle_image+HKTAS_DN_MANAGER,&ptr,8);
     for(unsigned i=0;i<2;i++) {
@@ -45,6 +46,14 @@ static void initialize_particle_fixture(void)
     /* A new test process image; no engine entry point is executed and no
      * particle jobs exist in these clock-only tests. Production never resets. */
     AUDIO_IMAGE_CHECK(!g_ps_count && !g_ps_writers);
+    AUDIO_IMAGE_CHECK(!g_cl_active);
+    if (g_cl_tls!=TLS_OUT_OF_INDEXES) AUDIO_IMAGE_CHECK(FlsFree(g_cl_tls));
+    if (g_cl_relay) AUDIO_IMAGE_CHECK(VirtualFree(g_cl_relay,0,MEM_RELEASE));
+    g_cl_tls=TLS_OUT_OF_INDEXES;g_cl_relay=NULL;g_cl_base=NULL;g_cl_sink=NULL;
+    g_cl_main=0;g_cl_fault=g_cl_unknown=g_cl_attempted_install=0;
+    g_cl_installed=g_cl_closed=g_cl_held=FALSE;g_cl_used=0;
+    g_cl_previous_epoch=0;g_cl_generation=g_cl_epoch=g_cl_started=g_cl_attempted=g_cl_completed=0;
+    memset(g_cl_pairs,0,sizeof(g_cl_pairs));
     if (g_ps_tls != TLS_OUT_OF_INDEXES) { AUDIO_IMAGE_CHECK(!TlsGetValue(g_ps_tls)); AUDIO_IMAGE_CHECK(TlsFree(g_ps_tls)); }
     if (particle_image) AUDIO_IMAGE_CHECK(VirtualFree(particle_image,0,MEM_RELEASE));
     g_ps_tls=TLS_OUT_OF_INDEXES; g_ps_attempted=g_ps_reason=0; g_ps_closed=g_ps_installed=FALSE;
@@ -233,7 +242,7 @@ static int frame_clock_observations(void)
         }
         uint64_t token=HktasClockBridge_BeginResidentFrameObservation(69,phase); CHECK(token!=0);
         CHECK(HktasClockBridge_RequireResidentDirectorFence(token)==1 && g_dn_started==g_resident_boundary_started);
-        CHECK(HktasClockBridge_RequireResidentFrameObservation(token,69)==1 && HktasClockBridge_RequireResidentAudioFence(token)==1);
+        CHECK(HktasClockBridge_RequireResidentFrameObservation(token,69)==1 && HktasClockBridge_RequireResidentAudioFence(token)==0);
         CHECK(HktasClockBridge_RequireResidentWritableBoundary(token,69)==0);
         hktas_v2_state gate_before; BYTE time_before[sizeof(engine)]; hktas_fractional_clock fractional_before=g_fractional_clock;
         memcpy(&gate_before,&gate,sizeof(gate)); memcpy(time_before,engine,sizeof(engine));
@@ -296,8 +305,11 @@ static int frame_clock_observations(void)
     frame_fixture(3,2); token=HktasClockBridge_BeginResidentFrameObservation(69,3); CHECK(token!=0);
     hktas_frame_clock sentinel,unchanged; memset(&sentinel,0xb5,sizeof(sentinel)); unchanged=sentinel;
     g_resident_boundary_started=GetTickCount64()-9000;
+    CHECK(HktasClockBridge_ExportResidentFrameClock(token,(BYTE *)&sentinel,sizeof(sentinel))==1);
+    sentinel=unchanged;
+    g_resident_boundary_started=GetTickCount64()-HKTAS_RESIDENT_SOURCE_WALL;
     CHECK(HktasClockBridge_ExportResidentFrameClock(token,(BYTE *)&sentinel,sizeof(sentinel))==0 && !memcmp(&sentinel,&unchanged,sizeof(sentinel)));
-    CHECK(HktasClockBridge_EndResidentBoundary(token,1)==0 && g_resident_boundary_failed && HktasClockBridge_GetResidentAudioFenceCapability()==0);
+    CHECK(HktasClockBridge_EndResidentBoundary(token,1)==0 && g_resident_boundary_failed && HktasClockBridge_GetResidentAudioFenceCapability()==1);
     CHECK(InterlockedCompareExchange(&g_resident_frame_writers,0,0)==-1 && HktasClockBridge_SetFullRunFrameRateRatio(60,1)==0);
     puts("PASS B/readonly kind separation, actual phase3 nesting, unlatch refusal, stale/expired tokens, legacy import and public clock writes rejected");
     return 0;
@@ -305,8 +317,8 @@ static int frame_clock_observations(void)
 static BOOL all_joint_domains_faulted(void)
 {
     return gate.mode==HKTAS_V2_MODE_FAULT && g_resident_boundary_failed
-        && (hktas_audio_atomic(&g_audio_state)&(HKTAS_AUDIO_CLOSED|HKTAS_AUDIO_FAILED))==(HKTAS_AUDIO_CLOSED|HKTAS_AUDIO_FAILED)
-        && g_audio_fault_reason && g_ps_reason && g_ps_closed && g_dn_fault && g_dn_closed;
+        && hktas_audio_atomic(&g_audio_state)==0
+        && !g_audio_fault_reason && g_ps_reason && g_ps_closed && g_dn_fault && g_dn_closed;
 }
 static DWORD WINAPI director_reset_time(void *unused)
 {
@@ -322,7 +334,7 @@ static DWORD WINAPI director_reset_time(void *unused)
 static int director_joint_scenarios(void)
 {
     initialize();rate(0,0);g_v2_boundary_callback_phase=2;
-    CHECK(HktasClockBridge_GetResidentBoundaryCapability()==2);
+    CHECK(HktasClockBridge_GetResidentBoundaryCapability()==4);
     /* Unlike the standalone graph command/ABA scenarios, this original
      * ResetFrameTiming crosses the ACTUAL clock/audio/particle/Director
      * release while an enrolled call is blocked. Only these two verified
@@ -363,15 +375,13 @@ static int director_joint_scenarios(void)
     initialize();rate(0,0);g_v2_boundary_callback_phase=2;director_manager[987]=1;
     CHECK(!HktasClockBridge_BeginResidentBoundary(0) && all_joint_domains_faulted());
     CHECK(gate.fault_code==6811 && !gate.completed_frames && !g_dn_held);
-    /* Remove the audio wake capability just before commit. A validated
-     * Director/particle domain still cannot publish or release independently
-     * if the final fallible Win32 wake preparation cannot succeed. */
+    /* Hardware wake events do not participate in the gameplay commit. */
     initialize();rate(0,0);g_v2_boundary_callback_phase=2;
     token=HktasClockBridge_BeginResidentBoundary(0);CHECK(token);
     HANDLE audio_wake=g_audio_open_event;g_audio_open_event=NULL;
     LONG committed=HktasClockBridge_EndResidentBoundary(token,1);
     g_audio_open_event=audio_wake;
-    CHECK(!committed && all_joint_domains_faulted() && !gate.completed_frames);
+    CHECK(committed && hktas_resident_boundary_released() && !gate.completed_frames);
     for(unsigned domain=0;domain<3;domain++) for(LONG complete=0;complete<=1;complete++) {
         initialize();rate(0,0);g_v2_boundary_callback_phase=2;
         token=HktasClockBridge_BeginResidentBoundary(0);CHECK(token);
@@ -379,7 +389,7 @@ static int director_joint_scenarios(void)
             : domain==1 ? HktasClockBridge_EndResidentParticleFence(token,complete) : HktasClockBridge_EndResidentDirectorFence(token,complete);
         CHECK(!result && all_joint_domains_faulted() && !HktasClockBridge_BeginResidentBoundary(0));
     }
-    puts("PASS unified clock/audio/particle/Director commit: real blocked writer, atomic ABA drift, abort on failed Director begin, six public release/abort misuse cases; no clock or Movie advance");
+    puts("PASS unified clock/particle/Director commit: real blocked writer, atomic ABA drift, abort on failed Director begin, six public release/abort misuse cases; no clock or Movie advance");
     return 0;
 }
 int main(int argc, char **argv)
@@ -439,9 +449,9 @@ int main(int argc, char **argv)
     gate.mode = HKTAS_V2_MODE_RUN; g_v2_boundary_callback_phase = 1;
     uint64_t first = HktasClockBridge_BeginResidentBoundary(0);
     CHECK(first != 0 && HktasClockBridge_RequireResidentBoundary(first,0) == 1);
-    CHECK(HktasClockBridge_RequireResidentAudioFence(first)==1 && hktas_audio_atomic(&g_audio_epoch)==first);
+    CHECK(HktasClockBridge_RequireResidentAudioFence(first)==0 && hktas_audio_atomic(&g_audio_epoch)==0);
     CHECK(HktasClockBridge_RequireResidentParticleFence(first)==1 && g_ps_epoch==first && g_ps_started==g_resident_boundary_started && !g_ps_count);
-    CHECK(hktas_audio_atomic(&g_audio_started)==g_resident_boundary_started && hktas_audio_atomic(&g_audio_state)==HKTAS_AUDIO_CLOSED);
+    CHECK(hktas_audio_atomic(&g_audio_started)==0 && hktas_audio_atomic(&g_audio_state)==0);
     CHECK(!hktas_resident_boundary_released());
     CHECK(HktasClockBridge_BeginResidentBoundary(0) == 0);
     CHECK(HktasClockBridge_ExportResidentContinuation(first,(BYTE *)&snapshot,sizeof(snapshot)) == 1);
@@ -455,7 +465,7 @@ int main(int argc, char **argv)
         uint64_t token = HktasClockBridge_BeginResidentBoundary((uint64_t)gate.completed_frames);
         CHECK(token > first);
         CHECK(HktasClockBridge_RequireResidentBoundary(first,gate.completed_frames)==0 && HktasClockBridge_RequireResidentAudioFence(first)==0);
-        CHECK(HktasClockBridge_RequireResidentAudioFence(token)==1 && hktas_audio_atomic(&g_audio_started)==g_resident_boundary_started);
+        CHECK(HktasClockBridge_RequireResidentAudioFence(token)==0 && hktas_audio_atomic(&g_audio_started)==0);
         first = token;
         CHECK(HktasClockBridge_ImportResidentContinuation(token,(BYTE *)&snapshot,sizeof(snapshot),7+iteration) == 1);
         CHECK(gate.completed_frames == (LONGLONG)snapshot.completed && gate.mode == HKTAS_V2_MODE_PAUSED);
@@ -469,50 +479,49 @@ int main(int argc, char **argv)
     }
     CHECK(!g_continuation_imported); /* Production epochs did not reset/consume the legacy gate. */
     uint64_t expired = HktasClockBridge_BeginResidentBoundary(snapshot.completed);
-    CHECK(expired != 0); g_resident_boundary_started -= 9001;
+    CHECK(expired != 0); g_resident_boundary_started -= (HKTAS_RESIDENT_RESTORE_WALL + 1);
     CHECK(HktasClockBridge_RequireResidentBoundary(expired,snapshot.completed) == 0);
     CHECK(HktasClockBridge_EndResidentBoundary(expired,1) == 0 && gate.mode == HKTAS_V2_MODE_FAULT);
-    CHECK(hktas_audio_atomic(&g_audio_state)==(HKTAS_AUDIO_CLOSED|HKTAS_AUDIO_FAILED));
+    CHECK(hktas_audio_atomic(&g_audio_state)==0);
     CHECK(HktasClockBridge_BeginResidentBoundary(snapshot.completed) == 0);
     initialize(); rate(0,0); g_v2_boundary_callback_phase = 2;
     uint64_t changed = HktasClockBridge_BeginResidentBoundary(0); CHECK(changed != 0);
     gate.command_sequence++;
     CHECK(HktasClockBridge_RequireResidentBoundary(changed,0) == 0);
     CHECK(HktasClockBridge_EndResidentBoundary(changed,1) == 0 && !hktas_resident_boundary_released());
-    CHECK(hktas_audio_atomic(&g_audio_state)==(HKTAS_AUDIO_CLOSED|HKTAS_AUDIO_FAILED));
+    CHECK(hktas_audio_atomic(&g_audio_state)==0);
     initialize(); rate(0,0); g_v2_boundary_callback_phase = 2;
     uint64_t invalid = HktasClockBridge_BeginResidentBoundary(0); CHECK(invalid != 0);
     snapshot.version = 2; anchor = g_deterministic_clock_anchor.QuadPart;
     CHECK(HktasClockBridge_ImportResidentContinuation(invalid,(BYTE *)&snapshot,sizeof(snapshot),0) == 0);
     CHECK(g_deterministic_clock_anchor.QuadPart == anchor && gate.completed_frames == 0 && g_resident_boundary_failed);
     CHECK(HktasClockBridge_EndResidentBoundary(invalid,0)==0);
-    CHECK(hktas_audio_atomic(&g_audio_state)==(HKTAS_AUDIO_CLOSED|HKTAS_AUDIO_FAILED));
+    CHECK(hktas_audio_atomic(&g_audio_state)==0);
     puts("PASS resident epochs: shared ordinary boundary, repeated independent restores, exact readback, native callback ownership, stale token, command drift, wall-time expiry and permanent failure");
     initialize(); rate(0,0); g_v2_boundary_callback_phase=2;
     uint64_t audio_expired=HktasClockBridge_BeginResidentBoundary(0); CHECK(audio_expired!=0);
-    CHECK(hktas_audio_atomic(&g_audio_started)==g_resident_boundary_started);
+    CHECK(hktas_audio_atomic(&g_audio_started)==0);
     InterlockedExchange64(&g_audio_started,(LONG64)(GetTickCount64()-9001));
-    CHECK(HktasClockBridge_RequireResidentBoundary(audio_expired,0)==0 && gate.mode==HKTAS_V2_MODE_FAULT);
-    CHECK(HktasClockBridge_EndResidentBoundary(audio_expired,1)==0 && g_resident_boundary_failed);
-    CHECK(HktasClockBridge_BeginResidentBoundary(0)==0 && HktasClockBridge_GetResidentAudioFenceCapability()==0);
+    CHECK(HktasClockBridge_RequireResidentBoundary(audio_expired,0)==1);
+    CHECK(HktasClockBridge_EndResidentBoundary(audio_expired,1)==1 && hktas_resident_boundary_released());
     initialize(); rate(0,0); g_v2_boundary_callback_phase=2;
     uint64_t wrong_end=HktasClockBridge_BeginResidentBoundary(0); CHECK(wrong_end!=0);
     CHECK(HktasClockBridge_RequireResidentBoundary(wrong_end+1,0)==0 && HktasClockBridge_RequireResidentAudioFence(wrong_end+1)==0);
-    CHECK(HktasClockBridge_RequireResidentBoundary(wrong_end,0)==1 && HktasClockBridge_RequireResidentAudioFence(wrong_end)==1);
+    CHECK(HktasClockBridge_RequireResidentBoundary(wrong_end,0)==1 && HktasClockBridge_RequireResidentAudioFence(wrong_end)==0);
     CHECK(HktasClockBridge_EndResidentBoundary(wrong_end+1,1)==0 && gate.mode==HKTAS_V2_MODE_FAULT);
-    CHECK(g_resident_boundary_failed && hktas_audio_atomic(&g_audio_state)==(HKTAS_AUDIO_CLOSED|HKTAS_AUDIO_FAILED));
+    CHECK(g_resident_boundary_failed && hktas_audio_atomic(&g_audio_state)==0);
     initialize(); rate(0,0); g_v2_boundary_callback_phase=2;
     uint64_t aborted=HktasClockBridge_BeginResidentBoundary(0); CHECK(aborted!=0);
     CHECK(HktasClockBridge_EndResidentBoundary(aborted,0)==0 && gate.mode==HKTAS_V2_MODE_FAULT);
-    CHECK(g_resident_boundary_failed && hktas_audio_atomic(&g_audio_state)==(HKTAS_AUDIO_CLOSED|HKTAS_AUDIO_FAILED));
+    CHECK(g_resident_boundary_failed && hktas_audio_atomic(&g_audio_state)==0);
     initialize(); rate(0,0); g_v2_boundary_callback_phase=2;
     uint64_t early_audio_end=HktasClockBridge_BeginResidentBoundary(0); CHECK(early_audio_end!=0);
     CHECK(HktasClockBridge_EndResidentAudioFence(early_audio_end,1)==0 && all_joint_domains_faulted());
     CHECK(HktasClockBridge_RequireResidentBoundary(early_audio_end,0)==0);
     CHECK(HktasClockBridge_EndResidentBoundary(early_audio_end,1)==0 && gate.mode==HKTAS_V2_MODE_FAULT);
-    CHECK(g_resident_boundary_failed && hktas_audio_atomic(&g_audio_state)==(HKTAS_AUDIO_CLOSED|HKTAS_AUDIO_FAILED));
+    CHECK(g_resident_boundary_failed && hktas_audio_atomic(&g_audio_state)==0);
     CHECK(HktasClockBridge_GetResidentAudioFenceCoverageGaps()&HKTAS_AUDIO_REQUIRED_GAP_NON_THREAD_WORKERS);
-    puts("PASS integrated clock/audio lease: actual synthetic-image install, common token/start time, mutual expiry, wrong-end token, abort and early audio release permanently fault");
+    puts("PASS hardware audio is independent of gameplay admission and expiry; wrong token and abort still fault");
     CHECK(frame_clock_observations()==0 && director_joint_scenarios()==0);
     return 0;
 }

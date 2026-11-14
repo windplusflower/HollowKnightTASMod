@@ -65,6 +65,10 @@ public sealed class ResidentPresentationTypesTests
     {
         var api=new Api(); var data=api.Fixture("text-mesh"); api.Call("RequireCompleteCoverage",data);
         Set(api.Row(data),"Font","font"); api.Reject("RequireCompleteCoverage",data);
+        Set(api.Row(data),"StaticFontDependency",true); api.Reject("Validate",data);
+        Set(api.Row(data),"Font","resident-asset/serialized/font"); api.Call("RequireCompleteCoverage",data);
+        var other = api.Fixture("text-mesh"); api.Reject("RequireEqual",data,other);
+        Set(api.Row(data),"StaticFontDependency",false);
         Set(api.Row(data),"Font",""); Set(api.Row(data),"Mesh","mesh"); api.Reject("RequireCompleteCoverage",data);
     }
     [TestMethod]

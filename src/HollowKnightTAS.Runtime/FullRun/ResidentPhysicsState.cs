@@ -19,6 +19,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static readonly Type[] ColliderTypes = { typeof(BoxCollider2D), typeof(PolygonCollider2D), typeof(CircleCollider2D), typeof(EdgeCollider2D), typeof(CapsuleCollider2D) };
         private static readonly FieldInfo PhysicsHandle = typeof(PhysicsScene2D).GetField("m_Handle", BindingFlags.Instance | BindingFlags.NonPublic)!;
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int AllocateTreeNode(IntPtr tree);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void NativeSetFloat(IntPtr owner, float value);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void NativeSetByte(IntPtr field, byte value);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void NativeSetInt(IntPtr field, int value);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void NativeVoid(IntPtr owner);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void NativeSetPath(IntPtr owner, int index, IntPtr dynamicArray);
 
         internal sealed class Data
         {
@@ -215,6 +220,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                         scope.Mutate(() => { owner.bodyType = (RigidbodyType2D)Int(row.Config, 35); owner.simulated = row.Config[16] != 0;
                             owner.sharedMaterial = Material(row.Material); });
                     }
+                    var engine = LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress;
+                    var setCircleRadius = NativeEntry<NativeSetFloat>(engine, 0xc08530, "f30f1091e0000000");
+                    var setAutoTiling = NativeEntry<NativeSetByte>(engine, 0xbf0330, "385108740a488b01");
+                    var resizePaths = NativeEntry<NativeSetInt>(engine, 0x62c240, "4883ec488b410845");
+                    var onPathCount = NativeEntry<NativeVoid>(engine, 0xc07230, "40534883ec20488b");
+                    var setPolygonPath = NativeEntry<NativeSetPath>(engine, 0xc08400, "40574883ec204983");
                     foreach (var row in source.Colliders) {
                         var owner = (Collider2D)directory.Resolve(row.Owner);
                         if (owner.gameObject.activeInHierarchy != row.Active) throw Error("Collider active hierarchy is not synchronized");
@@ -222,13 +233,37 @@ namespace HollowKnightTAS.Runtime.FullRun
                             owner.sharedMaterial = Material(row.Material); owner.offset = Vector(row.Config, 0); owner.density = Float(row.Config, 8);
                             owner.isTrigger = row.Config[12] != 0; owner.usedByEffector = row.Config[13] != 0; owner.usedByComposite = row.Config[14] != 0;
                             if (owner is BoxCollider2D box) { box.size = Vector(row.Geometry, 0); box.edgeRadius = Float(row.Geometry, 8); box.autoTiling = row.Tiling[0] != 0; }
-                            else if (owner is CircleCollider2D circle) circle.radius = Float(row.Geometry, 0);
+                            else if (row.Type == typeof(CircleCollider2D).FullName) setCircleRadius(M.Owner(owner), Float(row.Geometry, 0));
                             else if (owner is CapsuleCollider2D capsule) { capsule.size = Vector(row.Geometry, 0); capsule.direction = (CapsuleDirection2D)Int(row.Geometry, 8); }
-                            else if (owner is PolygonCollider2D polygon) { polygon.autoTiling = row.Tiling[0] != 0; polygon.pathCount = row.Paths.Length;
-                                for (var index = 0; index < row.Paths.Length; index++) polygon.SetPath(index, Points(row.Paths[index])); }
+                            else if (row.Type == typeof(PolygonCollider2D).FullName) {
+                                var poly = M.Owner(owner);
+                                setAutoTiling(IntPtr.Add(poly, 0xe0), row.Tiling[0] != 0 ? (byte)1 : (byte)0);
+                                resizePaths(IntPtr.Add(poly, 0x120), row.Paths.Length);
+                                onPathCount(poly);
+                                for (var index = 0; index < row.Paths.Length; index++) {
+                                    var path = row.Paths[index];
+                                    if (path.Count == 0) continue;
+                                    var dyn = Marshal.AllocHGlobal(32);
+                                    var buf = Marshal.AllocHGlobal(path.Values.Length);
+                                    try {
+                                        Marshal.Copy(path.Values, 0, buf, path.Values.Length);
+                                        Marshal.WriteIntPtr(dyn, 0, buf);
+                                        Marshal.WriteInt64(dyn, 8, 1L);
+                                        Marshal.WriteInt64(dyn, 16, path.Count);
+                                        Marshal.WriteInt64(dyn, 24, ((long)path.Count << 1) | 1L);
+                                        setPolygonPath(poly, index, dyn);
+                                    } finally {
+                                        Marshal.FreeHGlobal(buf);
+                                        Marshal.FreeHGlobal(dyn);
+                                    }
+                                }
+                            }
                             else if (owner is EdgeCollider2D edge) { edge.edgeRadius = Float(row.Geometry, 0); edge.points = Points(row.Paths[0]);
                                 edge.adjacentStartPoint = Vector(row.Geometry, 4); edge.adjacentEndPoint = Vector(row.Geometry, 12);
                                 edge.useAdjacentStartPoint = row.Geometry[20] != 0; edge.useAdjacentEndPoint = row.Geometry[21] != 0; }
+                            if (row.Enabled == 0 && row.World.Length != 0 && row.Active && M.Ptr(IntPtr.Add(M.Owner(owner), 216)) == IntPtr.Zero) {
+                                owner.enabled = true;
+                            }
                             owner.enabled = row.Enabled != 0;
                         });
                     }
@@ -243,8 +278,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                             ? IntPtr.Add(pointer, 232) : IntPtr.Add(pathBase, checked(index * 32)), row.Paths[index].Capacity, 8, 4, admitted);
                     }
                     target = Read(directory, bindAsset); RequireCompatible(source, target.Data); target.Frozen();
+                    scope.Mutate(() => ReconstructBlockAllocators(source, target, admitted));
+                    target = Read(directory, bindAsset); RequireCompatible(source, target.Data); target.Frozen();
                     scope.Mutate(() => PrepareContactNodes(source, target, admitted));
-                    target = Read(directory, bindAsset); RequireCompatible(source, target.Data); target.Frozen(); structured = true;
+                    target = Read(directory, bindAsset); RequireCompatible(source, target.Data); target.Frozen();
+                    if (ResidentPhysicsGlobals.NeedsInterestMapSync(source.Globals!, target.Globals!.Data)) {
+                        scope.Mutate(() => ResidentPhysicsGlobals.SynchronizeInterestMap(source.Globals!, target.Globals!, admitted));
+                        target = Read(directory, bindAsset); RequireCompatible(source, target.Data); target.Frozen();
+                    }
+                    structured = true;
                     ResidentPhysicsGlobals.RequireCompatible(source.Globals!, target.Globals!);
                 } catch (Exception error) { scope.Fault(error); throw; }
             }
@@ -518,8 +560,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             var pairs = ReadIntArray(live, Slice(state, 56, 32), 8, out pairCapacity);
             var moves = ReadIntArray(live, Slice(state, 88, 32), 4, out moveCapacity);
+            var queryProxy = Int(state, 120);
+            if (queryProxy < -1 || queryProxy >= nodes.Length || (queryProxy != -1 && (nodes[queryProxy] == null || nodes[queryProxy].Height == -1)))
+                queryProxy = -1;
             return new CheckpointPhysicsBroadphaseState { Root = Int(state, 8), Count = Int(state, 24), FreeHead = Int(state, 32), Path = M.U32(state, 36),
-                InsertionCount = Int(state, 40), ProxyCount = Int(state, 48), QueryProxy = Int(state, 120), WorldFlags = Int(state, 0),
+                InsertionCount = Int(state, 40), ProxyCount = Int(state, 48), QueryProxy = queryProxy, WorldFlags = Int(state, 0),
                 Step = Slice(state, 344, 8), SimulationId = Int(cache, 80), Nodes = nodes, Pairs = pairs, Moves = moves }.EncodeCompact();
         }
 
@@ -816,7 +861,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var a = source.Colliders[index]; var b = target.Colliders[index];
                 if (a.Material != b.Material || a.AttachedBody != b.AttachedBody || a.World != b.World || a.Active != b.Active || a.Enabled != b.Enabled || a.Added != b.Added
                     || a.Vtable != b.Vtable || a.TilingVtable != b.TilingVtable || a.FixtureCapacity != b.FixtureCapacity || a.PathCapacity != b.PathCapacity
-                    || a.Paths.Length != b.Paths.Length || a.Fixtures.Length != b.Fixtures.Length) throw Error("collider native allocation/registration is not synchronized: " + a.Owner);
+                    || a.Paths.Length != b.Paths.Length || a.Fixtures.Length != b.Fixtures.Length)
+                    throw Error($"collider native allocation/registration is not synchronized: {a.Owner} "
+                        + $"mat=({a.Material},{b.Material}) body=({a.AttachedBody},{b.AttachedBody}) world=({a.World},{b.World}) "
+                        + $"active=({a.Active},{b.Active}) enabled=({a.Enabled},{b.Enabled}) added=({a.Added},{b.Added}) "
+                        + $"vt=({a.Vtable},{b.Vtable}) tvt=({a.TilingVtable},{b.TilingVtable}) "
+                        + $"fcap=({a.FixtureCapacity},{b.FixtureCapacity}) pcap=({a.PathCapacity},{b.PathCapacity}) "
+                        + $"paths=({a.Paths.Length},{b.Paths.Length}) fix=({a.Fixtures.Length},{b.Fixtures.Length})");
                 for (var path = 0; path < a.Paths.Length; path++)
                     if (a.Paths[path].Count != b.Paths[path].Count || a.Paths[path].Capacity != b.Paths[path].Capacity) throw Error("collider point allocation is not synchronized: " + a.Owner);
                 for (var fixture = 0; fixture < a.Fixtures.Length; fixture++) {
@@ -928,6 +979,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static void Flags(params byte[] values) { if (values.Any(value => value > 1)) throw Error("native boolean byte differs"); }
         private static void Finite(byte[] value, int floats)
         { for (var index = 0; index < floats; index++) if (float.IsNaN(Float(value, index * 4)) || float.IsInfinity(Float(value, index * 4))) throw Error("active native geometry is not finite"); }
+        private static T NativeEntry<T>(IntPtr engine, int rva, string prefix) where T : class
+        {
+            var pointer = IntPtr.Add(engine, rva);
+            if (BitConverter.ToString(M.Read(pointer, prefix.Length / 2)).Replace("-", "").ToLowerInvariant() != prefix)
+                throw Error("native physics ABI differs at 0x" + rva.ToString("x"));
+            return (T)(object)Marshal.GetDelegateForFunctionPointer(pointer, typeof(T));
+        }
         private static InvalidDataException Error(string detail) => new InvalidDataException("Resident physics: " + detail + ".");
     }
 }

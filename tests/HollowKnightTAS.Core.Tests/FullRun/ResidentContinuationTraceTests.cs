@@ -13,7 +13,7 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
 public sealed class ResidentContinuationTraceTests
 {
     private const BindingFlags All = BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-    private static readonly string[] Names = "admission assetManifest assetValues clock componentNative directory globalNative input managedGraph objectNative process rng scheduler staticRoots typeManifest".Split(' ');
+    private static readonly string[] Names = "admission assetManifest assetValues clock componentNative directory input managedGraph objectNative process rng scheduler staticRoots typeManifest".Split(' ');
 
     private sealed class Fixture : IDisposable
     {
@@ -80,7 +80,7 @@ public sealed class ResidentContinuationTraceTests
         CollectionAssert.AreEqual(new[] { 1, 2, 3 }, records.Skip(1).Take(12).Select(row => row.GetProperty("k").GetInt32()).Where(k => k != 0).ToArray());
         foreach (var row in records.Skip(1).Take(12)) {
             // Independent Python fixture includes the UTF8 key "猫" and hashes the whole group proof protocol.
-            Assert.AreEqual("aa13cea79de763af4c79fc5c885410a5297d8a4e637d0fc450ca94c480a52f6d", row.GetProperty("worldSha256").GetString());
+            Assert.AreEqual("163571a231f2e71ab6523cde57babf5ca176580f4818aee1fa4ec79c2bc1526a", row.GetProperty("worldSha256").GetString());
             Assert.IsTrue(row.GetProperty("samplesComplete").GetBoolean());
         }
         Reject(() => fixture.Open("complete")); Reject(() => fixture.Seal(writer, native, movie, consumed));

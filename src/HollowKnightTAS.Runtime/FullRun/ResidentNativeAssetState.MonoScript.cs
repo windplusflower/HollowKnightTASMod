@@ -26,7 +26,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Cache = Cache == null ? null : new ResidentMonoNativeState.CacheData { Class = Cache.Class, ReferenceCount = Cache.ReferenceCount,
                     MethodCapacity = Cache.MethodCapacity, ScriptType = Cache.ScriptType, ExecutionOrder = Cache.ExecutionOrder,
                     Methods = (string[])Cache.Methods.Clone(), StateMachine = Cache.StateMachine, SharedAnimators = Cache.SharedAnimators,
-                    SerializationPresent = Cache.SerializationPresent, IdentifierMatches = Cache.IdentifierMatches } };
+                    SerializationPresent = Cache.SerializationPresent, SerializationClassBound = Cache.SerializationClassBound,
+                    IdentifierMatches = Cache.IdentifierMatches } };
         }
         private static bool IsNativeMonoScript(NativeObject owner)
         {
@@ -55,7 +56,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static string[] MonoScriptGaps(MonoScriptState state)
         {
             ValidateMonoScript(state);
-            return new[] { state.Cache?.SerializationPresent == true ? "monoscript/serialization-cache" : "",
+            return new[] { state.Cache?.SerializationPresent == true && !state.Cache.SerializationClassBound ? "monoscript/serialization-cache" : "",
                 state.Cache != null && !state.Cache.IdentifierMatches ? "monoscript/cache-identifier-class-binding" : "" }.Where(value => value.Length != 0).ToArray();
         }
         internal static void RequireMonoScriptComplete(MonoScriptState state)
@@ -73,6 +74,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!EncodeMonoScriptValues(source).SequenceEqual(EncodeMonoScriptValues(actual))) throw Error("MonoScript independent value readback differs");
             ResidentMonoNativeState.RequireCacheEqual(source.Cache, actual.Cache);
         }
+        internal static void RequireMonoScriptPlanEqual(MonoScriptState source, MonoScriptState actual)
+        {
+            if (!EncodeMonoScriptValues(source).SequenceEqual(EncodeMonoScriptValues(actual))) throw Error("MonoScript independent value readback differs");
+            ResidentMonoNativeState.RequirePlanCacheCompatible(source.Cache, actual.Cache);
+        }
         internal static void ApplyMonoScript(Snapshot source, NativeObject owner, Action admitted)
         {
             admitted();
@@ -80,7 +86,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || owner.GetType() != source.Type.Resolve()) throw Error("MonoScript transfer has another owner or managed wrapper type");
             RequireMonoScriptComplete(source.Script); RequireAssetVtable(owner, 0x16a2c30);
             var before = CaptureMonoScript(owner); RequireMonoScriptComplete(before);
-            ResidentMonoNativeState.RequireCacheEqual(source.Script.Cache, before.Cache);
+            ResidentMonoNativeState.RequirePlanCacheCompatible(source.Script.Cache, before.Cache);
             var pointer = ResidentNativeMemory.Owner(owner); var data = source.Script;
             owner.name = source.Name; owner.hideFlags = (HideFlags)source.HideFlags;
             WriteRawString(IntPtr.Add(pointer, 56), data.Script, admitted);
@@ -89,7 +95,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             ResidentNativeMemory.WriteString(IntPtr.Add(pointer, 128), data.ClassName, admitted);
             ResidentNativeMemory.WriteString(IntPtr.Add(pointer, 168), data.Namespace, admitted);
             ResidentNativeMemory.WriteString(IntPtr.Add(pointer, 208), data.AssemblyName, admitted);
-            admitted(); RequireMonoScriptEqual(data, CaptureMonoScript(owner));
+            admitted(); RequireMonoScriptPlanEqual(data, CaptureMonoScript(owner));
         }
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr CreateScriptFromClass(IntPtr klass);
         internal static NativeObject BindOrCreateRuntimeMonoScript(Snapshot source, Action admitted, ResidentMutationScope scope)

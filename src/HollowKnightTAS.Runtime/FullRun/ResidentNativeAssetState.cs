@@ -16,7 +16,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     // alone do not establish native cache, GPU or resource-registration parity.
     internal static partial class ResidentNativeAssetState
     {
-        internal const int MaximumBytes = 32 * 1024 * 1024;
+        internal const int MaximumBytes = 256 * 1024 * 1024;
         internal const int MaximumVertices = 1048576, MaximumSubMeshes = 4096, MaximumBlendShapes = 1024;
         private static readonly FieldInfo CachedPointer = typeof(NativeObject).GetField("m_CachedPtr", BindingFlags.Instance | BindingFlags.NonPublic)!;
         [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
@@ -31,22 +31,31 @@ namespace HollowKnightTAS.Runtime.FullRun
             public MeshState? Mesh;
             public MaterialState? Material;
             public TextureState? Texture;
+            public RenderTargetState? RenderTarget;
+            public SpriteState? Sprite;
             public PhysicsMaterialState? PhysicsMaterial;
             public TextAssetState? Text;
             public ResidentMonoNativeState.Data? Scriptable;
             public MonoScriptState? Script;
             public ShaderState? Shader;
+            public ResidentFontCacheState.Data? Font;
+            public ResidentClipDependencyState.Data? Clip;
             public string[] CoverageGaps = Array.Empty<string>();
             internal Snapshot Copy() => new Snapshot { Binding = Binding, Name = Name, Kind = Kind, Type = Type.Copy(), HideFlags = HideFlags,
-                Mesh = Mesh?.Copy(), Material = Material?.Copy(), Texture = Texture?.Copy(), PhysicsMaterial = PhysicsMaterial?.Copy(), Text = Text?.Copy(),
-                Scriptable = Scriptable == null ? null : ResidentMonoNativeState.Copy(Scriptable), Script = Script?.Copy(), Shader = Shader?.Copy(), CoverageGaps = (string[])CoverageGaps.Clone() };
+                Mesh = Mesh?.Copy(), Material = Material?.Copy(), Texture = Texture?.Copy(), RenderTarget = RenderTarget?.Copy(), Sprite = Sprite?.Copy(), PhysicsMaterial = PhysicsMaterial?.Copy(), Text = Text?.Copy(),
+                Scriptable = Scriptable == null ? null : ResidentMonoNativeState.Copy(Scriptable), Script = Script?.Copy(), Shader = Shader?.Copy(), Font = Font?.Copy(), Clip = Clip?.Copy(), CoverageGaps = (string[])CoverageGaps.Clone() };
             internal void RequireCompleteCoverage()
             {
                 var required = RequiredGaps(Kind);
-                if (Kind == "Mesh") RequireMeshComplete(Mesh ?? throw Error("Mesh native state is absent"));
+                if (Kind == "Mesh") RequireMeshComplete(Mesh ?? throw Error("Mesh native state is absent"), Name, Binding);
                 if (Kind == "Material") RequireMaterialComplete(Material ?? throw Error("Material native state is absent"));
                 if (Kind == "ScriptableObject") ResidentMonoNativeState.RequireComplete(Scriptable ?? throw Error("ScriptableObject native state is absent"));
                 if (Kind == "MonoScript") RequireMonoScriptComplete(Script ?? throw Error("MonoScript native state is absent"));
+                if (Kind == "RenderTexture") ValidateRenderTarget(RenderTarget!);
+                if (Kind == "Sprite") ValidateSprite(Sprite!);
+                if (Kind == "Texture2D") RequireTextureComplete(Texture!);
+                if (Kind == "AnimationClip") ResidentClipDependencyState.RequireComplete(Clip ?? throw Error("Clip dependency state is absent"));
+                if (Kind == "Font") ResidentFontCacheState.RequireComplete(Font ?? throw Error("Font cache state is absent"));
                 if (Kind == "Shader") RequireShaderComplete(Shader ?? throw Error("Shader native state is absent"));
                 if (required.Length != 0 || CoverageGaps.Length != 0)
                     throw Error("native asset coverage is incomplete: " + Binding + ": " + string.Join(",", required.Concat(CoverageGaps).Distinct()));
@@ -55,19 +64,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (Kind == "Mesh") {
                     RequireMeshCanonicalizable(Mesh ?? throw Error("Mesh native state is absent"));
-                    if (CoverageGaps.Any(value => value != "mesh/common-cold-cache-state"))
+                    if (CoverageGaps.Length != 0)
                         throw Error("Mesh has another noncanonicalizable coverage gap: " + string.Join(";", CoverageGaps));
                     return;
                 }
                 if (Kind == "Material") {
                     RequireMaterialCanonicalizable(Material ?? throw Error("Material native state is absent"));
-                    if (CoverageGaps.Any(value => value != "material/common-cold-cache-state"))
+                    if (CoverageGaps.Length != 0)
                         throw Error("Material has another noncanonicalizable coverage gap: " + string.Join(";", CoverageGaps));
                     return;
                 }
-                // Texture GPU/streaming remains real missing state, not merely
-                // cache markers. Its lower transfer helper cannot grant full
-                // canonicalizable coverage yet.
                 RequireCompleteCoverage();
             }
         }
@@ -160,8 +166,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             public ulong CpuImageSize;
             public ulong CpuCapacity;
             public byte[] CpuBytes = Array.Empty<byte>();
+            public byte[][] GpuMips = Array.Empty<byte[]>();
             public TextureNativeState? Native;
-            internal TextureState Copy() { var result = (TextureState)MemberwiseClone(); result.CpuBytes = (byte[])CpuBytes.Clone(); result.Native = Native?.Copy(); return result; }
+            internal TextureState Copy() { var result = (TextureState)MemberwiseClone(); result.CpuBytes = (byte[])CpuBytes.Clone(); result.GpuMips = GpuMips.Select(x => (byte[])x.Clone()).ToArray(); result.Native = Native?.Copy(); return result; }
         }
 
         internal static Snapshot Capture(string binding, NativeObject asset, Func<object, string?> bindReference)
@@ -176,18 +183,31 @@ namespace HollowKnightTAS.Runtime.FullRun
                 result.Kind = "MonoScript"; result.Script = CaptureMonoScript(asset); gaps.AddRange(MonoScriptGaps(result.Script));
             } else if (actual == typeof(Mesh)) {
                 result.Kind = "Mesh"; result.Mesh = CaptureMesh((Mesh)asset);
-                result.Mesh.Native = CaptureMeshNative((Mesh)asset, bindReference); gaps.AddRange(MeshCoverageGaps(result.Mesh, false));
+                result.Mesh.Native = CaptureMeshNative((Mesh)asset, bindReference); gaps.AddRange(MeshCoverageGaps(result.Mesh));
                 if (!result.Mesh.Readable) gaps.Add("mesh-cpu-buffers-unreadable");
+            } else if (actual == typeof(Font) && ((Font)asset).dynamic) {
+                result.Kind = "Font"; result.Font = ResidentFontCacheState.Capture((Font)asset,bindReference); gaps.AddRange(result.Font.RequiredGaps);
+            } else if (actual == typeof(AnimationClip)) {
+                result.Kind = "AnimationClip"; result.Clip = ResidentClipDependencyState.Capture((AnimationClip)asset,bindReference); gaps.AddRange(result.Clip.RequiredGaps);
             } else if (actual == typeof(Material)) {
                 result.Kind = "Material"; var material = (Material)asset; var state = new MaterialState();
                 CaptureMaterialNative(material, state, bindReference);
                 if (state.RuntimeProperties != null) gaps.AddRange(state.RuntimeProperties.CoverageGaps);
-                gaps.AddRange(MaterialCoverageGaps(state, false));
+                gaps.AddRange(MaterialCoverageGaps(state));
                 result.Material = state;
             } else if (actual == typeof(Texture2D)) {
                 result.Kind = "Texture2D"; result.Texture = CaptureTexture((Texture2D)asset);
-                if (!result.Texture.CpuDataPresent) gaps.Add("texture-cpu-image-absent");
+
                 gaps.AddRange(TextureNativeCoverageGaps(result.Texture));
+                var textureNative = result.Texture.Native!;
+                ResidentFailureEvidence.Mark("texture image roles: " + result.Name + ";main=" + textureNative.TextureIdPresent
+                    + ";uploaded=" + textureNative.Uploaded + ";unscaled=" + textureNative.UnscaledTextureIdPresent
+                    + ";unscaledUploaded=" + textureNative.UnscaledUploaded + ";alias=" + textureNative.UnscaledAliasesMain
+                    + ";image=" + result.Texture.Width + "x" + result.Texture.Height + ";gpu=" + textureNative.GpuWidth + "x" + textureNative.GpuHeight);
+            } else if (actual == typeof(RenderTexture)) {
+                result.Kind = "RenderTexture"; result.RenderTarget = CaptureRenderTarget((RenderTexture)asset);
+            } else if (actual == typeof(Sprite)) {
+                result.Kind = "Sprite"; result.Sprite = CaptureSprite((Sprite)asset, bindReference);
             } else if (actual == typeof(Shader)) {
                 result.Kind = "Shader"; result.Shader = CaptureShader((Shader)asset, bindReference); gaps.AddRange(ShaderCoverageGaps(result.Shader));
             } else if (actual == typeof(PhysicsMaterial2D)) {
@@ -196,7 +216,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 result.Kind = "TextAsset"; result.Text = CaptureTextAsset((TextAsset)asset);
             } else if (asset is ScriptableObject) {
                 result.Kind = "ScriptableObject"; result.Scriptable = ResidentMonoNativeState.Capture(asset, bindReference); gaps.AddRange(result.Scriptable.CoverageGaps);
-            } else { result.Kind = "Unsupported"; gaps.Add("native-asset-type:" + actual.FullName); }
+            } else {
+                result.Kind = "Unsupported"; gaps.Add("native-asset-type:" + actual.FullName);
+                if (asset is RenderTexture target) ResidentFailureEvidence.Mark("referenced render texture: created=" + target.IsCreated()
+                    + ";size=" + target.width + "x" + target.height + ";depth=" + target.depth + ";format=" + target.graphicsFormat
+                    + ";dimension=" + target.dimension + ";samples=" + target.antiAliasing + ";mips=" + target.useMipMap
+                    + ";volume=" + target.volumeDepth + ";randomWrite=" + target.enableRandomWrite);
+            }
             result.CoverageGaps = RequiredGaps(result.Kind).Concat(gaps).Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToArray();
             return result;
         }
@@ -207,11 +233,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 case "TextAsset": return Array.Empty<string>();
                 case "ScriptableObject": return Array.Empty<string>();
                 case "MonoScript": return Array.Empty<string>();
+                case "Font": return Array.Empty<string>();
+                case "AnimationClip": return Array.Empty<string>();
                 case "Mesh": return Array.Empty<string>();
                 case "Material": return Array.Empty<string>();
                 case "Shader": return Array.Empty<string>();
-                case "Texture2D": return new[] { "texture-cpu-image-layout-and-allocation-restore", "texture-gpu-image-and-upload-state",
-                    "texture-native-streaming-resource-registration" };
+                case "RenderTexture": return Array.Empty<string>();
+                case "Sprite": return Array.Empty<string>();
+                case "Texture2D": return Array.Empty<string>();
                 default: return new[] { "native-asset-type-unsupported" };
             }
         }
@@ -470,7 +499,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (cursor != weights.Length) throw Error("packed mesh skinning weights are incomplete");
         }
 
-        private static TextureState CaptureTexture(Texture2D texture)
+        private static TextureState CaptureTexture(Texture2D texture, bool captureGpu = true)
         {
             RequireAssetVtable(texture, 0x1685618); var native = ResidentNativeMemory.Owner(texture); var fullOwner = Read(native, 352);
             var state = new TextureState { Width = texture.width, Height = texture.height, Dimension = (int)texture.dimension, Format = (int)texture.format,
@@ -480,6 +509,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 RequestedMip = texture.requestedMipmapLevel, MinimumMip = texture.minimumMipmapLevel, CalculatedMip = texture.calculatedMipmapLevel,
                 DesiredMip = texture.desiredMipmapLevel, LoadingMip = texture.loadingMipmapLevel, LoadedMip = texture.loadedMipmapLevel, VirtualTextureOnly = texture.vtOnly,
                 Native = CaptureTextureNative(texture) };
+            if (captureGpu && state.Native.TextureIdPresent) state.GpuMips = ReadGpuMips(texture, state.MipmapCount);
             var owner = Read(IntPtr.Add(native, 88), 8);
             var shared = new IntPtr(BitConverter.ToInt64(owner, 0));
             if (shared == IntPtr.Zero) {
@@ -491,7 +521,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             state.CpuWidth = BitConverter.ToInt32(header, 48); state.CpuHeight = BitConverter.ToInt32(header, 52);
             state.CpuFormat = BitConverter.ToInt32(header, 56); state.CpuImageSize = BitConverter.ToUInt64(header, 64);
             state.CpuImageCount = BitConverter.ToInt32(header, 72); state.CpuMipCount = BitConverter.ToInt32(header, 76);
-            state.CpuCapacity = BitConverter.ToUInt64(header, 40) >> 1; state.CpuDataPresent = count != 0;
+            state.CpuCapacity = (ulong)count; state.CpuDataPresent = count != 0;
+            if (state.CpuDataPresent && !ResidentAssetPipeline.TextureCpuStorageLengthMatches(state))
+                ResidentFailureEvidence.Mark("texture CPU descriptor: name=" + texture.name + ";public=" + state.Width + "x" + state.Height
+                    + ";cpu=" + state.CpuWidth + "x" + state.CpuHeight + ";format=" + state.CpuFormat + ";stride=" + state.CpuImageSize
+                    + ";images=" + state.CpuImageCount + ";mips=" + state.CpuMipCount + ";bytes=" + count);
             if (!fullOwner.SequenceEqual(Read(native, 352)) || !owner.SequenceEqual(Read(IntPtr.Add(native, 88), 8)) || !header.SequenceEqual(Read(shared, 80))
                 || !state.CpuBytes.SequenceEqual(Read(new IntPtr(BitConverter.ToInt64(header, 16)), count))) throw Error("texture native CPU directory or bytes changed during capture");
             return state;

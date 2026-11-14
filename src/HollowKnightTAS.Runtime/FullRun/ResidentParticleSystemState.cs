@@ -148,7 +148,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var registry = result.Registry;
                 registry.Present = true; registry.CpuFence = M.U32(bytes, 64);
                 registry.PendingJobs = M.Ptr(bytes, 128) != IntPtr.Zero;
-                registry.Producers = CaptureProducers(reader, engine);
+                registry.Producers = CaptureProducers();
                 registry.Fences = CaptureFences(reader, M.Ptr(bytes, 128));
                 registry.StackVersion = M.U64(bytes, 136);
                 if (!Busy(registry)) {

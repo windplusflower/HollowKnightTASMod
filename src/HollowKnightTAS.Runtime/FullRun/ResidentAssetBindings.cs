@@ -54,9 +54,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             residentGameObjectIds = new HashSet<int>(directory.NativeBindings.Values.OfType<GameObject>().Select(owner => owner.GetInstanceID()));
         }
 
+        internal static bool IsSharedBinding(string? key)
+            => key != null && key.StartsWith("resident-asset/serialized/", StringComparison.Ordinal);
+        internal bool IsDynamic(NativeObject owner) => records[owner].Kind == "dynamic";
+
         internal string? Bind(object value)
         {
             if (!(value is NativeObject owner) || !ResidentObjectDirectory.IsLive(owner)) return null;
+            if (owner is RenderTexture rt && ResidentNativeAssetReference.IsTemporaryRenderTexture(ResidentNativeMemory.Owner(rt))) return null;
             var resident = directory.Bind(owner);
             if (resident != null) return resident;
             if (records.TryGetValue(owner, out var recorded)) {
@@ -135,8 +140,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         internal static Prepared PrepareTarget(AssetRecord[] manifest, ResidentObjectDirectory directory, Func<bool> admitted, ResidentMutationScope scope,
-            Func<AssetRecord, Func<string, NativeObject>, NativeObject>? createDynamic)
-            => new Prepared(manifest, directory, admitted, scope, createDynamic);
+            Func<AssetRecord, Func<string, NativeObject>, NativeObject>? createDynamic, IReadOnlyDictionary<string, NativeObject>? observedAssets = null)
+            => new Prepared(manifest, directory, admitted, scope, createDynamic, observedAssets);
 
         internal sealed class Prepared
         {
@@ -153,7 +158,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal IReadOnlyDictionary<string, NativeObject> Assets { get; }
 
             internal Prepared(AssetRecord[] source, ResidentObjectDirectory directory, Func<bool> admitted, ResidentMutationScope scope,
-                Func<AssetRecord, Func<string, NativeObject>, NativeObject>? createDynamic)
+                Func<AssetRecord, Func<string, NativeObject>, NativeObject>? createDynamic, IReadOnlyDictionary<string, NativeObject>? observedAssets = null)
             {
                 ValidateManifest(source);
                 manifest = source.Select(record => record.Copy()).ToArray();
@@ -171,7 +176,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 foreach (var record in manifest.Where(record => record.Kind == "serialized")) {
                     Require();
-                    var owner = ResidentTargetAssetLookup.Serialized(record, scope);
+                    var owner = observedAssets != null && observedAssets.TryGetValue(record.Binding, out var observed)
+                        ? observed : ResidentTargetAssetLookup.Serialized(record, scope);
                     if (directory.Bind(owner) != null) throw Error("serialized asset aliases a resident owner: " + record.Binding);
                     Add(record.Binding, owner);
                 }
@@ -182,6 +188,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 Require();
                 if (directory.NativeBindings.ContainsKey(binding)) return directory.Resolve(binding);
+                if (ResidentExecutionOwnership.IsExecutionBinding(binding)) {
+                    foreach (var pair in directory.NativeBindings)
+                        if (ResidentExecutionOwnership.SameExecutionKey(pair.Key, binding)) return pair.Value;
+                }
                 if (owners.TryGetValue(binding, out var owner)) {
                     if (!ResidentObjectDirectory.IsLive(owner)) throw Error("target asset was destroyed after binding: " + binding);
                     return owner;

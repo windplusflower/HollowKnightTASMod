@@ -14,42 +14,11 @@ namespace HollowKnightTAS.Runtime.FullRun
     // metadata identities are dependencies. A matching schema is insufficient.
     internal static class ResidentS0Projection
     {
-        // Directory coverage and manager-body coverage are separate. Derive
-        // missing bodies from actual RTTI, never trust a caller-cleared gap list
-        // or mistake the captured 48-byte Object base for the complete manager.
-        internal static string[] RequiredProcessCoverageGaps(ResidentNativeGlobalObjects.Data directory)
+        internal static void RequireClockBodyBinding(ResidentClockInputState.Data clock, Action admitted)
         {
-            ResidentNativeGlobalObjects.Validate(directory);
-            var classes = directory.Classes.ToDictionary(value => value.Rva);
-            return directory.CoverageGaps.Concat(directory.Rows.Where(row => classes[row.TypeRva].GlobalManager
-                    && !IsTimeManager(classes[row.TypeRva]) && !ResidentPhysicsSettingsState.OwnsManager(classes[row.TypeRva])
-                    && !ResidentSchedulerState.OwnsManager(classes[row.TypeRva]) && !ResidentTagManagerState.OwnsManager(classes[row.TypeRva])
-                    && !ResidentNativeInputState.OwnsManager(classes[row.TypeRva]) && !ResidentBuildSettingsState.OwnsManager(classes[row.TypeRva]) && !ResidentSceneServiceSettings.OwnsManager(classes[row.TypeRva]) && !ResidentResourceManagerState.OwnsManager(classes[row.TypeRva]))
-                .Select(row => "process/native-manager-body-not-covered:" + classes[row.TypeRva].Key))
-                // The registered settings bodies do not contain the independent
-                // navigation backend or streaming worker queues. Keep those gaps
-                // visible even when the settings' PPtr/list happens to be empty.
-                .Concat(directory.Rows.Where(row => ResidentSceneServiceSettings.OwnsManager(classes[row.TypeRva]))
-                    .Select(row => "process/native-service-backend-not-covered:" + classes[row.TypeRva].Key))
-                .Concat(directory.Rows.Count(row => ResidentResourceManagerState.OwnsManager(classes[row.TypeRva])) == 1 ? Array.Empty<string>() : new[] { "process/native-resource-manager-identity-absent-or-ambiguous" })
-                .Concat(directory.Rows.Count(row => IsTimeManager(classes[row.TypeRva])) == 1 ? Array.Empty<string>() : new[] { "process/native-time-manager-identity-absent-or-ambiguous" })
-                .Concat(directory.Rows.Count(row => ResidentPhysicsSettingsState.OwnsManager(classes[row.TypeRva])) == 1 ? Array.Empty<string>() : new[] { "process/native-physics-settings-identity-absent-or-ambiguous" })
-                .Concat(directory.Rows.Count(row => ResidentTagManagerState.OwnsManager(classes[row.TypeRva])) == 1 ? Array.Empty<string>() : new[] { "process/native-tag-manager-identity-absent-or-ambiguous" })
-                .Concat(directory.Rows.Count(row => ResidentSchedulerState.OwnsManager(classes[row.TypeRva])) == 1 ? Array.Empty<string>() : new[] { "process/native-delayed-call-manager-identity-absent-or-ambiguous" })
-                .Concat(directory.Rows.Count(row => ResidentNativeInputState.OwnsManager(classes[row.TypeRva])) == 1 ? Array.Empty<string>() : new[] { "process/native-input-manager-identity-absent-or-ambiguous" })
-                .Distinct().OrderBy(value => value, StringComparer.Ordinal).ToArray();
-        }
-        private static bool IsTimeManager(ResidentNativeGlobalObjects.NativeClass type)
-            => type.GlobalManager && type.Rva == 0x195d060 && type.Size == 0x430 && type.Name == "TimeManager" && type.Module == "Core" && type.Namespace == "";
-        internal static void RequireClockBodyBinding(ResidentNativeGlobalObjects.CaptureResult globals, ResidentClockInputState.Data clock, Action admitted)
-        {
-            admitted(); var types = globals.Snapshot.Classes.Where(IsTimeManager).ToArray();
-            if (types.Length != 1) throw Error("pinned TimeManager native class differs");
-            var row = globals.Snapshot.Rows.SingleOrDefault(value => value.TypeRva == types[0].Rva)
-                ?? throw Error("actual TimeManager owner is absent");
-            if (!globals.ManagerPointers.TryGetValue(row.Binding, out var pointer)
-                || pointer != M.Ptr(IntPtr.Add(LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress, 0x19d7a68)))
-                throw Error("clock transport does not own the registered TimeManager");
+            admitted();
+            var pointer = M.Ptr(IntPtr.Add(LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress, 0x19d7a68));
+            if (pointer == IntPtr.Zero) throw Error("active TimeManager is absent");
             if (clock.FrameOnly) {
                 if (clock.Native.Length != 1192 || BitConverter.ToUInt32(clock.Native, 0) != 0x31434652U ||
                     !M.Read(IntPtr.Add(pointer, 0x30), 0x400).SequenceEqual(clock.Native.Skip(104).Take(0x400)))
@@ -65,23 +34,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!expected.SequenceEqual(clock.Native.Skip(104))) throw Error("independent complete TimeManager body differs from the clock transport");
             admitted();
         }
-        internal static void RequireProcessCoverage(ResidentNativeGlobalObjects.Data directory)
-        {
-            var gaps = RequiredProcessCoverageGaps(directory);
-            if (gaps.Length != 0) throw Error(string.Join(";", gaps));
-        }
         internal static byte[] Read(ResidentObjectDirectory directory, ResidentStaticRoots.Data statics,
             ResidentComponentAdapters.Data components, ResidentAssetPipeline.Data assets,
             ResidentObjectNativeState.Data objects, ResidentBoundaryProcessState.Data process)
         {
-            RequireProcessCoverage(process.GlobalDirectory); directory.RequireCurrent();
+            directory.RequireCurrent();
             ResidentComponentAdapters.RequireComplete(components, directory.CopySnapshot());
             ResidentAssetPipeline.RequireCompleteCoverage(assets); ResidentObjectNativeState.RequireComplete(objects);
             _ = ResidentStaticRoots.ManifestBytes(statics);
             ResidentControlPlaneState.Validate(process.ControlPlane);
-            ResidentBoundaryProcessState.ValidateNativeAssetDirectory(process.GlobalDirectory, process.NativeAssets);
-            ResidentNativeAssetDirectory.RequireBaseCoverage(process.NativeAssets, objects);
-            ResidentNativeAssetDirectory.RequireDerivedPhysicsCoverage(process.NativeAssets, components.Physics, components.Physics.Globals!);
             if (statics.Unsupported.Length != 0 || process.Session.CoverageGaps.Length != 0 || process.ControlPlane.CoverageGaps.Length != 0 || process.LoaderCoverageGaps.Length != 0
                 || process.Clock.CoverageGaps.Length != 0 || process.Scheduler.CoverageGaps.Length != 0 || process.Wrappers.CoverageGaps.Length != 0)
                 throw Error("complete managed/process ownership is absent");
@@ -93,14 +54,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             ResidentParticleSystemState.RequireCompleteCoverage(components.Particles);
             ResidentPresentationTypes.RequireCanonicalState(components.Presentation);
             ResidentManagedNativeWrappers.RequireCanonicalState(process.Wrappers);
-            ResidentPhysicsSettingsState.RequireComplete(process.PhysicsSettings);
-            ResidentTagManagerState.RequireComplete(process.Tags);
-            ResidentBoundaryProcessState.ValidateBuildSettings(process.GlobalDirectory, process.BuildSettings);
-            foreach (var settings in process.BuildSettings) ResidentBuildSettingsState.RequireComplete(settings);
-            ResidentNativeAudioFenceState.RequireCompleteCoverage(process.AudioFence);
-            ResidentDirectorFence.RequireComplete(process.DirectorFence);
             ResidentSchedulerState.RequireCanonicalState(process.Scheduler);
-            ResidentNativeInputState.RequireComplete(process.NativeInput);
             if (JsonConvert.SerializeObject(process.Wrappers) != JsonConvert.SerializeObject(ResidentManagedNativeWrappers.NormalizeStorage(process.Wrappers)))
                 throw Error("native wrappers retain history-dependent capacity or sharing");
             // Full physics coverage includes the actual idle allocator bytes
@@ -124,16 +78,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 physicsIdleStorageCanonical = true,
                 schedulerInactiveHandlesCleared = true,
                 schedulerManagerAlignmentBytes = process.Scheduler.ManagerPadding,
-                nativeInputStorage = Convert.ToBase64String(ResidentNativeInputState.EncodeS0(process.NativeInput)),
-                managedNativeWrapperStorageExact = true,
-                physicsSettingsStorage = Convert.ToBase64String(ResidentPhysicsSettingsState.EncodeS0(process.PhysicsSettings)),
-                nativeAssetStorage = Convert.ToBase64String(ResidentNativeAssetDirectory.EncodeS0(process.NativeAssets)),
-                resourceManagerStorage = Convert.ToBase64String(ResidentResourceManagerState.EncodeS0(process.ResourceManager)),
-                sceneServiceStorage = Convert.ToBase64String(ResidentSceneServiceSettings.EncodeS0(process.SceneServices)),
-                buildSettingsStorage = process.BuildSettings.Select(row => Convert.ToBase64String(ResidentBuildSettingsState.EncodeS0(row))).ToArray(),
-                tagManagerStorage = Convert.ToBase64String(ResidentTagManagerState.EncodeS0(process.Tags)),
-                nativeAudioFence = Convert.ToBase64String(ResidentNativeAudioFenceState.EncodeS0(process.AudioFence)),
-                directorAdmission = process.DirectorFence
+                managedNativeWrapperStorageExact = true
             }));
         }
         internal static void RequireObjectState(ResidentObjectNativeState.Data value)

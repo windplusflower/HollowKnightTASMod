@@ -95,9 +95,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal readonly int Id;
             internal readonly IntPtr Pointer;
             internal readonly ResidentScriptingHandles.Capture Handle;
-            internal TransientOwner(IntPtr pointer)
+            internal readonly string FirstUse;
+            internal TransientOwner(IntPtr pointer, string firstUse = "")
             {
-                Pointer = pointer; Id = M.I32(M.Read(IntPtr.Add(pointer,8),4),0);
+                Pointer = pointer; Id = M.I32(M.Read(IntPtr.Add(pointer,8),4),0); FirstUse = firstUse;
                 Handle = ResidentScriptingHandles.Read(IntPtr.Add(pointer,24)); Require();
             }
             internal void Require()
@@ -194,7 +195,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (pointer == IntPtr.Zero) return new TransientTexture();
                 if (!transientAliases.TryGetValue(pointer,out var alias)) {
-                    var owner = new TransientOwner(pointer); transientOwners.Add(pointer,owner); familyChecks.Add(owner.Require);
+                    var owner = new TransientOwner(pointer, firstUse); transientOwners.Add(pointer,owner); familyChecks.Add(owner.Require);
                     transientAliases.Add(pointer,alias = "camera-cache/" + firstUse); observeTransient?.Invoke(owner);
                 }
                 return new TransientTexture { Alias = alias, Type = ResidentObjectDirectory.TypeRecord.Capture(typeof(RenderTexture)) };

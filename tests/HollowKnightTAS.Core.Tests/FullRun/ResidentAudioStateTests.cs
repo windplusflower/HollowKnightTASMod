@@ -64,6 +64,7 @@ public sealed class ResidentAudioStateTests
     public void ExpiredNativeWeakChannelCannotBeFlattenedToAnEmptySource()
     {
         var api = new Api(); var data = api.Fixture(); var main = Get(api.Row(data), "Main"); Set(main, "WeakOwner", true); Set(main, "Alias", "audio-channel/main");
+        Set(data,"Version",3); // Legacy DTO has no typed voice body and remains ineligible.
         Set(data, "CoverageGaps", System.Array.Empty<string>()); api.Call("Validate", data); api.Reject("RequireCompleteCoverage", data); api.Reject("RequireCanonicalizableCoverage", data);
         Set(main, "WeakOwner", false); api.Reject("Validate", data);
     }
@@ -71,8 +72,9 @@ public sealed class ResidentAudioStateTests
     public void OneShotOwnerAndFmodResourceGapsAreDerivedFromNativeShape()
     {
         var api = new Api(); var data = api.Fixture(); var row = api.Row(data); Set(row, "OneShots", api.Array("Channel", api.New("Channel")));
+        Set(data,"Version",3); // Legacy one-shot owner state is still ineligible.
         api.Call("Validate", data); api.Reject("RequireCompleteCoverage", data);
-        Set(row, "OneShots", api.Array("Channel")); ((bool[])Get(row, "NativeResources"))[1] = true; Set(data, "CoverageGaps", System.Array.Empty<string>());
+        Set(data,"Version",5); Set(row, "OneShots", api.Array("Channel")); ((bool[])Get(row, "NativeResources"))[1] = true; Set(data, "CoverageGaps", System.Array.Empty<string>()); api.Call("RequireCanonicalizableCoverage", data); ((bool[])Get(row, "NativeResources"))[0] = true;
         api.Reject("RequireCanonicalizableCoverage", data);
     }
     [TestMethod]
@@ -102,10 +104,11 @@ public sealed class ResidentAudioStateTests
         Set(manager, "Scheduled", new[] { "source" }); api.Call("Validate", data); Set(row, "ScheduledSource", ""); api.Reject("Validate", data);
     }
     [TestMethod]
-    public void ComponentOnlySnapshotCannotGrantTheUnimplementedAudioBackendCoverage()
+    public void ComponentSnapshotUsesAudioSourceCoverageWithoutGlobalBackendInventory()
     {
         var api = new Api(); var data = api.Fixture(); Set(Get(data, "Manager"), "Present", true); Set(data, "CoverageGaps", System.Array.Empty<string>());
-        api.Call("Validate", data); api.Reject("RequireCompleteCoverage", data); api.Reject("RequireCanonicalizableCoverage", data);
+        api.Call("Validate", data); api.Call("RequireCompleteCoverage", data); api.Call("RequireCanonicalizableCoverage", data);
+        Set(data, "CoverageGaps", new[] { "audio/unresolved-source" }); api.Reject("RequireCompleteCoverage", data);
     }
     [TestMethod]
     public void ActualAudioTypeCannotSelectAnotherNativeFieldLayout()

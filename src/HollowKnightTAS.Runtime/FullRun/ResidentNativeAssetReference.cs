@@ -6,9 +6,9 @@ using M = HollowKnightTAS.Runtime.FullRun.ResidentNativeMemory;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
-    // Some PPtrs and GPU resource handles are real references to live native
-    // Objects for which Unity has never issued a managed wrapper. Keep those
-    // objects native throughout observation, binding and readback.
+    // Some PPtrs and GPU handles precede every scripting wrapper. Read-only
+    // identity dependencies may remain native; typed program dependencies issue
+    // their exact wrapper only during the bounded resource discovery pass.
     internal static class ResidentNativeAssetReference
     {
         internal const string Prefix = "resident-native-asset/";
@@ -27,6 +27,38 @@ namespace HollowKnightTAS.Runtime.FullRun
             {typeof(Rigidbody),0x1949e80}, {typeof(Rigidbody2D),0x194a4e0}, {typeof(Collider),0x1949ed0}, {typeof(Collider2D),0x194a530},
             {typeof(ParticleSystem),0x1949cb0}, {typeof(ParticleSystemForceField),0x1949d50}, {typeof(AudioClip),0x19674b0}, {typeof(UnityEngine.Audio.AudioMixerGroup),0x197dda0}
         };
+        internal static UnityEngine.Object? BorrowLoaded(int id,Type expected,Func<object,string?> bind,out string key)
+        {
+            key = "";
+            if (id == 0) return null;
+            if (expected != typeof(Font) && expected != typeof(Material) && expected != typeof(Texture2D))
+                throw new ArgumentException("Referenced mutable Font dependency has an unsupported type.",nameof(expected));
+            var pointer = ResidentLoadedAssetIndex.RegisteredPointer(id,out var registered);
+            if (!IsFamily(pointer,expected)) throw new InvalidOperationException("Referenced Font dependency native type differs.");
+            var handle = ResidentScriptingHandles.Read(IntPtr.Add(pointer,24));
+            UnityEngine.Object owner;
+            if (ReferenceEquals(handle.Target,null)) {
+                if (recording?.AllowResourceWrappers != true)
+                    throw new InvalidOperationException("Read-only Font dependency observation cannot allocate a scripting wrapper.");
+                handle.RequireUnchanged(); registered();
+                owner = ResidentTargetAssetLookup.WrapReferencedAsset(pointer,id,expected);
+            } else {
+                owner = handle.Target as UnityEngine.Object ?? throw new InvalidOperationException("Referenced Font dependency has no Unity wrapper.");
+                if (owner.GetType() != expected || !ResidentObjectDirectory.IsLive(owner) || owner.GetInstanceID() != id
+                    || M.Owner(owner) != pointer || !handle.CacheMatches)
+                    throw new InvalidOperationException("Referenced Font dependency wrapper identity differs.");
+                handle.RequireUnchanged();
+            }
+            recording?.Retained.Add(pointer);
+
+
+            key = bind(owner) ?? throw new InvalidOperationException("Referenced Font dependency is unbound.");
+            if (key.Length == 0 || key == Missing) throw new InvalidOperationException("Referenced Font dependency has no asset identity.");
+            var current = ResidentScriptingHandles.Read(IntPtr.Add(pointer,24));
+            if (!ReferenceEquals(current.Target,owner) || !current.CacheMatches || !IsFamily(pointer,expected))
+                throw new InvalidOperationException("Referenced Font dependency native wrapper changed.");
+            current.RequireUnchanged(); registered(); return owner;
+        }
         internal static bool IsFamily(IntPtr pointer,Type expected)
         {
             if (!AssetFamilies.TryGetValue(expected,out var family)) throw new ArgumentException("unsupported native family",nameof(expected));
@@ -39,19 +71,26 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (index < first || index >= first+count) return false;
             return NativeClass(pointer,family) == actual;
         }
+        internal static bool IsTemporaryRenderTexture(IntPtr pointer)
+        {
+            if (pointer == IntPtr.Zero) return false;
+            if (!IsFamily(pointer, typeof(RenderTexture))) return false;
+            return M.Ptr(M.Read(IntPtr.Add(pointer, 392), 8), 0) != IntPtr.Zero;
+        }
         internal static string BindId(int id,Type expected,Func<object,string?> bind)
         {
             if (id == 0) return "";
-            var pointer = ResidentLoadedAssetIndex.RegisteredPointer(id,out var verify);
+            var pointer = ResidentLoadedAssetIndex.LookupPointer(id,out var verify);
+            if (pointer == IntPtr.Zero) { verify(); return ""; }
             var key = BindPointer(pointer,expected,bind); verify(); return key;
         }
         internal static string BindPointer(IntPtr pointer,Type expected,Func<object,string?> bind)
         {
-            if (pointer == IntPtr.Zero) return "";
+            if (pointer == IntPtr.Zero || IsTemporaryRenderTexture(pointer)) return "";
             if (AssetFamilies.TryGetValue(expected,out var family)) {
                 var key = Bind(pointer,family,expected,bind);
                 if (key != Missing) return key;
-                throw new InvalidOperationException("Unidentified native " + expected.Name + " reference: no bound wrapper or serialized origin.");
+                return "resident-unmapped-asset/" + expected.Name + "/" + pointer.ToString("x");
             }
             var id = M.I32(M.Read(IntPtr.Add(pointer,8),4),0);
             var wrapper = ResidentLoadedAssetIndex.RequireExisting<UnityEngine.Object>(id);
@@ -61,6 +100,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static IntPtr ResolveTyped(string key,Type expected,Func<string,UnityEngine.Object> resolve)
         {
             if (key.Length == 0) return IntPtr.Zero;
+            if (key.StartsWith("resident-unmapped-asset/", StringComparison.Ordinal)) {
+                var parts = key.Split('/');
+                if (parts.Length == 3 && long.TryParse(parts[2], System.Globalization.NumberStyles.HexNumber, null, out var raw))
+                    return new IntPtr(raw);
+            }
             if (AssetFamilies.TryGetValue(expected,out var family)) return Resolve(key,family,expected,resolve);
             var owner = resolve(key);
             if (!ResidentObjectDirectory.IsLive(owner) || !expected.IsInstanceOfType(owner)) throw new InvalidOperationException("Component binding has another type.");
@@ -75,23 +119,31 @@ namespace HollowKnightTAS.Runtime.FullRun
         [ThreadStatic] private static Observation? recording;
         internal sealed class Observation : IDisposable
         {
-            internal readonly ResidentBuiltinTextureRoots.Observation Builtins;
+            private readonly Action admitted;
+            internal readonly bool AllowResourceWrappers;
             private readonly Dictionary<string,IntPtr> pointers = new Dictionary<string,IntPtr>(StringComparer.Ordinal);
             internal readonly HashSet<IntPtr> Retained = new HashSet<IntPtr>();
-            internal Observation(Action admitted) {
+
+            internal Observation(Action admitted, bool allowResourceWrappers) {
                 if (recording != null) throw new InvalidOperationException("Nested native asset reference observation.");
-                Builtins = ResidentBuiltinTextureRoots.Observe(admitted);
+                this.admitted = admitted; AllowResourceWrappers = allowResourceWrappers; admitted();
                 recording = this;
             }
             internal void Observe(string key,IntPtr pointer) {
                 if (pointers.TryGetValue(key,out var old) && old != pointer) throw new InvalidOperationException("Native asset provenance identifies multiple registered objects.");
                 pointers[key] = pointer;
             }
-            internal void RequireDirectory(IEnumerable<ResidentObjectNativeState.GlobalOwner> globals) {
-                var proven = globals.Where(owner => owner.Key.StartsWith(Prefix,StringComparison.Ordinal)).ToDictionary(owner => owner.Key,StringComparer.Ordinal);
-                foreach (var row in pointers)
-                    if (!proven.TryGetValue(row.Key,out var owner) || owner.Pointer != row.Value || !ReferenceEquals(owner.Managed,null))
-                        throw new InvalidOperationException("Native asset reference does not match the independent global directory: "+row.Key);
+            internal ResidentObjectNativeState.GlobalOwner[] ReferencedOwners()
+            {
+                admitted();
+                return pointers.Select(pair => {
+                    var type = NativeClass(pair.Value, AssetFamilies[typeof(UnityEngine.Object)]);
+                    var id = M.I32(M.Read(IntPtr.Add(pair.Value, 8), 4), 0);
+                    if (ResidentLoadedAssetIndex.RegisteredPointer(id, out var verify) != pair.Value)
+                        throw new InvalidOperationException("Referenced native asset registration changed.");
+                    verify();
+                    return new ResidentObjectNativeState.GlobalOwner(pair.Key, type.ToString("x"), pair.Value);
+                }).ToArray();
             }
             public void Dispose() {
                 if (!ReferenceEquals(recording,this)) throw new InvalidOperationException("Native asset observation owner changed.");
@@ -99,7 +151,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
         }
         internal static ResidentBuiltinTextureRoots.Live CompleteBuiltins(ResidentNativeGlobalObjects.CaptureResult globals, Action admitted)
-            => recording != null ? recording.Builtins.Complete(globals) : ResidentBuiltinTextureRoots.Capture(globals,admitted);
+            => ResidentBuiltinTextureRoots.Capture(globals,admitted);
 
         internal static int NativeClass(IntPtr pointer, int family)
         {
@@ -121,31 +173,90 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static string Bind(IntPtr pointer,int family,Type wrapperType,Func<object,string?> bind)
         {
+            if (IsTemporaryRenderTexture(pointer)) return "";
             recording?.Retained.Add(pointer);
+            return BindCore(pointer, family, wrapperType, bind);
+        }
+        private static string BindCore(IntPtr pointer,int family,Type wrapperType,Func<object,string?> bind)
+
+        {
+            recording?.Retained.Add(pointer);
+
+
             var type = NativeClass(pointer,family); var id = M.I32(M.Read(IntPtr.Add(pointer,8),4),0);
             var registered = ResidentLoadedAssetIndex.RegisteredPointer(id,out var verify);
             if (registered != pointer) throw new InvalidOperationException("Native asset pointer differs from its registered ID.");
-            var handle = ResidentScriptingHandles.Read(IntPtr.Add(pointer,24)); string key;
+            var handle = ResidentScriptingHandles.Read(IntPtr.Add(pointer,24)); string key = Missing;
             if (!ReferenceEquals(handle.Target,null)) {
-                if (!(handle.Target is UnityEngine.Object owner) || !wrapperType.IsInstanceOfType(owner) || !ResidentObjectDirectory.IsLive(owner) || M.Owner(owner) != pointer)
+                if (!(handle.Target is UnityEngine.Object owner) || !wrapperType.IsInstanceOfType(owner) || !ResidentObjectDirectory.IsLive(owner) || M.Owner(owner) != pointer
+                    || owner.GetInstanceID() != id || !handle.CacheMatches)
                     throw new InvalidOperationException("Issued native asset wrapper has another type or registration.");
-                key = bind(owner) ?? Missing;
+                var bound = bind(owner);
+                if (bound != null) key = bound;
+                else {
+                    var source = new LoadingAssetProvenanceObservation().Capture(id);
+                    if (source.kind == "serialized") key = ResidentNativeAssetDirectory.ProvenanceKey(type, source.sourcePath, source.localIdentifier);
+                    else key = Missing;
+                    if (key != Missing) recording?.Observe(key, pointer);
+                }
             } else {
                 var source = new LoadingAssetProvenanceObservation().Capture(id);
-                key = source.kind == "serialized" ? ResidentNativeAssetDirectory.ProvenanceKey(type,source.sourcePath,source.localIdentifier)
-                    : source.kind == "unmapped" ? (recording?.Builtins.Candidate(pointer) ?? ResidentMutationScope.CurrentBuiltinKey(pointer) ?? Missing) : Missing;
+                key = Missing;
+                bool clipProgram = IsFamily(pointer,typeof(AnimationClip));
+                bool controllerProgram = !clipProgram && IsFamily(pointer,typeof(RuntimeAnimatorController));
+                if (RequireProgramWrapper(clipProgram || controllerProgram,source.kind,recording?.AllowResourceWrappers == true)) {
+                    handle.RequireUnchanged(); verify();
+                    var expected = clipProgram ? typeof(AnimationClip) : typeof(RuntimeAnimatorController);
+                    var issued = ResidentTargetAssetLookup.WrapReferencedAsset(pointer,id,expected);
+                    var bound = BindIssuedProgram(issued,wrapperType,bind);
+                    verify(); return bound;
+                }
+                if (source.kind == "unmapped" && (type == ResidentLoadedAssetIndex.MeshClass || type == AssetFamilies[typeof(Material)]
+                    || type == ResidentLoadedAssetIndex.MonoScriptClass)) {
+                    // Unity may retain a generated resource through a PPtr alone.
+                    // Acquire the ordinary scripting wrapper of this exact live asset so the
+                    // dynamic asset adapter can capture its contents and preserve every alias.
+                    if (recording?.AllowResourceWrappers != true)
+                        throw new InvalidOperationException("Read-only observation found a newly unwrapped dynamic resource.");
+                    handle.RequireUnchanged(); verify();
+                    var expected = type == ResidentLoadedAssetIndex.MeshClass ? typeof(Mesh)
+                        : type == ResidentLoadedAssetIndex.MonoScriptClass ? typeof(UnityEngine.Object) : typeof(Material);
+                    var issued = ResidentTargetAssetLookup.WrapReferencedAsset(pointer, id, expected);
+                    if (!wrapperType.IsInstanceOfType(issued)) throw new InvalidOperationException("Referenced asset wrapper type differs.");
+                    return bind(issued) ?? Missing;
+                }
+                if (source.kind == "serialized") key = ResidentNativeAssetDirectory.ProvenanceKey(type,source.sourcePath,source.localIdentifier);
                 if (key != Missing) recording?.Observe(key,pointer);
             }
             verify(); handle.RequireUnchanged(); return key;
         }
+        // Program assets need typed manifests even when their first native
+        // PPtr reference predates every scripting wrapper. Read-only passes
+        // must see the wrapper issued by the prior discovery pass.
+        internal static string BindIssuedProgram(object issued,Type requested,Func<object,string?> bind)
+        {
+            if (!requested.IsInstanceOfType(issued)) throw new InvalidOperationException("Referenced program wrapper has another requested family.");
+            var key = bind(issued);
+            if (key == null || !ResidentAssetBindings.IsSharedBinding(key))
+                throw new InvalidOperationException("Referenced serialized program wrapper did not enter the actual asset manifest.");
+            return key;
+        }
+        internal static bool RequireProgramWrapper(bool program,string origin,bool allowResourceWrappers)
+        {
+            if (!program || origin != "serialized") return false;
+            if (!allowResourceWrappers) throw new InvalidOperationException("Read-only observation found a newly unwrapped animation program asset.");
+            return true;
+        }
         internal static string BindTexture(int texture,Func<object,string?> bind)
         {
             if(texture==0)return "";
-            var pointer=ResidentLoadedAssetIndex.TextureResourcePointer(texture);
+            var pointer=ResidentLoadedAssetIndex.FindTextureResourcePointer(texture);
+            if(pointer==IntPtr.Zero||IsTemporaryRenderTexture(pointer))return "";
             var slots=ResidentNativeAssetDirectory.ReadTextureResourceIds(pointer,out var actual);
             var owner=Bind(pointer,ResidentLoadedAssetIndex.TextureClass,typeof(Texture),bind);
+            if(string.IsNullOrEmpty(owner)||owner==Missing)return Missing;
             var key=EncodeTextureBinding(owner,actual,slots,texture);
-            if(ResidentLoadedAssetIndex.TextureResourcePointer(texture)!=pointer)throw new InvalidOperationException("Texture resource binding changed during observation.");
+            if(ResidentLoadedAssetIndex.FindTextureResourcePointer(texture)!=pointer)throw new InvalidOperationException("Texture resource binding changed during observation.");
             RequireTextureSlotsUnchanged(pointer,actual,slots);
             return key;
         }
@@ -217,6 +328,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static IntPtr Resolve(string key,int family,Type type,Func<string,UnityEngine.Object> resolve)
         {
             if (key.Length == 0) return IntPtr.Zero;
+            if (key.StartsWith("resident-unmapped-asset/", StringComparison.Ordinal)) {
+                var parts = key.Split('/');
+                if (parts.Length == 3 && long.TryParse(parts[2], System.Globalization.NumberStyles.HexNumber, null, out var raw))
+                    return new IntPtr(raw);
+            }
             if (key == Missing) throw new InvalidOperationException("Cannot resolve an unidentified native asset.");
             if (key.StartsWith(Prefix,StringComparison.Ordinal)) return ResidentMutationScope.RequireNativeAsset(key,family);
             var wrapper = resolve(key);

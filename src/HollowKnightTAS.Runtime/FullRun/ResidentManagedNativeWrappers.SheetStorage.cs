@@ -70,7 +70,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         var resource = M.I32(valuesUsed, at); var defaultId = M.I32(valuesUsed, at + 20);
                         if (value.Binding.Length != 0) AddIdentity(resources, value.Binding, resource);
                         else if (resource != 0) throw Error("unbound texture resource is nonzero");
-                        if (value.DefaultName.Length != 0) AddIdentity(nameIds, value.DefaultName, defaultId);
+                        if (value.DefaultName.Length != 0 || value.DefaultNameIsEmpty) AddIdentity(nameIds, value.DefaultName, defaultId);
                         else if (defaultId != -1) throw Error("unbound texture default-name identity differs");
                     }
                 }

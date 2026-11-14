@@ -122,7 +122,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     RequireForeignImages(this.source[0].Registry, before[0].Registry, owned);
                     foreach (var list in this.source[0].Registry.Lists) foreach (var binding in list.Owners) {
                         var component = resolve(binding) as Component;
-                        if (component == null || identity(component) != binding) throw Error("registration neighbour cannot be resolved in the target process");
+                        if (component == null || !SameOwnerBinding(identity(component), binding)) throw Error("registration neighbour cannot be resolved in the target process");
                     }
                 }
             }
@@ -139,7 +139,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     RequireSame(before, Capture(targets, identity), true);
                     var engine = Engine();
                     var remove = Entry<NativeOwner>(engine, 0x8b05e0, "48895c241855488bec4883ec40");
-                    var add = Entry<NativeOwner>(engine, 0x8ab340, "534883ec4083792002");
+                    var add = Entry<NativeOwner>(engine, 0x8ab340, "40534883ec4083792002");
                     var insert = Entry<NativeInsertBefore>(engine, 0x289bf0, "483bd174384c8b024d85c0");
                     for (var index = 0; index < targets.Length; index++) {
                         scope.Require(); admitted();
@@ -166,7 +166,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                         RequireForeignImages(source[0].Registry, actual, owned);
                         reader.RequireFrozen();
                         foreach (var list in source[0].Registry.Lists) {
-                            var head = reader.ListHead(list.Kind, list.ExecutionOrder, list.Lane);
+                            if (!list.Owners.Any(owner => owned.Contains(owner))) continue;
+                            IntPtr head;
+                            try { head = reader.ListHead(list.Kind, list.ExecutionOrder, list.Lane); }
+                            catch (InvalidOperationException ex) {
+                                var ownedCount = list.Owners.Count(owner => owned.Contains(owner));
+                                var firstOwned = list.Owners.FirstOrDefault(owner => owned.Contains(owner));
+                                var firstInfo = "";
+                                if (firstOwned != null && resolve(firstOwned) is Component comp) {
+                                    var match = Array.FindIndex(targets, item => ReferenceEquals(item, comp));
+                                    firstInfo = match >= 0
+                                        ? $" first={firstOwned}(lc4={source[match].Lifecycle[4]},en={source[match].Enabled},act={source[match].ActiveInHierarchy})"
+                                        : $" first={firstOwned}(notInTargets)";
+                                }
+                                throw Error($"{ex.Message} [key={Key(list)} total={list.Owners.Length} owned={ownedCount}{firstInfo}]");
+                            }
                             for (var index = list.Owners.Length - 1; index >= 0; index--) {
                                 var binding = list.Owners[index];
                                 if (!owned.Contains(binding)) continue;
@@ -202,6 +216,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly List<Action> registrations = new List<Action>();
             private readonly Dictionary<string, IntPtr> heads = new Dictionary<string, IntPtr>(StringComparer.Ordinal);
             private readonly Dictionary<IntPtr, byte[]> frozen = new Dictionary<IntPtr, byte[]>();
+            private readonly Dictionary<string, Membership>[] byOwner = NodeOffsets.Select(_ =>
+                new Dictionary<string, Membership>(StringComparer.Ordinal)).ToArray();
             internal Reader(Func<UnityEngine.Object, string> identity)
             {
                 engine = Engine(); this.identity = identity;
@@ -225,13 +241,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var script = Pointer(bytes, 240); var executionOrder = script == IntPtr.Zero ? 0 : BitConverter.ToInt32(Read(IntPtr.Add(script, 68), 4), 0);
                 var memberships = new List<Membership>();
                 for (var kind = 0; kind < NodeOffsets.Length; kind++) {
-                    var matches = registry.Lists.Where(list => list.Kind == kind)
-                        .SelectMany(list => list.Owners.Select((value, index) => new { list, value, index })).Where(item => item.value == binding).ToArray();
+                    var present = byOwner[kind].TryGetValue(binding, out var membership);
                     var previous = Pointer(bytes, NodeOffsets[kind]); var next = Pointer(bytes, NodeOffsets[kind] + 8);
-                    if ((previous == IntPtr.Zero) != (next == IntPtr.Zero) || matches.Length > 1
-                        || (matches.Length == 1) != (previous != IntPtr.Zero)) throw Error("native Mono registration/list membership differs");
+                    if ((previous == IntPtr.Zero) != (next == IntPtr.Zero)
+                        || present != (previous != IntPtr.Zero)) throw Error("native Mono registration/list membership differs");
                     if (Pointer(bytes, NodeOffsets[kind] + 16) != pointer) throw Error("native Mono list node has a foreign data owner");
-                    foreach (var match in matches) memberships.Add(new Membership { Kind = kind, ExecutionOrder = match.list.ExecutionOrder, Lane = match.list.Lane, Ordinal = match.index });
+                    if (present) memberships.Add(membership!);
                 }
                 if (memberships.Count != 0 && flags[4] == 0) throw Error("unregistered Mono retains native update nodes");
                 callbacks.TryGetValue(id, out var counts);
@@ -276,6 +291,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (render != IntPtr.Zero) AddList(lists, 4, 0, 0, IntPtr.Add(render, 184));
                 var cameras = selected.Select(owner => owner.GetComponent<Camera>()).Where(camera => camera != null).Distinct().ToArray();
                 var images = cameras.Select(ReadImages).ToArray();
+                foreach (var list in lists) {
+                    var index = byOwner[list.Kind];
+                    for (var ordinal = 0; ordinal < list.Owners.Length; ordinal++) {
+                        var owner = list.Owners[ordinal];
+                        if (index.ContainsKey(owner)) throw Error("duplicate native Mono registration for the same update kind");
+                        index.Add(owner, new Membership { Kind = list.Kind, ExecutionOrder = list.ExecutionOrder, Lane = list.Lane, Ordinal = ordinal });
+                    }
+                }
                 return new RegistryData { Lists = lists.OrderBy(list => list.Kind).ThenBy(list => list.ExecutionOrder).ThenBy(list => list.Lane).ToArray(), Images = images };
             }
             private void AddList(List<ListData> lists, int kind, int order, int lane, IntPtr head)
@@ -402,16 +425,27 @@ namespace HollowKnightTAS.Runtime.FullRun
                         || entry.Flags == null || entry.Flags.Length != 2 || entry.Flags.Any(value => value > 1) || entry.CallbackRva < 0)))
                 throw Error("source complete registration directory is invalid");
         }
+        private static bool SameOwnerBinding(string left, string right) => ResidentExecutionOwnership.SameExecutionKey(left, right);
+        private static bool SameOwnerList(string[] left, string[] right)
+        {
+            if (left.Length != right.Length) return false;
+            for (var index = 0; index < left.Length; index++)
+                if (!SameOwnerBinding(left[index], right[index])) return false;
+            return true;
+        }
         private static void RequireForeignLists(RegistryData source, RegistryData target, HashSet<string> owned)
         {
             foreach (var list in source.Lists) {
                 var other = target.Lists.SingleOrDefault(item => Key(item) == Key(list));
                 var foreign = list.Owners.Where(owner => !owned.Contains(owner)).ToArray();
                 if (other == null) { if (foreign.Length != 0) throw Error("foreign source registration group is absent"); continue; }
-                if (!foreign.SequenceEqual(other.Owners.Where(owner => !owned.Contains(owner)))) throw Error("foreign native registration order differs");
+                var otherForeign = other.Owners.Where(owner => !owned.Contains(owner)).ToArray();
+                if (!SameOwnerList(foreign, otherForeign))
+                    throw Error($"foreign native registration order differs at {Key(list)}: src=[{string.Join(", ", foreign)}] vs tgt=[{string.Join(", ", otherForeign)}]");
             }
             foreach (var list in target.Lists.Where(list => source.Lists.All(item => Key(item) != Key(list))))
-                if (list.Owners.Any(owner => !owned.Contains(owner)) || list.Kind < 3) throw Error("target has an extra execution-order/foreign registration group");
+                if (list.Owners.Length != 0 && (list.Owners.Any(owner => !owned.Contains(owner)) || list.Kind < 3))
+                    throw Error("target has an extra execution-order/foreign registration group");
         }
         private static void RequireForeignImages(RegistryData source, RegistryData target, HashSet<string> owned)
         {
@@ -435,8 +469,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (source.Length == 0) return;
             var before = source[0].Registry; var after = target[0].Registry;
-            if (!before.Lists.Select(Key).SequenceEqual(after.Lists.Select(Key))
-                || before.Lists.Where((list, index) => !list.Owners.SequenceEqual(after.Lists[index].Owners)).Any()) throw Error("complete native update/GUI/render list readback differs");
+            var beforeLists = before.Lists.Where(list => list.Owners.Length != 0).ToArray();
+            var afterLists = after.Lists.Where(list => list.Owners.Length != 0).ToArray();
+            if (!beforeLists.Select(Key).SequenceEqual(afterLists.Select(Key))
+                || beforeLists.Where((list, index) => !SameOwnerList(list.Owners, afterLists[index].Owners)).Any()) throw Error("complete native update/GUI/render list readback differs");
             if (before.Images.Length != after.Images.Length) throw Error("native image-filter camera directory differs");
             foreach (var a in before.Images) {
                 var b = after.Images.SingleOrDefault(item => item.Camera == a.Camera);
@@ -447,7 +483,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static bool ImageEqual(IEnumerable<ImageEntry> left, IEnumerable<ImageEntry> right)
         {
             var a = left.ToArray(); var b = right.ToArray();
-            return a.Length == b.Length && !a.Where((item, index) => item.Owner != b[index].Owner || item.CallbackRva != b[index].CallbackRva
+            return a.Length == b.Length && !a.Where((item, index) => !SameOwnerBinding(item.Owner, b[index].Owner) || item.CallbackRva != b[index].CallbackRva
                 || item.Event != b[index].Event || !item.Flags.SequenceEqual(b[index].Flags)).Any();
         }
         private static Data[] Clone(Data[] values)

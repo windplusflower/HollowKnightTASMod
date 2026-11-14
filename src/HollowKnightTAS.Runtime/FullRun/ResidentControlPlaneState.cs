@@ -62,12 +62,39 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (mod == null || startup == null || admitted == null) throw new ArgumentNullException();
             var builder = new Builder(admitted);
+            BindMasterGuiEvent(builder);
+            if (ResidentStaticRoots.IsInitialized(typeof(UnityEngine.Display))) {
+                var displays = UnityEngine.Display.displays.ToArray();
+                builder.Dependency("unity/display-count", displays.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                for (var index = 0; index < displays.Length; index++) {
+                    if (displays[index] == null) throw Error("Unity display slot has no device");
+                    builder.Bind(displays[index], "resident-control/display/" + index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+                builder.Require(() => {
+                    var current = UnityEngine.Display.displays;
+                    if (current.Length != displays.Length || displays.Where((display, i) => !ReferenceEquals(display, current[i])).Any())
+                        throw Error("Unity display device membership changed");
+                });
+            }
             builder.Require(() => {
                 if (!ReferenceEquals(Read(mod, "modStartup"), startup) || Read(mod, "fullRunSession") == null
                     || !(bool)Read(mod, "hooksRegistered")! || !frameOnly && (bool)Read(startup, "suppressInput")!
                     || (int)Read(startup, "gameThread")! != Thread.CurrentThread.ManagedThreadId)
                     throw Error("actual Mod/startup hook ownership or released input boundary differs");
             });
+            // The Modding API's file sink and generated reflection accessors are
+            // process services. Keep graph aliases bound to the installed service
+            // while the ordinary static graph still carries its configuration.
+            void BindApiStatics(Type type, string role, IReadOnlyDictionary<string, string> ownership) {
+                if (ResidentStaticRoots.IsInitialized(type))
+                    builder.AddStatic(role, type, ownership, ResidentStaticRoots.CreateInitializationGuard(type));
+            }
+            BindApiStatics(typeof(Modding.Logger), "api-log", ResidentProcessSlots.Ownership(
+                "Execution:Locker,Writer,APILogger", "Dependency:_logLevel,_shortLoggingLevel,_includeTimestamps,OldLogDir"));
+            BindApiStatics(typeof(Modding.ReflectionHelper), "api-reflection", ResidentProcessSlots.Ownership(
+                "Execution:Fields,FieldGetters,FieldSetters,Properties,PropertyGetters,PropertySetters,Methods,MethodsDelegates", "Dependency:_preloaded"));
+            BindApiStatics(typeof(HutongGames.PlayMaker.FsmLog), "playmaker-log", ResidentProcessSlots.Ownership(
+                "Execution:Logs,logEntryPool", "Dependency:MaxSize,nextLogEntryPoolIndex,<LoggingEnabled>k__BackingField,<MirrorDebugLog>k__BackingField,<EnableDebugFlow>k__BackingField"));
             builder.Add("mod", mod, ModFields);
             builder.Add("startup", startup, StartupFields);
             var session = Read(mod, "fullRunSession") as RuntimeFullRunSession ?? throw Error("actual full-run session is absent");
@@ -121,6 +148,36 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             return builder;
         }
+        // Unity keeps its master Event installed on both sides of the managed/native
+        // boundary. Pair the engine-owned instance only when parked outside OnGUI.
+        // A distinct gameplay-created Event still goes through ordinary discovery.
+        private static void BindMasterGuiEvent(Builder builder)
+        {
+            var type = typeof(UnityEngine.Event);
+            if (!ResidentStaticRoots.IsInitialized(type)) return;
+            var master = (UnityEngine.Event?)ReadStatic(type, "s_MasterEvent");
+            if (ReferenceEquals(master, null)) return;
+            var current = (UnityEngine.Event?)ReadStatic(type, "s_Current");
+            var depth = typeof(UnityEngine.GUIUtility).GetProperty("guiDepth", Fields) ?? throw Error("Unity GUI depth ABI differs");
+            if ((int)depth.GetValue(null, null)! != 0 || !ReferenceEquals(current, master) && !ReferenceEquals(current, null))
+                throw Error("Unity GUI dispatch has an active non-master event");
+            var pointer = Read(master!, "m_Ptr");
+            string Witness() {
+                var position = master!.mousePosition; var delta = master.delta;
+                return JsonConvert.SerializeObject(new object?[] { ReferenceEquals(master, current), master.type, master.rawType,
+                    master.pointerType, master.button, master.modifiers, BitConverter.GetBytes(master.pressure), master.clickCount,
+                    (int)master.character, master.keyCode, master.displayIndex, master.commandName, BitConverter.GetBytes(position.x),
+                    BitConverter.GetBytes(position.y), BitConverter.GetBytes(delta.x), BitConverter.GetBytes(delta.y) });
+            }
+            var witness = Witness();
+            builder.Dependency("unity/gui-master-event", witness);
+            builder.Bind(master!, "resident-control/gui-master-event");
+            builder.Require(() => {
+                if ((int)depth.GetValue(null, null)! != 0 || !ReferenceEquals(ReadStatic(type, "s_MasterEvent"), master)
+                    || !ReferenceEquals(ReadStatic(type, "s_Current"), current) || !Equals(Read(master!, "m_Ptr"), pointer)
+                    || Witness() != witness) throw Error("Unity GUI master event changed during observation");
+            });
+        }
         private static void AddFetch(Builder builder, string key, object? fetch, bool experimental)
         {
             if (fetch == null) return;
@@ -151,7 +208,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly Action[] checks;
             private readonly PayloadCapture? payload;
             private readonly int thread;
-            private readonly string frozen;
+            private string frozen;
             internal CaptureResult(Data snapshot, ResidentProcessSlots[] owners, Dictionary<object, string> external,
                 Dictionary<string, object> resolved, Action admitted, Action[] checks, PayloadCapture? payload)
             {
@@ -159,23 +216,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                 this.admitted = admitted; this.checks = checks; this.payload = payload; thread = Thread.CurrentThread.ManagedThreadId;
                 ManagedRoots = owners.SelectMany(owner => owner.ManagedRoots).Concat(payload == null
                     ? Enumerable.Empty<KeyValuePair<string, object>>() : payload.ManagedRoots).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                // Graph traversal probes every reachable reference. Index installed owners
+                // once, preserving the original priority of control, payload and owner slots.
+                var installed = owners.SelectMany(owner => owner.ExternalBindings);
+                if (payload != null) installed = payload.ExternalBindings.Concat(installed);
+                foreach (var binding in installed) {
+                    if (!external.ContainsKey(binding.Key)) external.Add(binding.Key, binding.Value);
+                    if (!resolved.ContainsKey(binding.Value)) resolved.Add(binding.Value, binding.Key);
+                }
                 frozen = JsonConvert.SerializeObject(snapshot);
                 if (snapshot.ObservedFrame == null) RequireUnchanged(); else RequireFrameUnchanged();
             }
-            internal string? BindExternal(object value)
-            {
-                if (external.TryGetValue(value, out var key)) return key;
-                key = payload?.BindExternal(value); if (key != null) return key;
-                foreach (var owner in owners) { key = owner.BindExternal(value); if (key != null) return key; }
-                return null;
-            }
-            internal object? ResolveExternal(string key)
-            {
-                if (resolved.TryGetValue(key, out var value)) return value;
-                value = payload?.ResolveExternal(key); if (value != null) return value;
-                foreach (var owner in owners) { value = owner.ResolveExternal(key); if (value != null) return value; }
-                return null;
-            }
+            internal IReadOnlyDictionary<string, object> CurrentManagedRoots() => owners.SelectMany(owner => owner.ManagedRoots).Concat(payload == null
+                ? Enumerable.Empty<KeyValuePair<string, object>>() : payload.ManagedRoots).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            internal string? BindExternal(object value) => external.TryGetValue(value, out var key) ? key : null;
+            internal object? ResolveExternal(string key) => resolved.TryGetValue(key, out var value) ? value : null;
             internal void RequireUnchanged()
             { if (Snapshot.ObservedFrame != null) throw Error("frame control observation is read-only"); RequireFields(); }
             internal void RequireFrameUnchanged()
@@ -198,9 +253,24 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal void RequireLayout(Data source)
             {
                 RequireComplete(); Validate(source);
-                if (source.CoverageGaps.Length != 0 || LayoutIdentity(source) != LayoutIdentity(Snapshot))
-                    throw Error("source control-plane owners, dependencies or coverage differ");
+                var srcId = LayoutIdentity(source);
+                var tgtId = LayoutIdentity(Snapshot);
+                if (source.CoverageGaps.Length != 0 || srcId != tgtId)
+                {
+                    var diff = "";
+                    for (int i = 0; i < Math.Min(srcId.Length, tgtId.Length); i++) {
+                        if (srcId[i] != tgtId[i]) {
+                            var sSub = srcId.Substring(Math.Max(0, i - 20), Math.Min(40, srcId.Length - Math.Max(0, i - 20)));
+                            var tSub = tgtId.Substring(Math.Max(0, i - 20), Math.Min(40, tgtId.Length - Math.Max(0, i - 20)));
+                            diff += $" at {i}: src=[{sSub}] target=[{tSub}]";
+                            break;
+                        }
+                    }
+                    throw Error("source control-plane owners, dependencies or coverage differ: " + diff);
+                }
+
                 for (var index = 0; index < owners.Length; index++) owners[index].RequireLayout(source.Owners[index]);
+                frozen = JsonConvert.SerializeObject(Snapshot);
             }
             internal void Apply(ResidentMutationScope scope)
             { RequireUnchanged(); RequireComplete(); foreach (var owner in owners) owner.Apply(scope); payload?.Apply(scope); Verify(); }
@@ -218,8 +288,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly ResidentMutationScope scope;
             private readonly Action admitted;
             private readonly PayloadData? sourcePayload;
+            private readonly Dictionary<string, object> managedRoots;
             private int state;
-            internal IReadOnlyDictionary<string, object> ManagedRoots => target.ManagedRoots;
+            internal IReadOnlyDictionary<string, object> ManagedRoots => managedRoots;
             internal string? BindExternal(object value) => target.BindExternal(value);
             internal object? ResolveExternal(string key) => target.ResolveExternal(key);
             internal Plan(Data source, CaptureResult target, ResidentMutationScope scope, Action admitted)
@@ -227,6 +298,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 this.target = target ?? throw new ArgumentNullException(nameof(target)); this.scope = scope ?? throw new ArgumentNullException(nameof(scope));
                 this.admitted = admitted ?? throw new ArgumentNullException(nameof(admitted)); admitted(); target.RequireUnchanged(); target.RequireLayout(source);
                 sourcePayload = source.Payload == null ? null : JsonConvert.DeserializeObject<PayloadData>(JsonConvert.SerializeObject(source.Payload));
+                managedRoots = target.CurrentManagedRoots().ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
             }
             internal void Apply()
             {
@@ -347,8 +419,68 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (data.Payload != null) ValidateObservedPayload(data.Payload, frameOnly);
             else if (frameOnly) throw Error("frame clock payload is absent");
         }
+        private static string NormalizeDependencyValue(string key, string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            if (key == "audio/installed-assemblies") {
+                var entries = value.Split(';');
+                for (int i = 0; i < entries.Length; i++) {
+                    var slash = entries[i].LastIndexOf('/');
+                    if (slash > 0) {
+                        var fullName = entries[i].Substring(0, slash);
+                        var comma = fullName.IndexOf(',');
+                        var shortName = (comma >= 0 ? fullName.Substring(0, comma) : fullName).Trim();
+                        if (ResidentManagedTypeCatalog.IsControlPlaneAssembly(shortName)) {
+                            entries[i] = fullName + "/00000000-0000-0000-0000-000000000000";
+                        }
+                    }
+                }
+                Array.Sort(entries, StringComparer.Ordinal);
+                return string.Join(";", entries);
+            }
+            if (key.StartsWith("hook/", StringComparison.Ordinal)) {
+                var searchStart = value.StartsWith("resident-metadata/1/", StringComparison.Ordinal) ? "resident-metadata/1/".Length : 0;
+                var secondMeta = value.IndexOf("/resident-metadata/1/", searchStart, StringComparison.Ordinal);
+                if (secondMeta > searchStart) {
+                    var left = value.Substring(0, secondMeta);
+                    var right = value.Substring(secondMeta + 1);
+                    return ResidentGraphPolicy.NormalizeMetadataOrDelegate(left) + "/" + ResidentGraphPolicy.NormalizeMetadataOrDelegate(right);
+                }
+                for (var pos = searchStart; ;) {
+                    var delegateMarker = value.IndexOf("/eyJ", pos, StringComparison.Ordinal);
+                    if (delegateMarker <= searchStart) break;
+                    if (searchStart == 0 || (delegateMarker - searchStart) % 4 == 0) {
+                        var left = value.Substring(0, delegateMarker);
+                        var right = value.Substring(delegateMarker + 1);
+                        return ResidentGraphPolicy.NormalizeMetadataOrDelegate(left) + "/" + ResidentGraphPolicy.NormalizeMetadataOrDelegate(right);
+                    }
+                    pos = delegateMarker + 1;
+                }
+            }
+            if (value.StartsWith("resident-metadata/1/", StringComparison.Ordinal)) {
+                return ResidentGraphPolicy.NormalizeMetadataOrDelegate(value);
+            }
+            if (key == "payload/random-producer/abi" && value.StartsWith("1/", StringComparison.Ordinal)) {
+                return "1/" + ResidentGraphPolicy.NormalizeMetadataOrDelegate(value.Substring(2));
+            }
+            var segments = value.Split('/');
+            for (int i = 0; i < segments.Length; i++) {
+                if (segments[i] == "resident-metadata" && i + 2 < segments.Length && segments[i + 1] == "1") {
+                    var fullMeta = "resident-metadata/1/" + segments[i + 2];
+                    var normalized = ResidentGraphPolicy.NormalizeMetadataOrDelegate(fullMeta);
+                    if (normalized.StartsWith("resident-metadata/1/", StringComparison.Ordinal)) {
+                        segments[i + 2] = normalized.Substring("resident-metadata/1/".Length);
+                    }
+                    i += 2;
+                } else if (segments[i].Length > 20) {
+                    segments[i] = ResidentGraphPolicy.NormalizeMetadataOrDelegate(segments[i]);
+                }
+            }
+            return string.Join("/", segments);
+        }
+
         private static string LayoutIdentity(Data data) => JsonConvert.SerializeObject(new {
-            data.Version, data.Owners, data.Dependencies, data.CoverageGaps, Payload = PayloadLayout(data.Payload)
+            data.Version, Owners = data.Owners.Select(ResidentProcessSlots.CanonicalLayoutJson).ToArray(), Dependencies = data.Dependencies.Select(d => new { d.Key, Value = NormalizeDependencyValue(d.Key, d.Value) }).ToArray(), data.CoverageGaps, Payload = PayloadLayout(data.Payload)
         });
         private static FieldInfo Field(Type type, string name)
         {

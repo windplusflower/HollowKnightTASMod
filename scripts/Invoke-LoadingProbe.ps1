@@ -319,6 +319,22 @@ try {
                     -p:RuntimeIdentifier=win-x64 -p:SelfContained=true -getProperty:AppHostSourcePath,NetCoreRoot
                 if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve candidate apphost template.' }
                 $properties = ($resolved -join "`n" | ConvertFrom-Json).Properties
+                $appHostSourcePath = [string]$properties.AppHostSourcePath
+                if ([string]::IsNullOrWhiteSpace($appHostSourcePath)) {
+                    $majorMinor = ($injectorVersion -split '\.')[0..1] -join '.'
+                    $hostPackRoot = Join-Path $properties.NetCoreRoot 'packs/Microsoft.NETCore.App.Host.win-x64'
+                    $fallbackPack = Get-ChildItem -LiteralPath $hostPackRoot -Directory -Filter "$majorMinor.*" -ErrorAction SilentlyContinue |
+                        Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+                    if ($fallbackPack) {
+                        $candidateAppHost = Join-Path $fallbackPack.FullName 'runtimes/win-x64/native/apphost.exe'
+                        if (Test-Path -LiteralPath $candidateAppHost -PathType Leaf) {
+                            $appHostSourcePath = $candidateAppHost
+                        }
+                    }
+                }
+                if ([string]::IsNullOrWhiteSpace($appHostSourcePath) -or -not (Test-Path -LiteralPath $appHostSourcePath -PathType Leaf)) {
+                    throw 'Cannot resolve candidate apphost template path.'
+                }
                 $sdkVersion = (& dotnet --version).Trim()
                 if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve candidate SDK version.' }
                 [Reflection.Assembly]::LoadFrom((Join-Path $properties.NetCoreRoot "sdk/$sdkVersion/Microsoft.NET.HostModel.dll")) | Out-Null
@@ -327,7 +343,7 @@ try {
                 $parameters = $writer.GetParameters()
                 $hostArguments = [object[]]::new($parameters.Length)
                 for ($i = 0; $i -lt $hostArguments.Length; $i++) { $hostArguments[$i] = $parameters[$i].DefaultValue }
-                $hostArguments[0] = [string]$properties.AppHostSourcePath
+                $hostArguments[0] = [string]$appHostSourcePath
                 $hostArguments[1] = [string](Join-Path $clockRoot 'HollowKnightTAS.ClockInjector.exe')
                 $hostArguments[2] = [IO.Path]::GetRelativePath($clockRoot, (Join-Path $companion 'HollowKnightTAS.ClockInjector.dll'))
                 $hostArguments[3] = $false
@@ -481,7 +497,7 @@ try {
         [ordered]@{ run=$run; pid=$hostProcess.Id; status='running' } | ConvertTo-Json -Compress | Write-Output
         # InteractiveAsync keeps its existing 30 minute deadline. Allow only
         # bounded shutdown grace outside it; ordinary acceptance limits stay intact.
-        $probeHostTimeoutMs = if ($InteractiveRouteAuthoring) { 1830000 } elseif ($ActualDSuffixToEnd) { 600000 } else { 270000 }
+        $probeHostTimeoutMs = if ($InteractiveRouteAuthoring) { 1830000 } elseif ($ActualDSuffixToEnd) { 7500000 } elseif ($ActualDExperiment) { 2700000 } else { 270000 }
         if ($ActualDStage) {
             $relayPacket = $null
             if ($ActualDStage -eq 'Target') { $relayPacket = $ActualDRelayState.Packet; $ActualDRelayState.Remove('Packet') }

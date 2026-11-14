@@ -47,6 +47,17 @@ public sealed class ResidentObjectNativeStateTests
         var go = api.Get(api.Rows(actual).GetValue(1)!, "Object"); ((byte[])api.Get(go, "State"))[7] = 0xff;
         api.Reject("RequireEqual", expected, actual);
     }
+    [TestMethod]
+    public void SharedAssetEventDependenciesAreBoundWithoutMutableNativeRows()
+    {
+        var api = new Api(); var data = api.Valid(); const string key = "resident-asset/serialized/shared-dependency";
+        api.Set(data, "Dependencies", new[] { key });
+        var entry = api.New("Event"); api.Set(entry, "Callback", 123); api.Set(entry, "UserData", key);
+        api.Set(api.Rows(data).GetValue(0)!, "Events", api.Array("Event", entry)); api.Call("RequireComplete", data);
+        api.Set(data, "Dependencies", Array.Empty<string>()); api.Reject("Validate", data);
+        api.Set(data, "Dependencies", new[] { key, key }); api.Reject("Validate", data);
+        api.Set(data, "Dependencies", new[] { "resident-asset/dynamic/unowned" }); api.Reject("Validate", data);
+    }
     private sealed class Api
     {
         private const BindingFlags All = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;

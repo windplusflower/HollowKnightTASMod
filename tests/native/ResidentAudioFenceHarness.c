@@ -276,7 +276,7 @@ static void drain_regions(void)
         CHECK(hktas_audio_atomic(&g_audio_started)==started && HktasClockBridge_RequireResidentAudioFence(token)==1);
         CHECK(HktasClockBridge_GetResidentAudioFenceInFlight()==0);
         hktas_audio_status closed=status_now(); CHECK(closed.state==HKTAS_AUDIO_CLOSED && closed.epoch==token && closed.started==started);
-        CHECK(closed.observed>=started && closed.observed-started<9000 && closed.capability==1 && closed.abi_valid==1);
+        CHECK(closed.observed>=started && closed.observed-started<HKTAS_AUDIO_WALL_LIMIT && closed.capability==1 && closed.abi_valid==1);
         hktas_audio_worker_row rows[HKTAS_AUDIO_MAX_WORKERS];
         LONG count=HktasClockBridge_CopyResidentAudioWorkers(token,rows,HKTAS_AUDIO_MAX_WORKERS);
         CHECK(count==(phases[i]==9?0:1));
@@ -341,12 +341,12 @@ static void faults(void)
     CHECK(harness_faults==1 && HktasClockBridge_GetResidentAudioFenceCapability()==0);
     CHECK(HktasClockBridge_BeginResidentAudioFence(++next_token,GetTickCount64())==0 && harness_faults==1);
     reset_fault_fixture();
-    CHECK(HktasClockBridge_BeginResidentAudioFence(++next_token,GetTickCount64()-9000)==0 && harness_faults==1);
+    CHECK(HktasClockBridge_BeginResidentAudioFence(++next_token,GetTickCount64()-HKTAS_AUDIO_WALL_LIMIT)==0 && harness_faults==1);
     reset_fault_fixture();
     uint64_t token=++next_token; CHECK(HktasClockBridge_BeginResidentAudioFence(token,GetTickCount64())==1);
-    InterlockedExchange64(&g_audio_started,(LONG64)(GetTickCount64()-9000));
+    InterlockedExchange64(&g_audio_started,(LONG64)(GetTickCount64()-HKTAS_AUDIO_WALL_LIMIT));
     hktas_audio_status timed_out=status_now();
-    CHECK(timed_out.state==HKTAS_AUDIO_CLOSED && timed_out.observed-timed_out.started>=9000 && !timed_out.fault && !harness_faults);
+    CHECK(timed_out.state==HKTAS_AUDIO_CLOSED && timed_out.observed-timed_out.started>=HKTAS_AUDIO_WALL_LIMIT && !timed_out.fault && !harness_faults);
     CHECK(HktasClockBridge_RequireResidentAudioFence(token)==0 && harness_faults==1);
     CHECK(HktasClockBridge_EndResidentAudioFence(token,1)==0 && (hktas_audio_atomic(&g_audio_state)&HKTAS_AUDIO_FAILED));
     reset_fault_fixture();

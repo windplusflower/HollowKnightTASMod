@@ -180,8 +180,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var proxyBytes = Read(proxy, 32); node.ProxyBounds = Slice(proxyBytes, 0, 16); node.ProxyChild = Int(proxyBytes, 24);
                 if (Int(proxyBytes, 28) != i) throw new InvalidOperationException("Broadphase proxy/node identity differs.");
             }
+            var queryProxy = Int(b, 120);
+            if (queryProxy < -1 || queryProxy >= nodes.Length || (queryProxy != -1 && (nodes[queryProxy] == null || nodes[queryProxy].Height == -1)))
+                queryProxy = -1;
             var result = new CheckpointPhysicsBroadphaseState { Root = Int(b, 8), Count = count, FreeHead = Int(b, 32),
-                Path = BitConverter.ToUInt32(b, 36), InsertionCount = Int(b, 40), ProxyCount = Int(b, 48), QueryProxy = Int(b, 120),
+                Path = BitConverter.ToUInt32(b, 36), InsertionCount = Int(b, 40), ProxyCount = Int(b, 48), QueryProxy = queryProxy,
                 WorldFlags = Int(b, 0), Step = Slice(b, 344, 8), SimulationId = Int(Read(live.Cache, 88), 80), Nodes = nodes,
                 Pairs = Buffer(b, 56, 8), Moves = Buffer(b, 88, 4) };
             result.Validate();
@@ -320,8 +323,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             for (var i = 0; i < Nodes.Length; i++)
                 if (membership[i] == 2 && Nodes[i].UserData != null && !proxies.Contains(Nodes[i].UserData!))
                     throw new InvalidDataException("Broadphase active user data owner differs.");
-            if (QueryProxy < -1 || QueryProxy >= Nodes.Length || (QueryProxy != -1 && membership[QueryProxy] != 2))
+            if (QueryProxy < -1 || QueryProxy >= Nodes.Length)
                 throw new InvalidDataException("Broadphase query proxy differs.");
+            if (QueryProxy != -1 && membership[QueryProxy] != 2)
+                QueryProxy = -1;
         }
         internal Action PrepareApply(GameObject[] spatters, GameObject[] geos, GameObject[] projectiles)
             => PrepareApply(spatters, geos, projectiles, null);

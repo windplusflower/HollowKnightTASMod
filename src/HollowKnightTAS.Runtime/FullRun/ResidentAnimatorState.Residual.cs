@@ -82,6 +82,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             internal Action Prepare(Residual source,List<PendingWrite> writes,Action admitted)
             {
+                RequireSetPoliciesMatch(source,Data);
                 if (source.Frames.Length != Data.Frames.Length || source.Jobs.Length != Data.Jobs.Length) throw Error("recorder/fence allocation extent differs");
                 for (var i=0;i<source.Frames.Length;i++)
                     writes.Add(new PendingWrite(IntPtr.Add(FrameBase,i*24+16),BitConverter.GetBytes(Data.Frames[i].TimeBits),BitConverter.GetBytes(source.Frames[i].TimeBits)));
@@ -124,6 +125,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal readonly List<ControllerMemory> Additional = new List<ControllerMemory>();
             internal readonly List<IntPtr> Pointers = new List<IntPtr>();
             private readonly Dictionary<IntPtr,int> memories=new Dictionary<IntPtr,int>(), constants=new Dictionary<IntPtr,int>();
+            private readonly Dictionary<IntPtr,Tuple<int,int>> machines = new Dictionary<IntPtr,Tuple<int,int>>();
             private readonly Reader reader;
             internal MemoryDirectory(Reader reader)
             {
@@ -131,11 +133,26 @@ namespace HollowKnightTAS.Runtime.FullRun
                 for (int i=0;i<reader.Live.Playables.Count;i++) {
                     var p=reader.Live.Playables[i]; Playables.Add(p,i);
                     var bytes=reader.Memory.Read(IntPtr.Add(p,296),24); var memory=M.Ptr(bytes,16); var constant=M.Ptr(bytes,0);
-                    if (memory!=IntPtr.Zero) memories.Add(memory,i+1);
+                    if (memory!=IntPtr.Zero) {
+                        memories.Add(memory,i+1);
+                        var header = reader.Memory.Read(memory,16);
+                        var table = Relative(memory,header,8);
+                        var entries = reader.Memory.Bank(memory,header,0,8);
+                        for (int index = 0; index < entries.Length/8; index++) {
+                            var machine = Relative(table,entries,index*8);
+                            if (machine == IntPtr.Zero || machines.ContainsKey(machine)) throw Error("state-machine memory has multiple controller owners");
+                            machines.Add(machine,Tuple.Create(i,index));
+                        }
+                    }
                     if (constant!=IntPtr.Zero && !constants.ContainsKey(constant)) constants.Add(constant,i);
                 }
             }
             internal int Constant(IntPtr pointer) => pointer==IntPtr.Zero ? -1 : constants.TryGetValue(pointer,out var index) ? index : UnknownEdge;
+            internal void MachineBinding(IntPtr pointer,out int owner,out int index)
+            {
+                owner = pointer == IntPtr.Zero ? -1 : UnknownEdge; index = -1;
+                if (machines.TryGetValue(pointer,out var binding)) { owner = binding.Item1; index = binding.Item2; }
+            }
             internal int Memory(IntPtr pointer)
             {
                 if (pointer==IntPtr.Zero) return 0;
@@ -174,11 +191,32 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (seen.Count!=data.ExtraMemories.Length) throw Error("unowned recorded/sampling controller memory");
         }
         private static int[] ResidualCounts(Residual r,Row row) => new[] {r.Bound.Length,row.Cached.Length,row.Renderers.Length,row.Clearing.Length,row.CachedClips.Length,r.Jobs.Length};
+        private static bool KnownAnimationSetPolicy(int label, int destroyRva)
+            => label == 30 && (destroyRva == 0 || destroyRva == 0xcb660);
+
+        private static void RequireSetPoliciesMatch(Residual source, Residual target)
+        {
+            if (source.SetLabels.Length != 2 || source.DestroyRvas.Length != 2
+                || target.SetLabels.Length != 2 || target.DestroyRvas.Length != 2)
+                throw Error("animation set policy role directory differs");
+            for (int domain = 0; domain < 2; domain++)
+            {
+                if (!KnownAnimationSetPolicy(source.SetLabels[domain], source.DestroyRvas[domain])
+                    || !KnownAnimationSetPolicy(target.SetLabels[domain], target.DestroyRvas[domain])
+                    || source.SetLabels[domain] != target.SetLabels[domain]
+                    || source.DestroyRvas[domain] != target.DestroyRvas[domain])
+                    throw Error("animation set ownership policy differs");
+            }
+            // Set presence and its typed tables are checked independently by
+            // EvalView and final RequireEqual. The target callback is retained.
+        }
+
         private static IEnumerable<string> ResidualGaps(Residual? r,Row row)
         {
             if (r==null) { yield return "retained-allocator-recorder-and-jobs-witness-absent"; yield break; }
             if (r.AllocatorRvas.Any(rva=>rva!=0x15d5b60) || r.PlaybackVtable!=0x15d5b70 || r.Labels.Any(label=>label!=30)
-                || r.SetLabels.Any(label=>label!=30) || r.DestroyRvas.Any(rva=>rva!=0)) yield return "unbound-native-allocator-function";
+                || Enumerable.Range(0,2).Any(domain => !KnownAnimationSetPolicy(r.SetLabels[domain],r.DestroyRvas[domain])))
+                yield return "unbound-native-allocator-function";
             if (r.SamplingConstant==UnknownEdge) yield return "sampling-controller-constant-unbound";
             if (r.Bound.Any(b=>b.Output==UnknownEdge || b.Playable==UnknownEdge)) yield return "bound-playable-not-owned-by-graph-directory";
             if (r.FrameAllocated!=(r.FrameCapacity!=0)) yield return "recorder-vector-owner";

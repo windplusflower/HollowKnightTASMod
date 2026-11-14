@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Collections.Generic;
+using System.Linq;
+using Newtonsoft.Json;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
@@ -46,6 +48,39 @@ namespace HollowKnightTAS.Runtime.FullRun
             } catch (Exception) { /* best effort */ }
         }
         internal static T Measure<T>(string stage,Func<T> action) { Mark(stage); return action(); }
+        internal static void RecordDomain(string domain, object state)
+        {
+            if (!Collecting) return;
+            try {
+                // Native Mono rows repeat shared type metadata across thousands
+                // of owners. Keep failing owners complete within the same cap.
+                if (state is ResidentMonoNativeState.Data[] monoRows)
+                    state = monoRows.Where(row => ResidentMonoNativeState.RequiredGaps(row).Length != 0).ToArray();
+                var output = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT");
+                if (string.IsNullOrEmpty(output) || !Path.IsPathRooted(output) || !Directory.Exists(output)) return;
+                foreach (var character in domain) if (!char.IsLetterOrDigit(character)) return;
+                using var process = Process.GetCurrentProcess();
+                using var bytes = new BoundedEvidenceStream();
+                using (var text = new StreamWriter(bytes, new UTF8Encoding(false), 4096, true))
+                using (var json = new JsonTextWriter(text)) {
+                    JsonSerializer.CreateDefault().Serialize(json, state);
+                    json.Flush();
+                }
+                var path = Path.Combine(output, "resident-failed-domain-" + domain + "-" + process.Id + ".json");
+                File.WriteAllBytes(path, bytes.ToArray());
+                Mark("failed domain snapshot " + domain + " bytes=" + bytes.Length);
+            } catch (Exception error) {
+                Mark("failed domain snapshot unavailable " + domain + " " + error.GetType().Name);
+            }
+        }
+        private sealed class BoundedEvidenceStream : MemoryStream
+        {
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                if (Length + count > 16 * 1024 * 1024) throw new IOException("failure domain evidence exceeds 16 MiB");
+                base.Write(buffer, offset, count);
+            }
+        }
         // Native retirement may stop the process before the Mod logger flushes.
         // Persist the first managed exception only on the failed path, before
         // closing the epoch. Never turn an evidence I/O error into the cause.

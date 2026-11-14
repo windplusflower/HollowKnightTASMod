@@ -30,7 +30,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 ResidentAssetPipeline.ValidateTexture(source.Texture);
                 if (!source.Texture.CpuDataPresent || !source.Texture.Readable) throw Error("texture CPU transfer has no readable source image");
                 this.source = source.Copy(); this.target = target; this.admitted = admitted; Require(); functions = new TextureImageFunctions();
-                var current = CaptureTexture(target);
+                var current = CaptureTexture(target, captureGpu: false);
                 if (!current.Readable || current.Width != source.Texture.Width || current.Height != source.Texture.Height
                     || current.Dimension != source.Texture.Dimension || current.Format != source.Texture.Format || current.GraphicsFormat != source.Texture.GraphicsFormat
                     || current.MipmapCount != source.Texture.MipmapCount) throw Error("texture CPU transfer target needs native image reconstruction before copying");
@@ -67,7 +67,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 Require(); if (!applied) throw Error("texture CPU verification precedes application");
                 if (target.name != source.Name || (int)target.hideFlags != source.HideFlags
-                    || !EncodeTextureImage(source.Texture!).SequenceEqual(EncodeTextureImage(CaptureTexture(target))))
+                    || !EncodeTextureImage(source.Texture!).SequenceEqual(EncodeTextureImage(CaptureTexture(target, captureGpu: false))))
                     throw Error("texture CPU image, sampler or metadata failed independent readback");
             }
             private void Require()

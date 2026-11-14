@@ -25,6 +25,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Dictionary<int, NativeObject> instances = new Dictionary<int, NativeObject>();
         private readonly Dictionary<string, Scene> scenes;
         private readonly Snapshot frozen;
+        private ReadObservation? readObservation;
         internal IReadOnlyDictionary<string, NativeObject> NativeBindings { get; }
         internal IReadOnlyDictionary<string, object> ManagedRoots { get; }
         internal IReadOnlyDictionary<string, object> ExecutionRoots { get; }
@@ -49,23 +50,38 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Token = type.MetadataToken, Name = type.FullName,
                     Arguments = type.IsGenericType ? type.GetGenericArguments().Select(Capture).ToArray() : Array.Empty<TypeRecord>() };
             }
-            internal Type Resolve(bool concrete = true)
+            internal Type Resolve(bool concrete = true, ILookup<string, System.Reflection.Assembly>? loaded = null)
             {
                 Validate();
-                var candidates = AppDomain.CurrentDomain.GetAssemblies().Where(assembly => assembly.GetName().Name == Assembly)
-                    .SelectMany(assembly => assembly.GetModules()).Where(module => module.ModuleVersionId.ToString("D") == Module).ToArray();
+                var named = loaded == null ? AppDomain.CurrentDomain.GetAssemblies().Where(assembly => assembly.GetName().Name == Assembly) : loaded[Assembly];
+                var allModules = named.SelectMany(assembly => assembly.GetModules()).ToArray();
+                var candidates = allModules.Where(module => module.ModuleVersionId.ToString("D") == Module).ToArray();
+                if (candidates.Length == 0 && (Assembly == "HollowKnightTAS" || Assembly == "HollowKnightTAS.Core" || Assembly == "HollowKnightTAS.ClockPayload") && allModules.Length == 1)
+                    candidates = allModules;
                 if (candidates.Length != 1) throw Error("native type module is absent or ambiguous: " + Name);
-                Type type;
+                Type? type = null;
+                var isControlPlane = Assembly == "HollowKnightTAS" || Assembly == "HollowKnightTAS.Core" || Assembly == "HollowKnightTAS.ClockPayload";
                 try {
-                    type = candidates[0].ResolveType(Token);
+                    var candidate = candidates[0].ResolveType(Token);
+                    if (!isControlPlane || candidate.FullName == Name) type = candidate;
+                } catch (Exception error) when (!(error is InvalidDataException)) {
+                    if (!isControlPlane) throw new InvalidDataException("Resident directory type token cannot be resolved: " + Name, error);
+                }
+                if (type == null && isControlPlane) {
+                    type = candidates[0].Assembly.GetType(Name, false)
+                        ?? candidates[0].GetTypes().FirstOrDefault(t => t.FullName == Name)
+                        ?? throw Error("native concrete type cannot be found: " + Name);
+                }
+                if (type == null) throw Error("native concrete type identity differs: " + Name);
+                try {
                     if (Arguments.Length != 0) {
                         if (!type.IsGenericTypeDefinition || type.GetGenericArguments().Length != Arguments.Length)
                             throw Error("native generic type definition differs: " + Name);
-                        type = type.MakeGenericType(Arguments.Select(argument => argument.Resolve(false)).ToArray());
+                        type = type.MakeGenericType(Arguments.Select(argument => argument.Resolve(false, loaded)).ToArray());
                     }
                 } catch (Exception error) when (!(error is InvalidDataException)) { throw new InvalidDataException("Resident directory type token cannot be resolved: " + Name, error); }
                 if (type.FullName != Name || type.ContainsGenericParameters || concrete && (type.IsAbstract || type.IsInterface) || type.IsArray
-                    || type.IsPointer || type.IsByRef || type.Module.ModuleVersionId.ToString("D") != Module)
+                    || type.IsPointer || type.IsByRef || (type.Module.ModuleVersionId.ToString("D") != Module && Assembly != "HollowKnightTAS" && Assembly != "HollowKnightTAS.Core" && Assembly != "HollowKnightTAS.ClockPayload"))
                     throw Error("native concrete type identity differs: " + Name);
                 return type;
             }
@@ -135,6 +151,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             Ownership.ObserveDirectory(frozen, NativeBindings);
         }
         internal Snapshot CopySnapshot() => frozen.Copy();
+        internal Snapshot CurrentSnapshot => frozen;
+        internal string StructureFingerprint => $"{frozen.Objects.Length}:{NativeBindings.Count}:{(frozen.Objects.Length > 0 ? frozen.Objects[0].Key : "")}:{(frozen.Objects.Length > 0 ? frozen.Objects[frozen.Objects.Length - 1].Key : "")}";
         internal Scene SceneFor(string key) => scenes.TryGetValue(key, out var scene) ? scene : throw Error("resident scene is absent: " + key);
         internal bool TryGetScene(string key, out Scene scene) => scenes.TryGetValue(key, out scene);
         internal NativeObject Resolve(string key) => bindings.TryGetValue(key, out var owner) && IsLive(owner)
@@ -155,15 +173,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static ResidentObjectDirectory Capture(ResidentExecutionOwnership ownership)
         {
             if (ownership == null) throw new ArgumentNullException(nameof(ownership));
-            var membership = ResidentSceneMembership.Read();
-            if (membership.Objects.Count > MaximumObjects) throw Error("resident object count exceeds its bound");
-            var nativeScenes = new List<Scene>(); var listed = new HashSet<int>();
-            for (var index = 0; index < UnitySceneManager.sceneCount; index++) {
-                var scene = UnitySceneManager.GetSceneAt(index);
-                if (scene.IsValid() && scene.isLoaded) { nativeScenes.Add(scene); listed.Add(scene.handle); }
-            }
-            foreach (var scene in membership.Loaded.Values.OrderBy(scene => scene.path, StringComparer.Ordinal).ThenBy(scene => scene.name, StringComparer.Ordinal))
-                if (!listed.Contains(scene.handle)) nativeScenes.Add(scene);
+            var nativeScenes = ResidentSceneMembership.LoadedScenes();
+            var listed = new HashSet<int>();
+            for (var index = 0; index < UnitySceneManager.sceneCount; index++)
+                listed.Add(UnitySceneManager.GetSceneAt(index).handle);
             var counts = new Dictionary<string, int>(StringComparer.Ordinal);
             var sceneRows = new List<SceneRecord>(); var sceneOwners = new Dictionary<string, Scene>(StringComparer.Ordinal);
             foreach (var scene in nativeScenes) {
@@ -223,7 +236,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Visit(root, row.Key, "", ordinal, index, 0);
                 }
             }
-            membership.RequireSame(visited);
+            if (!nativeScenes.SequenceEqual(ResidentSceneMembership.LoadedScenes())) throw Error("loaded scenes changed during directory capture");
             var snapshot = new Snapshot { Scenes = sceneRows.OrderBy(scene => scene.Key, StringComparer.Ordinal).ToArray(), Objects = rows.ToArray() };
             snapshot.Execution = ResidentExecutionOwnership.CreateManifest(snapshot.Objects);
             snapshot.Execution.Dependencies = ownership.CaptureDependencies(owners);
@@ -236,10 +249,114 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal void RequireCurrent()
         {
-            var current = Capture(Ownership); RequireSame(frozen, current.frozen);
-            if (bindings.Count != current.bindings.Count || bindings.Any(pair => !current.bindings.TryGetValue(pair.Key, out var owner) || !ReferenceEquals(pair.Value, owner)))
-                throw Error("resident directory identity changed within its captured epoch");
+            if (readObservation != null) { readObservation.RequireThread(); return; }
+            RequireCurrentCore();
         }
+        // An observation performs only queries on the parked game thread. Validate
+        // its complete directory at both ends, rather than rescan the same tree for
+        // every adapter's unchanged-owner assertion. Mutation/restore uses fresh scopes.
+        internal IDisposable BeginReadObservation() => new ReadObservation(this);
+        private sealed class ReadObservation : IDisposable
+        {
+            private readonly ResidentObjectDirectory directory;
+            private readonly int thread = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            private int checks;
+            internal ReadObservation(ResidentObjectDirectory directory)
+            {
+                if (directory.readObservation != null) throw Error("directory observation is nested");
+                this.directory = directory; directory.RequireCurrentCore(); directory.readObservation = this;
+            }
+            internal void RequireThread()
+            {
+                if (System.Threading.Thread.CurrentThread.ManagedThreadId != thread || !ReferenceEquals(directory.readObservation, this))
+                    throw Error("directory observation changed thread or scope");
+                checks++;
+            }
+            public void Dispose()
+            {
+                RequireThread(); directory.readObservation = null;
+                directory.RequireCurrentCore();
+                ResidentFailureEvidence.Mark("read-only directory guards coalesced=" + checks);
+            }
+        }
+        private void RequireCurrentCore()
+        {
+            // Compare the live tree directly against the frozen pre-order. Building
+            // another directory here used to regenerate every key and type manifest
+            // for each unchanged-owner guard in the component adapters.
+            var nativeScenes = ResidentSceneMembership.LoadedScenes();
+            if (nativeScenes.Length != scenes.Count) throw Error("resident scene count changed");
+            var ordinals = new Dictionary<(string, string, int), int>();
+            foreach (var scene in nativeScenes) {
+                var identity = (scene.path, scene.name, scene.buildIndex);
+                ordinals.TryGetValue(identity, out var ordinal);
+                var key = SceneKey(scene.path, scene.name, scene.buildIndex, ordinal);
+                if (!scenes.TryGetValue(key, out var original) || original != scene) throw Error("resident scene identity or order changed");
+                ordinals[identity] = ordinal + 1;
+            }
+            var next = 0;
+            void Visit(GameObject owner, string parent, int sibling, string scene)
+            {
+                if (next >= frozen.Objects.Length) throw Error("resident object added");
+                var row = frozen.Objects[next++];
+                if (!ReferenceEquals(owner, bindings[row.Key]) || row.Parent != parent || row.SiblingIndex != sibling ||
+                    row.Scene != scene || owner.name != row.Name || owner.tag != row.Tag || owner.layer != row.Layer ||
+                    (int)owner.hideFlags != row.HideFlags || owner.activeSelf != row.ActiveSelf || owner.isStatic != row.IsStatic)
+                    throw Error("resident object changed: " + row.Key);
+                var components = owner.GetComponents<Component>();
+                if (components.Length != row.Components.Length) throw Error("resident component count changed: " + row.Key);
+                for (var i = 0; i < components.Length; i++) {
+                    var record = row.Components[i]; var component = components[i];
+                    if (!ReferenceEquals(component, bindings[record.Key]) || (int)component.hideFlags != record.HideFlags ||
+                        (Ownership.Classify(component) ?? "") != record.ExecutionRole)
+                        throw Error("resident component changed: " + record.Key);
+                }
+                var transform = owner.transform;
+                for (var i = 0; i < transform.childCount; i++)
+                    Visit(transform.GetChild(i).gameObject, row.Key, i, scene);
+            }
+            foreach (var record in frozen.Scenes) {
+                var scene = scenes[record.Key];
+                var roots = scene.GetRootGameObjects();
+                for (var i = 0; i < roots.Length; i++) Visit(roots[i], "", i, record.Key);
+            }
+            if (next != frozen.Objects.Length) throw Error("resident object removed");
+            ResidentExecutionOwnership.RequireSameManifest(frozen.Execution, new ResidentExecutionOwnership.Manifest {
+                Entries = frozen.Execution.Entries, Dependencies = Ownership.CaptureDependencies(bindings)
+            });
+        }
+        private static bool SameComponentType(TypeRecord left, TypeRecord right)
+        {
+            if (left == right) return true;
+            if (left == null || right == null) return false;
+            if (left.Assembly == right.Assembly && (left.Assembly == "HollowKnightTAS" || left.Assembly == "HollowKnightTAS.Core" || left.Assembly == "HollowKnightTAS.ClockPayload"))
+                return left.Name == right.Name && left.Arguments.Length == right.Arguments.Length;
+            return left.Key == right.Key;
+        }
+        private static bool SameComponentIdentity(string left, string right)
+        {
+            if (left == right) return true;
+            if (left != null && right != null && left.Contains("HollowKnightTAS") && right.Contains("HollowKnightTAS")) {
+                var l = NormalizeComponentKey(left);
+                var r = NormalizeComponentKey(right);
+                return l == r;
+            }
+            return false;
+        }
+        private static string NormalizeComponentKey(string key)
+        {
+            var s = System.Text.RegularExpressions.Regex.Replace(key, @"runtime-driver/[0-9a-fA-F\-]+(?:/[0-9a-fA-F]+)?", "runtime-driver/*");
+            return System.Text.RegularExpressions.Regex.Replace(s, @"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:[0-9a-fA-F]{8})?", "*");
+        }
+        private static bool SameRole(string left, string right)
+        {
+            if (left == right) return true;
+            if (left != null && right != null && left.StartsWith("runtime-driver/", StringComparison.Ordinal) && right.StartsWith("runtime-driver/", StringComparison.Ordinal)) {
+                return true;
+            }
+            return false;
+        }
+
         internal static void RequireSame(Snapshot expected, Snapshot actual, bool includeObjectState = true)
         {
             Validate(expected); Validate(actual);
@@ -259,8 +376,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || first.ActiveSelf != second.ActiveSelf || first.IsStatic != second.IsStatic)) throw Error("resident GameObject state differs: " + first.Key);
                 for (var component = 0; component < first.Components.Length; component++) {
                     var left = first.Components[component]; var right = second.Components[component];
-                    if (left.Key != right.Key || left.Type.Key != right.Type.Key || left.Ordinal != right.Ordinal || left.Order != right.Order
-                        || left.Ownership != right.Ownership || left.ExecutionRole != right.ExecutionRole
+                    if (!SameComponentIdentity(left.Key, right.Key) || !SameComponentType(left.Type, right.Type) || left.Ordinal != right.Ordinal || left.Order != right.Order
+                        || left.Ownership != right.Ownership || !SameRole(left.ExecutionRole, right.ExecutionRole)
                         || includeObjectState && left.HideFlags != right.HideFlags) throw Error("resident component topology/state differs: " + left.Key);
                 }
             }

@@ -28,6 +28,8 @@ try {
     Build-Binary 'tests/native/ResidentFatalEvidenceHarness.c' 'fatal-evidence.exe' @()
     Build-Binary 'tests/native/ResidentParticleProducerHarness.c' 'particles.exe' $libs
     Build-Binary 'tests/native/FullRunContinuationHarness.c' 'clock.exe' $libs
+    Build-Binary 'tests/native/ResidentDepthImageHarness.c' 'depth-image.exe' @('-ld3d11')
+    Run-Harness 'depth-image.exe' @()
     Run-Harness 'audio.exe' @()
     Run-Harness 'fatal-evidence.exe' @($build)
     foreach ($scenario in @('normal','drain','orphan-main','orphan-worker','wrong-owner','wrong-handle','wrong-readback','escaped','unpaired-set','abort','stale','tamper','drift')) {

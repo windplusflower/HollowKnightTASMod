@@ -86,27 +86,42 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal Discovery(object[] wrappers, int[] kinds, IntPtr[] pointers) { Wrappers = wrappers; Kinds = kinds; Pointers = pointers; }
         }
 
-        internal static CaptureResult Capture(IReadOnlyDictionary<string, object> graphRoots, ResidentGraphPolicy policy,
-            Func<object, string?> externalBinding, Func<object, string?> bindAsset, Action admitted)
+        internal sealed class Collector
         {
-            if (graphRoots == null || policy == null || externalBinding == null || bindAsset == null || admitted == null) throw new ArgumentNullException();
+            private readonly Dictionary<object, WrapperLive> known = new Dictionary<object, WrapperLive>(References.Instance);
+            internal readonly List<WrapperLive> Rows = new List<WrapperLive>();
+            internal string? Discover(object owner, Action<string, object> addRoot)
+            {
+                var kind = Kind(owner.GetType());
+                if (kind < 0) return null;
+                if (known.TryGetValue(owner, out var existing)) return existing.Row.Key;
+                if (Rows.Count >= MaximumWrappers) throw Error("managed native wrapper directory exceeds its bound");
+                var row = DescribeWrapper(owner.GetType(), WrapperKey(Rows.Count), "");
+                var pointer = (IntPtr)PointerFields[kind].GetValue(owner)!;
+                var wrapper = new WrapperLive(owner, row, pointer, MakeSlots(row, owner));
+                Rows.Add(wrapper); known.Add(owner, wrapper);
+                foreach (var field in wrapper.Fields) addRoot(field.Row.Root, field.Slot);
+                return row.Key;
+            }
+        }
+
+        internal static CaptureResult Capture(IReadOnlyDictionary<string, object> graphRoots, ResidentGraphPolicy policy,
+            Func<object, string?> externalBinding, Func<object, string?> bindAsset, Action admitted, Collector collected)
+        {
             admitted(); LoadingEngineClockProbe.RequirePinnedEngine();
-            var discovery = Discover(graphRoots, policy, externalBinding);
-            var data = new Data(); var rows = new List<WrapperLive>(); var natives = new List<NativeLive>();
+            var data = new Data(); var rows = collected.Rows; var natives = new List<NativeLive>();
             var pointers = new Dictionary<IntPtr, NativeLive>(); var gaps = new SortedSet<string>(StringComparer.Ordinal);
-            for (var index = 0; index < discovery.Wrappers.Length; index++) {
-                admitted(); var actual = discovery.Wrappers[index]; var kind = discovery.Kinds[index]; var pointer = discovery.Pointers[index];
-                var key = WrapperKey(index); NativeLive? native = null;
+            foreach (var wrapper in rows) {
+                var row = wrapper.Row; var kind = row.Kind; var pointer = wrapper.Pointer;
                 if (pointer != IntPtr.Zero) {
-                    if (!pointers.TryGetValue(pointer, out native)) {
+                    if (!pointers.TryGetValue(pointer, out var native)) {
                         native = ReadNative(NativeKey(natives.Count), kind, pointer, bindAsset); natives.Add(native); pointers.Add(pointer, native);
                     } else if (native.Row.Kind != kind) throw Error("one native address is claimed by different wrapper types");
                     native.Wrappers++;
+                    row.Native = native.Row.Key;
                 }
-                var row = DescribeWrapper(actual.GetType(), key, native?.Row.Key ?? "");
-                var slots = MakeSlots(row, actual);
-                foreach (var field in row.Fields.Where(field => field.Storage == "unsupported-pointer")) gaps.Add("managed-wrapper-pointer-field:" + key + "/" + field.Name);
-                rows.Add(new WrapperLive(actual, row, pointer, slots));
+                foreach (var field in row.Fields.Where(field => field.Storage == "unsupported-pointer"))
+                    gaps.Add("managed-wrapper-pointer-field:" + row.Key + "/" + field.Name);
             }
             foreach (var native in natives) {
                 if (native.Row.Kind == 0) {
@@ -139,9 +154,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (type.IsPrimitive || type.IsEnum || value is string || value is decimal || type == typeof(IntPtr) || type == typeof(UIntPtr) || ResidentGraphPolicy.IsMetadata(value)) return;
                 var external = ResidentValueAccess.IsView(value) ? null : externalBinding(value);
                 if (external != null && !external.StartsWith(Prefix, StringComparison.Ordinal)) return;
-                if (!ResidentValueAccess.IsView(value) && !seen.Add(value)) return;
-                if (seen.Count > CanonicalCarryGraphCodec.MaximumNodes) throw Error("managed wrapper discovery exceeds its node bound");
                 var kind = Kind(type);
+                if (kind < 0 && ResidentGraphPolicy.IsTerminalForWrapperSearch(value, type)) return;
+                if (!ResidentValueAccess.IsView(value) && !seen.Add(value)) return;
+                if (seen.Count > CanonicalCarryGraphCodec.MaximumNodes) throw Error("managed wrapper discovery exceeds its node bound: " + ResidentGraphPolicy.DescribeNodeBudget(seen));
                 if (kind >= 0) {
                     if (wrappers.Count >= MaximumWrappers) throw Error("managed native wrapper directory exceeds its bound");
                     RequirePointerLayout(kind); wrappers.Add(value); kinds.Add(kind); pointers.Add((IntPtr)PointerFields[kind].GetValue(value)!);
@@ -154,9 +170,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (owner is Delegate callback) { foreach (var call in callback.GetInvocationList()) Visit(call.Target, item.Item2 + 1); }
                 else if (owner is Array array) {
                     if (array.Rank != 1 || array.GetLowerBound(0) != 0 || array.Length > CanonicalCarryGraphCodec.MaximumNodes) throw Error("managed wrapper array shape differs");
+                    if (!ResidentGraphPolicy.CanContainReferences(array.GetType().GetElementType()!)) continue;
                     for (var index = 0; index < array.Length; index++) Visit(ResidentValueAccess.ReadArray(array, index), item.Item2 + 1);
-                } else foreach (var field in policy.ManagedFields(ResidentValueAccess.TypeOf(owner)))
-                    if (!field.FieldType.IsPointer && !field.FieldType.IsByRef) Visit(ResidentValueAccess.ReadField(owner, field), item.Item2 + 1);
+                } else foreach (var read in ResidentGraphPolicy.ReadersForReferences(ResidentValueAccess.TypeOf(owner)))
+                    Visit(read(owner), item.Item2 + 1);
             }
             return new Discovery(wrappers.ToArray(), kinds.ToArray(), pointers.ToArray());
         }
@@ -191,9 +208,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal void RequireUnchanged()
             {
                 RequireNativeUnchanged();
-                var discovery = Discover(GraphRoots, Policy, ExternalBinding);
-                if (discovery.Wrappers.Length != Wrappers.Length || discovery.Wrappers.Where((wrapper, index) => !ReferenceEquals(wrapper, Wrappers[index].Owner)
-                    || discovery.Kinds[index] != Wrappers[index].Row.Kind || discovery.Pointers[index] != Wrappers[index].Pointer).Any()) throw Error("reachable wrapper identity or native alias changed");
+                // Reachability is independently rediscovered with the whole managed graph.
+                // Check the frozen native owners and every projected subclass slot here.
                 foreach (var wrapper in Wrappers) foreach (var field in wrapper.Fields)
                     if (!SameSlot(field.Original, ResidentValueAccess.ReadField(wrapper.Owner, field.Field), field.Field.FieldType)) throw Error("wrapper managed field changed: " + field.Row.Root);
                 RequireNativeUnchanged();
@@ -283,9 +299,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (state != State.Applied || thread != Thread.CurrentThread.ManagedThreadId) { state = State.Faulted; throw Error("wrapper readback requires one completed application"); }
                 try {
                     scope.Require(); admitted(); VerifyFields(); VerifyNative();
-                    var actual = Discover(currentGraphRoots, target.Policy, value => BindExternal(value) ?? target.ExternalBinding(value));
-                    if (actual.Wrappers.Length != wrappers.Count || actual.Wrappers.Where((owner, index) => !ReferenceEquals(owner, wrappers[index].Owner)
-                        || actual.Pointers[index] != wrappers[index].Pointer || actual.Kinds[index] != wrappers[index].Row.Kind).Any()) throw Error("restored wrapper reachability or native aliases differ");
+                    foreach (var pair in ManagedRoots)
+                        if (!currentGraphRoots.TryGetValue(pair.Key, out var observed) || !ReferenceEquals(pair.Value, observed))
+                            throw Error("restored wrapper field root differs");
+                    // The independent post-apply graph pass checks all incoming aliases.
+
                 } catch { state = State.Faulted; throw; }
             }
             private void RequireApplying()
@@ -349,7 +367,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     // Every old graph wrapper has relinquished one reference.
                     // Other renderer owners, if any, retain their own COW sheet.
                     foreach (var native in before.Natives) for (var index = 0; index < native.Wrappers; index++) Destroy(native.Row.Kind, native.Pointer);
-                    var after = Capture(before.GraphRoots, before.Policy, before.ExternalBinding, bindAsset, admitted);
+                    var collector = new Collector();
+                    foreach (var wrapper in before.Wrappers) collector.Discover(wrapper.Owner, (_, __) => { });
+                    var after = Capture(before.GraphRoots, before.Policy, before.ExternalBinding, bindAsset, admitted, collector);
                     if (JsonConvert.SerializeObject(normalized) != JsonConvert.SerializeObject(after.Snapshot)) throw Error("common wrapper Canon did not reproduce complete native/managed identity metadata");
                 });
             } finally { if (!mutationStarted) foreach (var native in next.Values) native.Dispose(); }

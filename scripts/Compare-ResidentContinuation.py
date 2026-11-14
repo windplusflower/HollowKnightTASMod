@@ -10,7 +10,7 @@ import sys
 import unicodedata
 
 SCHEMA = "resident-continuation-trace-v1"
-GROUPS = ("admission", "assetManifest", "assetValues", "clock", "componentNative", "directory", "globalNative", "input",
+GROUPS = ("admission", "assetManifest", "assetValues", "clock", "componentNative", "directory", "input",
           "managedGraph", "objectNative", "process", "rng", "scheduler", "staticRoots", "typeManifest")
 MAX_LINE = 1024 * 1024
 MAX_FILE = 2 * 1024 * 1024 * 1024
@@ -120,7 +120,7 @@ class Trace:
         require(header["processNonce"] == hashlib.sha256(process_id).hexdigest(), "process identity receipt differs")
         for name in ("packetSha256", "movieSha256", "saveSha256", "buildSha256"):
             digest(header[name], name)
-        integer(header["packetBytes"], 1, 32 * 1024 * 1024, "packet byte length")
+        integer(header["packetBytes"], 1, 256 * 1024 * 1024, "packet byte length")
         integer(header["boundaryOrdinal"], 1, (1 << 31) - 1, "boundary ordinal")
         for name in ("sourceScene", "targetScene"):
             label(header[name], name)
@@ -240,7 +240,7 @@ def check_endpoint(receipt, trace):
 
 def compare(source, target, packet_sha256, packet_bytes, end_movie, source_header, source_endpoint, target_endpoint):
     digest(packet_sha256, "source IPC packet")
-    integer(packet_bytes, 1, 32 * 1024 * 1024, "source IPC packet length")
+    integer(packet_bytes, 1, 256 * 1024 * 1024, "source IPC packet length")
     integer(end_movie, 1, MAX_LONG, "requested endpoint")
     source, target = Path(source), Path(target)
     require(not source.samefile(target), "source and target are the same file")

@@ -29,6 +29,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public int DataWidth, DataHeight, DataFormat, DataImageCount, GpuWidth, GpuHeight;
             public ulong DataImageSize;
             public uint InitFlags;
+            public bool UnscaledAliasesMain;
             public bool PowerOfTwo, UnscaledUploaded, PreProcessed, Unreloadable, StreamingRegistered, IgnoreMasterLimit;
             public int MipsStripped;
             internal TextureNativeState Copy() {
@@ -44,7 +45,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             var result = new TextureNativeState {
                 UsageMode = M.I32(owner, 96), ColorSpace = M.I32(owner, 100), OwnerReferences = M.I32(owner, 104), ForcedFallbackFormat = M.I32(owner, 108),
                 DownscaleFallback = TextureBool(owner[112]), AlphaOptional = TextureBool(owner[113]), Uploaded = (owner[114] & 1) != 0,
-                TextureIdPresent = M.I32(owner, 80) != 0, UnscaledTextureIdPresent = M.I32(owner, 332) != 0, TexelSize = M.Slice(owner, 116, 8),
+                TextureIdPresent = M.I32(owner, 80) != 0, UnscaledTextureIdPresent = M.I32(owner, 332) != 0,
+                UnscaledAliasesMain = M.I32(owner, 332) != 0 && M.I32(owner, 332) == M.I32(owner, 80), TexelSize = M.Slice(owner, 116, 8),
                 StreamOffset = M.U64(owner, 128), StreamSize = M.U32(owner, 136), StreamPath = M.String(IntPtr.Add(pointer, 144)),
                 AsyncOwners = new[] { M.Ptr(owner, 184) != IntPtr.Zero, M.Ptr(owner, 200) != IntPtr.Zero, M.Ptr(owner, 216) != IntPtr.Zero },
                 AsyncVersions = new[] { M.U32(owner, 192), M.U32(owner, 208), M.U32(owner, 224) }, CreateMainFence = M.I32(owner, 232), UploadMainFence = M.I32(owner, 236),
@@ -94,7 +96,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return new[] {
                 native.AsyncOwners.Any(value => value) || native.CreateMainFence != 0 || native.UploadMainFence != 0 ? "texture/async-resource-fence-ownership" : "",
                 native.StreamingRegistered || state.Streaming ? "texture/streaming-manager-membership-and-mip-state" : "",
-                native.TextureIdPresent || native.UnscaledTextureIdPresent ? "texture/gpu-resource-identity-and-image" : "",
+                native.UnscaledUploaded && !native.UnscaledAliasesMain ? "texture/separate-unscaled-image" : "",
                 native.SharedPresent && native.SharedReferences != 1 ? "texture/shared-cpu-image-alias-group" : "",
                 native.PlatformBlob.Length != 0 ? "texture/platform-image-native-reconstruction" : ""
             }.Where(value => value.Length != 0).ToArray();

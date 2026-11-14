@@ -181,8 +181,23 @@ int wmain(int argc,wchar_t **argv)
     }
     if(argc>2 && !wcscmp(argv[2],L"drift")) {
         CHECK(HktasClockBridge_BeginResidentDirectorFence(1,GetTickCount64()));
-        ++stacks[3][8];CHECK(!HktasClockBridge_VerifyResidentDirectorQueues(1) && !HktasClockBridge_EndResidentDirectorFence(1,1));
+        ++stacks[5][8];CHECK(!HktasClockBridge_VerifyResidentDirectorQueues(1) && !HktasClockBridge_EndResidentDirectorFence(1,1));
         CHECK(status().closed && status().fault && faults==1);puts("PASS untracked ABA drift leaves permanent closed fault");return 0;
+    }
+    if(argc>2 && !wcscmp(argv[2],L"command-node")) {
+        pointer(stacks[5],connection);pointer(connection+8,node);u32(connection+16,8);u32(connection+24,0);
+        CHECK(HktasClockBridge_BeginResidentDirectorFence(1,GetTickCount64()));
+        u32(connection+24,1);
+        CHECK(!HktasClockBridge_VerifyResidentDirectorQueues(1) && status().fault==13);
+        puts("PASS command payload drift remains checked independently of free pools");return 0;
+    }
+    if(argc>2 && !wcscmp(argv[2],L"local-pools")) {
+        /* Unreadable free-pool storage must never be followed. */
+        for(unsigned i=0;i<9;++i) if(i!=5) pointer(manager+1040+i*8,(void*)(uintptr_t)1);
+        CHECK(HktasClockBridge_BeginResidentDirectorFence(1,GetTickCount64()));
+        CHECK(HktasClockBridge_VerifyResidentDirectorQueues(1));
+        CHECK(HktasClockBridge_EndResidentDirectorFence(1,1));
+        puts("PASS free pools are not traversed; command stack remains observed");return 0;
     }
     if(argc>2 && !wcscmp(argv[2],L"owner-entry")) {
         CHECK(HktasClockBridge_BeginResidentDirectorFence(1,GetTickCount64()));consume_thread(NULL);return 1;

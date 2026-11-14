@@ -30,6 +30,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             IEnumerable<string> gaps = Array.Empty<string>();
             switch (node.Kind) {
+                case AvatarKind.MotionReference:
+                    gaps = node.MotionReferenceValid != true ? Array.Empty<string>()
+                        : node.Fields.Length != 1 || node.Fields[0].Length != 242
+                            ? new[] {"motion-reference-live-field-shape"}
+                            : BooleanRange(node.Fields[0],240,2,"MotionXReference",240);
+                    break;
                 case AvatarKind.Input: gaps = BooleanRange(node.Fields[0],16,5,"AvatarInput",16); break;
                 case AvatarKind.Workspace: gaps = BooleanRange(node.Fields[0],48,3,"AvatarWorkspace",80); break;
                 case AvatarKind.Human: gaps = BooleanRange(node.Fields[1],232,3,"Human",312); break;
@@ -39,6 +45,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     gaps = BooleanRange(node.Fields[0],164,2,"AvatarMemory.byteFlags",164).Select(gap => gap.Replace("noncanonical-animator-bool:","unproven-animator-byte-flag:")); break;
                 case AvatarKind.Values: gaps = BooleanRange(node.Fields[4],0,node.Fields[4].Length,"ValueArray.bool",0); break;
                 case AvatarKind.Mask: gaps = node.Fields.SelectMany((bank,i) => BooleanRange(bank,0,bank.Length,"ValueArrayMask.bank"+i,0)); break;
+                case AvatarKind.NodeState: gaps = BooleanRange(node.Fields[0],0,1,"AnimationNodeState.motionReadMask",24)
+                    .Concat(BooleanRange(node.Fields[1],0,1,"AnimationNodeState.humanReadMask",48)); break;
             }
             foreach (var gap in gaps) yield return gap;
         }
@@ -67,12 +75,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var gap in BooleanRange(work.TriggerReset,0,work.TriggerReset.Length,"ControllerWorkspace.TriggerReset",0)) yield return gap;
             foreach (var machine in work.Machines) {
                 foreach (var gap in BooleanRange(machine.OutputFlags,0,4,"StateMachineOutput",24)) yield return gap;
-                // PDB lists individual message values. Powers of two alone
-                // do not establish that arbitrary combinations are valid.
-                // CreateStateMachineOutput initializes all three to128.
+                // EvaluateStateMachine writes combined event bits (for example
+                // Update|Move|IK); FireBehaviours intersects them with the stage
+                // mask. Invalid128 is the separate constructor/reset sentinel.
                 for (int i = 0; i < 12; i += 4) {
                     var message = M.U32(machine.Messages,i);
-                    if (message == 0 || message > 128 || (message & (message-1)) != 0)
+                    if (message != 128 && (message == 0 || (message & ~127U) != 0))
                         yield return "unproven-animator-enum:StateMachineMessage:+"+i+"="+message;
                 }
                 if (machine.Blends != null) foreach (var layer in machine.Blends)
@@ -85,6 +93,19 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var gap in BooleanRange(new[] {graph.RecursingRaw},0,1,"PlayableGraph.Recursing",184)) yield return gap;
             if (graph.RecursingRaw != 0) yield return "native-playable-graph-is-recursing";
             foreach (var node in graph.Nodes) {
+                if (node.Pose != null) foreach (var gap in BooleanRange(node.Pose.Flags,0,3,"AnimationPosePlayable",280)) yield return gap;
+                if (node.Mixer != null) {
+                    var subtype = node.Mixer.Subtype;
+                    if (node.Vtable == 0x15d8aa8) {
+                        foreach (var gap in BooleanRange(subtype,0,2,"AnimationBlendTreePlayable",360)) yield return gap;
+                        int children = M.I32(subtype,6);
+                        if (children < 0 || children > (node.Ports?.Inputs.Length ?? 0)) yield return "blend-tree-child-count-outside-inputs";
+                    } else {
+                        foreach (var gap in BooleanRange(subtype,4,1,"AnimationStateMachineMixerPlayable",364)) yield return gap;
+                        int interrupted = M.I32(subtype,0);
+                        if (interrupted < 0 || interrupted >= (node.Ports?.Inputs.Length ?? 0)) yield return "state-mixer-interrupted-pose-index-outside-inputs";
+                    }
+                }
                 foreach (var gap in ClockScalarGaps(node.Clock)) yield return gap;
                 if (AnimationFlagBytes(node.Vtable) != 0) foreach (var gap in AnimationFlagGaps(node.AnimationFlags)) yield return gap;
                 foreach (var gap in NativeEnum(M.U32(node.Modes,8),2,"Playable.WrapMode",64)) yield return gap;

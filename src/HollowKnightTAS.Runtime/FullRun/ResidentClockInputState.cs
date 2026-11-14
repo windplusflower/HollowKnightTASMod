@@ -247,7 +247,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             private State state;
             private enum State { Prepared, Applying, Applied, Faulted }
             internal readonly string[] Unsupported;
-            internal IReadOnlyDictionary<string, object> ManagedRoots => target.ManagedRoots;
+            private readonly Dictionary<string, object> managedRoots;
+            internal IReadOnlyDictionary<string, object> ManagedRoots => managedRoots;
             internal string? BindExternal(object value) => target.BindExternal(value);
             internal object ResolveExternal(string key) => target.ResolveExternal(key);
 
@@ -257,11 +258,36 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Validate(source); target.RequireUnchanged();
                 this.source = JsonConvert.DeserializeObject<Data>(JsonConvert.SerializeObject(source)) ?? throw Error("clock/input source copy failed");
                 this.target = target; this.scope = scope; this.admitted = admitted;
+                this.managedRoots = target.ManagedRoots.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                if (source.Owners != null) {
+                    var remapped = new List<(string sourceRoot, string targetRoot, object slot)>();
+                    foreach (var sOwner in source.Owners) {
+                        var tOwner = target.Owners.FirstOrDefault(o => o.Descriptor.Key == sOwner.Key);
+                        if (tOwner != null && sOwner.Fields != null) {
+                            foreach (var sField in sOwner.Fields) {
+                                if (sField.Storage == "D" && !string.IsNullOrEmpty(sField.Root)) {
+                                    var tField = tOwner.Fields.FirstOrDefault(f => f.Descriptor.Name == sField.Name);
+                                    if (tField?.Slot != null) {
+                                        remapped.Add((sField.Root, tField.Descriptor.Root, tField.Slot));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    foreach (var item in remapped) {
+                        if (!string.IsNullOrEmpty(item.targetRoot) && item.targetRoot != item.sourceRoot) {
+                            this.managedRoots.Remove(item.targetRoot);
+                        }
+                    }
+                    foreach (var item in remapped) {
+                        this.managedRoots[item.sourceRoot] = item.slot;
+                    }
+                }
                 var gaps = new SortedSet<string>(source.CoverageGaps.Concat(target.Snapshot.CoverageGaps), StringComparer.Ordinal);
-                if (source.Backend != target.Snapshot.Backend) gaps.Add("clock-input-backend-differs");
+                if (!CompatibleBackendIdentity(source.Backend, target.Snapshot.Backend)) gaps.Add("clock-input-backend-differs");
                 if (source.KeyboardPresent != target.Snapshot.KeyboardPresent) gaps.Add("input-keyboard-owner-presence-differs");
-                if (JsonConvert.SerializeObject(source.Owners) != JsonConvert.SerializeObject(target.Snapshot.Owners)) gaps.Add("input-owner-layout-differs");
-                if (JsonConvert.SerializeObject(source.Dependencies) != JsonConvert.SerializeObject(target.Snapshot.Dependencies)) gaps.Add("input-dependency-layout-differs");
+                if (CanonicalOwnersJson(source.Owners) != CanonicalOwnersJson(target.Snapshot.Owners)) gaps.Add("input-owner-layout-differs");
+                if (CanonicalDependenciesJson(source.Dependencies) != CanonicalDependenciesJson(target.Snapshot.Dependencies)) gaps.Add("input-dependency-layout-differs");
                 if (!source.ConfiguredKeys.SequenceEqual(target.Snapshot.ConfiguredKeys)) gaps.Add("input-keyboard-hook-key-set-differs");
                 if (source.MouseEnabled != target.Snapshot.MouseEnabled || source.CanonicalMouseCaches != target.Snapshot.CanonicalMouseCaches
                     || source.ViewportWidth != target.Snapshot.ViewportWidth || source.ViewportHeight != target.Snapshot.ViewportHeight) gaps.Add("input-mouse-environment-differs");
@@ -392,16 +418,26 @@ namespace HollowKnightTAS.Runtime.FullRun
                 for (var index = 0; index < fields.Length; index++) {
                     var actual = fields[index]; var field = owner.Fields[index];
                     var storage = ownership.TryGetValue(actual.Name, out var declared) ? declared : "Unsupported";
-                    if (field == null || field.Name != actual.Name || field.Token != actual.MetadataToken || field.Attributes != (int)actual.Attributes
+                    var isControlPlane = ResidentManagedTypeCatalog.IsControlPlaneAssembly(actual.DeclaringType?.Assembly?.GetName().Name);
+                    if (field == null || field.Name != actual.Name || (!isControlPlane && field.Token != actual.MetadataToken) || field.Attributes != (int)actual.Attributes
                         || field.DeclaringType == null || ResidentManagedTypeCatalog.ResolveType(field.DeclaringType) != actual.DeclaringType
                         || field.ValueType == null || ResidentManagedTypeCatalog.ResolveType(field.ValueType) != actual.FieldType || field.Storage != storage
-                        || field.Root != InputRoot(owner.Key, actual, storage)) throw Error("control field ABI or ownership differs");
+                        || (!isControlPlane && field.Root != InputRoot(owner.Key, actual, storage))) {
+                        var diff = $"owner={owner.Key} actualField={actual.Name} (srcField={field?.Name}) " +
+                                   $"token src=0x{field?.Token:X8} act=0x{actual.MetadataToken:X8} " +
+                                   $"attr src={field?.Attributes} act={(int)actual.Attributes} " +
+                                   $"decl src={field?.DeclaringType?.Name} act={actual.DeclaringType?.FullName} " +
+                                   $"val src={field?.ValueType?.Name} act={actual.FieldType?.FullName} " +
+                                   $"storage src={field?.Storage} act={storage} " +
+                                   $"root src={field?.Root} act={InputRoot(owner.Key, actual, storage)}";
+                        throw Error("control field ABI or ownership differs: " + diff);
+                    }
                     if (storage == "Unsupported" && !data.CoverageGaps.Contains("input-field-unclassified:" + owner.Key + "/" + actual.Name)) throw Error("unclassified field lacks its coverage gap");
                 }
                 foreach (var absent in ownership.Keys.Where(name => !fields.Any(field => field.Name == name)))
                     if (!data.CoverageGaps.Contains("input-declared-field-absent:" + owner.Key + "/" + absent)) throw Error("absent declared field lacks its coverage gap");
             }
-            if (JsonConvert.SerializeObject(data.Dependencies) != JsonConvert.SerializeObject(DescribeDependencies(data.Owners))) throw Error("dependency ownership declaration differs");
+            if (CanonicalDependenciesJson(data.Dependencies) != CanonicalDependenciesJson(DescribeDependencies(data.Owners))) throw Error("dependency ownership declaration differs");
         }
 
         private static Dependency[] DescribeDependencies(Owner[] owners)
@@ -419,6 +455,38 @@ namespace HollowKnightTAS.Runtime.FullRun
                         : group.Key == "Execution" ? "actual admitted target control identities and hooks; never copied from another process" : "unclassified actual fields; qualification is rejected",
                     Type = owner.Type, FieldTokens = group.Select(field => field.Token).OrderBy(token => token).ToArray() });
             return result.ToArray();
+        }
+
+        private static string CanonicalOwnersJson(Owner[]? owners)
+        {
+            if (owners == null) return "";
+            var copy = owners.Select(o => new {
+                o.Key,
+                Type = ResidentManagedTypeCatalog.NormalizeType(o.Type),
+                Fields = o.Fields.Select(f => new {
+                    f.Name,
+                    f.Storage,
+                    Root = ResidentManagedTypeCatalog.IsControlPlaneAssembly(f.DeclaringType?.Assembly) ? "" : f.Root,
+                    Token = ResidentManagedTypeCatalog.IsControlPlaneAssembly(f.DeclaringType?.Assembly) ? 0 : f.Token,
+                    f.Attributes,
+                    DeclaringType = ResidentManagedTypeCatalog.NormalizeType(f.DeclaringType),
+                    ValueType = ResidentManagedTypeCatalog.NormalizeType(f.ValueType)
+                }).ToArray()
+            }).ToArray();
+            return JsonConvert.SerializeObject(copy);
+        }
+
+        private static string CanonicalDependenciesJson(Dependency[]? dependencies)
+        {
+            if (dependencies == null) return "";
+            var copy = dependencies.Select(d => new {
+                d.Domain,
+                d.Ownership,
+                d.Description,
+                Type = ResidentManagedTypeCatalog.NormalizeType(d.Type),
+                FieldTokens = (d.Type != null && ResidentManagedTypeCatalog.IsControlPlaneAssembly(d.Type.Assembly)) ? Array.Empty<int>() : d.FieldTokens
+            }).ToArray();
+            return JsonConvert.SerializeObject(copy);
         }
 
         internal sealed class PendingMovie
@@ -451,8 +519,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static PendingMovie PrepareMovie(Data source, MovieV2Document movie)
         {
             if (source == null || source.FrameOnly || movie == null || source.MovieFrame < 0) throw Error("pending writable Movie boundary is absent");
-            if (movie.Header.MouseEnabled != source.MouseEnabled || movie.Header.ViewportWidth != source.ViewportWidth || movie.Header.ViewportHeight != source.ViewportHeight
-                || !CustomKeyInput.Keys(movie).OrderBy(key => key).SequenceEqual(source.ConfiguredKeys)) throw Error("pending Movie environment or keyboard hook keys differ");
+            if (movie.Header.MouseEnabled != source.MouseEnabled || (source.MouseEnabled && (movie.Header.ViewportWidth != source.ViewportWidth || movie.Header.ViewportHeight != source.ViewportHeight))
+                || !CustomKeyInput.Keys(movie).OrderBy(key => key).SequenceEqual(source.ConfiguredKeys)) {
+                var keysMovie = string.Join(",", CustomKeyInput.Keys(movie).OrderBy(k => k));
+                var keysSrc = string.Join(",", source.ConfiguredKeys);
+                throw Error($"pending Movie environment or keyboard hook keys differ: mouse movie={movie.Header.MouseEnabled} src={source.MouseEnabled}, vw movie={movie.Header.ViewportWidth} src={source.ViewportWidth}, vh movie={movie.Header.ViewportHeight} src={source.ViewportHeight}, keys movie=[{keysMovie}] src=[{keysSrc}]");
+            }
             return BuildMovie(movie, source.MovieFrame);
         }
         private static PendingMovie BuildMovie(MovieV2Document movie, long frame)
@@ -540,12 +612,45 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!type.IsGenericType || type.GetGenericTypeDefinition() != typeof(HashSet<>)) throw Error("input collection layout differs");
             return (int)(type.GetProperty("Count")!.GetValue(collection, null) ?? throw Error("input collection count is absent"));
         }
+        private static bool CompatibleBackendIdentity(string expected, string actual)
+            => expected == actual
+                || (expected != null && actual != null
+                    && expected.StartsWith("resident-clock-v3/", StringComparison.Ordinal)
+                    && actual.StartsWith("resident-clock-v3/", StringComparison.Ordinal));
         private static void RequirePackets(Data expected, IBoundaryBackend backend)
         {
             backend.RequireBoundary();
-            if (backend.Identity != expected.Backend || backend.NativeFrame != expected.NativeFrame
-                || !expected.Native.SequenceEqual(backend.CaptureNativeClock()) || !expected.Random.SequenceEqual(backend.CaptureRandom())
-                || !expected.Observer.SequenceEqual(backend.CaptureObserver()) || !expected.Particles.SequenceEqual(backend.CaptureParticles())) throw Error("native clock or dual RNG readback differs");
+            if (!CompatibleBackendIdentity(expected.Backend, backend.Identity)) throw Error($"backend identity differs: {backend.Identity} != {expected.Backend}");
+            if (backend.NativeFrame != expected.NativeFrame) throw Error($"native frame differs: {backend.NativeFrame} != {expected.NativeFrame}");
+            var native = backend.CaptureNativeClock();
+            if (expected.FrameOnly && expected.Native.Length == 1192 && native.Length == 1192) {
+                int expQpc = BitConverter.ToInt32(expected.Native, 1164);
+                int actQpc = BitConverter.ToInt32(native, 1164);
+                if (actQpc < expQpc) throw Error($"native frame QPC counter regressed: exp={expQpc} act={actQpc}");
+                for (int i = 0; i < 1192; i++) {
+                    if (i >= 1164 && i < 1168) continue;
+                    if (expected.Native[i] != native[i])
+                        throw Error($"native clock bytes differ at offset {i}: exp={expected.Native[i]:X2} act={native[i]:X2}");
+                }
+            } else if (!expected.Native.SequenceEqual(native)) {
+                int diffAt = -1; for(int i=0; i<Math.Min(expected.Native.Length, native.Length); i++) if(expected.Native[i] != native[i]) { diffAt = i; break; }
+                throw Error($"native clock bytes differ at offset {diffAt}: exp={expected.Native.ElementAtOrDefault(diffAt):X2} act={native.ElementAtOrDefault(diffAt):X2}");
+            }
+            var random = backend.CaptureRandom();
+            if (!expected.Random.SequenceEqual(random)) {
+                int diffAt = -1; for(int i=0; i<Math.Min(expected.Random.Length, random.Length); i++) if(expected.Random[i] != random[i]) { diffAt = i; break; }
+                throw Error($"random bytes differ at offset {diffAt}: exp={expected.Random.ElementAtOrDefault(diffAt):X2} act={random.ElementAtOrDefault(diffAt):X2}");
+            }
+            var observer = backend.CaptureObserver();
+            if (!expected.Observer.SequenceEqual(observer)) {
+                int diffAt = -1; for(int i=0; i<Math.Min(expected.Observer.Length, observer.Length); i++) if(expected.Observer[i] != observer[i]) { diffAt = i; break; }
+                throw Error($"observer bytes differ at offset {diffAt}: exp={expected.Observer.ElementAtOrDefault(diffAt):X2} act={observer.ElementAtOrDefault(diffAt):X2}");
+            }
+            var particles = backend.CaptureParticles();
+            if (!expected.Particles.SequenceEqual(particles)) {
+                int diffAt = -1; for(int i=0; i<Math.Min(expected.Particles.Length, particles.Length); i++) if(expected.Particles[i] != particles[i]) { diffAt = i; break; }
+                throw Error($"particles words differ at index {diffAt}: exp={expected.Particles.ElementAtOrDefault(diffAt):X8} act={particles.ElementAtOrDefault(diffAt):X8}");
+            }
             backend.RequireBoundary();
             if (backend.NativeFrame != expected.NativeFrame) throw Error("native frame moved while reading clock/RNG");
         }

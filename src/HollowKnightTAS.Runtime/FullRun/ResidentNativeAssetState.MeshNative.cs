@@ -67,7 +67,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || value.BonePathHashes == null || value.BonePathHashes.Length > MaximumVertices || value.Metrics == null || value.Metrics.Length != 8)
                 throw Error("mesh native metadata schema differs");
         }
-        private static string[] MeshCoverageGaps(MeshState state, bool canonicalizable)
+        private static string[] MeshCoverageGaps(MeshState state)
         {
             var gaps = new System.Collections.Generic.List<string>();
             if (!state.Readable || !state.BuffersCaptured) gaps.Add("mesh/cpu-geometry-unreadable");
@@ -79,19 +79,27 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (!value.AsyncEmpty) gaps.Add("mesh/async-upload-state");
                 if (!value.ComputeBindingsEmpty) gaps.Add("mesh/external-compute-buffer-bindings");
                 if (!value.AssetUsersEmpty) gaps.Add("mesh/asset-user-registry");
-                if (!canonicalizable && (!value.VerticesDirty || !value.IndicesDirty || !value.GpuBuffersEmpty || !value.DerivedArraysEmpty
-                    || value.MaxBoneIndex != -1 || !value.VertexFormatMatches)) gaps.Add("mesh/common-cold-cache-state");
+
             }
             return gaps.ToArray();
         }
         internal static void RequireMeshCanonicalizable(MeshState state)
         {
-            ValidateMesh(state); var gaps = MeshCoverageGaps(state, true);
+            ValidateMesh(state); var gaps = MeshCoverageGaps(state);
             if (gaps.Length != 0) throw Error("Mesh cannot enter common Canon: " + string.Join(";", gaps));
         }
-        private static void RequireMeshComplete(MeshState state)
+        private static void RequireMeshComplete(MeshState state, string name = "", string binding = "")
         {
-            RequireMeshCanonicalizable(state); var gaps = MeshCoverageGaps(state, false);
+            RequireMeshCanonicalizable(state);
+            var value = state.Native!;
+            if (!value.VerticesDirty || !value.IndicesDirty || !value.GpuBuffersEmpty || !value.DerivedArraysEmpty
+                || value.MaxBoneIndex != -1 || !value.VertexFormatMatches)
+            {
+                var detail = $"name='{name}', binding='{binding}', VerticesDirty={value.VerticesDirty}, IndicesDirty={value.IndicesDirty}, GpuBuffersEmpty={value.GpuBuffersEmpty}, DerivedArraysEmpty={value.DerivedArraysEmpty}, MaxBoneIndex={value.MaxBoneIndex}, VertexFormatMatches={value.VertexFormatMatches}";
+                ResidentFailureEvidence.Mark("Mesh cache normalization failed: " + detail);
+                throw Error("Mesh cache normalization did not read back: " + detail);
+            }
+            var gaps = MeshCoverageGaps(state);
             if (gaps.Length != 0) throw Error("Mesh complete native readback is not in S0: " + string.Join(";", gaps));
         }
         internal static byte[] EncodeMeshNativeValues(MeshNativeState value)

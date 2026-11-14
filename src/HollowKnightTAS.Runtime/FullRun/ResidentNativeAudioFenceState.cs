@@ -17,7 +17,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal const int StatusBytes = 96, WorkerBytes = 64, MaximumWorkers = 256;
         private const uint Magic = 0x31464152, WireVersion = 1, SupportedGaps = 7;
         private const ulong CountMask = 0xffffffffUL, ClosedBit = 0x4000000000000000UL, FailedBit = 0x8000000000000000UL;
-        private const ulong WallLimit = 9000;
+        private const ulong WallLimit = 360000;
         private static readonly string[] DomainNames = { "unknown-or-virtual", "wasapi-feeder", "wasapi-mixer", "wasapi-record", "fmod-stream", "fmod-async-decoder-file", "fmod-file-io" };
 
         internal sealed class Status

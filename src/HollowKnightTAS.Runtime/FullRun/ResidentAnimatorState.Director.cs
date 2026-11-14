@@ -149,14 +149,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var saved = source.Stages[stage]; var before = Data.Stages[stage];
                     for (int lane = 0; lane < 2; lane++) {
                         var list = lane == 0 ? saved.Parallel : saved.Serial;
-                        if (list.Length != (lane == 0 ? before.Parallel : before.Serial).Length) throw Error("director native stage queue allocation differs");
+                        if (list.Length != (lane == 0 ? before.Parallel : before.Serial).Length)
+                            throw Error($"director native stage queue allocation differs [stage={stage}, lane={lane}, src={list.Length}, tgt={(lane == 0 ? before.Parallel : before.Serial).Length}, srcGraphs=({string.Join(",",list.Select(x=>x.Graph))}), tgtGraphs=({string.Join(",", (lane == 0 ? before.Parallel : before.Serial).Select(x=>x.Graph))})]");
                         for (int i = 0; i < list.Length; i++) {
                             var at = IntPtr.Add(jobs[stage,lane],i*80); Frame(at,list[i].Time);
                             if (!graphPointers.TryGetValue(list[i].Graph,out var graph)) throw Error("queued graph outside owned director graph directory");
                             Bits(IntPtr.Add(at,72),BitConverter.GetBytes(graph.ToInt64()));
                         }
                     }
-                    if (saved.Groups.Length != before.Groups.Length) throw Error("director callback group directory differs");
+                    if (saved.Groups.Length != before.Groups.Length)
+                        throw Error($"director callback group directory differs [stage={stage}, src={saved.Groups.Length}, tgt={before.Groups.Length}]");
                     for (int i = 0; i < saved.Groups.Length; i++) {
                         var group = saved.Groups[i];
                         if (group.CallbackRva != before.Groups[i].CallbackRva || group.Outputs.Length != before.Groups[i].Outputs.Length)

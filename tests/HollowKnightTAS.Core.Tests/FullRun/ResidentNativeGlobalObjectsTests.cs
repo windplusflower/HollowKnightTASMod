@@ -49,25 +49,13 @@ public sealed class ResidentNativeGlobalObjectsTests
         api.Complete(data); // It becomes valid only with the actual registered ancestry and its type interval.
     }
     [TestMethod]
-    public void OptionalBuildSettingsCoverageFollowsRegisteredOwnersNotJustTypeMetadata()
+    public void BoundarySnapshotExcludesTheUnreferencedGlobalBuildSettingsInventory()
     {
-        var api = new Api(); var data = api.Directory();
-        var runtime = data.GetType().Assembly;
-        var check = runtime.GetType("HollowKnightTAS.Runtime.FullRun.ResidentBoundaryProcessState", true)!.GetMethod("ValidateBuildSettings", All)!;
-        var dto = runtime.GetType("HollowKnightTAS.Runtime.FullRun.ResidentBuildSettingsState+Data", true)!;
-        var none = Array.CreateInstance(dto, 0);
-        void Verify(Array values) => check.Invoke(null, new object[] { data, values });
-        Verify(none);
-        var manager = ((Array)Get<object>(data, "Classes")).GetValue(2)!;
-        Set(manager, "Rva", 0x198ceb0); Set(manager, "Name", "BuildSettings"); Set(manager, "Size", 352);
-        // The type is registered, but no object of that type exists yet.
-        Verify(none);
-        var owner = ((Array)Get<object>(data, "Rows")).GetValue(0)!;
-        Set(owner, "TypeRva", 0x198ceb0); Set(owner, "Binding", "resident-native-global/198ceb0/Core//BuildSettings");
-        api.Reject(() => Verify(none));
-        var wrong = Array.CreateInstance(dto, 1); wrong.SetValue(Activator.CreateInstance(dto, true), 0);
-        api.Reject(() => Verify(wrong));
-        Set(owner, "Kind", "unbound"); api.Reject(() => Verify(none));
+        var data = new Api().Directory(); var runtime = data.GetType().Assembly;
+        var process = runtime.GetType("HollowKnightTAS.Runtime.FullRun.ResidentBoundaryProcessState", true)!;
+        Assert.IsNull(process.GetMethod("ValidateBuildSettings", All));
+        var snapshot = process.GetNestedType("Data", All)!;
+        Assert.IsFalse(snapshot.GetFields(All).Any(field => field.FieldType.FullName!.Contains("ResidentBuildSettingsState", StringComparison.Ordinal)));
     }
     [TestMethod]
     public void ClearingCoverageStringsCannotHideUnboundOrMisclassifiedManagerOwners()

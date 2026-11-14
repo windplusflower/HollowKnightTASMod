@@ -44,7 +44,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (group.Sprites.Length != 0) gaps.Add("canvas-shared-mesh-sprite-cache-aliases");
                 if (group.Meshes.Length > 1) gaps.Add("canvas-shared-mesh-multiple-asset-wrappers");
             }
-            if (data.CameraManager.ExternalOwners.Length != 0) gaps.Add("camera-registry-nonresident-native-owner-state");
             if (data.CameraManager.Stack || data.CameraManager.InsideRenderOrCull) gaps.Add("camera-render-manager-active-stack");
             if (data.CameraManager.Projectors != 0) gaps.Add("camera-render-manager-projector-map");
             if (data.CanvasManager.EmptyDirtyBuckets != 0) gaps.Add("canvas-empty-dirty-buckets-require-common-canon");
@@ -182,7 +181,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 RequireCompleteCoverage(source); this.source = Copy(source); this.directory = directory ?? throw new ArgumentNullException(nameof(directory));
                 this.scope = scope ?? throw new ArgumentNullException(nameof(scope)); this.resolve = resolve ?? throw new ArgumentNullException(nameof(resolve));
                 this.bind = bind ?? throw new ArgumentNullException(nameof(bind)); this.admitted = admitted ?? throw new ArgumentNullException(nameof(admitted));
-                scope.Require(); admitted(); before = Capture(directory, bind); RequireCompleteCoverage(before);
+                scope.Require(); admitted(); before = Capture(directory, bind);
+                if (RequiredCoverageGaps(before).Concat(before.CoverageGaps).Any()) {
+                    Canon(directory, scope, resolve, bind, admitted);
+                    before = Capture(directory, bind);
+                }
+                RequireCompleteCoverage(before);
                 void Owner(string key, ResidentObjectDirectory.TypeRecord type) {
                     var owner = directory.Resolve(key);
                     if (!(owner is Component component) || !scope.Owns(component) || ResidentObjectDirectory.TypeRecord.Capture(owner.GetType()).Key != type.Key)
@@ -251,7 +255,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         scope.Require(); admitted(); IntPtr mesh;
                         if (group.Meshes.Length != 0) mesh = ResidentNativeAssetReference.ResolveTyped(group.Meshes[0],typeof(Mesh),resolve);
                         else {
-                            Mesh? created = null; scope.Mutate(() => created = new Mesh()); if (created == null) throw Error("temporary shared Mesh owner allocation failed"); temporary.Add(created); mesh = M.Owner(created);
+                            Mesh? created = null; scope.Mutate(() => { created = new Mesh(); created.vertices = new Vector3[1]; }); if (created == null) throw Error("temporary shared Mesh owner allocation failed"); temporary.Add(created); mesh = M.Owner(created);
                             ResidentSharedMeshState.ApplyToUniqueStorage(group.State, M.Ptr(IntPtr.Add(mesh, 56)), admitted);
                         }
                         meshes.Add(group.Key, mesh);

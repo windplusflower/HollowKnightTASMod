@@ -12,7 +12,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     // The source manifest must validate before redundant keys are omitted.
     internal static class ResidentDirectoryWire
     {
-        private const int Magic = 0x32445248, Limit = 32 * 1024 * 1024;
+        private const int Magic = 0x32445248, Limit = 256 * 1024 * 1024;
         internal static byte[] Encode(D.Snapshot value)
         {
             D.Validate(value);

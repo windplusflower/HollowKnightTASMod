@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -24,10 +24,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 source=Newtonsoft.Json.JsonConvert.DeserializeObject<Data>(Newtonsoft.Json.JsonConvert.SerializeObject(saved)) ?? throw Error("snapshot clone failed");
                 this.directory=directory; this.scope=scope; this.resolve=resolve; this.bind=bind; this.admitted=admitted;
                 var actual=Capture(directory,bind); RequireCompleteCoverage(actual);
+                if (source.Lights.Present) RequireLightServiceDependencies(source.Lights,actual.Lights);
                 if(!source.Rows.Select(row=>row.Owner+"/"+row.Kind).SequenceEqual(actual.Rows.Select(row=>row.Owner+"/"+row.Kind)) || source.Sorting.Present!=actual.Sorting.Present) throw Error("actual type directory differs");
                 foreach(var row in source.Rows) {
                     if(!(resolve(row.Owner) is Component owner) || Kind(owner.GetType())!=row.Kind || !scope.Owns(owner)) throw Error("target owner is outside mutation scope");
                     if(row.Kind=="text-mesh") {
+                        if (row.Font.Length != 0 && (!(resolve(row.Font) is Font font) || font.dynamic != row.FontCacheDependency))
+                            throw Error("target TextMesh Font differs from its validated asset dependency kind");
                         var slot=M.Ptr(IntPtr.Add(M.Owner(owner),136));
                         if(row.Mesh.Length==0 ? slot!=IntPtr.Zero : slot!=M.Owner(resolve(row.Mesh)))
                             throw Error("TextMesh owned mesh was not adopted before asset preparation");
@@ -46,6 +49,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                         // owning slot before assets are allocated. Do not invoke
                         // SetText/SetFont, which would regenerate geometry.
                         M.WriteString(IntPtr.Add(pointer,56),row.Text,admitted);
+                        // TextMesh::SetFont (0xc69260) writes this PPtr and
+                        // calls ApplyToMesh. The owned Mesh is already restored
+                        // independently, so retain its captured geometry here.
+                        M.Write(IntPtr.Add(pointer,96),BitConverter.GetBytes(ResidentNativeAssetReference.ResolveId(row.Font,typeof(Font),resolve)));
                     }
                 }
                 if(source.Sorting.Present) {

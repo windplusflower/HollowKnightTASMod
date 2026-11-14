@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 using UnityEngine;
@@ -117,12 +118,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var native = RenderManager(); var bytes = reader.Read(native, 200);
             BindingList Ids(int offset) => BindList(Dynamic(reader, IntPtr.Add(native, offset), 4), 4, (data, at) => reader.Id<Camera>(M.I32(data, at)));
-            var all = BindList(Dynamic(reader, AllCameraStorage(), 8), 8, (data, at) => reader.Pointer<Camera>(M.Ptr(data, at)));
+            var resident = reader.Directory.NativeBindings.Where(pair => pair.Value is Camera).ToDictionary(pair => M.Owner(pair.Value), pair => pair.Key);
+            var allStorage = Dynamic(reader, AllCameraStorage(), 8);
+            var allOwners = Enumerable.Range(0, allStorage.Bytes.Length / 8).Select(index => M.Ptr(allStorage.Bytes, index * 8))
+                .Where(resident.ContainsKey).Select(pointer => resident[pointer]).ToArray();
+            var all = new BindingList { Owners = allOwners, Capacity = allOwners.Length };
             var projectors = M.U64(bytes, 176); if (projectors > Maximum) throw Error("projector registry exceeds the native bound");
             return new CameraRegistry { Current = reader.Id<Camera>(M.I32(bytes, 0)), All = all, Onscreen = Ids(16), Offscreen = Ids(56), Add = Ids(96), Remove = Ids(128),
                 OnscreenSorted = Bool(bytes[48]), OffscreenSorted = Bool(bytes[88]), InsideRenderOrCull = Bool(bytes[160]),
                 Stack = M.Ptr(bytes, 8) != IntPtr.Zero, Projectors = (int)projectors,
-                ExternalOwners = all.Owners.Where(key => !reader.Directory.NativeBindings.ContainsKey(key)).OrderBy(key => key, StringComparer.Ordinal).ToArray() };
+                ExternalOwners = Array.Empty<string>() };
         }
         private static void ValidateCamera(CameraRow row)
         {
@@ -227,7 +232,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             var manager = RenderManager();
             void Ids(int offset, BindingList list) => WriteDynamic(IntPtr.Add(manager, offset), list.Owners.SelectMany(key => BitConverter.GetBytes(Id(key, resolve))).ToArray(), list.Capacity, 4, 4, admitted);
             Ids(16, source.Onscreen); Ids(56, source.Offscreen); Ids(96, source.Add); Ids(128, source.Remove);
-            WriteDynamic(AllCameraStorage(), source.All.Owners.SelectMany(key => BitConverter.GetBytes(Pointer(key, resolve).ToInt64())).ToArray(), source.All.Capacity, 8, 8, admitted);
+            var resident = source.All.Owners.Select(key => Pointer(key, resolve)).ToArray();
+            var owned = new HashSet<IntPtr>(resident); var storage = AllCameraStorage(); var header = M.Read(storage, 32);
+            var count = M.U64(header, 16); var capacity = M.U64(header, 24) >> 1;
+            if (count > capacity || capacity > Maximum) throw Error("all-camera registry exceeds bounds");
+            var bytes = M.Read(M.Ptr(header, 0), checked((int)count * 8));
+            var foreign = Enumerable.Range(0, (int)count).Select(index => M.Ptr(bytes, index * 8)).Where(pointer => !owned.Contains(pointer));
+            var retained = foreign.Concat(resident).SelectMany(pointer => BitConverter.GetBytes(pointer.ToInt64())).ToArray();
+            WriteDynamic(storage, retained, Math.Max((int)capacity, retained.Length / 8), 8, 8, admitted);
             M.Write(manager, BitConverter.GetBytes(Id(source.Current, resolve))); M.Write(IntPtr.Add(manager, 48), new[] { source.OnscreenSorted ? (byte)1 : (byte)0 });
             M.Write(IntPtr.Add(manager, 88), new[] { source.OffscreenSorted ? (byte)1 : (byte)0 });
         }

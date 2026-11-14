@@ -26,6 +26,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             public string Owner = "", Kind = "", Font = "", Mesh = "", Text = "", Flare = "", Cookie = "";
             public bool Execution, MeshOwned;
+            public bool StaticFontDependency, FontCacheDependency;
             public byte[][] Scalars = Array.Empty<byte[]>();
             // Light native resources are observed explicitly but not flattened
             // into serialized pointer bytes. Its full backend stays fail closed.
@@ -57,6 +58,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (directory == null || bind == null) throw new ArgumentNullException();
             _ = LoadingEngineClockProbe.RequirePinnedEngine();
             var result = new Data(); var rows = new List<Row>();
+            var fontDiagnostics = new Dictionary<IntPtr,FontCacheDiagnostic>();
+            bool fontDiagnosticsTruncated = false;
             var reverse = directory.NativeBindings.ToDictionary(pair => M.Owner(pair.Value), pair => pair.Key);
             var witness = new Dictionary<IntPtr, byte[]>();
             byte[] Read(IntPtr address, int size) { var bytes = M.Read(address, size); witness[address] = bytes; return bytes; }
@@ -74,6 +77,28 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var row = new Row { Owner = pair.Key, Kind = kind, Execution = directory.Ownership.IsExecution(component), Scalars = Ranges(kind).Select(range => M.Slice(bytes, range[0], range[1])).ToArray() };
                 if (kind == "text-mesh") {
                     row.Text = M.String(IntPtr.Add(pointer, 56)); row.Font = Id<Font>(M.I32(bytes, 96));
+                    if (row.Font.Length != 0) {
+                        var font = ((TextMesh)component).font;
+                        if (!ResidentObjectDirectory.IsLive(font) || font.GetInstanceID() != M.I32(bytes, 96))
+                            throw Error("TextMesh font PPtr and actual font differ");
+                        row.StaticFontDependency = !font.dynamic && row.Font.StartsWith("resident-asset/serialized/", StringComparison.Ordinal);
+                        row.FontCacheDependency = font.dynamic;
+                        // The dynamic Font already carries the existing atlas gap.
+                        // Separate evidence only; never add native cache data to D.
+                        if (!row.StaticFontDependency && font.dynamic && ResidentFailureEvidence.Collecting) {
+                            var fontPointer = M.Owner(font);
+                            if (!fontDiagnostics.ContainsKey(fontPointer)) {
+                                if (fontDiagnostics.Count < 4) {
+                                    fontDiagnostics.Add(fontPointer,CaptureFontCacheDiagnostic(fontPointer,row.Font,M.Read));
+                                    ResidentFailureEvidence.RecordDomain("FontCache",new { Fonts = fontDiagnostics.Values.ToArray(), Truncated = fontDiagnosticsTruncated, Reason = fontDiagnosticsTruncated ? "Font diagnostic truncated at four distinct native owners" : "" });
+                                } else {
+                                    fontDiagnosticsTruncated = true;
+                                    ResidentFailureEvidence.Mark("Font cache diagnostic truncated at four distinct native owners");
+                                    ResidentFailureEvidence.RecordDomain("FontCache",new { Fonts = fontDiagnostics.Values.ToArray(), Truncated = true, Reason = "Font diagnostic truncated at four distinct native owners" });
+                                }
+                            }
+                        }
+                    }
                     var mesh = M.Ptr(bytes, 136); row.Mesh = ResidentNativeAssetReference.BindPointer(mesh,typeof(Mesh),bind);
                     if (mesh != IntPtr.Zero) { RequireUniqueTextMeshOwner(component, mesh); row.MeshOwned = true; }
                 }
@@ -127,7 +152,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach(var row in data.Rows) {
                 if(row.Execution) gaps.Add(row.Kind+"/execution-native-domain");
                 if(row.Kind=="light") { foreach(var gap in LightGaps(row)) gaps.Add(gap); if(!data.Lights.Present) gaps.Add("light/manager-absent"); }
-                if(row.Kind=="text-mesh" && row.Font.Length!=0) gaps.Add("text-mesh/font-native-glyph-atlas-and-rebuild-callbacks");
+                if(row.Kind=="text-mesh" && row.Font.Length!=0 && !row.StaticFontDependency && !row.FontCacheDependency) gaps.Add("text-mesh/font-native-glyph-atlas-and-rebuild-callbacks");
                 if(row.Kind=="text-mesh" && row.Mesh.Length!=0 && !row.MeshOwned) gaps.Add("text-mesh/retained-mesh-ownership");
                 if(row.Kind=="sorting-group" && !data.Sorting.Present) gaps.Add("sorting-group/manager-absent");
             }
@@ -144,6 +169,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var ranges=Ranges(row.Kind); var sizes=ranges.Select(range=>range[1]).Concat(row.Kind=="light" && row.SharedLight ? new[]{102,44,5,96,64,20,156}:Array.Empty<int>()).ToArray();
                 if(row.Scalars.Length!=sizes.Length || row.Scalars.Where((bytes,index)=>bytes==null || bytes.Length!=sizes[index]).Any()) throw Error("native scalar layout differs");
                 if(row.MeshOwned && (row.Kind!="text-mesh" || row.Mesh.Length==0)) throw Error("owned mesh slot shape differs");
+                if(row.StaticFontDependency && (row.Kind!="text-mesh" || !row.Font.StartsWith("resident-asset/serialized/", StringComparison.Ordinal)))
+                    throw Error("static font dependency lacks a serialized Font binding");
+                if(row.FontCacheDependency && (row.Kind != "text-mesh" || row.Font.Length == 0 || row.StaticFontDependency))
+                    throw Error("Font cache dependency marker has no actual TextMesh Font reference");
                 if(row.Kind!="text-mesh" && (row.Text.Length!=0 || row.Font.Length!=0 || row.Mesh.Length!=0)) throw Error("text references on another type");
                 if(row.Kind!="light" && (row.SharedLight || row.CookieResource || row.RenderEvents || row.LightReferences!=0 || row.Flare.Length!=0 || row.Cookie.Length!=0)) throw Error("light resources on another type");
                 if(row.Kind=="canvas-group" && row.Scalars[1].Skip(4).Any(value=>value>1)) throw Error("CanvasGroup booleans differ");

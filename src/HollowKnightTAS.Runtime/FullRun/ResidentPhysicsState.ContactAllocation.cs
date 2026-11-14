@@ -68,7 +68,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var from = actual.Owners[j]; var to = wanted.Owners[j];
                     if (from == to) continue;
                     if (wanted.BlockSize != ContactBlock || from.Length != 0 && !IsContactOwner(from) || to.Length != 0 && !IsContactOwner(to))
-                        throw Error("contact migration would displace a live foreign allocation");
+                        throw Error($"contact migration would displace a live foreign allocation: chunk={i} slot={j} blockSize={wanted.BlockSize} from='{from}' to='{to}'");
                     changed = true;
                 }
             }
@@ -191,6 +191,265 @@ namespace HollowKnightTAS.Runtime.FullRun
             admitted(); var desiredFactory = FactoryImage(engine, source.ContactFactoryInitialized);
             if (!M.Read(factory, 601).SequenceEqual(desiredFactory)) M.Write(factory, desiredFactory);
             if (!M.Read(factory, 601).SequenceEqual(desiredFactory)) throw Error("contact factory initialization did not read back");
+        }
+
+        private static int ShapeNativeSize(int shapeType) => shapeType switch {
+            0 => 24, 1 => 56, 2 => 160, 3 => 48, 4 => 32,
+            _ => throw Error("unknown Box2D shape type: " + shapeType)
+        };
+
+        private static bool NeedsBlockAllocatorReconstruction(ResidentPhysicsGlobals.Allocator source, ResidentPhysicsGlobals.Allocator target)
+        {
+            if (source.ChunkCapacity != target.ChunkCapacity || source.Chunks.Length != target.Chunks.Length) return true;
+            for (var i = 0; i < source.Chunks.Length; i++) {
+                var a = source.Chunks[i]; var b = target.Chunks[i];
+                if (a.BlockSize != b.BlockSize || a.Owners.Length != b.Owners.Length) return true;
+                for (var j = 0; j < a.Owners.Length; j++) {
+                    if (a.Owners[j] == b.Owners[j]) continue;
+                    if (a.BlockSize != ContactBlock || (a.Owners[j].Length != 0 && !IsContactOwner(a.Owners[j]))
+                        || (b.Owners[j].Length != 0 && !IsContactOwner(b.Owners[j]))) return true;
+                }
+            }
+            return false;
+        }
+
+        private static void ReconstructBlockAllocators(Data source, Local target, Action admitted)
+        {
+            var engine = LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress;
+            var actualScenes = target.Globals!.Data.Scenes.ToDictionary(scene => scene.Key, StringComparer.Ordinal);
+            var worldsToRebuild = source.Globals!.Scenes
+                .Where(desired => NeedsBlockAllocatorReconstruction(desired.Blocks, actualScenes[desired.Key].Blocks))
+                .ToArray();
+            if (worldsToRebuild.Length == 0) return;
+
+            RequireCanonicalizableCoverage(target.Data);
+            CheckEntry(engine, 0xbafc20, 51, "a4a2f47aaafa6f758a329229bcb3478ce04cc6854458695ade685a48368e12b6");
+            CheckEntry(engine, 0xba8dd0, 425, "f08b40074c9fcf3a2392fc09acc60811574a03e71b63c4d6bff1d5dcd42fda8d");
+            CheckEntry(engine, 0x56b640, 94, "2890014de154460d79e3ec3357c76ec9af9f8198edd1243f07e27c9708f58447");
+            var lookup = M.Read(IntPtr.Add(engine, 0x1a2a5a0), 641);
+            var bucketSizes = new int[14];
+            var reqSizeForBlockSize = new Dictionary<int, (int Bucket, int ReqSize)>();
+            for (var b = 0; b < 14; b++) {
+                bucketSizes[b] = M.I32(M.Read(IntPtr.Add(engine, 0x1985940 + 4 * b), 4), 0);
+                var req = -1;
+                for (var s = 1; s <= 640; s++) if (lookup[s] == b) { req = s; break; }
+                if (req < 0) throw Error("block allocator bucket has no request size");
+                reqSizeForBlockSize[bucketSizes[b]] = (b, req);
+            }
+            var allocate = (AllocateBlock)Marshal.GetDelegateForFunctionPointer(IntPtr.Add(engine, 0xba8dd0), typeof(AllocateBlock));
+            var destroy = (DestroyContact)Marshal.GetDelegateForFunctionPointer(IntPtr.Add(engine, 0xbafc20), typeof(DestroyContact));
+            var freeChunk = (FreeChunk)Marshal.GetDelegateForFunctionPointer(IntPtr.Add(engine, 0x56b640), typeof(FreeChunk));
+            var allocFile = IntPtr.Add(engine, 0x15c6004);
+
+            foreach (var desiredScene in worldsToRebuild) {
+                admitted();
+                var worldKey = desiredScene.Key;
+                var desiredBlocks = desiredScene.Blocks;
+                var actualBlocks = actualScenes[worldKey].Blocks;
+                if (actualBlocks.ChunkCapacity > desiredBlocks.ChunkCapacity)
+                    throw Error("target block allocator chunk capacity exceeds source capacity");
+
+                var worldMeta = target.Data.Worlds.Single(w => w.Key == worldKey);
+                var allocator = target.Worlds[worldKey];
+                var scene = target.Scenes[worldKey];
+                var state = IntPtr.Add(allocator, WorldStateOffset);
+
+                // 1. Destroy live contacts in this world before touching block chunks.
+                WritePointer(IntPtr.Add(state, 128), IntPtr.Zero);
+                M.Write(IntPtr.Add(state, 176), BitConverter.GetBytes(0L));
+                M.Write(IntPtr.Add(state, 208), BitConverter.GetBytes(0L));
+                foreach (var body in worldMeta.BodyOrder) WritePointer(IntPtr.Add(target.Bodies[body], 136), IntPtr.Zero);
+                foreach (var c in worldMeta.Contacts) {
+                    admitted();
+                    var ptr = target.Contacts[c.Key];
+                    var vtable = M.Ptr(M.Read(ptr, 8), 0);
+                    if (vtable != IntPtr.Add(engine, c.Vtable) || M.Ptr(M.Read(IntPtr.Add(vtable, 8), 8), 0) != IntPtr.Add(engine, 0xbaf590))
+                        throw Error("contact destructor dispatch differs");
+                    destroy(ptr, allocator);
+                    target.Contacts.Remove(c.Key);
+                    target.ContactNames.Remove(ptr);
+                }
+
+                // 2. Collect every non-contact cell in this world's chunks and snapshot its raw bytes.
+                var cellToWorldSlot = new HashSet<IntPtr>();
+                for (var ci = 0; ci < actualBlocks.Chunks.Length; ci++) {
+                    var chunk = actualBlocks.Chunks[ci];
+                    for (var si = 0; si < chunk.Owners.Length; si++)
+                        cellToWorldSlot.Add(target.Globals.Cells[worldKey + "/chunk[" + ci + "]/cell[" + si + "]"]);
+                }
+
+                var liveObjects = new Dictionary<string, (IntPtr OldPtr, byte[] Bytes)>(StringComparer.Ordinal);
+                var proxyCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+                var chainShapes = new List<string>();
+                foreach (var bodyKey in worldMeta.BodyOrder) {
+                    var bodyPtr = target.Bodies[bodyKey];
+                    if (cellToWorldSlot.Contains(bodyPtr)) liveObjects.Add(bodyKey, (bodyPtr, M.Read(bodyPtr, 200)));
+                }
+                foreach (var col in target.Data.Colliders) {
+                    foreach (var fix in col.Fixtures) {
+                        var fixPtr = target.Fixtures[fix.Key];
+                        if (!cellToWorldSlot.Contains(fixPtr)) continue;
+                        liveObjects.Add(fix.Key, (fixPtr, M.Read(fixPtr, 88)));
+                        var shapePtr = target.Shapes[fix.Key];
+                        if (cellToWorldSlot.Contains(shapePtr))
+                            liveObjects.Add(fix.Key + "/shape", (shapePtr, M.Read(shapePtr, ShapeNativeSize(fix.Shape.Type))));
+                        if (fix.Proxies.Length != 0) {
+                            var proxyBase = target.Proxies[fix.Key + "/proxy[0]"];
+                            if (cellToWorldSlot.Contains(proxyBase)) {
+                                liveObjects.Add(fix.Key + "/proxy-buffer", (proxyBase, M.Read(proxyBase, checked(fix.Proxies.Length * 32))));
+                                proxyCounts[fix.Key] = fix.Proxies.Length;
+                            }
+                        }
+                        if (fix.Shape.Type == 3) {
+                            var verts = M.Ptr(M.Read(shapePtr, 24), 16);
+                            if (verts != IntPtr.Zero && cellToWorldSlot.Contains(verts)) {
+                                liveObjects.Add(fix.Key + "/chain-vertices", (verts, M.Read(verts, checked(fix.Shape.VertexCount * 8))));
+                                chainShapes.Add(fix.Key);
+                            }
+                        }
+                    }
+                }
+
+                var desiredPlacements = new Dictionary<string, (int Chunk, int Slot, int BlockSize)>(StringComparer.Ordinal);
+                for (var ci = 0; ci < desiredBlocks.Chunks.Length; ci++) {
+                    var chunk = desiredBlocks.Chunks[ci];
+                    for (var si = 0; si < chunk.Owners.Length; si++) {
+                        var owner = chunk.Owners[si];
+                        if (owner.Length == 0 || IsContactOwner(owner)) continue;
+                        desiredPlacements.Add(owner, (ci, si, chunk.BlockSize));
+                    }
+                }
+                if (desiredPlacements.Count != liveObjects.Count || !desiredPlacements.Keys.All(liveObjects.ContainsKey))
+                    throw Error("physics block allocator object set differs between source and target: " + worldKey);
+                foreach (var kv in desiredPlacements) {
+                    if (liveObjects[kv.Key].Bytes.Length > kv.Value.BlockSize)
+                        throw Error("physics block object exceeds target slot size: " + kv.Key);
+                }
+
+                // 3. Free all current chunks and allocate fresh chunks matching source BlockSize sequence.
+                for (var b = 0; b < 14; b++) WritePointer(IntPtr.Add(allocator, 24 + 8 * b), IntPtr.Zero);
+                var allocHeader = M.Read(allocator, 20);
+                var chunkDirPtr = M.Ptr(allocHeader, 0);
+                var memLabel = Int(allocHeader, 16);
+                for (var ci = actualBlocks.Chunks.Length - 1; ci >= 0; ci--) {
+                    admitted();
+                    var slot = IntPtr.Add(chunkDirPtr, checked(ci * 16));
+                    var row = M.Read(slot, 16);
+                    var chunkPtr = M.Ptr(row, 8);
+                    M.Write(IntPtr.Add(allocator, 8), BitConverter.GetBytes(ci));
+                    M.Write(slot, new byte[16]);
+                    freeChunk(chunkPtr, memLabel, allocFile, 0x26);
+                }
+                M.Write(IntPtr.Add(allocator, 8), BitConverter.GetBytes(0));
+
+                var newChunkPtrs = new IntPtr[desiredBlocks.Chunks.Length];
+                for (var ci = 0; ci < desiredBlocks.Chunks.Length; ci++) {
+                    admitted();
+                    var wantedSize = desiredBlocks.Chunks[ci].BlockSize;
+                    var (bucket, reqSize) = reqSizeForBlockSize[wantedSize];
+                    WritePointer(IntPtr.Add(allocator, 24 + 8 * bucket), IntPtr.Zero);
+                    var cell0 = allocate(allocator, reqSize);
+                    var hdr = M.Read(allocator, 16);
+                    var entry = M.Read(IntPtr.Add(M.Ptr(hdr, 0), 16 * ci), 16);
+                    var chunkPtr = M.Ptr(entry, 8);
+                    if (cell0 == IntPtr.Zero || cell0 != chunkPtr || Int(hdr, 8) != ci + 1 || Int(entry, 0) != wantedSize)
+                        throw Error("native block allocator did not create requested chunk " + ci);
+                    M.Write(chunkPtr, new byte[16384]);
+                    newChunkPtrs[ci] = chunkPtr;
+                }
+                if (Int(M.Read(allocator, 16), 12) != desiredBlocks.ChunkCapacity)
+                    throw Error("reconstructed block allocator chunk capacity differs from source");
+
+                // 4. Write live objects to exact target (chunk, slot) positions and build pointer remap.
+                var remap = new Dictionary<IntPtr, IntPtr>();
+                var newBodies = new List<IntPtr>();
+                var newFixtures = new List<IntPtr>();
+                var newProxyBuffers = new List<(IntPtr Ptr, int Count)>();
+                var newChainShapePtrs = new List<IntPtr>();
+
+                foreach (var kv in liveObjects) {
+                    var p = desiredPlacements[kv.Key];
+                    var newPtr = IntPtr.Add(newChunkPtrs[p.Chunk], p.Slot * p.BlockSize);
+                    M.Write(newPtr, kv.Value.Bytes);
+                    remap[kv.Value.OldPtr] = newPtr;
+                    if (kv.Key.EndsWith("/body", StringComparison.Ordinal) || kv.Key.EndsWith("/ground", StringComparison.Ordinal))
+                        newBodies.Add(newPtr);
+                    else if (kv.Key.IndexOf("/fixture[", StringComparison.Ordinal) >= 0 && !kv.Key.EndsWith("/shape", StringComparison.Ordinal)
+                        && !kv.Key.EndsWith("/proxy-buffer", StringComparison.Ordinal) && !kv.Key.EndsWith("/chain-vertices", StringComparison.Ordinal))
+                        newFixtures.Add(newPtr);
+                }
+                foreach (var kv in proxyCounts) {
+                    var oldBase = liveObjects[kv.Key + "/proxy-buffer"].OldPtr;
+                    var newBase = remap[oldBase];
+                    newProxyBuffers.Add((newBase, kv.Value));
+                    for (var idx = 1; idx < kv.Value; idx++)
+                        remap[IntPtr.Add(oldBase, idx * 32)] = IntPtr.Add(newBase, idx * 32);
+                }
+                foreach (var fixKey in chainShapes) newChainShapePtrs.Add(remap[liveObjects[fixKey + "/shape"].OldPtr]);
+
+                void PatchPtr(IntPtr address) {
+                    var cur = M.Ptr(address);
+                    if (remap.TryGetValue(cur, out var next)) WritePointer(address, next);
+                }
+
+                // 5. Remap all pointers in Scene, WorldState, Rigidbodies, Colliders, Bodies, Fixtures, Proxies, ChainShapes.
+                PatchPtr(IntPtr.Add(scene, 16)); // m_GroundBody
+                PatchPtr(IntPtr.Add(state, 224)); // m_bodyList
+                foreach (var arrOff in new[] { 248, 280 }) {
+                    var arrHdr = M.Read(IntPtr.Add(state, arrOff), 32);
+                    var cnt = Bound(Int(arrHdr, 16), MaximumOwners, "body array count");
+                    var dataPtr = M.Ptr(arrHdr, 0);
+                    for (var idx = 0; idx < cnt; idx++) PatchPtr(IntPtr.Add(dataPtr, idx * 8));
+                }
+                var treeHdr = M.Read(IntPtr.Add(state, 8), 40);
+                var treeCap = Bound(Int(treeHdr, 20), 32768, "tree capacity");
+                var treeNodes = M.Ptr(treeHdr, 8);
+                for (var ni = 0; ni < treeCap; ni++) {
+                    var nodePtr = IntPtr.Add(treeNodes, ni * 40);
+                    var nb = M.Read(nodePtr, 40);
+                    if (Int(nb, 36) != -1 && Int(nb, 28) == -1) PatchPtr(IntPtr.Add(nodePtr, 16));
+                }
+                foreach (var rb in source.Rigidbodies) PatchPtr(IntPtr.Add(target.Owners[rb.Owner], 120));
+                foreach (var col in source.Colliders) {
+                    var fixHdr = M.Read(IntPtr.Add(target.Owners[col.Owner], 88), 32);
+                    var cnt = DynamicCount(fixHdr, 8, out _);
+                    var dataPtr = M.Ptr(fixHdr, 0);
+                    for (var idx = 0; idx < cnt; idx++) PatchPtr(IntPtr.Add(dataPtr, idx * 8));
+                }
+                foreach (var bp in newBodies) {
+                    PatchPtr(IntPtr.Add(bp, 96));  // m_prev
+                    PatchPtr(IntPtr.Add(bp, 104)); // m_next
+                    PatchPtr(IntPtr.Add(bp, 112)); // m_fixtureList
+                }
+                foreach (var fp in newFixtures) {
+                    PatchPtr(IntPtr.Add(fp, 24));  // m_next
+                    PatchPtr(IntPtr.Add(fp, 32));  // m_body
+                    PatchPtr(IntPtr.Add(fp, 40));  // m_shape
+                    PatchPtr(IntPtr.Add(fp, 56));  // m_proxies
+                }
+                foreach (var (pb, cnt) in newProxyBuffers) {
+                    for (var idx = 0; idx < cnt; idx++) PatchPtr(IntPtr.Add(pb, idx * 32 + 16));
+                }
+                foreach (var sp in newChainShapePtrs) PatchPtr(IntPtr.Add(sp, 16));
+
+                // 6. Rebuild free lists cleanly for all buckets so Read() sees zero unbound cells.
+                var bucketFreeCells = Enumerable.Range(0, 14).Select(_ => new List<IntPtr>()).ToArray();
+                for (var ci = 0; ci < desiredBlocks.Chunks.Length; ci++) {
+                    var chunk = desiredBlocks.Chunks[ci];
+                    var bucket = reqSizeForBlockSize[chunk.BlockSize].Bucket;
+                    for (var si = 0; si < chunk.Owners.Length; si++) {
+                        var owner = chunk.Owners[si];
+                        if (owner.Length == 0 || IsContactOwner(owner))
+                            bucketFreeCells[bucket].Add(IntPtr.Add(newChunkPtrs[ci], si * chunk.BlockSize));
+                    }
+                }
+                for (var b = 0; b < 14; b++) {
+                    var list = bucketFreeCells[b];
+                    WritePointer(IntPtr.Add(allocator, 24 + 8 * b), list.Count == 0 ? IntPtr.Zero : list[0]);
+                    for (var idx = 0; idx < list.Count; idx++)
+                        WritePointer(list[idx], idx + 1 == list.Count ? IntPtr.Zero : list[idx + 1]);
+                }
+            }
         }
     }
 }

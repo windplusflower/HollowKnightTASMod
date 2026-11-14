@@ -82,19 +82,51 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!type.IsValueType || type.IsPrimitive || type.IsEnum || type == typeof(decimal)) throw Error("typed slot requires a composite value type");
             return new Value(type, Get(type).Create());
         }
-        internal static Func<object, object?> PrepareRead(FieldInfo field) => owner => ReadField(owner, field);
+        internal static Func<object, object?> PrepareRead(FieldInfo field)
+        {
+            if (field.IsStatic || field.FieldType.IsPointer || field.FieldType.IsByRef) return owner => ReadField(owner, field);
+            if (field.DeclaringType!.IsValueType) return owner => ReadField(owner, field);
+            var reader = ReaderFor(field, null);
+            return owner => Normalize(reader(owner));
+        }
+        internal delegate int FirstReference(object owner, out object? value);
+        internal static FirstReference? PrepareFirstReference(Type ownerType, FieldInfo[] fields)
+        {
+            if (ownerType.IsValueType || fields.Any(field => field.FieldType.IsValueType)) return null;
+            var method = new DynamicMethod("resident_first_reference", typeof(int), new[] { typeof(object), typeof(object).MakeByRefType() },
+                typeof(ResidentValueAccess).Module, true);
+            var il = method.GetILGenerator(); var value = il.DeclareLocal(typeof(object));
+            for (var index = 0; index < fields.Length; index++) {
+                var field = fields[index]; var next = il.DefineLabel();
+                il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Castclass, field.DeclaringType!);
+                if (field.GetRequiredCustomModifiers().Contains(typeof(System.Runtime.CompilerServices.IsVolatile))) il.Emit(OpCodes.Volatile);
+                il.Emit(OpCodes.Ldfld, field); il.Emit(OpCodes.Stloc, value); il.Emit(OpCodes.Ldloc, value); il.Emit(OpCodes.Brfalse, next);
+                il.Emit(OpCodes.Ldarg_1); il.Emit(OpCodes.Ldloc, value); il.Emit(OpCodes.Stind_Ref);
+                il.Emit(OpCodes.Ldc_I4, index); il.Emit(OpCodes.Ret); il.MarkLabel(next);
+            }
+            il.Emit(OpCodes.Ldarg_1); il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Stind_Ref); il.Emit(OpCodes.Ldc_I4_M1); il.Emit(OpCodes.Ret);
+            return (FirstReference)method.CreateDelegate(typeof(FirstReference));
+        }
         internal static object? ReadField(object owner, FieldInfo field)
         {
             if (owner == null || field == null || field.IsStatic || field.FieldType.IsPointer || field.FieldType.IsByRef) throw Error("instance field access differs");
-            var slot = owner as Value; var key = Tuple.Create(field, slot?.Type);
-            Func<object, object?> reader;
+            var slot = owner as Value;
+            return Normalize(ReaderFor(field, slot?.Type)(slot?.Storage ?? owner));
+        }
+        private static Func<object, object?> ReaderFor(FieldInfo field, Type? slotType)
+        {
+            var key = Tuple.Create(field, slotType);
             lock (Gate) {
-                if (!Readers.TryGetValue(key, out reader!)) {
-                    reader = MakeReader(field.FieldType, il => { Owner(il, field.DeclaringType!, slot?.Type); if (field.GetRequiredCustomModifiers().Contains(typeof(System.Runtime.CompilerServices.IsVolatile))) il.Emit(OpCodes.Volatile); il.Emit(OpCodes.Ldfld, field); });
+                if (!Readers.TryGetValue(key, out var reader)) {
+                    reader = MakeReader(field.FieldType, il => {
+                        Owner(il, field.DeclaringType!, slotType);
+                        if (field.GetRequiredCustomModifiers().Contains(typeof(System.Runtime.CompilerServices.IsVolatile))) il.Emit(OpCodes.Volatile);
+                        il.Emit(OpCodes.Ldfld, field);
+                    });
                     Readers.Add(key, reader);
                 }
+                return reader;
             }
-            return Normalize(reader(slot?.Storage ?? owner));
         }
         private static Func<object, object?> MakeReader(Type type, Action<ILGenerator> load)
         {

@@ -4,6 +4,8 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace HollowKnightTAS.Runtime.FullRun
@@ -22,7 +24,44 @@ namespace HollowKnightTAS.Runtime.FullRun
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool WriteProcessMemory(IntPtr process, IntPtr address, byte[] bytes, UIntPtr count, out UIntPtr written);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void ReserveArray(IntPtr header, UIntPtr capacity, UIntPtr stride, UIntPtr alignment);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr AssignString(IntPtr storage, IntPtr first, IntPtr last);
+        [ThreadStatic] private static OwnerObservation? observation;
+        internal sealed class OwnerObservation : IDisposable
+        {
+            internal readonly Dictionary<UnityEngine.Object, IntPtr> Owners = new Dictionary<UnityEngine.Object, IntPtr>(OwnerIdentity.Instance);
+            internal int Lookups;
+            internal OwnerObservation()
+            {
+                if (observation != null) throw Error("native owner observation is nested");
+                observation = this;
+            }
+            public void Dispose()
+            {
+                if (!ReferenceEquals(observation, this)) throw Error("native owner observation lost its thread or scope");
+                observation = null;
+                // Only identity is memoized. Body reads remain live and every owner is
+                // independently checked again before the read-only observation closes.
+                foreach (var pair in Owners) if (ReadOwner(pair.Key) != pair.Value) throw Error("native owner changed during read-only observation");
+                ResidentFailureEvidence.Mark("native owner identity reads=" + Owners.Count + ";requests=" + Lookups);
+            }
+        }
+        private sealed class OwnerIdentity : IEqualityComparer<UnityEngine.Object>
+        {
+            internal static readonly OwnerIdentity Instance = new OwnerIdentity();
+            public bool Equals(UnityEngine.Object x, UnityEngine.Object y) => ReferenceEquals(x, y);
+            public int GetHashCode(UnityEngine.Object value) => RuntimeHelpers.GetHashCode(value);
+        }
         internal static IntPtr Owner(UnityEngine.Object value)
+        {
+            var current = observation;
+            if (current == null) return ReadOwner(value);
+            current.Lookups++;
+            if (ReferenceEquals(value, null)) throw Error("native owner is absent");
+            if (current.Owners.TryGetValue(value, out var address)) return address;
+            address = ReadOwner(value);
+            current.Owners.Add(value, address);
+            return address;
+        }
+        private static IntPtr ReadOwner(UnityEngine.Object value)
         {
             if (value == null || IntPtr.Size != 8 || !BitConverter.IsLittleEndian) throw Error("native owner or pinned architecture differs");
             var result = (IntPtr)PointerField.GetValue(value)!;

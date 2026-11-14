@@ -75,11 +75,11 @@ static BOOL hktas_de_destination(BYTE *site,BYTE *target,int32_t *result)
     if(delta<INT32_MIN || delta>INT32_MAX) return FALSE;
     *result=(int32_t)delta;return TRUE;
 }
-static BOOL hktas_de_verify(BYTE *base,BYTE *relays,const void *const *wrappers,BOOL installed)
+static BOOL hktas_de_verify_table(BYTE *base,BYTE *relays,const void *const *wrappers,BOOL installed,const hktas_de_entry *entries,unsigned count)
 {
     if(!base || (installed && !relays) || !wrappers) return FALSE;
-    for(unsigned i=0;i<HKTAS_DE_COUNT;++i) {
-        const hktas_de_entry *e=&hktas_de_entries[i];
+    for(unsigned i=0;i<count;++i) {
+        const hktas_de_entry *e=&entries[i];
         BYTE *site=base+e->rva;
         DWORD64 module=0;PRUNTIME_FUNCTION frame=RtlLookupFunctionEntry((DWORD64)(uintptr_t)e->original,&module,NULL);
         if(!frame || module+frame->BeginAddress!=(DWORD64)(uintptr_t)e->original || frame->EndAddress-frame->BeginAddress!=e->prefix+11
@@ -108,11 +108,11 @@ static BOOL hktas_de_verify(BYTE *base,BYTE *relays,const void *const *wrappers,
  * linker unwind rows, origins and relative jump ranges pass preflight
  * before the first instruction becomes reachable. A partial write is a
  * terminal install error; the caller must retain the relays and fault. */
-static BOOL hktas_de_install(BYTE *base,BYTE *relays,const void *const *wrappers)
+static BOOL hktas_de_install_table(BYTE *base,BYTE *relays,const void *const *wrappers,const hktas_de_entry *entries,unsigned count)
 {
-    if(!hktas_de_verify(base,relays,wrappers,FALSE)) return FALSE;
-    for(unsigned i=0;i<HKTAS_DE_COUNT;++i) {
-        const hktas_de_entry *e=&hktas_de_entries[i];
+    if(!hktas_de_verify_table(base,relays,wrappers,FALSE,entries,count)) return FALSE;
+    for(unsigned i=0;i<count;++i) {
+        const hktas_de_entry *e=&entries[i];
         BYTE *site=base+e->rva,*relay=relays+i*16;int32_t delta;
         BYTE *resume=site+e->prefix;DWORD old,ignored;
         if(!hktas_de_destination(site,relay,&delta) || !VirtualProtect(e->continuation,8,PAGE_EXECUTE_READWRITE,&old)) return FALSE;
@@ -121,14 +121,18 @@ static BOOL hktas_de_install(BYTE *base,BYTE *relays,const void *const *wrappers
         memcpy(relay,"\xff\x25\0\0\0\0",6);memcpy(relay+6,&wrappers[i],8);
     }
     DWORD old,ignored;
-    if(!VirtualProtect(relays,HKTAS_DE_COUNT*16,PAGE_EXECUTE_READ,&old)
-        || !FlushInstructionCache(GetCurrentProcess(),relays,HKTAS_DE_COUNT*16)) return FALSE;
-    for(unsigned i=0;i<HKTAS_DE_COUNT;++i) {
-        BYTE *site=base+hktas_de_entries[i].rva,*relay=relays+i*16;int32_t delta;
+    if(!VirtualProtect(relays,count*16,PAGE_EXECUTE_READ,&old)
+        || !FlushInstructionCache(GetCurrentProcess(),relays,count*16)) return FALSE;
+    for(unsigned i=0;i<count;++i) {
+        BYTE *site=base+entries[i].rva,*relay=relays+i*16;int32_t delta;
         if(!hktas_de_destination(site,relay,&delta) || !VirtualProtect(site,5,PAGE_EXECUTE_READWRITE,&old)) return FALSE;
         site[0]=0xe9;memcpy(site+1,&delta,4);
         if(!VirtualProtect(site,5,old,&ignored) || !FlushInstructionCache(GetCurrentProcess(),site,5)) return FALSE;
     }
-    return hktas_de_verify(base,relays,wrappers,TRUE);
+    return hktas_de_verify_table(base,relays,wrappers,TRUE,entries,count);
 }
+static BOOL hktas_de_verify(BYTE *base,BYTE *relays,const void *const *wrappers,BOOL installed)
+{ return hktas_de_verify_table(base,relays,wrappers,installed,hktas_de_entries,HKTAS_DE_COUNT); }
+static BOOL hktas_de_install(BYTE *base,BYTE *relays,const void *const *wrappers)
+{ return hktas_de_install_table(base,relays,wrappers,hktas_de_entries,HKTAS_DE_COUNT); }
 #endif

@@ -93,23 +93,22 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var root = IntPtr.Add(LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress, 0x1965470);
             var header = M.Read(root, 32); var contents = ReadArray(root, 0, 8, out var capacity);
-            var owners = new Dictionary<IntPtr, string>(); var external = new HashSet<string>(StringComparer.Ordinal);
-            var members = ResidentLoadedAssetIndex.Family(ResidentLoadedAssetIndex.SpriteRendererClass, out var requireSameFamily);
-            foreach (var member in members) {
-                var pointer = M.Ptr(IntPtr.Add(member.Pointer, 584)); if (pointer == IntPtr.Zero) continue;
-                var key = ResidentNativeAssetReference.Bind(member.Pointer,ResidentLoadedAssetIndex.SpriteRendererClass,typeof(SpriteRenderer),bind);
-                if (key == ResidentNativeAssetReference.Missing) throw Error("Sprite cache registry owner has no portable identity");
-                if (owners.ContainsKey(pointer)) throw Error("Sprite cache has multiple native owners"); owners.Add(pointer, key);
-                if (!directory.NativeBindings.ContainsKey(key)) external.Add(key);
+            var owners = new Dictionary<IntPtr, string>();
+            foreach (var pair in directory.NativeBindings.Where(pair => pair.Value is SpriteRenderer)) {
+                var pointer = M.Ptr(IntPtr.Add(M.Owner(pair.Value), 584)); if (pointer == IntPtr.Zero) continue;
+                if (owners.ContainsKey(pointer)) throw Error("Sprite cache has multiple resident owners");
+                owners.Add(pointer, pair.Key);
             }
-            var list = Enumerable.Range(0, contents.Length / 8).Select(index => {
+            var seen = new HashSet<IntPtr>(); var list = new List<string>();
+            for (var index = 0; index < contents.Length / 8; index++) {
                 var pointer = M.Ptr(contents, index * 8);
-                return owners.TryGetValue(pointer, out var key) ? key : throw Error("global Sprite cache registry has an unknown owner");
-            }).ToArray();
-            requireSameFamily();
-            if (list.Length != owners.Count || list.Distinct(StringComparer.Ordinal).Count() != list.Length) throw Error("global Sprite cache registry does not cover each actual SpriteRenderer");
+                if (pointer == IntPtr.Zero || !seen.Add(pointer)) throw Error("Sprite cache registry contains an absent or duplicate cache");
+                if (owners.TryGetValue(pointer, out var key)) list.Add(key);
+            }
+            if (list.Count != owners.Count) throw Error("Sprite cache registry omits a resident owner");
             if (!M.Read(root, 32).SequenceEqual(header) || !M.Read(M.Ptr(header, 0), contents.Length).SequenceEqual(contents)) throw Error("Sprite cache registry changed during capture");
-            return new SpriteRegistryState { Capacity = capacity, Owners = list, ExternalOwners = external.OrderBy(value => value, StringComparer.Ordinal).ToArray() };
+            // Foreign prefab cache allocations are process-local dependencies.
+            return new SpriteRegistryState { Capacity = list.Count, Owners = list.ToArray() };
         }
         private static void ValidateSpriteRegistry(Data data)
         {
@@ -179,8 +178,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static void ApplySpriteRegistry(SpriteRegistryState source, Func<string, NativeObject> resolve, Action admitted)
         {
-            var pointers = source.Owners.SelectMany(key => BitConverter.GetBytes(M.Ptr(IntPtr.Add(ResidentNativeAssetReference.Resolve(key,ResidentLoadedAssetIndex.SpriteRendererClass,typeof(SpriteRenderer),resolve),584)).ToInt64())).ToArray();
-            WriteArray(IntPtr.Add(LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress, 0x1965470), 0, pointers, source.Capacity, 8, 8, admitted);
+            var owned = source.Owners.Select(key => M.Ptr(IntPtr.Add(ResidentNativeAssetReference.Resolve(key,ResidentLoadedAssetIndex.SpriteRendererClass,typeof(SpriteRenderer),resolve),584))).ToArray();
+            if (owned.Any(pointer => pointer == IntPtr.Zero)) throw Error("restored Sprite cache is absent");
+            var resident = new HashSet<IntPtr>(owned);
+            var root = IntPtr.Add(LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress, 0x1965470);
+            var current = ReadArray(root, 0, 8, out var capacity);
+            var foreign = Enumerable.Range(0, current.Length / 8).Select(index => M.Ptr(current, index * 8)).Where(pointer => !resident.Contains(pointer));
+            var pointers = foreign.Concat(owned).SelectMany(pointer => BitConverter.GetBytes(pointer.ToInt64())).ToArray();
+            WriteArray(root, 0, pointers, Math.Max(capacity, pointers.Length / 8), 8, 8, admitted);
         }
         private static void ApplySecondarySheet(IntPtr owner, ResidentShaderPropertySheet.Data? source, Func<string, NativeObject> resolve, Func<object, string?> bind, Action admitted)
         {
@@ -262,6 +267,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (row.SecondaryProperties != null) ResidentShaderPropertySheet.RequireCompleteCoverage(row.SecondaryProperties);
             }
             try {
+                CanonParticleDrawCaches(expected, directory, scope, admitted);
                 foreach (var row in expected.Rows.Where(row => !row.Execution && row.Kind != "MeshFilter")) {
                     var old = M.U32(row.Scalars[0],232); if ((old & ~NamedDrawingBits) == 0) continue;
                     scope.Require(); admitted(); var owner = (Component)directory.Resolve(row.Owner);

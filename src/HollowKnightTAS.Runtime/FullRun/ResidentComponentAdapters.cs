@@ -12,7 +12,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     // are measured directory data; they never select an implementation here.
     internal static class ResidentComponentAdapters
     {
-        internal const int MaximumBytes = 32 * 1024 * 1024;
+        internal const int MaximumBytes = 256 * 1024 * 1024;
         internal sealed class Data
         {
             [JsonProperty(Required = Required.Always)] public int Version = 2;
@@ -49,45 +49,76 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static Data Capture(ResidentObjectDirectory directory, Func<object, string?> bind)
             => CaptureWithManagedRoots(directory, bind).Data;
-        internal static Observation CaptureWithManagedRoots(ResidentObjectDirectory directory, Func<object, string?> bind)
+        [ThreadStatic] internal static (string fingerprint, TypeCoverage[] types)? s_CachedTypes;
+        internal static Observation CaptureWithManagedRoots(ResidentObjectDirectory directory, Func<object, string?> bind, bool readOnly = false, bool managedRootsOnly = false)
         {
             if (directory == null || bind == null) throw new ArgumentNullException();
             string Binding(UnityEngine.Object value) => bind(value) ?? throw Error("native reference is unbound: " + value.GetType().FullName);
-            var snapshot = directory.CopySnapshot();
             ResidentFailureEvidence.Mark("component physics"); var physics = ResidentPhysicsState.CaptureWithManagedRoots(directory, Binding);
+            if (managedRootsOnly) return new Observation(new Data(), physics, new Dictionary<IntPtr,ResidentCameraCanvasState.TransientOwner>());
+            var snapshot = readOnly ? directory.CurrentSnapshot : directory.CopySnapshot();
+            var monos = GameplayMono(directory);
             var transientAssets = new Dictionary<IntPtr,ResidentCameraCanvasState.TransientOwner>();
-            var result = new Data {
-                Types = DescribeTypes(snapshot),
-                Transforms = ResidentFailureEvidence.Measure("component Transforms",() => ResidentTransformState.Capture(directory)),
+            var completed = new Dictionary<string,object>();
+            T CaptureDomain<T>(string name, Func<T> capture) where T : class
+            {
+                var value = ResidentFailureEvidence.Measure("component " + name, capture);
+                if (ResidentFailureEvidence.Collecting) completed.Add(name,value);
+                return value;
+            }
+            Data result;
+            try {
+                TypeCoverage[] types;
+                if (readOnly && s_CachedTypes != null && s_CachedTypes.Value.fingerprint == directory.StructureFingerprint) {
+                    types = s_CachedTypes.Value.types;
+                } else {
+                    types = DescribeTypes(snapshot);
+                    if (readOnly) s_CachedTypes = (directory.StructureFingerprint, types);
+                }
+                result = new Data {
+                Types = types,
+                Transforms = CaptureDomain("Transforms",() => ResidentTransformState.Capture(directory)),
                 Physics = physics.Data,
-                Properties = ResidentFailureEvidence.Measure("component Properties",() => ResidentRendererPropertyBlocks.Capture(directory, bind)),
-                Renderers = ResidentFailureEvidence.Measure("component Renderers",() => ResidentRendererState.Capture(directory, bind)),
-                CameraCanvas = ResidentFailureEvidence.Measure("component CameraCanvas",() => ResidentCameraCanvasState.Capture(directory, bind, value => transientAssets.Add(value.Pointer,value))),
-                Audio = ResidentFailureEvidence.Measure("component Audio",() => ResidentAudioState.Capture(directory, bind)),
-                Animation = ResidentFailureEvidence.Measure("component Animation",() => ResidentAnimatorState.Capture(directory, bind)),
-                Particles = ResidentFailureEvidence.Measure("component Particles",() => ResidentParticleSystemState.Capture(directory, bind)),
-                Presentation = ResidentFailureEvidence.Measure("component Presentation",() => ResidentPresentationTypes.Capture(directory, bind)),
-                Mono = ResidentFailureEvidence.Measure("component Mono",() => ResidentMonoLifecycle.Capture(GameplayMono(directory), Binding)),
-                MonoNative = ResidentFailureEvidence.Measure("component MonoNative",() => ResidentMonoNativeState.CaptureMany(GameplayMono(directory), bind))
+                Properties = CaptureDomain("Properties",() => ResidentRendererPropertyBlocks.Capture(directory, bind)),
+                Renderers = CaptureDomain("Renderers",() => ResidentRendererState.Capture(directory, bind)),
+                CameraCanvas = CaptureDomain("CameraCanvas",() => ResidentCameraCanvasState.Capture(directory, bind, value => transientAssets.Add(value.Pointer,value))),
+                Audio = CaptureDomain("Audio",() => ResidentAudioState.Capture(directory, bind)),
+                Presentation = CaptureDomain("Presentation",() => ResidentPresentationTypes.Capture(directory, bind)),
+                Animation = CaptureDomain("Animation",() => ResidentAnimatorState.Capture(directory, bind)),
+                Particles = CaptureDomain("Particles",() => ResidentParticleSystemState.Capture(directory, bind)),
+                Mono = CaptureDomain("Mono",() => ResidentMonoLifecycle.Capture(monos, Binding)),
+                MonoNative = CaptureDomain("MonoNative",() => ResidentMonoNativeState.CaptureMany(monos, bind, readOnly))
             };
+            } catch {
+                // Later capture failures must not hide the earlier families.
+                // Emit bounded DTOs only on failure, before native retirement.
+                foreach (var domain in completed) ResidentFailureEvidence.RecordDomain(domain.Key,domain.Value);
+                throw;
+            }
             ResidentFailureEvidence.Mark("component coverage");
             result.CoverageGaps = RequiredGaps(result);
             ResidentFailureEvidence.Mark("component validation");
             // Both manifests above were just derived from this private observation.
             // Check every owner and body; decoded packets independently rebuild
             // the type and gap manifests in Validate.
-            ValidateOwnersAndBodies(result, snapshot, result.Types);
+            if (!readOnly) ValidateOwnersAndBodies(result, snapshot, result.Types);
             return new Observation(result, physics, transientAssets);
         }
 
         internal static TypeCoverage[] DescribeTypes(ResidentObjectDirectory.Snapshot directory)
         {
             ResidentObjectDirectory.Validate(directory);
+            var loaded = AppDomain.CurrentDomain.GetAssemblies().ToLookup(assembly => assembly.GetName().Name!, StringComparer.Ordinal);
+            var keys = new Dictionary<ResidentObjectDirectory.TypeRecord, string>();
+            string Key(ResidentObjectDirectory.TypeRecord type) {
+                if (!keys.TryGetValue(type, out var key)) keys.Add(type, key = type.Key);
+                return key;
+            }
             return directory.Objects.SelectMany(owner => owner.Components)
                 .Where(component => component.Ownership == ResidentComponentOwnership.Gameplay)
-                .GroupBy(component => component.Type.Key, StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal)
+                .GroupBy(component => Key(component.Type), StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal)
                 .Select(group => {
-                    var type = group.First().Type.Resolve();
+                    var type = group.First().Type.Resolve(loaded: loaded);
                     var domains = new List<string> { "directory/object-component-metadata:D", "managed/complete-instance-fields:D", "native/owner-binding:Dependency" };
                     var gaps = new List<string>();
                     if (type == typeof(Transform) || type == typeof(RectTransform)) domains.Add("transform/local-cache-hierarchy-dispatch:D");
@@ -181,6 +212,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             ResidentAudioState.Validate(value.Audio);
             ResidentAnimatorState.ValidateOwners(value.Animation, directory);
             ResidentParticleSystemState.Validate(value.Particles);
+            ResidentRendererState.ValidateParticleShapes(value.Renderers, value.Particles);
             ResidentPresentationTypes.Validate(value.Presentation);
             var particleType = ResidentObjectDirectory.TypeRecord.Capture(typeof(ParticleSystem)).Key;
             var presentationTypes = new[] { typeof(CanvasGroup), typeof(UnityEngine.Rendering.SortingGroup), typeof(Light), typeof(TextMesh) }
@@ -192,7 +224,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!actual.Where(row => presentationTypes.ContainsKey(row.Type.Key)).Select(row => (row.Key, presentationTypes[row.Type.Key], row.Ownership == ResidentComponentOwnership.Execution))
                 .SequenceEqual(value.Presentation.Rows.Select(row => (row.Owner, row.Kind, row.Execution))))
                 throw Error("presentation component owner directory differs");
-            var monos = expected.Where(row => typeof(MonoBehaviour).IsAssignableFrom(row.Type.Resolve()))
+            var monos = expected.Where(row => row.Domains.Contains("mono/lifecycle-enabled-registration:D"))
                 .SelectMany(row => row.Owners).OrderBy(key => key, StringComparer.Ordinal).ToArray();
             if (!value.Mono.Select(row => row.Owner).SequenceEqual(monos)) throw Error("complete gameplay Mono directory differs");
             if (!value.MonoNative.Select(row => row.Owner).SequenceEqual(monos)) throw Error("complete native Mono directory differs");
@@ -221,20 +253,32 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static void RequireCanonicalizableCoverage(Data value, ResidentObjectDirectory.Snapshot directory)
         {
             Validate(value, directory);
-            if (value.Types.Any(type => type.Gaps.Length != 0)) throw Error("actual native component type coverage is incomplete");
-            ResidentTransformState.RequireCompleteCoverage(value.Transforms);
-            ResidentPhysicsState.RequireCanonicalizableCoverage(value.Physics);
-            ResidentRendererState.RequireCanonicalizableCoverage(value.Renderers);
-            ResidentCameraCanvasState.RequireCanonicalizableCoverage(value.CameraCanvas);
-            ResidentAudioState.RequireCanonicalizableCoverage(value.Audio);
-            ResidentAnimatorState.RequireCanonicalizableCoverage(value.Animation);
-            ResidentParticleSystemState.RequireCanonicalizableCoverage(value.Particles);
-            ResidentPresentationTypes.RequireCanonicalizableCoverage(value.Presentation);
-            ResidentMonoNativeState.ValidateMany(value.MonoNative, requireComplete: true);
-            foreach (var row in value.Properties.Rows) {
-                if (row.Main != null) ResidentShaderPropertySheet.RequireCompleteCoverage(row.Main);
-                foreach (var sheet in row.PerMaterial) if (sheet != null) ResidentShaderPropertySheet.RequireCompleteCoverage(sheet);
+            var failures = new List<string>();
+            void Check(string domain, object state, Action verify) {
+                try { verify(); }
+                catch (InvalidDataException error) {
+                    failures.Add(domain + ": " + error.Message);
+                    ResidentFailureEvidence.RecordDomain(domain, state);
+                }
             }
+            if (value.Types.Any(type => type.Gaps.Length != 0)) failures.Add("actual native component type coverage is incomplete");
+            Check("Transforms", value.Transforms, () => ResidentTransformState.RequireCompleteCoverage(value.Transforms));
+            Check("Physics", value.Physics, () => ResidentPhysicsState.RequireCanonicalizableCoverage(value.Physics));
+            Check("Renderers", value.Renderers, () => ResidentRendererState.RequireCanonicalizableCoverage(value.Renderers));
+            Check("CameraCanvas", value.CameraCanvas, () => ResidentCameraCanvasState.RequireCanonicalizableCoverage(value.CameraCanvas));
+            Check("Audio", value.Audio, () => ResidentAudioState.RequireCanonicalizableCoverage(value.Audio));
+            Check("Animator", value.Animation, () => ResidentAnimatorState.RequireCanonicalizableCoverage(value.Animation));
+            Check("Particles", value.Particles, () => ResidentParticleSystemState.RequireCanonicalizableCoverage(value.Particles));
+            Check("Presentation", value.Presentation, () => ResidentPresentationTypes.RequireCanonicalizableCoverage(value.Presentation));
+            Check("MonoNative", value.MonoNative, () => ResidentMonoNativeState.ValidateMany(value.MonoNative, requireComplete: true));
+            Check("Properties", value.Properties, () => {
+                foreach (var row in value.Properties.Rows) {
+                    if (row.Main != null) ResidentShaderPropertySheet.RequireCompleteCoverage(row.Main);
+                    foreach (var sheet in row.PerMaterial) if (sheet != null) ResidentShaderPropertySheet.RequireCompleteCoverage(sheet);
+                }
+            });
+            foreach (var failure in failures) ResidentFailureEvidence.Mark("component Canon preflight " + failure);
+            if (failures.Count != 0) throw Error(string.Join(";", failures));
         }
         internal static Action CanonBeforeAssets(ResidentObjectDirectory directory, ResidentMutationScope scope,
             Func<object, string?> bind, Func<string, UnityEngine.Object> resolve, Action admitted, Action<ResidentCameraCanvasState.TransientOwner> requireTransientExclusive)
@@ -276,7 +320,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             private ResidentParticleSystemState.Plan? particles;
             private ResidentPresentationTypes.Plan? presentation;
             private ResidentMonoLifecycle.Plan? lifecycle;
-            private ResidentMonoNativeState.Plan[]? monoNative;
+            private ResidentMonoNativeState.BatchPlan? monoNative;
             private bool nativeApplied, lifecycleApplied;
             internal Plan(Data saved, ResidentObjectDirectory directory, ResidentMutationScope scope,
                 Func<object, string?> bind, Func<string, UnityEngine.Object> resolve, Action admitted, Func<string, object?> resolveManaged)
@@ -293,20 +337,31 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // Prepare each plan immediately before its domain write: earlier
                 // native setters may legitimately invalidate later witnesses.
                 physics = ResidentPhysicsState.Prepare(source.Physics, directory, Binding, resolve, scope, admitted, resolveManaged);
+                Modding.Logger.Log("[HKTAS-RESTORE] ApplyNative: physics.Prepare");
                 physics.ApplyStructure();
+                Modding.Logger.Log("[HKTAS-RESTORE] ApplyNative: physics.ApplyStructure");
                 transforms = ResidentTransformState.Prepare(source.Transforms, directory, scope, admitted);
                 transforms.Apply(); physics.Apply();
+                Modding.Logger.Log("[HKTAS-RESTORE] ApplyNative: transforms+physics.Apply");
                 renderers = ResidentRendererState.Prepare(source.Renderers, directory, scope, resolve, bind, admitted);
                 renderers.Apply();
+                Modding.Logger.Log("[HKTAS-RESTORE] ApplyNative: renderers.Apply");
                 properties = ResidentRendererPropertyBlocks.Prepare(source.Properties, directory, scope, resolve, bind, admitted);
                 properties.Apply();
+                Modding.Logger.Log("[HKTAS-RESTORE] ApplyNative: properties.Apply");
                 cameraCanvas = ResidentCameraCanvasState.Prepare(source.CameraCanvas, directory, scope, resolve, bind, admitted); cameraCanvas.Apply();
+                Modding.Logger.Log("[HKTAS-RESTORE] ApplyNative: cameraCanvas.Apply");
                 audio = ResidentAudioState.Prepare(source.Audio, directory, scope, resolve, bind, admitted); audio.Apply();
+                Modding.Logger.Log("[HKTAS-RESTORE] ApplyNative: audio.Apply");
                 animation = ResidentAnimatorState.Prepare(source.Animation, directory, scope, resolve, bind, admitted); animation.Apply();
+                Modding.Logger.Log("[HKTAS-RESTORE] ApplyNative: animation.Apply");
                 particles = ResidentParticleSystemState.Prepare(source.Particles, directory, scope, resolve, bind, admitted); particles.Apply();
+                Modding.Logger.Log("[HKTAS-RESTORE] ApplyNative: particles.Apply");
                 presentation = new ResidentPresentationTypes.Plan(source.Presentation, directory, scope, resolve, bind, admitted); presentation.Apply();
-                monoNative = source.MonoNative.Select(row => ResidentMonoNativeState.Prepare(row, resolve(row.Owner), scope, resolve, bind, admitted)).ToArray();
-                foreach (var mono in monoNative) mono.Apply();
+                Modding.Logger.Log("[HKTAS-RESTORE] ApplyNative: presentation.Apply");
+                monoNative = ResidentMonoNativeState.PrepareMany(source.MonoNative, resolve, scope, resolve, bind, admitted);
+                monoNative.Apply();
+                Modding.Logger.Log("[HKTAS-RESTORE] ApplyNative: monoNative.Apply");
                 nativeApplied = true;
             }
             internal void ApplyLifecycle(Action reconcileScheduler)
@@ -321,7 +376,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (!nativeApplied || !lifecycleApplied) throw Error("component verification precedes complete application");
                 admitted(); transforms!.Verify(); physics!.Verify(); renderers!.Verify(); properties!.Verify(); cameraCanvas!.Verify(); audio!.Verify(); lifecycle!.Verify();
                 animation!.Verify(); particles!.Verify(); presentation!.Verify();
-                foreach (var mono in monoNative!) mono.Verify(); admitted();
+                monoNative!.Verify(); admitted();
             }
             private string Binding(UnityEngine.Object value) => bind(value) ?? throw Error("native reference is unbound");
         }
@@ -335,6 +390,79 @@ namespace HollowKnightTAS.Runtime.FullRun
             PreserveReferencesHandling = PreserveReferencesHandling.Objects, TypeNameHandling = TypeNameHandling.None,
             MissingMemberHandling = MissingMemberHandling.Error, MaxDepth = 128
         };
+        internal static byte[] EncodeObservation(Data value)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+            writer.Write(0x434E5456); // 'CNTV'
+            writer.Write(value.Version);
+            writer.Write(value.Types.Length);
+            foreach (var t in value.Types) {
+                writer.Write(t.Type.Key);
+                writer.Write(t.Owners.Length);
+                writer.Write(t.Domains.Length);
+                writer.Write(t.Gaps.Length);
+            }
+            writer.Write(value.Transforms.Nodes.Length);
+            foreach (var n in value.Transforms.Nodes) {
+                writer.Write(n.Owner);
+                writer.Write(n.Local.Length);
+                writer.Write(n.Local);
+                writer.Write(n.Cached.Length);
+                writer.Write(n.Cached);
+            }
+            writer.Write(value.Physics.Bodies.Length);
+            foreach (var b in value.Physics.Bodies) {
+                writer.Write(b.Key);
+                writer.Write(b.Values.Length);
+                writer.Write(b.Values);
+            }
+            writer.Write(value.Renderers.Rows.Length);
+            foreach (var r in value.Renderers.Rows) {
+                writer.Write(r.Owner);
+                writer.Write(r.Scalars.Length);
+                foreach (var s in r.Scalars) {
+                    writer.Write(s.Length);
+                    writer.Write(s);
+                }
+            }
+            writer.Write(value.Animation.Rows.Length);
+            foreach (var a in value.Animation.Rows) {
+                writer.Write(a.Owner);
+                writer.Write(a.Fields.Length);
+                foreach (var f in a.Fields) {
+                    writer.Write(f.Length);
+                    writer.Write(f);
+                }
+            }
+            writer.Write(value.Particles.Rows.Length);
+            foreach (var p in value.Particles.Rows) {
+                writer.Write(p.Owner);
+                if (p.Simulation != null) {
+                    writer.Write(p.Simulation.State.Length);
+                    writer.Write(p.Simulation.State);
+                } else {
+                    writer.Write(0);
+                }
+            }
+            writer.Write(value.Mono.Length);
+            foreach (var m in value.Mono) {
+                writer.Write(m.Owner);
+                writer.Write(m.Enabled);
+            }
+            writer.Write(value.MonoNative.Length);
+            foreach (var mn in value.MonoNative) {
+                writer.Write(mn.Owner);
+                writer.Write(mn.ReferenceVtable);
+                writer.Write(mn.GuiState);
+                writer.Write(mn.AudioFilter);
+            }
+            writer.Write(value.CoverageGaps.Length);
+            foreach (var g in value.CoverageGaps) writer.Write(g);
+            writer.Flush();
+            return stream.ToArray();
+        }
+
         internal static byte[] Encode(Data value, ResidentObjectDirectory.Snapshot directory)
         {
             Validate(value, directory);

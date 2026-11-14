@@ -257,7 +257,7 @@ public sealed class ResidentAnimatorStateTests
         internal IntPtr At(int offset) => IntPtr.Add(block,offset);
         private void Ptr(int member,int target) => Marshal.WriteIntPtr(block,member,At(target));
         internal void Int(int field,int value) => Marshal.WriteInt32(block,field,value);
-        internal AvatarImage(Type type, int instance)
+        internal AvatarImage(Type type, int instance, bool integerBank = true)
         {
             Marshal.Copy(new byte[2048],0,block,2048);
             // Output pose and both workspace scratch references deliberately
@@ -265,7 +265,7 @@ public sealed class ResidentAnimatorStateTests
             Ptr(256+16,464); Ptr(336,464); Ptr(344,464); Ptr(256+32,512);
             Int(464,1); Marshal.WriteInt64(block,472,912-472);
             Ptr(256+8,992); Int(992+48,2); Marshal.WriteInt64(block,992+56,1080-(992+56)); Marshal.WriteByte(block,1081,1);
-            Ptr(256,1104); Int(1104+64,1); Marshal.WriteInt64(block,1104+72,1224-(1104+72));
+            Ptr(256,1104); Int(1104+64,integerBank ? 1 : 0); Marshal.WriteInt64(block,1104+72,1224-(1104+72));
             // Actual ID-based Animator binding and pointer-based skeleton /
             // exposed Transform entries reference target-local stand-ins.
             Marshal.WriteInt64(block,1232,1); Ptr(1240,1328); Int(1248,instance); Marshal.WriteInt64(block,1256,1);
@@ -286,11 +286,13 @@ public sealed class ResidentAnimatorStateTests
             var list = ((IEnumerable)Graph.GetType().GetField("Nodes",Flags)!.GetValue(Graph)!).Cast<object>().ToArray();
             Rows(data,"AvatarNodes",list); return data;
         }
-        internal void Transfer(Type type, Array source)
+        internal void Transfer(Type type, Array source) => TransferWithValues(type, source, Array.Empty<int>());
+        internal void TransferWithValues(Type type, Array source, int[] controllerOwnedValues)
         {
             var writes = Writes(type);
             IntPtr Resolve(string key,bool isAnimator) => isAnimator && key == "animator" ? At(1376) : key == "transform" ? At(1408) : throw new InvalidDataException();
-            Graph.GetType().GetMethod("Prepare",Flags)!.Invoke(Graph,new object[] {source,writes,(Func<string,bool,IntPtr>)Resolve,new HashSet<int>()});
+            Func<string, int> resolveObject = _ => 1;
+            Graph.GetType().GetMethod("Prepare",Flags)!.Invoke(Graph,new object[] {source,writes,(Func<string,bool,IntPtr>)Resolve,new HashSet<int>(controllerOwnedValues),resolveObject});
             foreach (var write in writes) write!.GetType().GetMethod("Apply",Flags)!.Invoke(write,null);
         }
         public void Dispose() => Marshal.FreeHGlobal(block);
@@ -304,7 +306,8 @@ public sealed class ResidentAnimatorStateTests
         object Node(string kind) => nodes.Cast<object>().Single(n => n.GetType().GetField("Kind",Flags)!.GetValue(n)!.ToString() == kind);
         byte[][] Fields(string kind) { var n=Node(kind); return (byte[][])n.GetType().GetField("Fields",Flags)!.GetValue(n)!; }
         Fields("TrsPose")[0][20] = 0x51; Fields("Motion")[2][16] = 0x72; Fields("Memory")[0][148] = 0x89;
-        target.Transfer(type,nodes);
+        var valuesIndex = Array.IndexOf(nodes, Node("Values"));
+        target.TransferWithValues(type,nodes, new[] { valuesIndex });
         Assert.AreEqual((byte)0x51,Marshal.ReadByte(target.At(912),20)); Assert.AreEqual((byte)0x72,Marshal.ReadByte(target.At(512),80));
         Assert.AreEqual((byte)0x89,Marshal.ReadByte(target.At(64),148)); Assert.AreEqual(352,Marshal.ReadInt32(target.At(1232),16));
         Assert.AreEqual(target.At(1408),Marshal.ReadIntPtr(target.At(1344)));
@@ -547,12 +550,16 @@ public sealed class ResidentAnimatorStateTests
     public void UnprovenStateMachineMessageCombinationsRemainRawAndCannotBeWritten()
     {
         var type=Load();
-        foreach(var message in new[]{0,65,256,-1}) {
+        foreach(var message in new[]{0,256,-1}) {
             using var source=new RuntimeImage(); using var target=new RuntimeImage(); source.Int(836,message);
             var saved=Call(type,"CaptureRuntime",source.Player);
             Assert.IsTrue(ScalarList(type,"RuntimeScalarGaps",saved).Any(g=>g.Contains("StateMachineMessage:+4=")));
             var writes=Writes(type); Invalid(()=>Call(type,"PrepareRuntime",saved,target.Player,writes));
             Assert.AreEqual(0,writes.Count); Assert.AreEqual(message,Marshal.ReadInt32(source.Player,836)); Assert.AreEqual(128,Marshal.ReadInt32(target.Player,836));
+        }
+        using (var combined = new RuntimeImage()) {
+            combined.Int(836, 65);
+            Assert.AreEqual(0, ScalarList(type, "RuntimeScalarGaps", Call(type, "CaptureRuntime", combined.Player)!).Length);
         }
     }
     [TestMethod]
@@ -726,5 +733,35 @@ public sealed class ResidentAnimatorStateTests
             var gaps=(string[])Call(type,"RequiredCoverageGaps",data);
             CollectionAssert.Contains(gaps,"director-inflight-connection-outside-owned-graphs");CollectionAssert.Contains(gaps,"director-atomic-producer-admission");
         } finally {Marshal.FreeHGlobal(manager);}
+    }
+    [TestMethod]
+    public void OverrideControllerAllowsUnmaterializedLazyClipCachesWhenDerivedClipsMatch()
+    {
+        var type = Load();
+        object MakeData(string[] clips, string[] original) {
+            var data = New(type, "Data");
+            var row = Row(type); Set(row, "Controller", "ctrl/override"); Rows(data, "Rows", row);
+            var baseAsset = New(type, "ControllerAsset");
+            Set(baseAsset, "Binding", "ctrl/base"); Set(baseAsset, "Kind", "controller");
+            Set(baseAsset, "Clips", new[] { "clip/a", "clip/b", "clip/a" }); Set(baseAsset, "ObserverDirectoryCaptured", true);
+            var over = New(type, "ControllerAsset");
+            Set(over, "Binding", "ctrl/override"); Set(over, "Kind", "override"); Set(over, "Base", "ctrl/base");
+            Set(over, "OverridePairs", new[] { "clip/a", "clip/c" });
+            Set(over, "Clips", clips); Set(over, "OriginalClips", original); Set(over, "ObserverDirectoryCaptured", true);
+            var arr = Array.CreateInstance(baseAsset.GetType(), 2);
+            arr.SetValue(baseAsset, 0); arr.SetValue(over, 1);
+            Set(data, "Assets", arr);
+            return data;
+        }
+        var lazy = MakeData(Array.Empty<string>(), Array.Empty<string>());
+        var warm = MakeData(new[] { "clip/c", "clip/b", "clip/c" }, new[] { "clip/a", "clip/b" });
+        Call(type, "RequireControllerAssetEquivalence", lazy, warm);
+        Call(type, "RequireEqual", lazy, warm);
+        var mismatchedWarm = MakeData(new[] { "clip/a", "clip/b", "clip/c" }, new[] { "clip/a", "clip/b" });
+        Invalid(() => Call(type, "RequireEqual", lazy, mismatchedWarm));
+        var mismatchedBase = MakeData(new[] { "clip/c", "clip/b", "clip/c" }, new[] { "clip/a" });
+        Invalid(() => Call(type, "RequireEqual", lazy, mismatchedBase));
+        var otherWarm = MakeData(new[] { "clip/b", "clip/c", "clip/c" }, new[] { "clip/a", "clip/b" });
+        Invalid(() => Call(type, "RequireEqual", warm, otherWarm));
     }
 }

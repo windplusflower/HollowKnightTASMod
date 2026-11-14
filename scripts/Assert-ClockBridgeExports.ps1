@@ -49,13 +49,18 @@ function Assert-ClockBridgeExports {
         throw 'Clock bridge canonical contact impulse policy export is missing before installation.'
     }
     if ($RequireResidentBoundary) {
-        foreach ($entry in 'GetResidentBoundaryCapability','BeginResidentBoundary','RequireResidentBoundary',
+        foreach ($entry in 'GetResidentBoundaryCapability','BeginResidentBoundary','BeginResidentSourceBoundary','RequireResidentBoundary',
             'RequireResidentWritableBoundary','ExportResidentContinuation','ImportResidentContinuation','EndResidentBoundary',
             'BeginResidentFrameObservation','RequireResidentFrameObservation','GetResidentFrameClockBytes','ExportResidentFrameClock',
             'CopyResidentAudioFenceStatus','CopyResidentAudioWorkers','CopyResidentParticleFenceStatus',
+            'CopyResidentClipCurveLedgerStatus','QueryResidentClipCurveEligibility',
+            'QueryResidentAudioVoiceControl',
+            'QueryResidentAudioVoiceControlV2',
             'BeginResidentParticleFence','RequireResidentParticleFence','EndResidentParticleFence',
             'CopyResidentInputFenceStatus','CopyResidentDirectorFenceStatus','BeginResidentDirectorFence','RequireResidentDirectorFence',
-            'VerifyResidentDirectorQueues','EndResidentDirectorFence') {
+            'VerifyResidentDirectorQueues','EndResidentDirectorFence','BeginResidentDirectorRestoreMutation',
+            'EndResidentDirectorRestoreMutation','GetDepthImageRenderEvent',
+            'BeginDepthImage','ReadDepthImage','ReleaseDepthImage') {
             if (-not $names.Contains('HktasClockBridge_' + $entry)) { throw "Resident bridge export missing before installation: $entry" }
         }
     }

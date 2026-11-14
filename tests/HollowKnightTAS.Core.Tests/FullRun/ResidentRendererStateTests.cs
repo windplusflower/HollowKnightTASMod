@@ -37,11 +37,15 @@ public sealed class ResidentRendererStateTests
             var type = Get(row, "Type"); Set(type, "Assembly", "UnityEngine.CoreModule"); Set(type, "Module", "9b972b67-126e-4d2b-893b-e07ab2c34011");
             Set(type, "Name", "UnityEngine." + kind); Set(type, "Token", 0x02000001);
             var stream = new byte[7]; Buffer.BlockCopy(BitConverter.GetBytes(-1), 0, stream, 0, 4);
-            var scalarSizes = kind == "MeshRenderer" ? new[] { 244, 7, 12, 1 } : new[] { 244, 7, 12, 18, 8, 25, 26 };
-            var scalars = scalarSizes.Select(size => new byte[size]).ToArray(); scalars[1] = stream; Set(row, "Scalars", scalars);
-            Set(row, "Meshes", kind == "MeshRenderer" ? new[] { "", "", "" } : System.Array.Empty<string>());
-            Set(row, "CachedMeshes", kind == "MeshRenderer" ? new[] { "", "", "" } : System.Array.Empty<string>());
-            Set(row, "ConsumerLinked", new bool[kind == "MeshRenderer" ? 3 : 1]);
+            var scalarSizes = kind == "ParticleSystemRenderer" ? new[] { 244, 7, 12, 208, 4 } : kind == "MeshRenderer" ? new[] { 244, 7, 12, 1 } : new[] { 244, 7, 12, 18, 8, 25, 26 };
+            var scalars = scalarSizes.Select(size => new byte[size]).ToArray(); scalars[1] = stream; Buffer.BlockCopy(BitConverter.GetBytes(0xfffff000U), 0, scalars[0], 192, 4); Set(row, "Scalars", scalars);
+            Set(row, "Meshes", kind == "ParticleSystemRenderer" ? new[] { "", "", "", "" } : kind == "MeshRenderer" ? new[] { "", "", "" } : System.Array.Empty<string>());
+            Set(row, "CachedMeshes", kind == "ParticleSystemRenderer" ? new[] { "", "", "", "" } : kind == "MeshRenderer" ? new[] { "", "", "" } : System.Array.Empty<string>());
+            Set(row, "ConsumerLinked", new bool[kind == "ParticleSystemRenderer" ? 4 : kind == "MeshRenderer" ? 3 : 1]);
+            if (kind == "ParticleSystemRenderer") {
+                var particle = New("ParticleRendererData"); Set(particle, "StripIndices", Array("NativeBuffer", Enumerable.Range(0, 4).Select(_ => New("NativeBuffer")).ToArray()));
+                Set(row, "Particle", particle);
+            }
             var data = New("Data"); Set(data, "Rows", Array("Row", row));
             var registry = Get(data, "Updates"); Set(registry, "Systems", Array("UpdateSystem", Enumerable.Range(0, 17).Select(_ => New("UpdateSystem")).ToArray()));
             return data;
@@ -53,6 +57,38 @@ public sealed class ResidentRendererStateTests
             var error = Assert.ThrowsExactly<TargetInvocationException>(() => Call(name, values));
             Assert.IsInstanceOfType<InvalidDataException>(error.InnerException);
         }
+    }
+    [TestMethod]
+    public void ShapeOnlyMeshListsRequireMatchingOwnerCacheAndLinkedNode()
+    {
+        var api = new Api(); var data = api.Fixture(); var shape = api.New("ShapeConsumer");
+        Set(shape, "Owner", "particle"); Set(shape, "Mesh", "mesh/shape"); Set(shape, "SharedMesh", "mesh/shape"); Set(shape, "Linked", true);
+        Set(data, "Shapes", api.Array("ShapeConsumer", shape));
+        var entry = api.New("Consumer"); Set(entry, "Owner", "particle"); Set(entry, "OtherRole", "ParticleSystem.Shape");
+        var list = api.New("ConsumerList"); Set(list, "Asset", "mesh/shape"); Set(list, "Kind", "Mesh"); Set(list, "Entries", api.Array("Consumer", entry));
+        Set(data, "Consumers", api.Array("ConsumerList", list)); api.Call("Validate", data);
+        Set(list, "Entries", api.Array("Consumer")); api.Reject("Validate", data);
+        Set(list, "Entries", api.Array("Consumer", entry)); Set(shape, "Linked", false); api.Reject("Validate", data);
+        Set(shape, "Linked", true); Set(shape, "SharedMesh", "mesh/other"); api.Reject("Validate", data);
+        Set(shape, "SharedMesh", "mesh/shape"); Set(entry, "Slot", 1); api.Reject("Validate", data);
+    }
+    [TestMethod]
+    public void SortingGroupUsesTheNativeInvalidSentinelAndRejectsActualGroupZero()
+    {
+        var api = new Api(); var data = api.Fixture(); api.Call("RequireCompleteCoverage", data);
+        Buffer.BlockCopy(BitConverter.GetBytes(0U), 0, ((byte[][])Get(api.Owner(data), "Scalars"))[0], 192, 4);
+        api.Reject("RequireCanonicalizableCoverage", data);
+    }
+    [TestMethod]
+    public void ParticleRendererKeepsSettingsAndOwnedIndicesWhileCanonicalizingBorrowedDrawViews()
+    {
+        var api = new Api(); var data = api.Fixture("ParticleSystemRenderer"); api.Call("RequireCompleteCoverage", data);
+        var particle = Get(api.Owner(data), "Particle"); Set(particle, "DrawCacheDirty", true);
+        api.Call("RequireCanonicalizableCoverage", data); api.Reject("RequireCompleteCoverage", data);
+        Set(particle, "DrawCacheDirty", false); Set(particle, "InstanceBufferPresent", true); api.Reject("RequireCanonicalizableCoverage", data);
+        Set(particle, "InstanceBufferPresent", false);
+        ((byte[][])Get(api.Owner(data), "Scalars"))[3][12] = 1;
+        api.Reject("RequireEqual", data, api.Fixture("ParticleSystemRenderer"));
     }
     [TestMethod]
     public void DrawingPaddingIsCanonicalizedWithoutDiscountingNamedFieldsOrExecutionOwnership()

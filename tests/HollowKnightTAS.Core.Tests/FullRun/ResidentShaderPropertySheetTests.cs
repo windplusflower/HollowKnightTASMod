@@ -51,6 +51,22 @@ public sealed class ResidentShaderPropertySheetTests
         }
     }
     [TestMethod]
+    public void EmptyInternedDefaultNameRemainsDifferentFromAbsentDefaultName()
+    {
+        var api = new Api(); var data = api.Fixture();
+        var properties = (Array)Get(data, "Properties");
+        var texture = ((Array)Get(properties.GetValue(2)!, "Textures")).GetValue(0)!;
+        var ids = new Func<string, int>(name => name.Length == 0 ? 0 : name == "custom/fade" ? 10 : name == "custom/size" ? 20 : 30);
+        var absent = api.Call("BuildLayout", data, ids, new Func<string, int>(_ => 100));
+        Set(texture, "DefaultNameIsEmpty", true);
+        var present = api.Call("BuildLayout", data, ids, new Func<string, int>(_ => 100));
+        Assert.AreEqual(-1, BitConverter.ToInt32((byte[])Get(absent, "Values"), 40));
+        Assert.AreEqual(0, BitConverter.ToInt32((byte[])Get(present, "Values"), 40));
+        Set(texture, "DefaultName", "white");
+        api.Reject("BuildLayout", data, ids, new Func<string, int>(_ => 100));
+    }
+
+    [TestMethod]
     public void TargetIdsAreReboundWhileFloatBitsAndAuxiliaryVectorAliasesRemainExact()
     {
         var api = new Api(); var data = api.Fixture();

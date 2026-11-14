@@ -13,6 +13,16 @@ namespace HollowKnightTAS.Runtime.FullRun
     // witness and native frame-gate epoch must both remain admitted throughout.
     internal sealed class ResidentClockBackend : ResidentClockInputState.IBoundaryBackend, IDisposable
     {
+        [ThreadStatic] private static ResidentClockBackend? currentClipBackend;
+        private readonly int ownerThread = System.Threading.Thread.CurrentThread.ManagedThreadId;
+        internal static ulong RequireClipToken()
+        {
+            var current = currentClipBackend ?? throw Error("clip eligibility has no active backend scope");
+            if (current.ownerThread != System.Threading.Thread.CurrentThread.ManagedThreadId || current.closed || current.failed)
+                throw Error("clip eligibility backend scope is inactive or belongs to another thread");
+            current.RequireBoundary();
+            return current.Token;
+        }
         private readonly NativeFullRunFrameClock.ResidentBoundary boundary;
         private readonly Action requireLoader;
         private readonly Action requirePayloadInitialized;
@@ -25,8 +35,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         public string[] CoverageGaps => Array.Empty<string>();
         public long NativeFrame => boundary.NativeFrame;
         internal ulong Token => boundary.Token;
-        internal ResidentClockBackend(NativeFullRunFrameClock clock, Action requireLoader, int observationPhase = 0)
+        internal ResidentClockBackend(NativeFullRunFrameClock clock, Action requireLoader, int observationPhase = 0, bool restoring = false)
         {
+            if (currentClipBackend != null) throw Error("nested clip eligibility backend scope");
             this.observationPhase = observationPhase;
             this.requireLoader = requireLoader ?? throw new ArgumentNullException(nameof(requireLoader)); requireLoader();
             var candidates = AppDomain.CurrentDomain.GetAssemblies().Where(assembly => assembly.GetName().Name == "HollowKnightTAS.ClockPayload").ToArray();
@@ -59,13 +70,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             requirePayloadInitialized();
             if ((int)InvokePayload("GetResidentRandomProducerAbi")! != 1) throw Error("random producer protocol differs");
             var hash = Sha256Utility.ComputeHex(File.ReadAllBytes(payload.Location));
-            boundary = observationPhase == 0 ? clock.OpenResidentBoundary(clock.CurrentFrameIndex)
+            boundary = observationPhase == 0 ? clock.OpenResidentBoundary(clock.CurrentFrameIndex, restoring)
                 : clock.OpenResidentFrameObservation(clock.CurrentFrameIndex, observationPhase);
-            Identity = "resident-clock-v2/" + boundary.BridgeSha256 + "/" + hash + "/" + payload.ManifestModule.ModuleVersionId.ToString("D");
+            Identity = "resident-clock-v3/" + boundary.BridgeSha256 + "/" + hash + "/" + payload.ManifestModule.ModuleVersionId.ToString("D");
             try {
                 RequireNativeAndLoader();
                 InvokePayload(observationPhase == 0 ? "OpenResidentRandomProducerFence" : "OpenResidentFrameProducerFence", Token); producerFenceOpen = true;
                 RequireBoundary();
+                currentClipBackend = this;
             } catch (Exception error) { ResidentFailureEvidence.Record(error); Fault(); boundary.Dispose(); throw; }
         }
         private void RequireNativeAndLoader()
@@ -99,11 +111,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             catch (Exception error) { ResidentFailureEvidence.Record(error); Fault(); throw; }
         }
         public byte[] CaptureNativeClock() { RequireBoundary(); var bytes = boundary.Capture(); RequireBoundary(); return bytes; }
-        internal byte[] CaptureAudioStatus() { RequireBoundary(); var bytes = boundary.CaptureAudioStatus(); RequireBoundary(); return bytes; }
-        internal ResidentDirectorFence.Data CaptureDirectorFence() { RequireBoundary(); return boundary.CaptureDirectorFence(); }
+        internal void BeginDirectorRestoreMutation() { RequireBoundary(); boundary.BeginDirectorRestoreMutation(); RequireBoundary(); }
+        internal void EndDirectorRestoreMutation() { RequireBoundary(); boundary.EndDirectorRestoreMutation(); RequireBoundary(); }
         internal IntPtr RequireInputOwner() { RequireBoundary(); return boundary.RequireInputOwner(); }
         internal string DescribeInputFence() { RequireBoundary(); return boundary.DescribeInputFence(); }
-        internal byte[] CaptureAudioWorkers() { RequireBoundary(); var bytes = boundary.CaptureAudioWorkers(); RequireBoundary(); return bytes; }
         public byte[] CaptureRandom() => (byte[])Invoke(observationPhase == 0 ? "ExportResidentRandomState" : "ExportResidentFrameRandomState", Token)!;
         public byte[] CaptureObserver() => (byte[])Invoke(observationPhase == 0 ? "ExportResidentClockObserver" : "ExportResidentFrameClockObserver", Token)!;
         public uint[] CaptureParticles() => (uint[])Invoke(observationPhase == 0 ? "ExportResidentParticleRandomState" : "ExportResidentFrameParticleRandomState", Token)!;
@@ -140,7 +151,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             catch { /* Native retirement remains mandatory if payload abort fails. */ }
             finally { producerFenceOpen = false; boundary.Fault(); }
         }
-        public void Dispose() { if (!closed) Fault(); boundary.Dispose(); }
+        public void Dispose()
+        {
+            if (ownerThread != System.Threading.Thread.CurrentThread.ManagedThreadId) throw Error("backend disposal belongs to another thread");
+            try { if (!closed) Fault(); boundary.Dispose(); }
+            finally { if (ReferenceEquals(currentClipBackend,this)) currentClipBackend = null; }
+        }
         private static InvalidOperationException Error(string message) => new InvalidOperationException("Resident clock backend: " + message);
     }
 }

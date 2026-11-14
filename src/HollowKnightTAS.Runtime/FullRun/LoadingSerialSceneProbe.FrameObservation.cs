@@ -26,7 +26,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 owner = instance ?? throw new InvalidOperationException("Resident frame observer has no installed serial loader");
                 admitted = requireFrame;
                 var roles = ResidentFieldOwnership.ToDictionary(row => row.Key, row => row.Value, StringComparer.Ordinal);
-                foreach (var field in new[] { "transition", "checkpointLoadInfo", "checkpointTransitionRoutine", "residentBeginRoutine",
+                foreach (var field in new[] { "transition", "checkpointLoadInfo",
                     "sourceUnloaded", "awaitingBoundary", "observedBoundary", "checkpointTransitionFinished" }) roles[field] = "D";
                 slots = new ResidentProcessSlots("frame-loader", owner, roles, Require);
                 Snapshot = new ResidentLoaderData { Owner = slots.Snapshot, FrameObservation = true,

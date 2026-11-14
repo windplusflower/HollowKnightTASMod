@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <stdio.h>
+#include "resident_depth_image.h"
 #include "startup_gate.h"
 #include "save_write_guard.h"
 #include "restore_window.h"
@@ -102,14 +103,57 @@ static BOOL finish_contact_impulse_policy(void);
 static LONG hktas_reject_individual_end(void);
 #include "resident_audio_fence.h"
 #include "resident_particle_producer.h"
+static BOOL hktas_install_clip_in_exclusive_startup(BYTE *base,DWORD thread);
+#define HKTAS_DN_ADDITIONAL_INSTALL(base,thread) hktas_install_clip_in_exclusive_startup(base,thread)
+static BOOL hktas_clip_director_inherited(void);
+static BOOL hktas_clip_drained(void);
+static BOOL hktas_clip_joint_hold(uint64_t token);
+static BOOL hktas_director_clip_inherited(void);
+#define HKTAS_DN_CLIP_INHERITED() hktas_clip_director_inherited()
+#define HKTAS_DN_EXTRA_DRAINED() hktas_clip_drained()
+#define HKTAS_DN_EXTRA_HOLD(token) hktas_clip_joint_hold(token)
 #include "resident_director_producers.h"
-/* Keep the exact first audio failure in the shared fault word. It survives
- * termination; reporting only 66 also obscured explicit abort (reason 37). */
-static void __cdecl hktas_resident_audio_fault(LONG family)
+#define HKTAS_CL_PARENT_LOCK() AcquireSRWLockExclusive(&g_dn_lock)
+#define HKTAS_CL_PARENT_UNLOCK() ReleaseSRWLockExclusive(&g_dn_lock)
+#define HKTAS_CL_PARENT_COUNTED() hktas_director_clip_inherited()
+#define HKTAS_CL_WAKE_PARENT() WakeAllConditionVariable(&g_dn_cv)
+#include "resident_clip_curve_ledger.h"
+#include "resident_audio_voice_control.h"
+/* Called with Director -> Clip locks, or Director lock before taking Clip.
+ * Only live counted contexts from this epoch/its pre-seal census inherit. */
+static BOOL hktas_director_clip_inherited(void)
 {
-    LONG reason = HktasClockBridge_GetResidentAudioFenceFault();
+    hktas_dn_thread *thread=g_dn_fls==FLS_OUT_OF_INDEXES ? NULL : FlsGetValue(g_dn_fls);
+    return thread && thread->counted && thread->depth && g_dn_active && !g_dn_fault && !g_dn_held
+        && (thread->counted_epoch==g_dn_epoch || (g_dn_closed && thread->counted_epoch==g_dn_previous_epoch));
+}
+static BOOL hktas_clip_director_inherited(void)
+{
+    AcquireSRWLockExclusive(&g_cl_lock);
+    BOOL ok=hktas_cl_thread_inherited_locked(hktas_cl_thread_current())
+        && (!g_dn_closed || g_cl_epoch==g_dn_epoch);
+    ReleaseSRWLockExclusive(&g_cl_lock);return ok;
+}
+static BOOL hktas_clip_drained(void)
+{
+    AcquireSRWLockExclusive(&g_cl_lock);BOOL ok=!g_cl_active;
+    ReleaseSRWLockExclusive(&g_cl_lock);return ok;
+}
+static BOOL hktas_clip_joint_hold(uint64_t token)
+{
+    AcquireSRWLockExclusive(&g_cl_lock);
+    BOOL ok=g_cl_installed && g_cl_closed && !g_cl_fault && !g_cl_active && token==g_cl_epoch
+        && GetCurrentThreadId()==g_cl_main && GetTickCount64()-g_cl_started<g_resident_wall_limit && hktas_cl_image(TRUE);
+    if(ok) g_cl_held=TRUE;
+    ReleaseSRWLockExclusive(&g_cl_lock);return ok;
+}
+static void __cdecl hktas_resident_clip_curve_fault(LONG family)
+{
+    LONG reason = g_cl_fault;
     hktas_v2_fault(reason > 0 && reason < 100 ? family * 100 + reason : family);
 }
+static BOOL hktas_install_clip_in_exclusive_startup(BYTE *base,DWORD thread)
+{ return install_resident_clip_curve_ledger(base,thread,hktas_resident_clip_curve_fault); }
 static void __cdecl hktas_resident_particle_fault(LONG family)
 {
     /* Called with the producer lock held. Do not re-enter its status export. */
@@ -122,7 +166,30 @@ static void __cdecl hktas_resident_director_fault(LONG family)
     hktas_v2_fault(reason > 0 && reason < 100 ? family * 100 + reason : family);
 }
 #include "resident_boundary_clock.h"
+__declspec(dllexport) LONG __cdecl HktasClockBridge_QueryResidentAudioVoiceControl(
+    uintptr_t opaque,const uintptr_t *groups,uint32_t count,BYTE *output,uint32_t bytes)
+{
+    BYTE *base=(BYTE *)GetModuleHandleW(L"UnityPlayer.dll");
+    uint64_t token=g_resident_boundary_token,frame=g_resident_boundary_frame;
+    /* The read-only FMOD receipt is not a producer/hardware fence. Require
+     * the existing pinned early-startup image and current gameplay boundary;
+     * managed retains its independent master lease and voice identity checks. */
+    if (!base || base!=g_dn_base || !hktas_dn_signature(base)
+        || !hktas_resident_boundary_valid(token,frame)) return 0;
+    LONG result=hktas_vc_query(opaque,groups,count,output,bytes);
+    return hktas_resident_boundary_valid(token,frame) ? result : 0;
+}
 #include "resident_frame_clock.h"
+__declspec(dllexport) LONG __cdecl HktasClockBridge_QueryResidentAudioVoiceControlV2(
+    uintptr_t opaque,uintptr_t opaque_system,const uintptr_t *groups,uint32_t count,BYTE *output,uint32_t bytes)
+{
+    BYTE *base=(BYTE *)GetModuleHandleW(L"UnityPlayer.dll");
+    uint64_t token=g_resident_boundary_token,frame=g_resident_boundary_frame;
+    if (!base || base!=g_dn_base || !hktas_dn_signature(base)
+        || !hktas_resident_boundary_valid(token,frame)) return 0;
+    LONG result=hktas_vc_query_v2(opaque,opaque_system,groups,count,output,bytes);
+    return hktas_resident_boundary_valid(token,frame) ? result : 0;
+}
 
 static BOOL loading_startup_clock_is_frozen(void)
 {
@@ -1344,7 +1411,6 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
             return TRUE;
         }
         if (g_v2_gate_enabled && (!g_guard_required || !g_startup_latch_enabled
-            || !install_resident_audio_fence((BYTE *)GetModuleHandleW(L"UnityPlayer.dll"), g_startup_hook_thread_id, hktas_resident_audio_fault)
             || !install_resident_particle_producer((BYTE *)GetModuleHandleW(L"UnityPlayer.dll"), g_startup_hook_thread_id, hktas_resident_particle_fault)
             || !install_resident_director_producers((BYTE *)GetModuleHandleW(L"UnityPlayer.dll"), g_startup_hook_thread_id, hktas_resident_director_fault)))
         {

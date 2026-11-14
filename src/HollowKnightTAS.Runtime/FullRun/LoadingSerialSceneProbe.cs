@@ -258,11 +258,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (target.IsValid() && target.isLoaded)
                 throw new InvalidOperationException("Serial native boundary already has the target scene.");
             if (session == null) throw new ArgumentNullException(nameof(session));
+            var start = ResidentNativeMemory.WallMilliseconds();
             self.Inventory("native-empty-boundary", movie, native);
             LoadingBoundaryInventory.Capture(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native);
             if (session.TryParkResidentImport(native, self.ordinal, self.sourceName, self.transition.TargetSceneName))
                 return true; // The iterator still cannot advance. Restore enters the same Canon inside its measured transaction.
-            session.EnterResidentBoundary();
+            if (!session.EnterResidentBoundary(self.ordinal, movie, native)) {
+                var elapsedMs = ResidentNativeMemory.WallMilliseconds() - start;
+                self.Write("resident-transit-verified", new { movie, native, elapsedMs });
+            }
             self.observedBoundary = true;
             return true;
         }

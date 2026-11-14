@@ -72,6 +72,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             ["recordingRandomSynchronizationAcknowledged"] = "acknowledgement"
         };
 
+
         internal static CaptureResult Capture(HollowKnightTASMod mod, ModStartupCompatibility startup, ulong token,
             Action admitted, Action requirePayloadInitialized)
             => CaptureControl(mod, startup, token, admitted, requirePayloadInitialized, false);
@@ -353,6 +354,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 initialized();
             }
+            internal IEnumerable<KeyValuePair<object, string>> ExternalBindings => external;
             internal string? BindExternal(object value) => external.TryGetValue(value, out var key) ? key : null;
             internal object? ResolveExternal(string key) => resolved.TryGetValue(key, out var value) ? value : null;
             private void Bind(object value, string key)
@@ -417,7 +419,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (!Export<byte[]>("RandomState").SequenceEqual(source.Random)
                     || !Export<byte[]>("ClockObserver").SequenceEqual(source.Observer)
                     || !Export<uint[]>("ParticleRandomState").SequenceEqual(source.Particles))
-                    throw Error("payload packet-owned fields did not independently read back");
+                    throw Error($"payload packet-owned fields did not independently read back [random={!Export<byte[]>("RandomState").SequenceEqual(source.Random)} observer={!Export<byte[]>("ClockObserver").SequenceEqual(source.Observer)} particles={!Export<uint[]>("ParticleRandomState").SequenceEqual(source.Particles)}]");
             }
             private void RequireEpoch(bool imported)
             {
@@ -506,9 +508,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw Error("payload field descriptor is absent, duplicated or changed transport");
             }
             var clock = ResidentManagedTypeCatalog.ResolveType(data.ClockType); var particle = ResidentManagedTypeCatalog.ResolveType(data.ParticleType);
-            if (JsonConvert.SerializeObject(data.ClockFields) != JsonConvert.SerializeObject(DescribePayloadFields(clock, true, ClockFields, "clock"))
-                || JsonConvert.SerializeObject(data.ParticleFields) != JsonConvert.SerializeObject(DescribePayloadFields(particle, false, ParticleFields, "particle")))
+            var clockExpected = CanonicalPayloadFields(DescribePayloadFields(clock, true, ClockFields, "clock"));
+            var clockActual = CanonicalPayloadFields(data.ClockFields);
+            var particleExpected = CanonicalPayloadFields(DescribePayloadFields(particle, false, ParticleFields, "particle"));
+            var particleActual = CanonicalPayloadFields(data.ParticleFields);
+            if (JsonConvert.SerializeObject(clockActual) != JsonConvert.SerializeObject(clockExpected)
+                || JsonConvert.SerializeObject(particleActual) != JsonConvert.SerializeObject(particleExpected))
                 throw Error("payload field manifest changed actual layout or transport ownership");
+
+
+
             if (frameOnly) {
                 var values = data.FrameValues!;
                 var seen = 0;
@@ -579,9 +588,27 @@ namespace HollowKnightTAS.Runtime.FullRun
                     return new PayloadEvent { Field = field.Name, Role = role,
                         ResetMode = role == "request" ? EventResetMode.AutoReset : role == "acknowledgement" ? EventResetMode.ManualReset : (EventResetMode)(-1) };
                 }).ToArray();
+        private static object[] CanonicalPayloadFields(PayloadField[]? fields)
+        {
+            if (fields == null) return Array.Empty<object>();
+            return fields.Select(f => new {
+                f.Name,
+                f.Storage,
+                f.Transport,
+                Root = ResidentManagedTypeCatalog.IsControlPlaneAssembly(f.DeclaringType?.Assembly) ? "" : f.Root,
+                Token = ResidentManagedTypeCatalog.IsControlPlaneAssembly(f.DeclaringType?.Assembly) ? 0 : f.Token,
+                f.Attributes,
+                DeclaringType = ResidentManagedTypeCatalog.NormalizeType(f.DeclaringType),
+                ValueType = ResidentManagedTypeCatalog.NormalizeType(f.ValueType)
+            }).ToArray();
+        }
         private static object? PayloadLayout(PayloadData? data) => data == null ? null : new {
-            data.ProducerAbi, data.ClockType, data.ParticleType, data.ClockFields, data.ParticleFields, data.CoverageGaps,
+            data.ProducerAbi, ClockType = ResidentProcessSlots.NormalizeType(data.ClockType), ParticleType = ResidentProcessSlots.NormalizeType(data.ParticleType),
+            ClockFields = CanonicalPayloadFields(data.ClockFields), ParticleFields = CanonicalPayloadFields(data.ParticleFields), data.CoverageGaps,
             Events = data.Events.Select(value => new { value.Field, value.Role, value.ResetMode, value.Present, value.Observed }).ToArray()
         };
+
+
+
     }
 }

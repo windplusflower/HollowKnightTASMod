@@ -18,8 +18,18 @@ namespace HollowKnightTAS.Runtime.FullRun
         private const int MaximumLine = 1024 * 1024, MaximumKeys = 1000000;
         private const long MaximumFile = 2L * 1024 * 1024 * 1024;
         private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false, true);
-        private static readonly string[] Names = { "admission", "assetManifest", "assetValues", "clock", "componentNative", "directory", "globalNative", "input", "managedGraph", "objectNative", "process", "rng", "scheduler", "staticRoots", "typeManifest" };
+        private static readonly string[] Names = { "admission", "assetManifest", "assetValues", "clock", "componentNative", "directory", "input", "managedGraph", "objectNative", "process", "rng", "scheduler", "staticRoots", "typeManifest" };
         internal static IReadOnlyList<string> RequiredGroups => Array.AsReadOnly(Names);
+
+        internal sealed class GroupMeta
+        {
+            internal readonly string ExpectedHash, ObservedHash;
+            internal readonly int ExpectedCount, ObservedCount;
+            internal GroupMeta(string expHash, int expCount, string obsHash, int obsCount)
+            {
+                ExpectedHash = expHash; ExpectedCount = expCount; ObservedHash = obsHash; ObservedCount = obsCount;
+            }
+        }
 
         internal sealed class Identity
         {
@@ -52,6 +62,23 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             internal static Group Capture(string name, byte[] portableBytes, IEnumerable<string> expectedKeys, IEnumerable<string> observedKeys, IEnumerable<string> gaps)
                 => new Group(name, portableBytes ?? throw new ArgumentNullException(nameof(portableBytes)), expectedKeys, observedKeys, gaps);
+            internal static Group CaptureWithMeta(string name, byte[] portableBytes, IEnumerable<string> expectedKeys, IEnumerable<string> observedKeys, IEnumerable<string> gaps, out GroupMeta meta)
+            {
+                var g = Capture(name, portableBytes, expectedKeys, observedKeys, gaps);
+                meta = new GroupMeta(g.ExpectedHash, g.ExpectedCount, g.ObservedHash, g.ObservedCount);
+                return g;
+            }
+            internal static Group CaptureTrusted(string name, byte[] portableBytes, string expectedHash, int expectedCount, string observedHash, int observedCount, string[] gaps)
+                => new Group(name, portableBytes ?? throw new ArgumentNullException(nameof(portableBytes)), expectedHash, expectedCount, observedHash, observedCount, gaps ?? Array.Empty<string>());
+            private Group(string name, byte[] payload, string expectedHash, int expectedCount, string observedHash, int observedCount, string[] gaps)
+            {
+                if (!Names.Contains(name, StringComparer.Ordinal)) throw Error("unknown observation domain");
+                Name = name; PayloadBytes = payload.Length; PayloadHash = Sha256Utility.ComputeHex(payload);
+                ExpectedCount = expectedCount; ExpectedHash = expectedHash;
+                ObservedCount = observedCount; ObservedHash = observedHash;
+                this.gaps = gaps;
+                if (PayloadBytes == 0 && gaps.Length == 0) throw Error("empty payload requires a missing-domain reason");
+            }
             internal static Group Missing(string name, string reason)
                 => new Group(name, Array.Empty<byte>(), Array.Empty<string>(), Array.Empty<string>(), new[] { reason });
             internal object Record() => new { name = Name, bytes = PayloadBytes, sha256 = PayloadHash, expectedCount = ExpectedCount,
@@ -157,6 +184,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (stream.Position > MaximumFile - bytes.Length) throw Error("trace exceeds the bounded file size");
             stream.Write(bytes, 0, bytes.Length); bodyHash.TransformBlock(bytes, 0, bytes.Length, bytes, 0);
+            stream.Flush();
         }
         private static byte[] Line(object record)
         {

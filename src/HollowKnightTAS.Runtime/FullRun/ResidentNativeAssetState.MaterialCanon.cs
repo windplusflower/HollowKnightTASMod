@@ -17,7 +17,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw Error("native asset array shape exceeds its bounds");
             return Pointer(bytes, offset) == IntPtr.Zero && size == 0 && BitConverter.ToUInt64(bytes, offset + 24) == 1;
         }
-        private static string[] MaterialCoverageGaps(MaterialState state, bool canonicalizable)
+        private static string[] MaterialCoverageGaps(MaterialState state)
         {
             ResidentAssetPipeline.ValidateMaterial(state); var result = new System.Collections.Generic.List<string>(); var cache = state.Caches;
             if (cache == null) result.Add("material/native-cache-domain-not-captured");
@@ -26,23 +26,26 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (cache != null) {
                 if (!cache.BuildStacksEmpty || !cache.RuntimeStacksEmpty) result.Add("material/virtual-texture-stack-state");
                 if (state.HasRuntimeSheet && (cache.SharedReferences < 1 || cache.PropertySheetReferences < 1)) result.Add("material/invalid-native-reference-count");
-                if (!canonicalizable && (!cache.MainTextureUncached || !cache.MainColorUncached || !cache.HashesEmpty || !cache.TextureUnionEmpty
-                    || !cache.BufferAbsent || !cache.DisplayListsEmpty || !cache.SmallIndexMatchesOwner || cache.SharedReferences != 1 || cache.PropertySheetReferences != 1
-                    || !state.TextureDirty || !state.ConstantBufferDirty || !state.RuntimeTextureDirty || !state.RuntimeConstantBufferDirty || !state.RuntimeStacksDirty
-                    || (state.RuntimeFlags & 4U) == 0)) result.Add("material/common-cold-cache-state");
+
             }
             if (state.RuntimeProperties != null) result.AddRange(state.RuntimeProperties.CoverageGaps);
             return result.Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToArray();
         }
         internal static void RequireMaterialCanonicalizable(MaterialState state)
         {
-            var gaps = MaterialCoverageGaps(state, true);
+            var gaps = MaterialCoverageGaps(state);
             if (state.RuntimeProperties != null) ResidentShaderPropertySheet.RequireCompleteCoverage(state.RuntimeProperties);
             if (gaps.Length != 0) throw Error("Material cannot enter common Canon: " + string.Join(";", gaps));
         }
         private static void RequireMaterialComplete(MaterialState state)
         {
-            RequireMaterialCanonicalizable(state); var gaps = MaterialCoverageGaps(state, false);
+            RequireMaterialCanonicalizable(state);
+            var cache = state.Caches!;
+            if (!cache.MainTextureUncached || !cache.MainColorUncached || !cache.HashesEmpty || !cache.TextureUnionEmpty
+                || !cache.BufferAbsent || !cache.DisplayListsEmpty || !cache.SmallIndexMatchesOwner || cache.SharedReferences != 1 || cache.PropertySheetReferences != 1
+                || !state.TextureDirty || !state.ConstantBufferDirty || !state.RuntimeTextureDirty || !state.RuntimeConstantBufferDirty || !state.RuntimeStacksDirty
+                || (state.RuntimeFlags & 4U) == 0) throw Error("Material cache normalization did not read back");
+            var gaps = MaterialCoverageGaps(state);
             if (gaps.Length != 0) throw Error("Material complete native readback is not in S0: " + string.Join(";", gaps));
         }
         // D: complete saved/runtime properties, shader/owner references, queue,

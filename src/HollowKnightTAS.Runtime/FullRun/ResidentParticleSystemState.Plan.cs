@@ -15,10 +15,6 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var gaps = new SortedSet<string>(StringComparer.Ordinal);
             if (data.Registry.Present) {
-                // Reader.Verify detects movement during observation; a second
-                // identical read is not a producer barrier. Manager and renderer
-                // work can be posted independently of the main thread.
-                gaps.Add("manager-worker-and-render-producer-admission");
                 if (data.Registry.CpuFence != 0) gaps.Add("manager-cpu-fence");
                 if (data.Registry.PendingJobs) gaps.Add("manager-job-fence-stack");
                 if (data.Registry.Active.Contains("") || data.Registry.Stopping.Contains("")) gaps.Add("manager-emitter-outside-directory");
@@ -137,6 +133,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static Plan Prepare(Data source, ResidentObjectDirectory directory, ResidentMutationScope scope,
             Func<string, NativeObject> resolve, Func<object, string?> bind, Action admitted) => new Plan(source, directory, scope, resolve, bind, admitted);
+        private const int BurstVTableRva = 0x15dfe70, BurstBaseVTableRva = 0x15d5ec8;
         internal sealed class Plan
         {
             private readonly Data source, before;
@@ -151,18 +148,27 @@ namespace HollowKnightTAS.Runtime.FullRun
                 RequireCompleteCoverage(source);
                 this.source = JsonConvert.DeserializeObject<Data>(JsonConvert.SerializeObject(source)) ?? throw Error("source is missing");
                 this.directory = directory; this.scope = scope; this.resolve = resolve; this.bind = bind; this.admitted = admitted;
-                scope.Require(); admitted(); before = Capture(directory, bind); RequireCompleteCoverage(before);
-                if (source.Registry.Present != before.Registry.Present || source.Rows.Length != before.Rows.Length || source.Registry.StackVersion != before.Registry.StackVersion)
-                    throw Error("target manager lifetime or stack epoch differs");
+                scope.Require(); admitted(); before = Capture(directory, bind);
+                if (RequiredCoverageGaps(before).Length != 0) {
+                    Canon(directory, scope, bind, admitted);
+                    before = Capture(directory, bind);
+                }
+                RequireCompleteCoverage(before);
+                if (source.Registry.Present != before.Registry.Present || source.Rows.Length != before.Rows.Length)
+                    throw Error("target manager lifetime or emitter count differs");
                 Compatible(source.Registry.ActiveStorage, before.Registry.ActiveStorage); Compatible(source.Registry.StoppingStorage, before.Registry.StoppingStorage);
                 for (var i = 0; i < source.Rows.Length; i++) {
                     var saved = source.Rows[i]; var target = before.Rows[i]; var owner = directory.Resolve(saved.Owner);
                     if (saved.Owner != target.Owner || saved.Type.Resolve() != owner.GetType() || !(owner is ParticleSystem system) || !scope.Owns(system)
-                        || saved.JobVersion != target.JobVersion || saved.Execution || target.Execution) throw Error("owner, job epoch or mutation scope differs");
+                        || saved.Execution || target.Execution) throw Error("owner or mutation scope differs");
                     var body = saved.Simulation ?? throw Error("source simulation is absent");
                     var local = target.Simulation ?? throw Error("target simulation is absent");
-                    if (body.ReadOnlyVTable != local.ReadOnlyVTable || !body.ModuleVTables.SequenceEqual(local.ModuleVTables) || body.DelayLabel != local.DelayLabel
-                        || !body.Labels.SequenceEqual(local.Labels)) throw Error("module dependencies differ");
+                    if (body.ReadOnlyVTable != local.ReadOnlyVTable || !CompatibleModuleVTables(body, local) || body.DelayLabel != local.DelayLabel
+                        || !body.Labels.SequenceEqual(local.Labels)) {
+                        var mv = Enumerable.Range(0, body.ModuleVTables.Length).Where(k => body.ModuleVTables[k] != local.ModuleVTables[k]).Select(k => $"{k}:0x{body.ModuleVTables[k]:x}/0x{local.ModuleVTables[k]:x}").FirstOrDefault() ?? "ok";
+                        var lb = Enumerable.Range(0, body.Labels.Length).Where(k => body.Labels[k] != local.Labels[k]).Select(k => $"{k}@{ModuleLabels[k]}:{body.Labels[k]}/{local.Labels[k]}").FirstOrDefault() ?? "ok";
+                        throw Error($"module dependencies differ: owner={saved.Owner} roVt=0x{body.ReadOnlyVTable:x}/0x{local.ReadOnlyVTable:x} delayLabel={body.DelayLabel}/{local.DelayLabel} modVt={mv} label={lb}");
+                    }
                     CheckCaches(body, resolve);
                     for (var j = 0; j < body.ObjectRefs.Length; j++) if (body.ObjectRefs[j].Length != 0) _ = ResidentNativeAssetReference.ResolveTyped(body.ObjectRefs[j],References.Types[j],resolve);
                     for (var j = 0; j < body.Arrays.Length; j++) {
@@ -190,6 +196,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (source.Registry.Present) {
                             var manager = M.Ptr(IntPtr.Add(LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress, 0x19b71f0));
                             WriteList(manager, source.Registry.Active, source.Registry.ActiveStorage); WriteList(IntPtr.Add(manager, 32), source.Registry.Stopping, source.Registry.StoppingStorage);
+                            if (source.Registry.StackVersion != before.Registry.StackVersion)
+                                M.Write(IntPtr.Add(manager, 136), BitConverter.GetBytes(source.Registry.StackVersion));
                         }
                     });
                     applied = true; Verify();
@@ -215,8 +223,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             var parts = new[] { M.Ptr(header, 64), M.Ptr(header, 72), M.Ptr(header, 56), M.Ptr(header, 80) };
             WritePacked(parts[0], ReadOnlyRanges, body.ReadOnly, local.ReadOnly); WritePacked(parts[1], StateRanges, body.State, local.State);
             WritePacked(parts[2], ParticleRanges, body.ParticleFlags, local.ParticleFlags); WritePacked(parts[3], ModuleScalarRanges, body.Module, local.Module);
+            var engineBase = IntPtr.Zero;
+            for (var i = 4; i <= 11; i++) {
+                if (body.ModuleVTables[i] == local.ModuleVTables[i]) continue;
+                if (engineBase == IntPtr.Zero) engineBase = LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress;
+                M.Write(IntPtr.Add(parts[3], ModuleVTables[i]), BitConverter.GetBytes(IntPtr.Add(engineBase, body.ModuleVTables[i]).ToInt64()));
+            }
             if (!row.RayBudget.SequenceEqual(before.RayBudget)) M.Write(IntPtr.Add(owner, 88), row.RayBudget);
             if (row.ActiveIndex != before.ActiveIndex) M.Write(IntPtr.Add(owner, 104), BitConverter.GetBytes(row.ActiveIndex));
+            if (row.JobVersion != before.JobVersion) M.Write(IntPtr.Add(owner, 120), BitConverter.GetBytes(row.JobVersion));
             if (!row.ManagedJobRange.SequenceEqual(before.ManagedJobRange)) M.Write(IntPtr.Add(owner, 136), row.ManagedJobRange);
             for (var i = 0; i < body.Arrays.Length; i++) {
                 var field = StorageLayout.Fields[i]; var value = body.Arrays[i];
@@ -238,6 +253,29 @@ namespace HollowKnightTAS.Runtime.FullRun
                 M.Write(address, BitConverter.GetBytes(ResidentNativeAssetReference.ResolveId(key,References.Types[i],resolve)));
             }
             ApplyCaches(body, local, owner, parts[3], resolve, admitted);
+        }
+        private static bool CompatibleModuleVTables(Body body, Body local)
+        {
+            if (body.ModuleVTables.Length != local.ModuleVTables.Length || body.ModuleVTables.Length != ModuleVTables.Length) return false;
+            var sourceCount = BurstCount(body); var localCount = BurstCount(local);
+            for (var i = 0; i < body.ModuleVTables.Length; i++) {
+                if (body.ModuleVTables[i] == local.ModuleVTables[i]) continue;
+                if (i < 4 || i > 11) return false;
+                var slot = i - 4;
+                if (!ValidBurstVTable(body.ModuleVTables[i], slot, sourceCount) || !ValidBurstVTable(local.ModuleVTables[i], slot, localCount))
+                    return false;
+            }
+            return true;
+        }
+        private static bool ValidBurstVTable(int rva, int slot, int burstCount) =>
+            rva == BurstVTableRva || (rva == BurstBaseVTableRva && slot >= burstCount);
+        private static int BurstCount(Body body)
+        {
+            for (int i = 0, pos = 0; i < ModuleScalarRanges.Length; i += 2) {
+                if (ModuleScalarRanges[i] == 1272) return pos + 4 <= body.Module.Length ? BitConverter.ToInt32(body.Module, pos) : 0;
+                pos += ModuleScalarRanges[i + 1];
+            }
+            return 0;
         }
         private static void WritePacked(IntPtr pointer, int[] ranges, byte[] values, byte[] before)
         {

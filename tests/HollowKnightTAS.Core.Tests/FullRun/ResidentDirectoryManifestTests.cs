@@ -84,7 +84,7 @@ public sealed class ResidentDirectoryManifestTests
         Reject((_, owners) => Set(owners.GetValue(2)!, "Key", Get(owners.GetValue(1)!, "Key")));
         var type = api.NativeType(typeof(UnityEngine.Mesh));
         Set(type, "Module", "11111111-1111-1111-1111-111111111111");
-        api.Reject(() => type.GetType().GetMethod("Resolve", All)!.Invoke(type, new object[] { true }));
+        api.Reject(() => type.GetType().GetMethod("Resolve", All)!.Invoke(type, new object?[] { true, null }));
     }
 
     [TestMethod]

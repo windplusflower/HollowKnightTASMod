@@ -6,6 +6,27 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal static partial class ResidentAnimatorState
     {
         private const int InvalidateBoundCurve = 0x11b6f0, InvalidateSceneTransform = 0x11b760;
+        internal static bool IsGenericBinderCallback(int rva) => rva == 0xc2a80;
+        internal static IntPtr GenericBinder(IntPtr animator, int slot, Func<IntPtr,int,byte[]> read)
+        {
+            if (animator == IntPtr.Zero || slot < 0 || slot > 1) return IntPtr.Zero;
+            return M.Ptr(read(IntPtr.Add(animator, 520 + slot * 144), 8), 0);
+        }
+        internal static bool HasGenericBinderReceiver(IntPtr binder, IntPtr receiver, Func<IntPtr,int,byte[]> read)
+        {
+            if (binder == IntPtr.Zero || receiver == IntPtr.Zero) return false;
+            var header = read(binder, 64);
+            // GenericBindingCallback visits four 32-byte bound-curve arrays.
+            // All four use an Object* receiver at +24; array counts are int32.
+            for (var table = 0; table < 4; table++) {
+                var count = M.I32(header, table * 16); var values = M.Ptr(header, table * 16 + 8);
+                if (count < 0 || count > MaximumEntries || count != 0 && values == IntPtr.Zero)
+                    throw Error("generic bound-curve array exceeds its native extent");
+                var rows = read(values, checked(count * 32));
+                for (var index = 0; index < count; index++) if (M.Ptr(rows, index * 32 + 24) == receiver) return true;
+            }
+            return false;
+        }
         internal static bool IsBinderCallback(int rva) => rva == InvalidateBoundCurve || rva == InvalidateSceneTransform;
         internal static bool IsBinderOwnerVtable(int rva) => rva == AnimatorVtable;
         internal static bool TryBindBinderUserData(int callback, IntPtr receiver, IntPtr userData, Func<IntPtr,string?> identifyAnimator,

@@ -204,6 +204,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         foreach (var texture in property.Textures) {
                             writer.Write(texture.Binding); writer.Write(texture.DefaultName); writer.Write(texture.ScaleOffset); writer.Write(texture.TexelSize); writer.Write(texture.HdrDecode);
                             writer.Write(texture.AssignedDimension); writer.Write(texture.RequiredDimension); writer.Write(texture.VrUsage); writer.Write(texture.BindMs);
+                            writer.Write(texture.DefaultNameIsEmpty);
                         }
                     }
                 }

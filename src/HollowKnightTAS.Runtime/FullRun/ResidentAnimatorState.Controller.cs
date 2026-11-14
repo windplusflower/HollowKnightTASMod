@@ -77,7 +77,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 int count = Count(M.U32(header, countField));
                 var address = Relative(owner, header, countField + 8);
-                if ((address == IntPtr.Zero) != (count == 0)) throw Error("native controller bank allocation/count disagree");
+                if (count != 0 && address == IntPtr.Zero) throw Error("nonempty controller bank has no storage: count=" + count);
                 return Read(address, checked(count * stride));
             }
             internal void Verify()

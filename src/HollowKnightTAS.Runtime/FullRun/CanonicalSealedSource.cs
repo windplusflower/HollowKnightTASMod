@@ -30,6 +30,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Require(bytes);
         }
         internal byte[] Bytes => bytes ?? throw new InvalidOperationException("Sealed source export was faulted.");
+        internal string Hash => hash;
         internal T Require(byte[] current)
         {
             try {

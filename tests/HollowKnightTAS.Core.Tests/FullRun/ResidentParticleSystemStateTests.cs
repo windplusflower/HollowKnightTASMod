@@ -68,6 +68,17 @@ public sealed class ResidentParticleSystemStateTests
         }
     }
     [TestMethod]
+    public void ShapeMeshLinksRequireTwoTypedLinksAndABoundMesh()
+    {
+        var api = new Api(); var body = api.New("Body"); var offsets = api.Offsets("ModuleLinks"); var links = offsets.Select(_ => -1).ToArray();
+        Set(body, "ModuleLinkKinds", links); var cache = Get(body, "Caches");
+        ((string[])Get(cache, "Objects"))[0] = "mesh/shape"; links[Array.IndexOf(offsets,856)] = -4;
+        links[Array.IndexOf(offsets,1048)] = -6; api.Reject("ValidateCacheBindings", body);
+        links[Array.IndexOf(offsets,1056)] = -6; api.Call("ValidateCacheBindings", body);
+        links[Array.IndexOf(offsets,872)] = -6; api.Reject("ValidateCacheBindings", body);
+        links[Array.IndexOf(offsets,872)] = -1; ((string[])Get(cache, "Objects"))[0] = ""; api.Reject("ValidateCacheBindings", body);
+    }
+    [TestMethod]
     public void FixedModuleScalarWritesExcludeAllPointerAllocatorAndInstanceIdSlots()
     {
         var api = new Api();
@@ -87,7 +98,7 @@ public sealed class ResidentParticleSystemStateTests
     {
         var api = new Api(); var data = api.New("Data"); api.Call("RequireCompleteCoverage", data);
         Set(Get(data, "Registry"), "Present", true);
-        CollectionAssert.Contains(api.Refresh(data), "manager-worker-and-render-producer-admission");
+        CollectionAssert.Contains(api.Refresh(data), "particle-main-thread-admission");
         api.Call("Validate", data); api.Reject("RequireCompleteCoverage", data);
         Set(data, "CoverageGaps", Array.Empty<string>()); api.Reject("Validate", data);
     }
@@ -166,7 +177,7 @@ public sealed class ResidentParticleSystemStateTests
         Set(producer, "MainVTable", 0x166bad8); Set(producer, "WorkerOwnsDevice", true); api.Refresh(data); api.Reject("Validate", data);
         Set(producer, "WorkerIsKnown", true); Set(producer, "Threaded", true); Set(producer, "Serialize", true);
         var gaps = api.Refresh(data); api.Call("Validate", data);
-        CollectionAssert.Contains(gaps, "graphics-command-producer-or-pending-fence"); CollectionAssert.Contains(gaps, "managed-job-schedule-to-handle-publication");
+        CollectionAssert.DoesNotContain(gaps, "graphics-command-producer-or-pending-fence"); CollectionAssert.Contains(gaps, "managed-job-schedule-to-handle-publication");
         Set(producer, "Serialize", false); Set(producer, "WorkerOwnsDevice", false); Set(producer, "WorkerReachedClientFence", true);
         api.Refresh(data); api.Reject("RequireCompleteCoverage", data);
     }
@@ -178,7 +189,7 @@ public sealed class ResidentParticleSystemStateTests
         var gaps = api.Refresh(data); api.Call("Validate", data);
         CollectionAssert.DoesNotContain(gaps, "managed-job-schedule-to-handle-publication");
         api.Reject("RequireLivePublication", data); // Wire bit alone cannot admit this process.
-        CollectionAssert.Contains(gaps, "manager-worker-and-render-producer-admission");
+        CollectionAssert.DoesNotContain(gaps, "particle-main-thread-admission");
         CollectionAssert.Contains(gaps, "pending-emitter-update-job");
         Set(p, "NativeMainThread", false); api.Reject("Validate", data);
     }
@@ -229,5 +240,27 @@ public sealed class ResidentParticleSystemStateTests
         Set(cache, "SharedMesh", "mesh/2"); api.Reject("ValidateCacheBindings", body);
         Set(cache, "SharedMesh", "mesh/1"); links[Array.IndexOf(offsets,4760)] = 4760; api.Reject("ValidateCacheBindings", body);
         links[Array.IndexOf(offsets,4768)] = 4760; api.Call("ValidateCacheBindings", body);
+    }
+    [TestMethod]
+    public void IdleBurstSlotsAllowDestructedBaseVTableAcrossStreamedBinaryReadAndClone()
+    {
+        var api = new Api(); var source = api.New("Body"); var local = api.New("Body");
+        var packed = api.Call("PackedLength", api.Offsets("ModuleScalarRanges"))!;
+        var sourceModule = new byte[(int)packed]; var localModule = new byte[(int)packed];
+        Set(source, "Module", sourceModule); Set(local, "Module", localModule);
+        var countOffset = 0;
+        var ranges = api.Offsets("ModuleScalarRanges");
+        for (var i = 0; i < ranges.Length; i += 2) { if (ranges[i] == 1272) break; countOffset += ranges[i + 1]; }
+        var count = api.Offsets("ModuleVTables").Length;
+        var sourceVt = Enumerable.Repeat(0x15dfe70, count).ToArray();
+        var localVt = (int[])sourceVt.Clone();
+        localVt[4] = 0x15d5ec8;
+        Set(source, "ModuleVTables", sourceVt); Set(local, "ModuleVTables", localVt);
+        Assert.IsTrue((bool)api.Call("CompatibleModuleVTables", source, local)!);
+        BitConverter.GetBytes(1).CopyTo(localModule, countOffset);
+        Assert.IsFalse((bool)api.Call("CompatibleModuleVTables", source, local)!);
+        BitConverter.GetBytes(0).CopyTo(localModule, countOffset);
+        localVt[4] = 0x15dfe70; localVt[3] = 0x15d5ec8;
+        Assert.IsFalse((bool)api.Call("CompatibleModuleVTables", source, local)!);
     }
 }

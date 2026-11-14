@@ -1,5 +1,6 @@
 #ifndef HKTAS_RESIDENT_PARTICLE_PRODUCER_H
 #define HKTAS_RESIDENT_PARTICLE_PRODUCER_H
+#include "resident_deadline.h"
 #include "resident_fatal_evidence.h"
 #include <windows.h>
 #include <stddef.h>
@@ -70,8 +71,8 @@ static BOOL hktas_ps_wait_open_locked(void)
 {
     while (g_ps_closed && !g_ps_reason) {
         uint64_t elapsed = GetTickCount64() - g_ps_started;
-        if (GetCurrentThreadId() == g_ps_main || elapsed >= 9000u) break;
-        if (!SleepConditionVariableSRW(&g_ps_changed, &g_ps_lock, (DWORD)(9000u - elapsed), 0) && GetLastError() != ERROR_TIMEOUT) break;
+        if (GetCurrentThreadId() == g_ps_main || elapsed >= g_resident_wall_limit) break;
+        if (!SleepConditionVariableSRW(&g_ps_changed, &g_ps_lock, (DWORD)(g_resident_wall_limit - elapsed), 0) && GetLastError() != ERROR_TIMEOUT) break;
     }
     if (g_ps_closed) { hktas_ps_reject_locked(1); return FALSE; }
     if (g_ps_reason || !g_ps_installed) { ReleaseSRWLockExclusive(&g_ps_lock); return FALSE; }
@@ -257,15 +258,15 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_BeginResidentParticleFence(u
 {
     AcquireSRWLockExclusive(&g_ps_lock);
     if (!g_ps_installed || g_ps_reason || g_ps_closed || !token || token <= g_ps_epoch || GetCurrentThreadId() != g_ps_main
-        || GetTickCount64() - started >= 9000u || TlsGetValue(g_ps_tls) || !hktas_ps_image(g_ps_base,TRUE)) {
+        || GetTickCount64() - started >= g_resident_wall_limit || TlsGetValue(g_ps_tls) || !hktas_ps_image(g_ps_base,TRUE)) {
         hktas_ps_fault_locked(20); ReleaseSRWLockExclusive(&g_ps_lock); return 0;
     }
     g_ps_epoch = token; g_ps_started = started; g_ps_closed = TRUE;
     while (g_ps_count && !g_ps_reason) {
         uint64_t elapsed = GetTickCount64() - started;
-        if (elapsed >= 9000u || (!SleepConditionVariableSRW(&g_ps_changed,&g_ps_lock,(DWORD)(9000u-elapsed),0) && GetLastError()!=ERROR_TIMEOUT)) break;
+        if (elapsed >= g_resident_wall_limit || (!SleepConditionVariableSRW(&g_ps_changed,&g_ps_lock,(DWORD)(g_resident_wall_limit-elapsed),0) && GetLastError()!=ERROR_TIMEOUT)) break;
     }
-    if (g_ps_count || g_ps_reason || GetTickCount64() - started >= 9000u) {
+    if (g_ps_count || g_ps_reason || GetTickCount64() - started >= g_resident_wall_limit) {
         hktas_ps_fault_locked(21); ReleaseSRWLockExclusive(&g_ps_lock); return 0;
     }
     ReleaseSRWLockExclusive(&g_ps_lock); return 1;
@@ -273,7 +274,7 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_BeginResidentParticleFence(u
 static BOOL hktas_ps_held_locked(uint64_t token)
 {
     return g_ps_installed && !g_ps_reason && token && g_ps_closed && g_ps_epoch == token && GetCurrentThreadId() == g_ps_main
-        && !g_ps_count && !g_ps_writers && GetTickCount64()-g_ps_started < 9000u && hktas_ps_image(g_ps_base,TRUE);
+        && !g_ps_count && !g_ps_writers && GetTickCount64()-g_ps_started < g_resident_wall_limit && hktas_ps_image(g_ps_base,TRUE);
 }
 __declspec(dllexport) LONG __cdecl HktasClockBridge_RequireResidentParticleFence(uint64_t token)
 {

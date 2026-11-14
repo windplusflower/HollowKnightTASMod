@@ -13,8 +13,34 @@ namespace HollowKnightTAS.Runtime.FullRun
         // Apply/Verify with ResidentRendererState.MeshConsumerRebind. Canvas UI
         // keeps independent retains, so assigning the Mesh's replacement alone
         // leaves these CPU consumers pointing at the old geometry allocation.
-        internal static MeshConsumerRebind PrepareMeshConsumerRebind(ResidentObjectDirectory directory, Mesh mesh, ResidentMutationScope scope, Action admitted)
-            => new MeshConsumerRebind(directory, mesh, scope, admitted);
+        internal sealed class MeshConsumerIndex
+        {
+            internal readonly ILookup<IntPtr, ResidentLoadedAssetIndex.Member> Meshes, Renderers;
+            internal readonly ILookup<IntPtr, (ResidentLoadedAssetIndex.Member Owner, int Index)> Instructions;
+            internal readonly ILookup<IntPtr, ResidentLoadedAssetIndex.Member> SpriteCaches;
+            internal MeshConsumerIndex()
+            {
+                Meshes = ResidentLoadedAssetIndex.Family(ResidentLoadedAssetIndex.MeshClass, out var meshes)
+                    .ToLookup(owner => M.Ptr(IntPtr.Add(owner.Pointer, 56)));
+                Renderers = ResidentLoadedAssetIndex.Family(ResidentLoadedAssetIndex.CanvasRendererClass, out var renderers)
+                    .ToLookup(owner => M.Ptr(IntPtr.Add(owner.Pointer, 72)));
+                var instructions = new List<(IntPtr Shared, ResidentLoadedAssetIndex.Member Owner, int Index)>();
+                var canvasOwners = ResidentLoadedAssetIndex.Family(ResidentLoadedAssetIndex.CanvasClass, out var canvases);
+                foreach (var member in canvasOwners) {
+                    var header = M.Read(IntPtr.Add(member.Pointer, 240), 32); var count = M.U64(header, 16);
+                    if (count > M.U64(header, 24) >> 1 || count * 720UL > MaximumBytes) throw Error("Canvas instruction index exceeds bounds");
+                    var buffer = M.Ptr(header, 0);
+                    for (var i = 0; i < (int)count; i++) instructions.Add((M.Ptr(IntPtr.Add(buffer, i * 720 + 512)), member, i));
+                }
+                Instructions = instructions.ToLookup(value => value.Shared, value => (value.Owner, value.Index));
+                SpriteCaches = ResidentLoadedAssetIndex.Family(ResidentLoadedAssetIndex.SpriteRendererClass, out var sprites).ToLookup(owner => {
+                    var cache = M.Ptr(IntPtr.Add(owner.Pointer, 584)); return cache == IntPtr.Zero ? IntPtr.Zero : M.Ptr(IntPtr.Add(cache, 96));
+                });
+                meshes(); renderers(); canvases(); sprites();
+            }
+        }
+        internal static MeshConsumerRebind PrepareMeshConsumerRebind(ResidentObjectDirectory directory, Mesh mesh, ResidentMutationScope scope, Action admitted, MeshConsumerIndex? index = null)
+            => new MeshConsumerRebind(directory, mesh, scope, admitted, index);
         internal sealed class MeshConsumerRebind
         {
             private readonly ResidentObjectDirectory directory;
@@ -40,41 +66,45 @@ namespace HollowKnightTAS.Runtime.FullRun
                 internal int Index;
                 internal byte[] Before = Array.Empty<byte>();
             }
-            internal MeshConsumerRebind(ResidentObjectDirectory directory, Mesh mesh, ResidentMutationScope scope, Action admitted)
+            internal MeshConsumerRebind(ResidentObjectDirectory directory, Mesh mesh, ResidentMutationScope scope, Action admitted, MeshConsumerIndex? index)
             {
                 this.directory = directory ?? throw new ArgumentNullException(nameof(directory)); this.mesh = mesh ?? throw new ArgumentNullException(nameof(mesh));
                 this.scope = scope ?? throw new ArgumentNullException(nameof(scope)); this.admitted = admitted ?? throw new ArgumentNullException(nameof(admitted));
                 scope.Require(); admitted(); meshOwner = M.Owner(mesh); originalShared = M.Ptr(IntPtr.Add(meshOwner, 56));
                 var shared = M.Read(originalShared, 400);
-                var meshes = ResidentLoadedAssetIndex.Family(ResidentLoadedAssetIndex.MeshClass,out var checkMeshes);
-                var meshAliases = meshes.Where(owner => M.Ptr(IntPtr.Add(owner.Pointer,56)) == originalShared).ToArray();
+                index ??= new MeshConsumerIndex();
+                var meshAliases = index.Meshes[originalShared].ToArray();
                 if (meshAliases.Length != 1 || meshAliases[0].Pointer != meshOwner || !ReferenceEquals(meshAliases[0].Borrow<Mesh>(),mesh)) throw Error("Mesh Canon needs a unified plan for aliased Mesh owners");
-                var canvasRenderers = ResidentLoadedAssetIndex.Family(ResidentLoadedAssetIndex.CanvasRendererClass,out var checkRenderers);
+                var canvasRenderers = index.Renderers[originalShared];
                 foreach (var member in canvasRenderers) {
                     var pointer = member.Pointer; var bytes = M.Read(pointer, 304);
-                    if (M.Ptr(bytes, 72) != originalShared) continue;
+                    if (M.Ptr(bytes, 72) != originalShared) throw Error("Indexed CanvasRenderer mesh binding changed");
                     var renderer = member.Borrow<CanvasRenderer>();
                     RequireOwned(renderer); renderers.Add(new RendererUse { Owner = renderer, Pointer = pointer, Before = bytes, Scalars = CaptureRanges(bytes, CanvasRendererRanges) });
                 }
-                var canvases = ResidentLoadedAssetIndex.Family(ResidentLoadedAssetIndex.CanvasClass,out var checkCanvases);
-                foreach (var member in canvases) {
+                foreach (var entry in index.Instructions[originalShared]) {
+                    var member = entry.Owner;
                     var native = member.Pointer; var header = M.Read(IntPtr.Add(native, 240), 32); var count = M.U64(header, 16); var capacity = M.U64(header, 24) >> 1;
                     if (count > capacity || capacity > Maximum || count * 720UL > MaximumBytes) throw Error("Canvas instruction array exceeds the consumer bound");
                     var buffer = M.Ptr(header, 0);
-                    for (var index = 0; index < (int)count; index++) {
-                        var pointer = IntPtr.Add(buffer, index * 720); var bytes = M.Read(pointer, 720); if (M.Ptr(bytes, 512) != originalShared) continue;
+                    var instructionIndex = entry.Index;
+                    if (instructionIndex >= (int)count) throw Error("Canvas instruction index changed during Canon preparation");
+                    {
+                        var pointer = IntPtr.Add(buffer, instructionIndex * 720); var bytes = M.Read(pointer, 720); if (M.Ptr(bytes, 512) != originalShared) throw Error("Indexed Canvas instruction mesh binding changed");
                         var canvas = member.Borrow<Canvas>(); RequireOwned(canvas);
                         if (!Function<FenceDone>(0x725ac0, "40534883ec30488bd9e86217000084c0742648833b007420")(IntPtr.Add(native, 424))) throw Error("Canvas Mesh consumer has an active batch job");
-                        instructions.Add(new InstructionUse { Owner = canvas, Canvas = native, Buffer = buffer, Pointer = pointer, Index = index, Before = bytes });
+                        instructions.Add(new InstructionUse { Owner = canvas, Canvas = native, Buffer = buffer, Pointer = pointer, Index = instructionIndex, Before = bytes });
                     }
                 }
-                var spriteAliases = ResidentLoadedAssetIndex.Family(ResidentLoadedAssetIndex.SpriteRendererClass,out var checkSprites).Count(owner => {
-                    var cache = M.Ptr(IntPtr.Add(owner.Pointer, 584)); return cache != IntPtr.Zero && M.Ptr(IntPtr.Add(cache, 96)) == originalShared;
-                });
-                checkMeshes(); checkRenderers(); checkCanvases(); checkSprites();
+                var spriteAliases = index.SpriteCaches[originalShared].Count();
                 if (spriteAliases != 0) throw Error("Mesh Canon needs a unified plan for Sprite-owned shared geometry");
                 if (M.I32(shared, 4) != 1 + renderers.Count + instructions.Count) throw Error("Mesh Canon has an unbound native SharedMeshData retain");
-                var reader = new Reader(directory, directory.Bind); dirty = CanonicalDirty(reader); reader.RequireFrozen(); RequireIdentity(false);
+                if (renderers.Count != 0 || instructions.Count != 0) {
+                    var reader = new Reader(directory, directory.Bind); dirty = CanonicalDirty(reader); reader.RequireFrozen();
+                } else {
+                    dirty = Array.Empty<DirtyGroup>();
+                }
+                RequireIdentity(false);
             }
             private static DirtyGroup[] CanonicalDirty(Reader reader)
             {
@@ -91,6 +121,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (applied) throw Error("Canvas Mesh consumer refresh is single-use"); scope.Require(); admitted(); RequireIdentity(false);
                 var replacement = M.Ptr(IntPtr.Add(meshOwner, 56));
                 if (replacement == originalShared) throw Error("Canvas consumer refresh precedes the Mesh allocation swap");
+                if (renderers.Count == 0 && instructions.Count == 0) { applied = true; return; }
                 try {
                     foreach (var row in renderers) {
                         scope.Require(); admitted(); Function<Binary>(0x233510, "48895c2408488974241048897c24185541564157488d6c24")(row.Pointer, meshOwner);
@@ -113,6 +144,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal void Verify()
             {
                 if (!applied) throw Error("Canvas Mesh consumer verification precedes refresh"); scope.Require(); admitted(); RequireIdentity(true);
+                if (renderers.Count == 0 && instructions.Count == 0) return;
                 var reader = new Reader(directory, directory.Bind); if (Json(dirty) != Json(CanonicalDirty(reader))) throw Error("Mesh consumer refresh changed the UI dirty map"); reader.RequireFrozen(); admitted();
             }
             private void RequireIdentity(bool rebound)

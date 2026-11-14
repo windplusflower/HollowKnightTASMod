@@ -10,6 +10,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         internal sealed class Producers
         {
+            public bool LocalServices;
             public Bucket[] Buckets=Array.Empty<Bucket>();
             public FreeStack[] Handles=Array.Empty<FreeStack>();
             public int GrowthBits, GrowNextFrame;
@@ -39,6 +40,21 @@ namespace HollowKnightTAS.Runtime.FullRun
             public bool[] RetainsObject=Array.Empty<bool>();
         }
         internal sealed class ClassMethod {public string Key="";public short Index;}
+        private static Producers CaptureLocalServices(IntPtr manager, MemoryReader reader)
+        {
+            // NullMethods is a process-local metadata dependency. Free pools,
+            // class caches and allocation history are not resident graph D.
+            var bytes = reader.Read(IntPtr.Add(manager,904),80);
+            var methods = new string[10];
+            for (int i=0;i<methods.Length;i++) {
+                var pointer = M.Ptr(bytes,i*8);
+                if (pointer == IntPtr.Zero) { methods[i] = ""; continue; }
+                var method = ResidentScriptingHandles.ReadMethod(pointer) ?? throw Error("Director null method has no Mono target");
+                methods[i] = method.Module.ModuleVersionId.ToString("D")+"/"+method.MetadataToken.ToString("x8")+"/"+method.DeclaringType?.AssemblyQualifiedName
+                    +"/"+string.Join(",",method.GetGenericArguments().Select(t=>t.AssemblyQualifiedName??t.ToString()));
+            }
+            return new Producers { LocalServices = true, NullMethods = methods };
+        }
         private static Producers CaptureProducers(IntPtr manager,MemoryReader reader)
         {
             var bytes=reader.Read(manager,1120);var p=new Producers {GrowthBits=M.I32(bytes,992),GrowNextFrame=M.I32(bytes,996),Tracker=M.Ptr(bytes,1112)!=IntPtr.Zero,
@@ -120,6 +136,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static void ValidateProducers(Producers p)
         {
+            if (p != null && p.LocalServices) {
+                if (p.Buckets == null || p.Buckets.Length != 0 || p.Handles == null || p.Handles.Length != 0
+                    || p.GrowthBits != 0 || p.GrowNextFrame != 0 || p.Tracker || p.CommandTag != 0
+                    || p.ClassMap == null || p.ClassMap.Length != 0 || p.Methods == null || p.Methods.Length != 0
+                    || p.MethodStorage == null || p.MethodStorage.Label != 30 || !p.MethodStorage.Borrowed
+                    || p.MethodStorage.Capacity != 0 || p.MethodStorage.Allocated || p.MethodStorage.Padding
+                    || !Keys(p.NullMethods) || p.NullMethods.Length != 10)
+                    throw Error("Director local service dependency differs");
+                return;
+            }
             if (p==null || p.Buckets==null || p.Buckets.Length!=5 || p.Handles==null || p.Handles.Length!=3 || p.MethodStorage==null || p.ClassMap==null
                 || p.Methods==null || p.Methods.Length>MaximumEntries || p.MethodStorage.Capacity<p.Methods.Length || p.MethodStorage.Capacity>MaximumEntries
                 || p.ClassMap.Length>MaximumEntries || !Keys(p.NullMethods) || p.NullMethods.Length!=10 || p.Methods.Any(m=>!Keys(m) || m.Length!=10)) throw Error("Director producer directory differs");
@@ -142,6 +168,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var p=data.Registry.Producers;
             if (p==null) {if(data.Registry.Present) yield return "director-producer-ownership-witness-absent";yield break;}
+            if (p.LocalServices) {
+                if (p.NullMethods.Any(k => k.Length != 0)) yield return "director-native-null-method-dependency";
+                if (data.Graphs.SelectMany(graph => graph.Nodes).Any(node => node.MethodTable >= 1))
+                    yield return "director-live-managed-method-cache-dependency";
+                yield break;
+            }
             if (p.Tracker) yield return "director-debug-allocation-tracker";
             if (p.ClassMap.Length!=0 || p.Methods.Length!=0 || p.NullMethods.Any(k=>k.Length!=0)) yield return "director-managed-class-and-method-cache-rebuild";
             var inFlight=new int[5];

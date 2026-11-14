@@ -16,7 +16,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     internal static class ResidentLoadedAssetIndex
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] [return: MarshalAs(UnmanagedType.I1)] private delegate bool MainThread();
-        private static readonly Dictionary<int, byte[]> verifiedCode = new Dictionary<int, byte[]>();
+        private static readonly Dictionary<(int Rva, int Size, string Hash), byte[]> verifiedCode = new Dictionary<(int Rva, int Size, string Hash), byte[]>();
         private static readonly object codeGate = new object();
         private static IntPtr verifiedBase;
         private static MainThread? mainThread;
@@ -39,13 +39,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             var current = M.Read(IntPtr.Add(engine, rva), size);
             lock (codeGate) {
                 if (verifiedBase != IntPtr.Zero && verifiedBase != engine) throw Error("native lookup module changed");
-                if (verifiedCode.TryGetValue(rva, out var expected)) {
+                var key = (rva, size, hash);
+                if (verifiedCode.TryGetValue(key, out var expected)) {
                     if (!expected.SequenceEqual(current)) throw Error("native lookup ABI changed");
                     return;
                 }
                 using (var sha = SHA256.Create()) if (BitConverter.ToString(sha.ComputeHash(current)).Replace("-", "").ToLowerInvariant() != hash)
                     throw Error("native lookup ABI differs");
-                verifiedBase = engine; verifiedCode.Add(rva, current);
+                verifiedBase = engine; verifiedCode.Add(key, current);
             }
         }
         internal const int MeshClass = 0x194cd70, SpriteRendererClass = 0x1949510, CanvasClass = 0x194ae70, CanvasRendererClass = 0x194d880;

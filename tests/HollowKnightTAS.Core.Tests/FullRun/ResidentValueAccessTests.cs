@@ -40,6 +40,28 @@ public sealed class ResidentValueAccessTests
         public Owner(Outer value) { Value = value; }
     }
     private sealed class GenericOwner<T> { public T Value = default!; }
+    private class ReferenceBase { public object? First; }
+    private sealed class ReferenceChild : ReferenceBase
+    {
+        public volatile object? Last;
+        public object DangerousProperty => throw new InvalidOperationException("Properties are outside the field scanner.");
+    }
+
+    [TestMethod]
+    public void CompiledFirstReferencePreservesOrderAndReadsOnlyInstanceFields()
+    {
+        var fields = new[] { typeof(ReferenceBase).GetField("First")!, typeof(ReferenceChild).GetField("Last")! };
+        var scan = ResidentValueAccess.PrepareFirstReference(typeof(ReferenceChild), fields)!;
+        var owner = new ReferenceChild();
+        Assert.AreEqual(-1, scan(owner, out var result)); Assert.IsNull(result);
+        owner.Last = new object();
+        Assert.AreEqual(1, scan(owner, out result)); Assert.AreSame(owner.Last, result);
+        owner.First = new object();
+        Assert.AreEqual(0, scan(owner, out result)); Assert.AreSame(owner.First, result);
+        owner.First = null; owner.Last = null;
+        Assert.AreEqual(-1, scan(owner, out result)); Assert.IsNull(result);
+        Assert.IsNull(ResidentValueAccess.PrepareFirstReference(typeof(Owner), new[] { typeof(Owner).GetField("Value")! }));
+    }
     private static FieldInfo Field(Type type, string name) => type.GetField(name, Fields)!;
     private static Dictionary<string, object> Roots(Owner owner) => new() { ["owner"] = owner };
     private static object NoExternal(string key) => throw new InvalidDataException("Unexpected binding: " + key);

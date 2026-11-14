@@ -46,6 +46,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             public ControllerMemory? Memory;
             public ControllerRuntime Runtime = new ControllerRuntime();
             public int SharedAvatarValues = -1;
+            public int ResetValues = -1;
+            public ControllerDependency? Dependency;
         }
         internal sealed class Director
         {
@@ -60,6 +62,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             public string Binding = "", Kind = "", Base = "";
             public string[] Clips = Array.Empty<string>(), OriginalClips = Array.Empty<string>(), OverridePairs = Array.Empty<string>();
+            public bool ObserverDirectoryCaptured;
+            public string[] ObserverPeers = Array.Empty<string>();
         }
         private const string Unbound = "#unresolved-native-object";
         private const int AnimatorVtable = 0x15d6520, PlayableVtable = 0x15d8f08;
@@ -74,6 +78,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal readonly List<IntPtr> Playables = new List<IntPtr>();
             internal readonly Dictionary<IntPtr, int> Graphs = new Dictionary<IntPtr, int>();
             internal readonly Dictionary<IntPtr, int> Outputs = new Dictionary<IntPtr, int>();
+            internal readonly Dictionary<IntPtr, ClipBindingDependency> ClipBindings = new Dictionary<IntPtr, ClipBindingDependency>();
+            internal readonly Dictionary<IntPtr, ClipConstantDependency> ClipConstants = new Dictionary<IntPtr, ClipConstantDependency>();
             internal readonly List<EvalView[]> Evaluation = new List<EvalView[]>();
             internal IntPtr Manager;
             internal AvatarGraph? Avatars;
@@ -159,6 +165,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             internal string ControllerId(int id)
                 => id == 0 ? "" : objects.TryGetValue(id, out var pointer) ? Controller(pointer) : Unbound;
+            internal bool ObjectPointer(int id, out IntPtr pointer) => objects.TryGetValue(id,out pointer);
             internal string Controller(IntPtr pointer)
             {
                 if (pointer == IntPtr.Zero) return "";
@@ -217,14 +224,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Live.Users = new UsersView(this); Live.Data.Users = Live.Users.Rows;
                 var jobs = new Dictionary<IntPtr,int>(); Live.Memories = new MemoryDirectory(this);
                 foreach (var graph in Live.Graphs.OrderBy(pair=>pair.Value)) Live.Topologies.Add(new GraphView(graph.Value,graph.Key,Memory,Rva,Live.Memories.Playables));
+                foreach (var graph in Live.Topologies) graph.CaptureBodies(this);
                 Live.Data.Graphs=Live.Topologies.Select(t=>t.Data).ToArray();
                 foreach (var row in Live.Data.Rows) {
                     var view = new ResidualView(this,row,Live.Memories,jobs); row.Retained = view.Data; Live.Retained.Add(view);
                 }
                 Live.Data.ExtraMemories = Live.Memories.Additional.ToArray();
                 Live.Data.Playables = playables.ToArray();
+                CaptureControllerDependencies(this);
+                for (int i = 0; i < playables.Count; i++) {
+                    var body = Memory.Read(Live.Playables[i],456);
+                    playables[i].ResetValues = body[260] == 1 ? Live.Avatars!.Retained(M.Ptr(body,400),AvatarKind.Values) : -1;
+                }
                 Live.Data.AvatarNodes = Live.Avatars!.Nodes.ToArray();
                 for (int i = 0; i < playables.Count; i++) playables[i].SharedAvatarValues = Live.Avatars.ValueIndex(controllerValues[i]);
+                Live.Avatars.RegisterValueChannels(Live.Data,Id<NativeObject>);
                 // Walk override base references iteratively. Cycles/aliases
                 // are identified by object address within this capture only.
                 var pending = new Queue<IntPtr>(controllers.Keys);
@@ -234,6 +248,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var id = M.I32(Memory.Read(IntPtr.Add(pointer, 168), 4), 0);
                     if (objects.TryGetValue(id, out var parent) && Controller(parent) != Unbound) pending.Enqueue(parent);
                 }
+                CaptureControllerAssetObservers(this,controllers);
                 Live.Data.Assets = controllers.Values.OrderBy(value => value.Binding, StringComparer.Ordinal).ToArray();
                 Live.Manager = M.Ptr(Memory.Read(IntPtr.Add(Engine, 0x196f0c0), 8), 0);
                 var registry = Live.Data.Registry;
@@ -244,7 +259,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     registry.Stopped = List(IntPtr.Add(Live.Manager, 824), registered);
                     Live.Queues = new QueueView(Live.Manager,Engine,moduleSize,Live.Graphs,Live.Outputs,Live.Data.Rows.Length,Memory);
                     registry.Queues = Live.Queues.Data;
-                    registry.Producers=CaptureProducers(Live.Manager,Memory);
+                    registry.Producers=CaptureLocalServices(Live.Manager,Memory);
                 }
                 Memory.Verify(); Live.RequireFrozen = Memory.Verify;
             }
@@ -286,8 +301,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var avatars = reader.Live.Avatars!;
                 row.Binder = CaptureHandles(reader,bytes);
                 row.Datasets = new[] {avatars.Set(bytes,440), avatars.Set(bytes,584)};
-                row.Inputs = new[] {avatars.Input(bytes,1576,reader.TransformAccess), avatars.Input(bytes,896,reader.TransformAccess)};
-                var views = new[] {new EvalView(M.Owner(owner),bytes,176,440,520,reader),new EvalView(M.Owner(owner),bytes,712,584,664,reader)};
+                var retired = new[] {RetiredEvaluation(bytes,440,520,1576), RetiredEvaluation(bytes,584,664,896)};
+                row.Inputs = new[] {avatars.Input(bytes,1576,reader.TransformAccess,retired[0]), avatars.Input(bytes,896,reader.TransformAccess,retired[1])};
+                var views = new[] {new EvalView(M.Owner(owner),bytes,176,440,520,reader,retired[0]),new EvalView(M.Owner(owner),bytes,712,584,664,reader,retired[1])};
                 row.Evaluation = views.Select(view => view.Data).ToArray(); reader.Live.Evaluation.Add(views);
                 var handle = M.Ptr(bytes, 1536);
                 row.GraphFlag = (M.U32(bytes,1544) & 1) != 0; row.StaleGraph = handle == IntPtr.Zero && M.U32(bytes,1544) != 0;

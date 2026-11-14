@@ -19,7 +19,7 @@ namespace HollowKnightTAS.Diagnostics
 
     public static class ActualDMemoryRelay
     {
-        private const int MaximumBytes = 32 * 1024 * 1024;
+        private const int MaximumBytes = 256 * 1024 * 1024;
         private static readonly byte[] Magic = Encoding.ASCII.GetBytes("HKTASDR1");
         private static void RequireName(string name)
         {

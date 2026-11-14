@@ -27,7 +27,7 @@
 #define HKTAS_AUDIO_REQUIRED_GAP_NON_THREAD_WORKERS 1u
 #define HKTAS_AUDIO_GAP_UNKNOWN_CALLBACK 2u
 #define HKTAS_AUDIO_GAP_PENDING_STARTUP 4u
-#define HKTAS_AUDIO_WALL_LIMIT 9000u
+#define HKTAS_AUDIO_WALL_LIMIT 360000u
 
 typedef struct {
     uint16_t offset;
@@ -490,7 +490,7 @@ static BOOL hktas_audio_build_relocation(BYTE *base, BYTE *relay)
     return TRUE;
 }
 
-static BOOL install_resident_audio_fence(BYTE *base, DWORD main_thread, hktas_audio_fault_sink fault_sink)
+static inline BOOL install_resident_audio_fence(BYTE *base, DWORD main_thread, hktas_audio_fault_sink fault_sink)
 {
     if (g_audio_install_attempted || !fault_sink || !main_thread || main_thread != GetCurrentThreadId()) return FALSE;
     g_audio_install_attempted = TRUE; g_audio_fault_sink = fault_sink; g_audio_main_thread = main_thread;

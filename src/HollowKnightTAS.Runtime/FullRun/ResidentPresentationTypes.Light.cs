@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -14,6 +14,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public bool Present;
             public string[] Active=Array.Empty<string>(), Realtime=Array.Empty<string>();
             public int[] ListenerVtables=Array.Empty<int>();
+            public SceneLightService[]? Services;
         }
         private static readonly int[][] LightSharedRanges={new[]{28,102},new[]{140,44},new[]{184,5},new[]{192,96},new[]{296,64},new[]{368,20},new[]{464,156}};
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void OwnerCall(IntPtr owner);
@@ -55,7 +56,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static LightRegistry CaptureLightRegistry(Row[] rows,ResidentObjectDirectory directory,Func<IntPtr,int,byte[]> read)
         {
             var result=new LightRegistry(); var manager=LightManager(); result.Present=manager!=IntPtr.Zero;
-            if(!result.Present) return result;
+            if(!result.Present) { result.Services = Array.Empty<SceneLightService>(); return result; }
             var reverse=directory.NativeBindings.Where(pair=>pair.Value.GetType()==typeof(Light)).ToDictionary(pair=>M.Owner(pair.Value),pair=>pair.Key);
             string Owner(IntPtr pointer)=>reverse.TryGetValue(pointer,out var key)?key:"@unsupported";
             var body=read(manager,80); var root=manager; var current=M.Ptr(body,8); var previous=root; var seen=new HashSet<IntPtr>(); var active=new List<string>();
@@ -84,10 +85,29 @@ namespace HollowKnightTAS.Runtime.FullRun
             result.Realtime=realtime.OrderBy(key=>key,StringComparer.Ordinal).ToArray();
             var listeners=ArrayInfo(body,48,8); var listenerBytes=read(M.Ptr(body,48),listeners.Item1*8);
             var engine=LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress.ToInt64();
+            var services = new List<SceneLightService>();
+            var dispatch = M.Ptr(IntPtr.Add(LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress,0x1a1ddd8));
+            var diagnostics = new List<LightServiceDiagnostic>();
+            Dictionary<int,string>? diagnosticOwners = null;
+            // Diagnostics remain limited to unsupported known services.
             result.ListenerVtables=Enumerable.Range(0,listeners.Item1).Select(index=> {
                 var pointer=M.Ptr(listenerBytes,index*8); if(pointer==IntPtr.Zero) throw Error("Light listener is null");
-                var vtable=M.Ptr(read(pointer,8),0).ToInt64()-engine; return vtable>0 && vtable<0x4000000?(int)vtable:-1;
+                var vtable=M.Ptr(read(pointer,8),0).ToInt64()-engine;
+                var serviceRva = vtable>0 && vtable<0x4000000 ? (int)vtable : -1;
+                services.Add(CaptureSceneLightService(pointer,serviceRva,dispatch,read,M.String));
+                if (ResidentFailureEvidence.Collecting && vtable == 0x1621248 && services[services.Count-1].Unsupported.Length != 0) {
+                    if (diagnosticOwners == null) {
+                        try { diagnosticOwners = reverse.ToDictionary(pair=>M.I32(M.Read(IntPtr.Add(pair.Key,8),4),0),pair=>pair.Value); }
+                        catch (Exception error) { ResidentFailureEvidence.Mark("SceneLights owner diagnostic unavailable " + error.GetType().Name); }
+                    }
+                    if (diagnosticOwners != null && diagnostics.Count < 4)
+                        diagnostics.Add(CaptureLightServiceDiagnostic(pointer,index,M.Read,id=>diagnosticOwners.TryGetValue(id,out var owner)?owner:""));
+                    else ResidentFailureEvidence.Mark("SceneLights diagnostic listener count exceeds four-listener bound");
+                }
+                return vtable>0 && vtable<0x4000000?(int)vtable:-1;
             }).ToArray();
+            result.Services = services.ToArray();
+            if (diagnostics.Count != 0) ResidentFailureEvidence.RecordDomain("SceneLights",diagnostics.ToArray());
             return result;
         }
         private static void ApplyLightShared(Row row,IntPtr owner,Func<string,UnityEngine.Object> resolve,Action admitted)
@@ -111,6 +131,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             var registry=data.Lights; var manager=LightManager();
             if((manager!=IntPtr.Zero)!=registry.Present) throw Error("Light manager presence changed");
             if(!registry.Present) return;
+            var actualServices = CaptureLightRegistry(data.Rows,directory,M.Read);
+            RequireLightServiceDependencies(registry,actualServices);
+            var listenerHeader = M.Read(manager,80);
+            var listenerPointers = M.Read(M.Ptr(listenerHeader,48),registry.ListenerVtables.Length*8);
+            for (int index=0;index<registry.ListenerVtables.Length;index++)
+                ApplySceneLightFields(registry.Services![index],actualServices.Services![index],M.Ptr(listenerPointers,index*8),admitted);
             foreach(var row in data.Rows.Where(row=>row.Kind=="light")) M.Write(IntPtr.Add(M.Owner(resolve(row.Owner)),64),new byte[16]);
             var nodes=registry.Active.Select(key=>IntPtr.Add(M.Owner(resolve(key)),64)).ToArray();
             M.Write(manager,BitConverter.GetBytes((nodes.Length==0?manager:nodes[nodes.Length-1]).ToInt64())
@@ -147,7 +173,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static IEnumerable<string> LightRegistryGaps(LightRegistry data)
         {
             if(data.Active.Concat(data.Realtime).Contains("@unsupported")) yield return "light/nonresident-manager-owner";
-            if(data.ListenerVtables.Length!=0) yield return "light/manager-listener-native-context";
+            if(data.ListenerVtables.Length!=0 && (data.Services == null || data.Services.Length != data.ListenerVtables.Length
+                || data.Services.Any(service=>service.Unsupported.Length != 0))) yield return "light/manager-listener-native-context";
         }
         private static void ValidateLights(Data data)
         {
@@ -157,6 +184,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             if(!registry.Present && (registry.Active.Length!=0 || registry.Realtime.Length!=0 || registry.ListenerVtables.Length!=0)) throw Error("absent Light manager has retained state");
             foreach(var key in registry.Active.Concat(registry.Realtime).Where(key=>key!="@unsupported"))
                 if(!data.Rows.Any(row=>row.Kind=="light" && row.Owner==key)) throw Error("Light manager owner is not actual Light");
+            if (registry.Services != null) {
+                if (registry.Services.Length != registry.ListenerVtables.Length) throw Error("Light service payload count differs");
+                for (int index=0;index<registry.Services.Length;index++) {
+                    ValidateSceneLightService(registry.Services[index]);
+                    if (registry.Services[index].Vtable != registry.ListenerVtables[index]) throw Error("Light service vtable identity differs");
+                }
+            }
             foreach(var row in data.Rows) {
                 if(row.CookieNativeTexture==null || row.ShadowDistances==null || row.LightEventCounts==null || row.LightEventMasks==null || row.LightEventMasks.Any(bytes=>bytes==null || bytes.Length%4!=0) || row.LightEventCounts.Any(count=>count<0 || count>100000)) throw Error("Light resource shape differs");
                 if(row.ShadowDistances.Length!=0 && row.ShadowDistances.Length!=128 || row.CookieResource!=(row.CookieNativeTexture.Length!=0)

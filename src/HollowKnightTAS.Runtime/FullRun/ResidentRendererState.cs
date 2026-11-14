@@ -30,6 +30,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public SceneState Scene = new SceneState();
             public UpdateRegistry Updates = new UpdateRegistry();
             public ConsumerList[] Consumers = Array.Empty<ConsumerList>();
+            public ShapeConsumer[] Shapes = Array.Empty<ShapeConsumer>();
             public SpriteRegistryState Sprites = new SpriteRegistryState();
             public string[] CoverageGaps = Array.Empty<string>();
         }
@@ -58,6 +59,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             public byte[] Weights = Array.Empty<byte>(), OptimizedBones = Array.Empty<byte>(), SkinVertices = Array.Empty<byte>();
             public ushort OptimizedRootBone;
             public string[] OpaqueStates = Array.Empty<string>();
+            public ParticleRendererData? Particle;
         }
         internal sealed class SceneState
         {
@@ -92,6 +94,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             public ulong CombinedSystems;
             public int[] FunctionRvas = new int[5];
         }
+        internal sealed class ShapeConsumer
+        {
+            public string Owner = "", Mesh = "", SharedMesh = "";
+            public bool Linked, Execution;
+        }
         internal sealed class ConsumerList
         {
             public string Asset = "", Kind = "";
@@ -110,10 +117,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static readonly Range[] Common = { new Range(64, 244), new Range(424, 7), new Range(432, 12) };
         private static readonly Range[] MeshExtra = { new Range(472, 1) };
         private static readonly Range[] SpriteExtra = { new Range(492, 18), new Range(512, 8), new Range(536, 25), new Range(592, 26) };
+        private static readonly Range[] ParticleExtra = { new Range(448, 208), new Range(1752, 4) };
         private static readonly Range[] SkinExtra = { new Range(536, 1), new Range(624, 32), new Range(712, 5), new Range(768, 1) };
         private static Range[] Ranges(string kind) => kind == "MeshFilter" ? Array.Empty<Range>()
             : Common.Concat(kind == "MeshRenderer" ? MeshExtra : kind == "SpriteRenderer" ? SpriteExtra
-                : kind == "SkinnedMeshRenderer" ? SkinExtra : Array.Empty<Range>()).ToArray();
+                : kind == "SkinnedMeshRenderer" ? SkinExtra : kind == "ParticleSystemRenderer" ? ParticleExtra : Array.Empty<Range>()).ToArray();
 
         // This resolver indexes actual loaded objects of the required native
         // type. It never substitutes a name or loads an asset from a payload path.
@@ -128,11 +136,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             internal readonly Dictionary<string, IntPtr> Bound = new Dictionary<string,IntPtr>(StringComparer.Ordinal);
             private readonly Dictionary<int,IntPtr> idPointers = new Dictionary<int,IntPtr>();
+            private readonly LoadingAssetProvenanceObservation provenance = new LoadingAssetProvenanceObservation();
             private readonly Dictionary<(IntPtr,Type),string> pointerKeys = new Dictionary<(IntPtr,Type),string>();
             internal void RequireUnchanged()
             {
                 foreach (var slot in idPointers) {
-                    if (ResidentLoadedAssetIndex.RegisteredPointer(slot.Key,out var verify) != slot.Value) throw Error("asset reference changed its registration");
+                    if (ResidentLoadedAssetIndex.LookupPointer(slot.Key,out var verify) != slot.Value) throw Error("asset reference changed its registration");
                     verify();
                 }
                 foreach (var slot in pointerKeys)
@@ -143,7 +152,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (id == 0) return "";
                 if (!idPointers.TryGetValue(id,out var pointer)) {
-                    pointer = ResidentLoadedAssetIndex.RegisteredPointer(id,out var verify); verify(); idPointers.Add(id,pointer);
+                    pointer = ResidentLoadedAssetIndex.LookupPointer(id,out var verify); verify(); idPointers.Add(id,pointer);
+                }
+                if (pointer == IntPtr.Zero) {
+                    var origin = provenance.Capture(id);
+                    // A retired native-only PPtr has no target once both registries
+                    // have released it. A serialized PPtr can still resolve later.
+                    if (origin.kind == "unmapped") return "";
+                    return UnloadedAssetKey(typeof(T), origin.sourcePath, origin.localIdentifier);
                 }
                 return Pointer<T>(pointer);
             }
@@ -153,8 +169,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var identity = (pointer,typeof(T));
                 if (pointerKeys.TryGetValue(identity,out var known)) return known;
                 var key = ResidentNativeAssetReference.BindPointer(pointer,typeof(T),bind); pointerKeys.Add(identity,key);
-                if (Bound.TryGetValue(key,out var old) && old != pointer) throw Error("native binding collapsed two owners");
-                Bound[key] = pointer; return key;
+                if (key.Length != 0) { if (Bound.TryGetValue(key,out var old) && old != pointer) throw Error("native binding collapsed two owners"); Bound[key] = pointer; } return key;
             }
             internal string Renderer(IntPtr pointer, bool baseRenderer)
             {
@@ -165,9 +180,26 @@ namespace HollowKnightTAS.Runtime.FullRun
                 return key;
             }
         }
+        private const string UnloadedPrefix = "resident-unloaded-reference/v1/";
+        private static string UnloadedAssetKey(Type type, string path, long local)
+            => UnloadedPrefix + type.FullName + "/" + local.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + "/" + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(path));
+        private static int ResolveUnloaded(string binding, Type? expected)
+        {
+            var parts = binding.Substring(UnloadedPrefix.Length).Split(new[] { '/' }, 3);
+            if (parts.Length != 3 || expected != null && parts[0] != expected.FullName
+                || !long.TryParse(parts[1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var local))
+                throw Error("unloaded renderer reference type or identifier differs");
+            var path = new System.Text.UTF8Encoding(false, true).GetString(Convert.FromBase64String(parts[2]));
+            var id = ResidentTargetAssetLookup.FindRegisteredSourceId(path, local);
+            if (ResidentLoadedAssetIndex.LookupPointer(id, out var verify) != IntPtr.Zero)
+                throw Error("unloaded renderer dependency became live");
+            ResidentTargetAssetLookup.RequireOrigin(id, path, local);
+            verify(); return id;
+        }
         private static string Kind(Component owner) => owner.GetType() == typeof(MeshFilter) ? "MeshFilter"
             : owner.GetType() == typeof(MeshRenderer) ? "MeshRenderer" : owner.GetType() == typeof(SpriteRenderer) ? "SpriteRenderer"
-            : owner.GetType() == typeof(SkinnedMeshRenderer) ? "SkinnedMeshRenderer" : "UnsupportedRenderer";
+            : owner.GetType() == typeof(SkinnedMeshRenderer) ? "SkinnedMeshRenderer" : owner.GetType() == typeof(ParticleSystemRenderer) ? "ParticleSystemRenderer" : "UnsupportedRenderer";
         internal static Data Capture(ResidentObjectDirectory directory, Func<object, string?> bind)
         {
             if (directory == null || bind == null) throw new ArgumentNullException();
@@ -175,7 +207,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var references = new SourceBindings(directory, bind); var result = new Data(); var rows = new List<Row>();
             foreach (var pair in directory.NativeBindings.Where(pair => pair.Value is Renderer || pair.Value is MeshFilter).OrderBy(pair => pair.Key, StringComparer.Ordinal)) {
                 var owner = (Component)pair.Value; var native = M.Owner(owner); var kind = Kind(owner);
-                var size = kind == "MeshFilter" ? 64 : kind == "MeshRenderer" ? 568 : kind == "SpriteRenderer" ? 624 : kind == "SkinnedMeshRenderer" ? 776 : 448;
+                var size = kind == "MeshFilter" ? 64 : kind == "MeshRenderer" ? 568 : kind == "SpriteRenderer" ? 624 : kind == "SkinnedMeshRenderer" ? 776 : kind == "ParticleSystemRenderer" ? 1760 : 448;
                 var bytes = M.Read(native, size); var opaque = new List<string>();
                 var row = new Row { Owner = pair.Key, Kind = kind, Type = ResidentObjectDirectory.TypeRecord.Capture(owner.GetType()),
                     Execution = directory.Ownership.IsExecution(owner), Scalars = Ranges(kind).Select(range => M.Slice(bytes, range.Offset, range.Count)).ToArray() };
@@ -191,6 +223,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                         row.Meshes = new[] { 552, 556, 560 }.Select(offset => references.Id<Mesh>(M.I32(bytes, offset))).ToArray();
                         row.CachedMeshes = new[] { 448, 456, 464 }.Select(offset => references.Pointer<Mesh>(M.Ptr(bytes, offset))).ToArray();
                         row.ConsumerLinked = new[] { 480, 504, 528 }.Select(offset => Linked(bytes, offset, native, 0)).ToArray();
+                    } else if (kind == "ParticleSystemRenderer") {
+                        CaptureParticleRenderer(row, native, bytes, references);
                     } else if (kind == "SpriteRenderer") {
                         row.Sprite = references.Id<Sprite>(M.I32(bytes, 488)); row.CachedSprite = references.Pointer<Sprite>(M.Ptr(bytes, 456));
                         row.ConsumerLinked = new[] { Linked(bytes, 464, native, 448) };
@@ -223,7 +257,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             ResidentFailureEvidence.Mark("renderer scene");
             result.Rows = rows.ToArray(); result.Scene = CaptureScene(references); result.Updates = CaptureUpdates();
             ResidentFailureEvidence.Mark("renderer asset users");
-            result.Consumers = CaptureConsumers(result.Rows, directory, references);
+            result.Shapes = CaptureShapes(directory, references);
+            result.Consumers = CaptureConsumers(result.Rows, result.Shapes, directory, references);
             ResidentFailureEvidence.Mark("renderer sprite registry");
             result.Sprites = CaptureSpriteRegistry(directory, bind);
             references.RequireUnchanged();
@@ -291,11 +326,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                     FunctionRvas = new[] { 8, 32, 40, 48, 56 }.Select(offset => Code(index * 64 + offset)).ToArray() }).ToArray() };
             if (!M.Read(pointer, 1104).SequenceEqual(bytes)) throw Error("renderer update registry changed during capture"); return result;
         }
+        private static int CachedMeshOffset(string kind, int slot)
+            => kind == "ParticleSystemRenderer" ? 656 + slot * 8 : kind == "MeshRenderer" ? 448 + slot * 8 : 472;
         private static int[] ConsumerOffsets(string kind) => kind == "MeshRenderer" ? new[] { 480, 504, 528 }
-            : kind == "SkinnedMeshRenderer" ? new[] { 744 } : kind == "SpriteRenderer" ? new[] { 464 } : Array.Empty<int>();
-        private static ConsumerList[] CaptureConsumers(Row[] rows, ResidentObjectDirectory directory, SourceBindings references)
+            : kind == "ParticleSystemRenderer" ? new[] { 688, 712, 736, 760 } : kind == "SkinnedMeshRenderer" ? new[] { 744 } : kind == "SpriteRenderer" ? new[] { 464 } : Array.Empty<int>();
+        private static ConsumerList[] CaptureConsumers(Row[] rows, ShapeConsumer[] shapes, ResidentObjectDirectory directory, SourceBindings references)
         {
             var assets = rows.SelectMany(row => row.CachedMeshes.Select(key => (key, "Mesh")))
+                .Concat(shapes.Select(shape => (shape.Mesh, "Mesh")))
                 .Concat(rows.Where(row => row.Kind == "SpriteRenderer").Select(row => (row.CachedSprite, "Sprite")))
                 .Where(value => value.Item1.Length != 0).Distinct().OrderBy(value => value.Item2, StringComparer.Ordinal).ThenBy(value => value.Item1, StringComparer.Ordinal);
             var nodes = IndexConsumerNodes(directory,rows);
@@ -317,6 +355,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 for (var slot = 0; slot < offsets.Length; slot++) nodes.Add(IntPtr.Add(native, offsets[slot]),
                     new ConsumerNode { Key = row.Owner, Kind = row.Kind, Slot = slot, Owner = native });
             }
+            foreach (var pair in directory.NativeBindings.Where(pair => pair.Value is ParticleSystem)) {
+                var native = M.Owner(pair.Value); var modules = M.Ptr(IntPtr.Add(native,80));
+                if (modules != IntPtr.Zero) nodes.Add(IntPtr.Add(modules,1048), new ConsumerNode { Key = pair.Key, Kind = "ParticleSystem.Shape", Owner = native });
+            }
             return nodes;
         }
         private static Consumer[] ReadConsumers(NativeObject asset, string kind, ResidentObjectDirectory directory, Row[] rows)
@@ -332,13 +374,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var payload = M.Ptr(bytes,16);
                 if (nodes.TryGetValue(current,out var node)) {
                     var sprite = node.Kind == "SpriteRenderer";
+                    var shape = node.Kind == "ParticleSystem.Shape";
+                    var cache = shape ? IntPtr.Add(M.Ptr(IntPtr.Add(node.Owner,80)),856)
+                        : IntPtr.Add(node.Owner,sprite ? 456 : CachedMeshOffset(node.Kind, node.Slot));
                     if (sprite != (kind == "Sprite") || payload != IntPtr.Add(node.Owner,sprite ? 448 : 0) ||
-                        M.Ptr(IntPtr.Add(node.Owner,sprite ? 456 : node.Kind == "MeshRenderer" ? 448+8*node.Slot : 472)) != pointer)
+                        M.Ptr(cache) != pointer)
                         throw Error(kind + " registered scene consumer owner, slot or cached asset differs");
-                    entries.Add(new Consumer { Owner = node.Key, Slot = node.Slot });
+                    entries.Add(new Consumer { Owner = node.Key, Slot = node.Slot, OtherRole = shape ? "ParticleSystem.Shape" : "" });
                 } else {
                     if (references == null) throw Error(kind + " mutation would affect an owner outside the enrolled renderer rows");
-                    entries.Add(ReadOtherConsumer(kind,current,payload,pointer,references));
+                    var other = ReadOtherConsumer(kind, current, payload, pointer, references);
+                    if (!IsNonResidentAssetConsumer(other)) entries.Add(other);
                 }
                 if (!M.Read(current,24).SequenceEqual(bytes)) throw Error(kind + " consumer node changed during observation");
                 previous = current; current = M.Ptr(bytes, 8);
@@ -362,6 +408,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 role = "MeshRenderer"; var delta = node.ToInt64()-owner.ToInt64();
                 if (delta != 480 && delta != 504 && delta != 528) throw Error("unrecognized MeshRenderer consumer slot");
                 slot = (int)(delta-480)/24; nodeOffset = (int)delta; cacheOffset = 448+8*slot;
+            } else if (!sprite && type == 0x1949d00) {
+                role = "ParticleSystemRenderer"; var delta = node.ToInt64() - owner.ToInt64() - 688;
+                if (delta < 0 || delta > 72 || delta % 24 != 0) throw Error("unrecognized ParticleSystemRenderer consumer slot");
+                slot = (int)(delta / 24); nodeOffset = 688 + slot * 24; cacheOffset = 656 + slot * 8;
             } else if (!sprite && type == 0x1949470) { role = "SkinnedMeshRenderer"; nodeOffset = 744; cacheOffset = 472; }
             else if (!sprite && type == 0x1949f70) { role = "MeshCollider"; nodeOffset = 128; cacheOffset = 120; }
             else if (!sprite && type == 0x1949cb0) {
@@ -376,16 +426,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         // renderer cache reference. Such assets are not in Data.Consumers, but
         // a nonempty unbound ObjectUsers list must still reject common Canon.
         // The ordered list itself remains exclusively owned by this adapter.
-        internal static void RequireMeshConsumersCovered(ResidentObjectDirectory directory, Mesh mesh)
+        internal static void RequireMeshConsumersCovered(ResidentObjectDirectory directory, Mesh mesh, MeshConsumerIndex? index = null)
         {
             if (directory == null || !ResidentObjectDirectory.IsLive(mesh) || mesh.GetType() != typeof(Mesh)) throw Error("Mesh consumer coverage lacks its exact live owner");
-            var rows = directory.NativeBindings.Where(pair => pair.Value is Renderer)
-                .Select(pair => new Row { Owner = pair.Key, Kind = Kind((Component)pair.Value) }).ToArray();
+            index ??= new MeshConsumerIndex(directory);
             var pointer = M.Owner(mesh);
-            foreach (var consumer in ReadConsumers(mesh, "Mesh", directory, rows)) {
-                var owner = (Component)directory.Resolve(consumer.Owner); var kind = Kind(owner); var native = M.Owner(owner);
-                if (kind != "MeshRenderer" && kind != "SkinnedMeshRenderer") throw Error("Mesh ObjectUsers contains an unsupported native consumer type");
-                var offset = kind == "MeshRenderer" ? 448 + consumer.Slot * 8 : 472;
+            foreach (var consumer in index.Read(mesh)) {
+                var owner = (Component)directory.Resolve(consumer.Owner); var kind = owner is ParticleSystem ? "ParticleSystem.Shape" : Kind(owner); var native = M.Owner(owner);
+                if (kind != "MeshRenderer" && kind != "SkinnedMeshRenderer" && kind != "ParticleSystemRenderer" && kind != "ParticleSystem.Shape") throw Error("Mesh ObjectUsers contains an unsupported native consumer type");
+                var offset = kind == "ParticleSystem.Shape" ? 856 : CachedMeshOffset(kind, consumer.Slot);
+                if (kind == "ParticleSystem.Shape") native = M.Ptr(IntPtr.Add(native,80));
                 if (M.Ptr(IntPtr.Add(native, offset)) != pointer || directory.Ownership.IsExecution(owner))
                     throw Error("Mesh ObjectUsers has a foreign cache binding or execution owner");
             }
@@ -407,7 +457,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 RequireCompleteCoverage(source); this.source = Copy(source);
                 this.directory = directory ?? throw new ArgumentNullException(nameof(directory)); this.scope = scope ?? throw new ArgumentNullException(nameof(scope));
                 this.resolve = resolve ?? throw new ArgumentNullException(nameof(resolve)); this.bind = bind ?? throw new ArgumentNullException(nameof(bind));
-                admission = admitted ?? throw new ArgumentNullException(nameof(admitted)); admission(); before = Capture(directory, bind); RequireCompleteCoverage(before);
+                admission = admitted ?? throw new ArgumentNullException(nameof(admitted)); admission(); before = Capture(directory, bind);
+                if (RequiredCoverageGaps(before).Concat(before.CoverageGaps).Any()) {
+                    Canon(directory, scope, resolve, bind, admission);
+                    before = Capture(directory, bind);
+                }
+                RequireCompleteCoverage(before);
                 if (source.Rows.Length != before.Rows.Length) throw Error("complete renderer directory differs");
                 for (var index = 0; index < source.Rows.Length; index++) {
                     var row = source.Rows[index]; var target = before.Rows[index];
@@ -421,14 +476,37 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Check<Component>(row.Animator); Check<Component>(row.Cloth);
                     if (row.SpriteCache != null) PreflightSpriteCache(row.SpriteCache, target.SpriteCache, resolve);
                 }
+                if (source.Shapes.Length != before.Shapes.Length) throw Error("particle shape directory differs");
+                for (var index = 0; index < source.Shapes.Length; index++) {
+                    var shape = source.Shapes[index]; var target = before.Shapes[index];
+                    if (shape.Owner != target.Owner || shape.Execution != target.Execution
+                        || !(directory.Resolve(shape.Owner) is ParticleSystem owner) || !shape.Execution && !scope.Owns(owner)
+                        || shape.Execution && Json(shape) != Json(target)) throw Error("particle shape ownership differs");
+                    Check<Mesh>(shape.Mesh); Check<Mesh>(shape.SharedMesh);
+                }
                 var first = CopyRegistry(source.Updates); var second = CopyRegistry(before.Updates); first.MotionVectorFrame = second.MotionVectorFrame = 0;
                 if (Json(first) != Json(second)) throw Error("renderer update callback/type registry differs between source and target");
                 var sourceLists = source.Consumers.ToDictionary(ListKey, StringComparer.Ordinal); var targetLists = before.Consumers.ToDictionary(ListKey, StringComparer.Ordinal);
                 foreach (var key in sourceLists.Keys.Concat(targetLists.Keys).Distinct())
                     if (!sourceLists.TryGetValue(key, out var wanted) || !targetLists.TryGetValue(key, out var existing) || Json(wanted) != Json(existing)) changedConsumers.Add(key);
-                var execution = new HashSet<string>(source.Rows.Where(row => row.Execution).Select(row => row.Owner), StringComparer.Ordinal);
-                foreach (var list in source.Consumers.Concat(before.Consumers).Where(list => changedConsumers.Contains(ListKey(list))))
-                    if (list.Entries.Any(entry => entry.OtherRole.Length != 0 || execution.Contains(entry.Owner))) throw Error("changing a shared asset consumer list would overwrite a dependency outside the participating renderer rows");
+                var execution = new HashSet<string>(source.Rows.Where(row => row.Execution).Select(row => row.Owner)
+                    .Concat(source.Shapes.Where(row => row.Execution).Select(row => row.Owner)), StringComparer.Ordinal);
+                var shapeOwners = new HashSet<string>(source.Shapes.Select(row => row.Owner), StringComparer.Ordinal);
+                bool IsExternalConsumer(Consumer entry) => (entry.OtherRole.Length != 0 && !(entry.OtherRole == "ParticleSystem.Shape" && shapeOwners.Contains(entry.Owner))) || execution.Contains(entry.Owner);
+                string ExternalKey(Consumer entry) => entry.OtherRole + "|" + entry.Slot + "|" + entry.Owner;
+                var extErrors = new List<string>();
+                foreach (var key in changedConsumers) {
+                    var srcExt = (sourceLists.TryGetValue(key, out var sl) ? sl.Entries : System.Array.Empty<Consumer>()).Where(IsExternalConsumer).Select(ExternalKey).OrderBy(v => v, StringComparer.Ordinal).ToArray();
+                    var tgtExt = (targetLists.TryGetValue(key, out var tl) ? tl.Entries : System.Array.Empty<Consumer>()).Where(IsExternalConsumer).Select(ExternalKey).OrderBy(v => v, StringComparer.Ordinal).ToArray();
+                    if (!srcExt.SequenceEqual(tgtExt)) {
+                        var onlySrc = string.Join(",", srcExt.Except(tgtExt, StringComparer.Ordinal));
+                        var onlyTgt = string.Join(",", tgtExt.Except(srcExt, StringComparer.Ordinal));
+                        extErrors.Add($"key={key}, onlySrc=[{onlySrc}], onlyTgt=[{onlyTgt}]");
+                    }
+                }
+                if (extErrors.Count > 0) {
+                    throw Error("changing a shared asset consumer list would overwrite a dependency outside the participating renderer rows (" + extErrors.Count + "): " + string.Join(" | ", extErrors.Take(10)));
+                }
                 var preflightNodes = IndexConsumerNodes(directory,before.Rows); var preflightReferences = new SourceBindings(directory,bind);
                 foreach (var list in source.Consumers) {
                     if (list.Kind == "Mesh") Check<Mesh>(list.Asset); else Check<Sprite>(list.Asset);
@@ -440,8 +518,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 PreflightSpriteRegistry(source.Sprites, before.Sprites, directory, resolve);
             }
             private void Check<T>(string binding) where T : NativeObject
-            { if (binding.Length != 0) _ = ResidentNativeAssetReference.ResolveTyped(binding,typeof(T),resolve); }
-            private int Id(string binding) => binding.Length == 0 ? 0 : M.I32(M.Read(IntPtr.Add(Pointer(binding),8),4),0);
+            {
+                if (binding.StartsWith(UnloadedPrefix, StringComparison.Ordinal)) _ = ResolveUnloaded(binding, typeof(T));
+                else if (binding.Length != 0) _ = ResidentNativeAssetReference.ResolveTyped(binding,typeof(T),resolve);
+            }
+            private int Id(string binding) => binding.StartsWith(UnloadedPrefix, StringComparison.Ordinal) ? ResolveUnloaded(binding, null) : binding.Length == 0 ? 0 : M.I32(M.Read(IntPtr.Add(Pointer(binding),8),4),0);
             private IntPtr Pointer(string binding) => ResidentNativeAssetReference.ResolveTyped(binding,typeof(NativeObject),resolve);
             private void Int(IntPtr owner, int offset, int value) => M.Write(IntPtr.Add(owner, offset), BitConverter.GetBytes(value));
             private void Ptr(IntPtr owner, int offset, IntPtr value) => M.Write(IntPtr.Add(owner, offset), BitConverter.GetBytes(value.ToInt64()));
@@ -465,6 +546,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     var rowByKey = source.Rows.ToDictionary(row => row.Owner, StringComparer.Ordinal);
                     foreach (var list in before.Consumers.Where(list => changedConsumers.Contains(ListKey(list))))
                         foreach (var entry in list.Entries) Detach(Node(entry, rowByKey));
+                    for (var index = 0; index < source.Shapes.Length; index++) {
+                        var shape = source.Shapes[index]; if (shape.Execution) continue;
+                        ResidentParticleSystemState.ApplyShapeMeshCache(M.Owner(directory.Resolve(shape.Owner)),
+                            shape.Mesh, before.Shapes[index].Mesh, shape.SharedMesh, before.Shapes[index].SharedMesh, resolve, admission);
+                    }
                     foreach (var row in source.Rows) {
                         if (row.Execution) continue; scope.Require(); admission();
                         var native = M.Owner(directory.Resolve(row.Owner));
@@ -474,6 +560,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                         Int(native, 400, Id(row.ProbeAnchor)); Int(native, 404, Id(row.ProbeAnchorCached)); Int(native, 408, Id(row.LightProbeVolume)); Ptr(native, 416, Pointer(row.LodGroup));
                         if (row.Kind == "MeshRenderer") {
                             for (var slot = 0; slot < 3; slot++) { Int(native, 552 + slot * 4, Id(row.Meshes[slot])); Ptr(native, 448 + slot * 8, Pointer(row.CachedMeshes[slot])); }
+                        } else if (row.Kind == "ParticleSystemRenderer") {
+                            for (var slot = 0; slot < 4; slot++) {
+                                Int(native, 912 + slot * 4, Id(row.Meshes[slot])); Ptr(native, 656 + slot * 8, Pointer(row.CachedMeshes[slot]));
+                                var buffer = row.Particle!.StripIndices[slot]; Array(native, 784 + slot * 32, buffer.Bytes, buffer.Capacity, 4, 4);
+                            }
+                            StashParticleDrawCache(native);
+                            M.Write(IntPtr.Add(native, 928), EmptyParticleDraw);
                         } else if (row.Kind == "SpriteRenderer") {
                             Int(native, 488, Id(row.Sprite)); Ptr(native, 456, Pointer(row.CachedSprite));
                             ApplySecondarySheet(native, row.SecondaryProperties, resolve, bind, admission);
@@ -490,12 +583,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                     }
                     foreach (var list in source.Consumers.Where(list => changedConsumers.Contains(ListKey(list)))) {
                         var sentinel = IntPtr.Add(Pointer(list.Asset), list.Kind == "Mesh" ? 368 : 280); var header = M.Read(sentinel, 16);
-                        if (M.Ptr(header, 0) != sentinel || M.Ptr(header, 8) != sentinel) throw Error("asset consumer sentinel retained an unowned node");
+                        var prev = M.Ptr(header, 0); var next = M.Ptr(header, 8);
+                        if (prev == IntPtr.Zero || next == IntPtr.Zero || (prev == sentinel) != (next == sentinel)
+                            || (prev != sentinel && (M.Ptr(IntPtr.Add(prev, 8)) != sentinel || M.Ptr(next) != sentinel)))
+                            throw Error("asset consumer sentinel retained an unowned node");
                         var nodes = list.Entries.Select(entry => Node(entry, rowByKey)).ToArray();
-                        for (var index = 0; index < nodes.Length; index++) {
-                            Ptr(nodes[index], 0, index == 0 ? sentinel : nodes[index - 1]); Ptr(nodes[index], 8, index + 1 == nodes.Length ? sentinel : nodes[index + 1]);
+                        for (var index = 0; index < nodes.Length; index++)
+                            if (list.Entries[index].OtherRole == "ParticleSystem.Shape") Ptr(nodes[index],16,M.Owner(directory.Resolve(list.Entries[index].Owner)));
+                        if (nodes.Length > 0) {
+                            Ptr(prev, 8, nodes[0]);
+                            for (var index = 0; index < nodes.Length; index++) {
+                                Ptr(nodes[index], 0, index == 0 ? prev : nodes[index - 1]);
+                                Ptr(nodes[index], 8, index + 1 == nodes.Length ? sentinel : nodes[index + 1]);
+                            }
+                            Ptr(sentinel, 0, nodes[nodes.Length - 1]);
                         }
-                        Ptr(sentinel, 0, nodes.Length == 0 ? sentinel : nodes[nodes.Length - 1]); Ptr(sentinel, 8, nodes.Length == 0 ? sentinel : nodes[0]);
                     }
                     ApplyScene(source.Scene); Int(UpdatePointer(), 1096, source.Updates.MotionVectorFrame);
                     ApplySpriteRegistry(source.Sprites, resolve, admission);
@@ -505,7 +607,29 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal void Verify()
             { if (!applied) throw Error("renderer verification precedes application"); scope.Require(); admission(); RequireEqual(source, Capture(directory, bind)); admission(); }
             private IntPtr Node(Consumer entry, Dictionary<string, Row> rows)
-                => IntPtr.Add(M.Owner(directory.Resolve(entry.Owner)), ConsumerOffsets(rows[entry.Owner].Kind)[entry.Slot]);
+            {
+                if (entry.OtherRole == "ParticleSystem.Shape") {
+                    var shapeOwner = entry.Owner.StartsWith(ResidentNativeAssetReference.Prefix, StringComparison.Ordinal)
+                        ? ResidentMutationScope.RequireNativeAsset(entry.Owner, 0x1949cb0)
+                        : M.Owner(directory.Resolve(entry.Owner));
+                    return IntPtr.Add(M.Ptr(IntPtr.Add(shapeOwner, 80)), 1048);
+                }
+                if (entry.OtherRole.Length != 0) {
+                    int typeRva, nodeOffset;
+                    if (entry.OtherRole == "SpriteRenderer") { typeRva = ResidentLoadedAssetIndex.SpriteRendererClass; nodeOffset = 464; }
+                    else if (entry.OtherRole == "SpriteMask") { typeRva = 0x194ab30; nodeOffset = 464; }
+                    else if (entry.OtherRole == "MeshRenderer") { typeRva = 0x19494c0; nodeOffset = 480 + 24 * entry.Slot; }
+                    else if (entry.OtherRole == "ParticleSystemRenderer") { typeRva = 0x1949d00; nodeOffset = 688 + 24 * entry.Slot; }
+                    else if (entry.OtherRole == "SkinnedMeshRenderer") { typeRva = 0x1949470; nodeOffset = 744; }
+                    else if (entry.OtherRole == "MeshCollider") { typeRva = 0x1949f70; nodeOffset = 128; }
+                    else throw Error("unsupported external consumer role: " + entry.OtherRole);
+                    var otherOwner = entry.Owner.StartsWith(ResidentNativeAssetReference.Prefix, StringComparison.Ordinal)
+                        ? ResidentMutationScope.RequireNativeAsset(entry.Owner, typeRva)
+                        : M.Owner(directory.Resolve(entry.Owner));
+                    return IntPtr.Add(otherOwner, nodeOffset);
+                }
+                return IntPtr.Add(M.Owner(directory.Resolve(entry.Owner)), ConsumerOffsets(rows[entry.Owner].Kind)[entry.Slot]);
+            }
             private void Detach(IntPtr node)
             {
                 scope.Require(); admission(); var header = M.Read(node, 16); var previous = M.Ptr(header, 0); var next = M.Ptr(header, 8);
@@ -544,6 +668,21 @@ namespace HollowKnightTAS.Runtime.FullRun
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void NativeUnary(IntPtr owner);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void NativePair(IntPtr manager, IntPtr owner);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void CalculateBounds(IntPtr output, IntPtr renderer, IntPtr mesh);
+        internal sealed class MeshConsumerIndex
+        {
+            private readonly Dictionary<IntPtr, ConsumerNode> nodes;
+            internal readonly Dictionary<int, MeshFilter[]> Filters;
+            internal MeshConsumerIndex(ResidentObjectDirectory directory)
+            {
+                var rows = directory.NativeBindings.Where(pair => pair.Value is Renderer)
+                    .Select(pair => new Row { Owner = pair.Key, Kind = Kind((Component)pair.Value) }).ToArray();
+                nodes = IndexConsumerNodes(directory, rows);
+                Filters = directory.NativeBindings.Values.OfType<MeshFilter>()
+                    .GroupBy(filter => M.I32(M.Read(IntPtr.Add(M.Owner(filter), 56), 4), 0))
+                    .ToDictionary(group => group.Key, group => group.ToArray());
+            }
+            internal Consumer[] Read(Mesh mesh) => ReadConsumers(M.Owner(mesh), "Mesh", nodes, null);
+        }
         internal sealed class MeshConsumerRebind
         {
             private readonly ResidentObjectDirectory directory;
@@ -551,7 +690,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly Mesh mesh;
             private readonly IntPtr meshPointer;
             private readonly Action admission;
-            private readonly Row[] rows;
+            private readonly MeshConsumerIndex index;
             private readonly Consumer[] consumers;
             private readonly Dictionary<string, ConsumerOwner> owners = new Dictionary<string, ConsumerOwner>(StringComparer.Ordinal);
             private readonly Dictionary<MeshFilter, int> filters = new Dictionary<MeshFilter, int>();
@@ -563,23 +702,23 @@ namespace HollowKnightTAS.Runtime.FullRun
                 internal string Kind = "";
                 internal byte[] Bindings = Array.Empty<byte>(), StaticBatch = Array.Empty<byte>();
             }
-            internal MeshConsumerRebind(ResidentObjectDirectory directory, Mesh mesh, ResidentMutationScope scope, Action admitted)
+            internal MeshConsumerRebind(ResidentObjectDirectory directory, Mesh mesh, ResidentMutationScope scope, Action admitted, MeshConsumerIndex? index)
             {
                 this.directory = directory ?? throw new ArgumentNullException(nameof(directory)); this.mesh = mesh ?? throw new ArgumentNullException(nameof(mesh));
                 this.scope = scope ?? throw new ArgumentNullException(nameof(scope)); admission = admitted ?? throw new ArgumentNullException(nameof(admitted));
                 scope.Require(); admission(); meshPointer = M.Owner(mesh);
-                rows = directory.NativeBindings.Where(pair => pair.Value is Renderer).Select(pair => new Row { Owner = pair.Key, Kind = Kind((Component)pair.Value) }).ToArray();
-                consumers = ReadConsumers(mesh, "Mesh", directory, rows);
+                this.index = index ?? new MeshConsumerIndex(directory);
+                consumers = this.index.Read(mesh);
                 foreach (var key in consumers.Select(value => value.Owner).Distinct()) {
-                    var owner = (Component)directory.Resolve(key); var kind = Kind(owner);
-                    if (kind != "MeshRenderer" && kind != "SkinnedMeshRenderer") throw Error("Mesh consumer has no native refresh adapter: " + owner.GetType().FullName);
+                    var owner = (Component)directory.Resolve(key); var kind = owner is ParticleSystem ? "ParticleSystem.Shape" : Kind(owner);
+                    if (kind != "MeshRenderer" && kind != "SkinnedMeshRenderer" && kind != "ParticleSystemRenderer" && kind != "ParticleSystem.Shape") throw Error("Mesh consumer has no native refresh adapter: " + owner.GetType().FullName);
                     if (!scope.Owns(owner) || directory.Ownership.IsExecution(owner)) throw Error("Mesh Canon would change an execution or unowned renderer");
                     var pointer = M.Owner(owner);
                     owners.Add(key, new ConsumerOwner { Owner = owner, Pointer = pointer, Kind = kind, Bindings = MeshBindings(pointer, kind),
-                        StaticBatch = M.Read(IntPtr.Add(pointer, 248), 4) });
+                        StaticBatch = kind == "ParticleSystem.Shape" ? Array.Empty<byte>() : M.Read(IntPtr.Add(pointer, 248), 4) });
                     if (kind == "SkinnedMeshRenderer") RequireSkinHandle(pointer, false);
                 }
-                foreach (var filter in directory.NativeBindings.Values.OfType<MeshFilter>()) {
+                foreach (var filter in this.index.Filters.TryGetValue(mesh.GetInstanceID(), out var matching) ? matching : Array.Empty<MeshFilter>()) {
                     var id = M.I32(M.Read(IntPtr.Add(M.Owner(filter), 56), 4), 0);
                     if (id == mesh.GetInstanceID()) filters.Add(filter, id);
                 }
@@ -598,7 +737,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                         // bit is set, and preserves PPtrs/static-batch state that
                         // null/restore setter cycles would otherwise overwrite.
                         if (item.Kind == "MeshRenderer") updateMesh(item.Pointer);
-                        else updateSkin(SkinManager(), item.Pointer);
+                        else if (item.Kind == "SkinnedMeshRenderer") updateSkin(SkinManager(), item.Pointer);
+                        else if (item.Kind == "ParticleSystem.Shape")
+                            Function<NativeUnary>(0x1b33e0,"488b49504881c100020000e9808dc300")(item.Pointer);
                     }
                     applied = true; Verify();
                 } catch (Exception error) { scope.Fault(error); throw; }
@@ -618,18 +759,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 if (!M.Read(storage, 24).SequenceEqual(M.Read(IntPtr.Add(item.Pointer, 216), 24)))
                                     throw Error("Mesh renderer bounds did not refresh from its actual bound geometry");
                             }
-                        } else RequireSkinHandle(item.Pointer, true);
+                        } else if (item.Kind == "SkinnedMeshRenderer") RequireSkinHandle(item.Pointer, true);
                     }
                 } finally { Marshal.FreeHGlobal(storage); }
                 admission();
             }
             private void RequireIdentity()
             {
-                if (M.Owner(mesh) != meshPointer || Json(ReadConsumers(mesh, "Mesh", directory, rows)) != Json(consumers))
+                if (M.Owner(mesh) != meshPointer || Json(index.Read(mesh)) != Json(consumers))
                     throw Error("Mesh consumer identities or list order changed during Canon");
                 foreach (var item in owners.Values)
                     if (M.Owner(item.Owner) != item.Pointer || !MeshBindings(item.Pointer, item.Kind).SequenceEqual(item.Bindings)
-                        || !M.Read(IntPtr.Add(item.Pointer, 248), 4).SequenceEqual(item.StaticBatch)) throw Error("Mesh refresh changed consumer bindings or retained static batch state");
+                        || item.Kind != "ParticleSystem.Shape" && !M.Read(IntPtr.Add(item.Pointer, 248), 4).SequenceEqual(item.StaticBatch)) throw Error("Mesh refresh changed consumer bindings or retained static batch state");
                 foreach (var pair in filters)
                     if (M.I32(M.Read(IntPtr.Add(M.Owner(pair.Key), 56), 4), 0) != pair.Value) throw Error("MeshFilter binding changed during Mesh Canon");
                 RequireAssetUsersEmpty();
@@ -640,7 +781,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (M.Ptr(bytes, 0) != sentinel || M.Ptr(bytes, 8) != sentinel)
                     throw Error("Mesh has native asset users requiring a separate refresh adapter");
             }
-            private static byte[] MeshBindings(IntPtr owner, string kind) => kind == "MeshRenderer"
+            private static byte[] MeshBindings(IntPtr owner, string kind) => kind == "ParticleSystem.Shape"
+                ? M.Read(IntPtr.Add(M.Ptr(IntPtr.Add(owner,80)),792),12).Concat(M.Read(IntPtr.Add(M.Ptr(IntPtr.Add(owner,80)),856),8)).ToArray() : kind == "ParticleSystemRenderer"
+                ? M.Read(IntPtr.Add(owner, 656), 32).Concat(M.Read(IntPtr.Add(owner, 912), 16)).ToArray() : kind == "MeshRenderer"
                 ? M.Read(IntPtr.Add(owner, 448), 24).Concat(M.Read(IntPtr.Add(owner, 552), 12)).ToArray()
                 : M.Read(IntPtr.Add(owner, 468), 12).Concat(M.Read(IntPtr.Add(owner, 772), 4)).ToArray();
             private static IntPtr SkinManager()
@@ -660,8 +803,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw Error("skinned renderer retained prepared geometry after Mesh refresh");
             }
         }
-        internal static MeshConsumerRebind PrepareMeshConsumerRebind(ResidentObjectDirectory directory, Mesh mesh, ResidentMutationScope scope, Action admitted)
-            => new MeshConsumerRebind(directory, mesh, scope, admitted);
+        internal static MeshConsumerRebind PrepareMeshConsumerRebind(ResidentObjectDirectory directory, Mesh mesh, ResidentMutationScope scope, Action admitted, MeshConsumerIndex? index = null)
+            => new MeshConsumerRebind(directory, mesh, scope, admitted, index);
         private static T Function<T>(int rva, string prefix) where T : Delegate
         {
             var pointer = IntPtr.Add(LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress, rva);
@@ -685,15 +828,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (row.SecondaryProperties != null) foreach (var gap in row.SecondaryProperties.CoverageGaps) gaps.Add("sprite-secondary-sheet:" + gap);
                     if (row.SpriteCache != null) foreach (var gap in SpriteCacheGaps(row.SpriteCache)) gaps.Add(gap);
                 }
+                if (row.Particle != null) {
+                    if (row.Particle.InstanceBufferPresent) gaps.Add("particle-renderer-owned-instance-buffer");
+                    if (row.Particle.DrawCacheDirty) gaps.Add(row.Execution ? "execution-particle-renderer-draw-cache" : "particle-renderer-draw-cache-requires-common-canon");
+                }
                 if (row.Kind == "SkinnedMeshRenderer") gaps.Add("skinned-renderer-manager-and-cache-restoration");
                 if (row.Kind == "UnsupportedRenderer") gaps.Add("unsupported-native-renderer-type:" + row.Type.Name);
-                if (row.Scalars.Length != 0 && row.Scalars[0].Length >= 196 && (M.U32(row.Scalars[0], 192) >> 12) != 0)
+                // SortingGroup::GetInvalidSortingGroupID (0x558420) returns
+                // 0xfffff; SharedRendererData's constructor stores 0xfffff000.
+                if (row.Scalars.Length != 0 && row.Scalars[0].Length >= 196 && (M.U32(row.Scalars[0], 192) >> 12) != 0xfffffU)
                     gaps.Add("renderer-sorting-group-registration");
                 foreach (var value in row.OpaqueStates) gaps.Add(value);
             }
             if (data.Scene.HasGateState || data.Scene.HasUmbraTome) gaps.Add("renderer-umbra-and-gate-state");
             if (data.Scene.Intermediate.Length != 0) gaps.Add("intermediate-renderer-ownership");
-            if (data.Sprites.ExternalOwners.Length != 0) gaps.Add("sprite-registry-nonresident-native-owner-state");
+
             return gaps.ToArray();
         }
         internal static void RequireCompleteCoverage(Data data)
@@ -705,7 +854,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static void RequireCanonicalizableCoverage(Data data)
         {
             Validate(data); var removable = new HashSet<string>(StringComparer.Ordinal) { "sprite-owned-geometry-gpu-buffers",
-                "sprite-secondary-sheet-sharing-requires-common-canon", "sprite-render-cache-requires-common-canon", "renderer-drawing-padding-requires-common-canon" };
+                "sprite-secondary-sheet-sharing-requires-common-canon", "sprite-render-cache-requires-common-canon", "renderer-drawing-padding-requires-common-canon", "particle-renderer-draw-cache-requires-common-canon" };
             if (data.Rows.Where(row => row.Kind == "SpriteRenderer").All(row => row.SpriteTilingJobDone)) removable.Add("sprite-tiling-job-fence");
             var gaps = RequiredCoverageGaps(data).Concat(data.CoverageGaps).Where(gap => !removable.Contains(gap)).Distinct(StringComparer.Ordinal).ToArray();
             if (gaps.Length != 0) throw Error("native renderer cannot safely enter common Canon: " + string.Join(",", gaps));
@@ -724,12 +873,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static void Validate(Data data)
         {
-            if (data == null || data.Version != 2 || data.Rows == null || data.Rows.Length > MaximumSlots || data.Scene == null || data.Updates == null || data.Consumers == null || data.Sprites == null || data.CoverageGaps == null)
+            if (data == null || data.Version != 2 || data.Rows == null || data.Rows.Length > MaximumSlots || data.Scene == null || data.Updates == null || data.Consumers == null || data.Shapes == null || data.Sprites == null || data.CoverageGaps == null)
                 throw Error("renderer snapshot shape differs");
             var seen = new HashSet<string>(StringComparer.Ordinal); string? previous = null;
             foreach (var row in data.Rows) {
                 if (row == null || !Text(row.Owner, false) || !seen.Add(row.Owner) || previous != null && StringComparer.Ordinal.Compare(previous, row.Owner) >= 0
-                    || row.Type == null || !new[] { "MeshFilter", "MeshRenderer", "SpriteRenderer", "SkinnedMeshRenderer", "UnsupportedRenderer" }.Contains(row.Kind))
+                    || row.Type == null || !new[] { "MeshFilter", "MeshRenderer", "SpriteRenderer", "SkinnedMeshRenderer", "ParticleSystemRenderer", "UnsupportedRenderer" }.Contains(row.Kind))
                     throw Error("renderer owner/type directory differs");
                 previous = row.Owner; row.Type.Validate();
                 if ((row.SecondaryProperties == null) != (row.SecondaryReferenceCount == 0) || row.SecondaryReferenceCount < 0 || row.SecondaryReferenceCount > MaximumSlots
@@ -744,10 +893,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     row.RootBone, row.Animator, row.Cloth }) if (!Text(value)) throw Error("renderer binding text differs");
                 if (row.ConsumerLinked == null || row.MaterialCapacity < row.Materials.Length || row.MaterialCapacity > MaximumSlots
                     || row.BoneCapacity < row.Bones.Length || row.BoneCapacity > MaximumSlots) throw Error("renderer capacity differs");
-                var meshCount = row.Kind == "MeshRenderer" ? 3 : row.Kind == "MeshFilter" || row.Kind == "SkinnedMeshRenderer" ? 1 : 0;
+                var meshCount = row.Kind == "ParticleSystemRenderer" ? 4 : row.Kind == "MeshRenderer" ? 3 : row.Kind == "MeshFilter" || row.Kind == "SkinnedMeshRenderer" ? 1 : 0;
                 if (row.Meshes.Length != meshCount || row.CachedMeshes.Length != (row.Kind == "MeshFilter" ? 0 : meshCount)
-                    || row.ConsumerLinked.Length != (row.Kind == "MeshRenderer" ? 3 : row.Kind == "SpriteRenderer" || row.Kind == "SkinnedMeshRenderer" ? 1 : 0))
+                    || row.ConsumerLinked.Length != (row.Kind == "ParticleSystemRenderer" ? 4 : row.Kind == "MeshRenderer" ? 3 : row.Kind == "SpriteRenderer" || row.Kind == "SkinnedMeshRenderer" ? 1 : 0))
                     throw Error("renderer mesh/consumer layout differs");
+                ValidateParticleRenderer(row);
                 Bytes(row.Weights, row.WeightCapacity, 4); Bytes(row.OptimizedBones, row.OptimizedBoneCapacity, 2); Bytes(row.SkinVertices, row.SkinVertexCapacity, 1);
                 if (row.SecondaryProperties != null) ResidentShaderPropertySheet.Validate(row.SecondaryProperties);
                 if (row.SpriteNineSlice != (row.SpriteCache != null)) throw Error("Sprite renderer cache presence differs");
@@ -759,6 +909,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     for (var index = 4; index < 7; index++) Bool(row.Scalars[1][index]);
                 }
             }
+            ValidateShapes(data.Shapes);
             ValidateScene(data.Scene, seen);
             ValidateUpdates(data.Updates); ValidateConsumers(data);
             ValidateSpriteRegistry(data);
@@ -789,9 +940,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static void ValidateConsumers(Data data)
         {
             if (data.Consumers.Length > MaximumSlots) throw Error("asset consumer directory exceeds bounds");
-            var rows = data.Rows.ToDictionary(row => row.Owner, StringComparer.Ordinal); var linked = new HashSet<string>(StringComparer.Ordinal);
+            var rows = data.Rows.ToDictionary(row => row.Owner, StringComparer.Ordinal);
+            var shapes = data.Shapes.ToDictionary(row => row.Owner, StringComparer.Ordinal); var linked = new HashSet<string>(StringComparer.Ordinal);
             var expectedAssets = new HashSet<string>(data.Rows.SelectMany(row => row.CachedMeshes.Where(key => key.Length != 0).Select(key => "Mesh:" + key))
-                .Concat(data.Rows.Where(row => row.CachedSprite.Length != 0).Select(row => "Sprite:" + row.CachedSprite)), StringComparer.Ordinal);
+                .Concat(data.Rows.Where(row => row.CachedSprite.Length != 0).Select(row => "Sprite:" + row.CachedSprite))
+                .Concat(data.Shapes.Where(row => row.Mesh.Length != 0).Select(row => "Mesh:" + row.Mesh)), StringComparer.Ordinal);
             string? previous = null;
             foreach (var list in data.Consumers) {
                 if (list == null || !Text(list.Asset, false) || list.Kind != "Mesh" && list.Kind != "Sprite" || list.Entries == null || list.Entries.Length > MaximumSlots)
@@ -803,11 +956,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (entry != null && !string.IsNullOrEmpty(entry.OtherRole)) {
                         var mesh = list.Kind == "Mesh";
                         var role = entry.OtherRole;
-                        if (!Text(entry.Owner,false) || entry.Slot < 0 || entry.Slot >= (role == "MeshRenderer" ? 3 : 1)
-                            || !(mesh ? role == "MeshRenderer" || role == "SkinnedMeshRenderer" || role == "MeshCollider" || role == "ParticleSystem.Shape"
+                        if (!Text(entry.Owner,false) || entry.Slot < 0 || entry.Slot >= (role == "ParticleSystemRenderer" ? 4 : role == "MeshRenderer" ? 3 : 1)
+                            || !(mesh ? role == "MeshRenderer" || role == "SkinnedMeshRenderer" || role == "ParticleSystemRenderer" || role == "MeshCollider" || role == "ParticleSystem.Shape"
                                 : role == "SpriteRenderer" || role == "SpriteMask")
                             || rows.TryGetValue(entry.Owner,out var externalRow) && externalRow.Kind != "UnsupportedRenderer"
                             || !linked.Add("other/" + role + "/" + entry.Owner + ":" + entry.Slot)) throw Error("external asset consumer role, slot or ownership differs");
+                        if (shapes.TryGetValue(entry.Owner, out var shape) && (role != "ParticleSystem.Shape" || !shape.Linked || shape.Mesh != list.Asset))
+                            throw Error("shape consumer cached mesh or registration differs");
                         continue;
                     }
                     if (entry == null || entry.OtherRole == null || !rows.TryGetValue(entry.Owner, out var row) || entry.Slot < 0 || entry.Slot >= row.ConsumerLinked.Length
@@ -816,6 +971,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                         : row.Kind == "SpriteRenderer" || row.CachedMeshes[entry.Slot] != list.Asset) throw Error("asset consumer cached binding differs");
                 }
             }
+            foreach (var shape in data.Shapes)
+                if (shape.Linked != linked.Contains("other/ParticleSystem.Shape/" + shape.Owner + ":0")) throw Error("shape registration disagrees with asset list");
             if (expectedAssets.Count != 0) throw Error("an asset consumer list is missing");
             foreach (var row in data.Rows)
                 for (var slot = 0; slot < row.ConsumerLinked.Length; slot++)
@@ -824,6 +981,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (row.SceneHandle < -1 || row.SceneHandle >= data.Scene.Nodes.Length || row.SceneHandle >= 0 && data.Scene.Nodes[row.SceneHandle].Owner != row.Owner)
                     throw Error("component scene handle disagrees with renderer scene registration");
         }
+        private static bool IsNonResidentAssetConsumer(Consumer entry)
+            => entry.OtherRole.Length != 0 &&
+               (entry.Owner.StartsWith("resident-asset/", StringComparison.Ordinal) ||
+                entry.Owner.StartsWith(ResidentNativeAssetReference.Prefix, StringComparison.Ordinal));
         private static string ListKey(ConsumerList list) => list.Kind + ":" + list.Asset;
         private static UpdateRegistry CopyRegistry(UpdateRegistry value) => Newtonsoft.Json.JsonConvert.DeserializeObject<UpdateRegistry>(Json(value))
             ?? throw Error("renderer update snapshot copy is absent");

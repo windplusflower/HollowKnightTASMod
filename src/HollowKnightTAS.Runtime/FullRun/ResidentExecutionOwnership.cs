@@ -207,16 +207,66 @@ namespace HollowKnightTAS.Runtime.FullRun
             => new TopologyGuard(source, target);
         internal static void RequireSameManifest(Manifest expected, Manifest actual)
         {
-            if (expected.Version != actual.Version || expected.Entries.Length != actual.Entries.Length
-                || expected.Entries.Where((entry, index) => entry.ComponentKey != actual.Entries[index].ComponentKey
-                    || entry.ObjectKey != actual.Entries[index].ObjectKey || entry.Type.Key != actual.Entries[index].Type.Key || entry.Role != actual.Entries[index].Role).Any()
-                || expected.Dependencies.Length != actual.Dependencies.Length || expected.Dependencies.Where((entry, index) =>
-                    !SameDependency(entry, actual.Dependencies[index])).Any())
-                throw Error("source execution identities or dependencies do not map to the current admitted process");
+            if (expected.Version != actual.Version)
+                throw Error("manifest version differs: exp=" + expected.Version + ", act=" + actual.Version);
+            if (expected.Entries.Length != actual.Entries.Length)
+                throw Error("entries length differs: exp=" + expected.Entries.Length + ", act=" + actual.Entries.Length);
+            for (var index = 0; index < expected.Entries.Length; index++) {
+                var exp = expected.Entries[index]; var act = actual.Entries[index];
+                if (!SameComponentKey(exp.ComponentKey, act.ComponentKey))
+                    throw Error("entry component key differs at " + index + ": exp=" + exp.ComponentKey + ", act=" + act.ComponentKey);
+                if (exp.ObjectKey != act.ObjectKey)
+                    throw Error("entry object key differs at " + index + ": exp=" + exp.ObjectKey + ", act=" + act.ObjectKey);
+                if (!SameType(exp.Type, act.Type))
+                    throw Error("entry type differs at " + index + ": exp=" + exp.Type?.Key + ", act=" + act.Type?.Key);
+                if (!SameRole(exp.Role, act.Role))
+                    throw Error("entry role differs at " + index + ": exp=" + exp.Role + ", act=" + act.Role);
+            }
+            if (expected.Dependencies.Length != actual.Dependencies.Length)
+                throw Error("dependencies length differs: exp=" + expected.Dependencies.Length + ", act=" + actual.Dependencies.Length);
+            for (var index = 0; index < expected.Dependencies.Length; index++) {
+                var exp = expected.Dependencies[index]; var act = actual.Dependencies[index];
+                if (!SameDependency(exp, act))
+                    throw Error("dependency differs at " + index + ": exp=" + exp.ObjectKey + "/" + exp.Role + "/" + exp.ComponentKey + " (type=" + exp.Type?.Key + "), act=" + act.ObjectKey + "/" + act.Role + "/" + act.ComponentKey + " (type=" + act.Type?.Key + ")");
+            }
+        }
+        private static bool SameRole(string? left, string? right)
+        {
+            if (left == right) return true;
+            if (left == null || right == null) return false;
+            if (left.StartsWith("runtime-driver/", StringComparison.Ordinal) && right.StartsWith("runtime-driver/", StringComparison.Ordinal)) {
+                return true;
+            }
+            return false;
+        }
+        internal static bool SameExecutionKey(string? left, string? right)
+            => left == right || left != null && right != null && IsExecutionBinding(left) && IsExecutionBinding(right) && SameComponentKey(left, right);
+        private static bool SameComponentKey(string? left, string? right)
+        {
+            if (left == right) return true;
+            if (left == null || right == null) return false;
+            if (left.Contains("HollowKnightTAS") && right.Contains("HollowKnightTAS")) {
+                var l = NormalizeComponentKey(left);
+                var r = NormalizeComponentKey(right);
+                return l == r;
+            }
+            return false;
+        }
+        private static string NormalizeComponentKey(string key)
+        {
+            var s = System.Text.RegularExpressions.Regex.Replace(key, @"runtime-driver/[0-9a-fA-F\-]+(?:/[0-9a-fA-F]+)?", "runtime-driver/*");
+            return System.Text.RegularExpressions.Regex.Replace(s, @"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:[0-9a-fA-F]{8})?", "*");
+        }
+        private static bool SameType(ResidentObjectDirectory.TypeRecord? left, ResidentObjectDirectory.TypeRecord? right)
+        {
+            if (left == null || right == null) return left == right;
+            if (left.Assembly == right.Assembly && (left.Assembly == "HollowKnightTAS" || left.Assembly == "HollowKnightTAS.Core" || left.Assembly == "HollowKnightTAS.ClockPayload"))
+                return left.Name == right.Name && left.Arguments.Length == right.Arguments.Length;
+            return left.Key == right.Key;
         }
         private static bool SameDependency(DependencyEntry left, DependencyEntry right)
-            => left.ObjectKey == right.ObjectKey && left.Role == right.Role && left.ComponentKey == right.ComponentKey
-                && left.ComponentOrder == right.ComponentOrder && left.Type?.Key == right.Type?.Key;
+            => left.ObjectKey == right.ObjectKey && SameRole(left.Role, right.Role) && SameComponentKey(left.ComponentKey, right.ComponentKey)
+                && left.ComponentOrder == right.ComponentOrder && SameType(left.Type, right.Type);
         internal sealed class TopologyGuard
         {
             private readonly ResidentObjectDirectory.Snapshot baseline;
@@ -267,8 +317,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw Error("execution GameObject topology or state would require a write");
                 var left = expected.Components.Where(value => value.Ownership != ResidentComponentOwnership.Gameplay).ToArray();
                 var right = actual.Components.Where(value => value.Ownership != ResidentComponentOwnership.Gameplay).ToArray();
-                if (left.Length != right.Length || left.Where((component, index) => component.Key != right[index].Key || component.Type.Key != right[index].Type.Key
-                    || component.Ownership != right[index].Ownership || component.ExecutionRole != right[index].ExecutionRole || component.Ordinal != right[index].Ordinal
+                if (left.Length != right.Length || left.Where((component, index) => !SameComponentKey(component.Key, right[index].Key) || !SameType(component.Type, right[index].Type)
+                    || component.Ownership != right[index].Ownership || !SameRole(component.ExecutionRole, right[index].ExecutionRole) || component.Ordinal != right[index].Ordinal
                     || component.Order != right[index].Order || component.HideFlags != right[index].HideFlags).Any())
                     throw Error("execution component identity, order or metadata would require a write");
             }

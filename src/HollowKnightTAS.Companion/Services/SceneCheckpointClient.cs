@@ -171,9 +171,9 @@ namespace HollowKnightTAS.Companion.Services
                 // reply bound aligned; the four-minute job/270s host stay fixed.
                 var clockCanon = fields.TryGetValue("phase", out var phase) && phase == "s0-clock-recanon"
                     && Environment.GetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_EXPERIMENT") == "1";
-                var actualD = fields.TryGetValue("phase", out var actualPhase) && actualPhase == "d-exp-apply"
+                var actualD = fields.TryGetValue("phase", out var actualPhase) && actualPhase.StartsWith("d-exp-", StringComparison.Ordinal)
                     && Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_EXPERIMENT") == "1";
-                timeout.CancelAfter(TimeSpan.FromSeconds(clockCanon || actualD ? 10 : 2));
+                timeout.CancelAfter(TimeSpan.FromSeconds(clockCanon ? 10 : (actualD ? (actualPhase == "d-exp-apply" ? 360 : 30) : 2)));
                 return await completion.Task.WaitAsync(timeout.Token);
             }
             finally { runtime.EnvelopeReceived -= Received; }

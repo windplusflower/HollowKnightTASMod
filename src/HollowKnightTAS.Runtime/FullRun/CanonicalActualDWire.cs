@@ -8,7 +8,7 @@ namespace HollowKnightTAS.Runtime.FullRun
     // size allowance changes when the outer JSON/base64 representation ends.
     internal static class CanonicalActualDWire
     {
-        internal const int MaximumBytes = 32 * 1024 * 1024;
+        internal const int MaximumBytes = 256 * 1024 * 1024;
         internal const int DomainCount = 12;
         private const int Magic = 0x31444B48; // HKD1, little-endian.
         private const int Version = 1;

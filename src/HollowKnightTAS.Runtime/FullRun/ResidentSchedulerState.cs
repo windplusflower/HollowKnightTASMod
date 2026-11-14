@@ -77,6 +77,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal readonly Dictionary<IntPtr, RoutineLive> routines = new Dictionary<IntPtr, RoutineLive>();
             internal readonly List<CallbackLive> callbacks = new List<CallbackLive>();
             internal readonly Dictionary<string, IntPtr> owners = new Dictionary<string, IntPtr>(StringComparer.Ordinal);
+            internal readonly List<Owner> ownerRows = new List<Owner>();
             internal readonly Dictionary<string, UnityEngine.Object> nativeAssets = new Dictionary<string, UnityEngine.Object>(StringComparer.Ordinal);
             internal readonly Dictionary<string, IntPtr> assetPointers = new Dictionary<string, IntPtr>(StringComparer.Ordinal);
             internal readonly List<Tuple<IntPtr, byte[]>> witness = new List<Tuple<IntPtr, byte[]>>();
@@ -154,52 +155,76 @@ namespace HollowKnightTAS.Runtime.FullRun
                 live.Wrapper = wrapper; live.Row.WrapperPresent = true; wrappers[wrapper] = live.Pointer;
                 Bind(wrapper, Wrapper(live.Row.Key));
             }
-            internal void FindWrappers()
+            internal string? DiscoverStoredWrapper(object value, Action<string, object> addRoot)
             {
-                var seen = new HashSet<object>(References.Instance); var pending = new Queue<Tuple<object, int>>(); var values = 0;
-                void Visit(object? value, int depth) {
-                    if (value == null) return; if (++values > CanonicalCarryGraphCodec.MaximumValues || depth > 128) throw Error("scheduler managed closure exceeds its bound");
-                    if (value is Coroutine wrapper) {
-                        var pointer = (IntPtr)WrapperPointer.GetValue(wrapper)!;
-                        if (pointer != IntPtr.Zero) RegisterWrapper(wrapper, RoutineAt(pointer));
-                        else if (!externals.ContainsKey(wrapper)) { var key = Prefix + "released/" + released.Count.ToString("D6", CultureInfo.InvariantCulture); released.Add(key); Bind(wrapper, key); wrappers.Add(wrapper, pointer); }
-                        return;
-                    }
-                    var type = ResidentValueAccess.TypeOf(value);
-                    if (type.IsPrimitive || type.IsEnum || value is string || value is decimal || type == typeof(IntPtr) || type == typeof(UIntPtr) || ResidentGraphPolicy.IsMetadata(value)
-                        || !ResidentValueAccess.IsView(value) && executionBinding(value) != null) return;
-                    if (!ResidentValueAccess.IsView(value) && !seen.Add(value)) return;
-                    if (seen.Count > CanonicalCarryGraphCodec.MaximumNodes) throw Error("scheduler managed node count exceeds its bound");
-                    pending.Enqueue(Tuple.Create(value, depth));
+                if (value is not Coroutine wrapper) return BindExternal(value);
+                if (externals.TryGetValue(wrapper, out var known)) return known;
+                var pointer = (IntPtr)WrapperPointer.GetValue(wrapper)!;
+                if (pointer != IntPtr.Zero) {
+                    var count = ManagedRoots.Count;
+                    RegisterWrapper(wrapper, RoutineAt(pointer));
+                    if (ManagedRoots.Count != count)
+                        foreach (var pair in ManagedRoots) addRoot(pair.Key, pair.Value);
+                } else {
+                    var key = Prefix + "released/" + released.Count.ToString("D6", CultureInfo.InvariantCulture);
+                    released.Add(key); Bind(wrapper, key); wrappers.Add(wrapper, pointer);
                 }
-                foreach (var root in graphRoots.Where(row => !row.Key.StartsWith(Prefix, StringComparison.Ordinal)).OrderBy(row => row.Key, StringComparer.Ordinal)) Visit(root.Value, 0);
-                var scanned = new HashSet<IntPtr>();
-                while (pending.Count != 0 || routines.Keys.Any(pointer => !scanned.Contains(pointer))) {
-                    foreach (var routine in routines.Values.Where(row => !scanned.Contains(row.Pointer)).ToArray()) {
-                        scanned.Add(routine.Pointer); if (routine.Row.Execution.Length == 0) Visit(routine.Enumerator.Target, 0);
-                    }
-                    if (pending.Count == 0) continue;
-                    var item = pending.Dequeue(); var owner = item.Item1;
-                    if (owner is Delegate callback) { foreach (var call in callback.GetInvocationList()) Visit(call.Target, item.Item2 + 1); }
-                    else if (owner is Array array) {
-                        if (array.Rank != 1 || array.GetLowerBound(0) != 0) throw Error("scheduler managed array shape differs");
-                        for (var i = 0; i < array.Length; i++) Visit(ResidentValueAccess.ReadArray(array, i), item.Item2 + 1);
-                    } else foreach (var field in CanonicalCarryGraphCodec.Fields(ResidentValueAccess.TypeOf(owner)))
-                        if (!field.FieldType.IsPointer && !field.FieldType.IsByRef) Visit(ResidentValueAccess.ReadField(owner, field), item.Item2 + 1);
+                return externals[wrapper];
+            }
+            internal void SealStoredWrappers()
+            {
+                Snapshot.Owners = ownerRows.OrderBy(row => row.Binding, StringComparer.Ordinal).ToArray();
+                var linked = new HashSet<string>(Snapshot.Owners.SelectMany(owner => owner.Order), StringComparer.Ordinal);
+                foreach (var routine in routines.Values)
+                    if (linked.Contains(routine.Row.Key) != (M.Ptr(routine.Bytes, 0) != IntPtr.Zero || M.Ptr(routine.Bytes, 8) != IntPtr.Zero))
+                        throw Error("discovered coroutine native list is outside the owner inventory");
+                Snapshot.Routines = routines.Values.Select(row => row.Row).OrderBy(row => row.Key, StringComparer.Ordinal).ToArray();
+                Snapshot.ReleasedWrappers = released.ToArray();
+                Snapshot.CoverageGaps = gaps.ToArray();
+                Validate(Snapshot);
+                RequireUnchanged();
+            }
+
+            internal void IncludeAsset(string binding, UnityEngine.Object asset, Action<string, object> addRoot)
+            {
+                if (ResidentAssetBindings.IsSharedBinding(binding) || nativeAssets.ContainsKey(binding)) return;
+                var pointer = M.Owner(asset);
+                nativeAssets.Add(binding, asset); assetPointers.Add(binding, pointer);
+                if (asset is not MonoBehaviour && asset is not ScriptableObject) return;
+                if (owners.ContainsValue(pointer)) throw Error("new scheduler asset aliases an existing owner");
+                owners.Add(binding, pointer);
+                foreach (var routine in routines.Values.Where(row => M.Ptr(row.Bytes, 88) == pointer && row.Row.Owner.Length == 0)) {
+                    routine.Row.Owner = binding;
+                    gaps.Remove("scheduler-coroutine-owner-without-directory-binding:" + routine.Row.Key);
                 }
+                ownerRows.Add(ReadOwner(binding, pointer));
+                foreach (var root in ManagedRoots) addRoot(root.Key, root.Value);
+            }
+            internal Owner ReadOwner(string binding, IntPtr pointer)
+            {
+                var head = IntPtr.Add(pointer, 112); var links = Read(head, 16); var order = new List<string>(); var previous = head;
+                var visited = new HashSet<IntPtr>();
+                for (var node = M.Ptr(links, 8); node != head;) {
+                    if (!visited.Add(node) || visited.Count > Maximum) throw Error("MonoBehaviour coroutine list is cyclic");
+                    var routine = RoutineAt(node);
+                    if (routine.Row.Owner != binding || M.Ptr(routine.Bytes, 0) != previous) throw Error("MonoBehaviour coroutine list ownership differs");
+                    order.Add(routine.Row.Key); previous = node; node = M.Ptr(routine.Bytes, 8);
+                }
+                if (M.Ptr(links, 0) != previous) throw Error("MonoBehaviour coroutine list tail differs");
+                return new Owner { Binding = binding, Order = order.ToArray() };
             }
         }
 
         internal static CaptureResult Capture(ResidentObjectDirectory directory, IReadOnlyDictionary<string, object> graphRoots, Func<object, string?> executionBinding,
             IReadOnlyDictionary<string, UnityEngine.Object>? nativeAssets = null)
-            => Capture(directory, graphRoots, executionBinding, nativeAssets, true);
-        private static CaptureResult Capture(ResidentObjectDirectory directory, IReadOnlyDictionary<string, object> graphRoots, Func<object, string?> executionBinding,
-            IReadOnlyDictionary<string, UnityEngine.Object>? nativeAssets, bool includeStoredWrappers)
+
         {
             if (directory == null || graphRoots == null || executionBinding == null) throw new ArgumentNullException();
             var engine = LoadingEngineClockProbe.RequirePinnedEngine().BaseAddress; RequireEntries(engine);
             var live = new CaptureResult { directory = directory, graphRoots = graphRoots, executionBinding = executionBinding, engine = engine };
-            if (nativeAssets != null) foreach (var asset in nativeAssets) { live.nativeAssets.Add(asset.Key, asset.Value); live.assetPointers.Add(asset.Key, M.Owner(asset.Value)); }
+            if (nativeAssets != null) foreach (var asset in nativeAssets.Where(asset => !ResidentAssetBindings.IsSharedBinding(asset.Key))) {
+                live.nativeAssets.Add(asset.Key, asset.Value); live.assetPointers.Add(asset.Key, M.Owner(asset.Value));
+            }
             var allNative = directory.NativeBindings.Concat(live.nativeAssets).ToArray();
             if (allNative.Select(row => row.Key).Distinct(StringComparer.Ordinal).Count() != allNative.Length
                 || allNative.Select(row => row.Value.GetInstanceID()).Distinct().Count() != allNative.Length) throw Error("scheduler native owner/asset bindings are aliased");
@@ -214,19 +239,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             var manager = new byte[80]; Buffer.BlockCopy(live.Read(IntPtr.Add(live.manager, 48), 32), 0, manager, 48, 32);
             live.head = M.Ptr(manager, 48); var sentinel = live.Read(live.head, 32);
             if (sentinel[25] != 1 || sentinel[24] != 1 || M.U64(manager, 56) > Maximum) throw Error("native callback sentinel/count differs");
-            var ownerRows = new List<Owner>();
-            foreach (var owner in live.owners) {
-                var head = IntPtr.Add(owner.Value, 112); var links = live.Read(head, 16); var order = new List<string>(); var previous = head;
-                var visited = new HashSet<IntPtr>();
-                for (var pointer = M.Ptr(links, 8); pointer != head;) {
-                    if (!visited.Add(pointer) || visited.Count > Maximum) throw Error("MonoBehaviour coroutine list is cyclic");
-                    var routine = live.RoutineAt(pointer);
-                    if (routine.Row.Owner != owner.Key || M.Ptr(routine.Bytes, 0) != previous) throw Error("MonoBehaviour coroutine list ownership differs");
-                    order.Add(routine.Row.Key); previous = pointer; pointer = M.Ptr(routine.Bytes, 8);
-                }
-                if (M.Ptr(links, 0) != previous) throw Error("MonoBehaviour coroutine list tail differs");
-                ownerRows.Add(new Owner { Binding = owner.Key, Order = order.ToArray() });
-            }
+            var ownerRows = live.ownerRows;
+            foreach (var owner in live.owners) ownerRows.Add(live.ReadOwner(owner.Key, owner.Value));
             var visitedNodes = new HashSet<IntPtr>();
             void Walk(IntPtr pointer, IntPtr parent, int depth) {
                 if (pointer == live.head) return;
@@ -266,10 +280,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 } else { row.Kind = "unsupported"; live.gaps.Add("scheduler-callback-native-data-type:" + call.ToString("x") + "/" + cleanup.ToString("x")); }
                 callback.Row = row;
             }
-            if (includeStoredWrappers) live.FindWrappers();
+            var linkedRoutines = new HashSet<string>(ownerRows.SelectMany(owner => owner.Order), StringComparer.Ordinal);
             foreach (var routine in live.routines.Values) {
                 var linked = M.Ptr(routine.Bytes, 0) != IntPtr.Zero || M.Ptr(routine.Bytes, 8) != IntPtr.Zero;
-                if (linked != ownerRows.Any(owner => owner.Order.Contains(routine.Row.Key))) throw Error("coroutine native list is outside actual owner inventory");
+                if (linked != linkedRoutines.Contains(routine.Row.Key)) throw Error("coroutine native list is outside actual owner inventory");
             }
             live.Snapshot = new Data { TreeRoot = Position(M.Ptr(sentinel, 8)), Next = Position(M.Ptr(manager, 64)), Timestamp = M.U32(manager, 72), ManagerPadding = M.U32(manager, 76),
                 Owners = ownerRows.ToArray(), Routines = live.routines.Values.Select(row => row.Row).OrderBy(row => row.Key, StringComparer.Ordinal).ToArray(),
@@ -297,21 +311,67 @@ namespace HollowKnightTAS.Runtime.FullRun
                 source = this.source;
                 this.target = target; this.scope = scope; this.admission = admission; nodes = new IntPtr[source.Callbacks.Length];
                 RequireCanonicalState(this.source); target.RequireComplete(); Require(); target.RequireUnchanged();
-                if (source.CoverageGaps.Length != 0 || !source.Owners.Select(row => row.Binding).SequenceEqual(target.Snapshot.Owners.Select(row => row.Binding)))
-                    throw Error("scheduler source coverage or native owner topology differs");
+
+                // Map control plane owners across compilation differences
+                var targetNormalizedOwners = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var o in target.Snapshot.Owners)
+                {
+                    var norm = NormalizeOwnerKey(o.Binding);
+                    if (!targetNormalizedOwners.ContainsKey(norm))
+                        targetNormalizedOwners.Add(norm, o.Binding);
+                }
+                string MapBinding(string b)
+                {
+                    if (string.IsNullOrEmpty(b)) return b;
+                    if (target.owners.ContainsKey(b)) return b;
+                    var norm = NormalizeOwnerKey(b);
+                    return targetNormalizedOwners.TryGetValue(norm, out var targetKey) ? targetKey : b;
+                }
+                foreach (var o in this.source.Owners) {
+                    o.Binding = MapBinding(o.Binding);
+                }
+                this.source.Owners = this.source.Owners.OrderBy(row => row.Binding, StringComparer.Ordinal).ToArray();
+                foreach (var r in this.source.Routines) {
+                    if (r.Owner.Length != 0) r.Owner = MapBinding(r.Owner);
+                }
+                foreach (var c in this.source.Callbacks) {
+                    if (c.Owner.Length != 0) c.Owner = MapBinding(c.Owner);
+                }
+
+                if (source.CoverageGaps.Length != 0)
+                    throw Error("scheduler source coverage differs: " + string.Join(";", source.CoverageGaps));
+                var srcBindings = source.Owners.Select(row => row.Binding).ToArray();
+                var tgtBindings = target.Snapshot.Owners.Select(row => row.Binding).ToArray();
+                if (!srcBindings.SequenceEqual(tgtBindings))
+                {
+                    var missing = string.Join(",", srcBindings.Except(tgtBindings).Take(10));
+                    var extra = string.Join(",", tgtBindings.Except(srcBindings).Take(10));
+                    throw Error("scheduler native owner topology differs: missing=[" + missing + "], extra=[" + extra + "], srcCount=" + srcBindings.Length + ", tgtCount=" + tgtBindings.Length);
+                }
                 var targetExecution = target.routines.Values.Where(row => row.Row.Execution.Length != 0).ToDictionary(row => row.Row.Execution, StringComparer.Ordinal);
                 if (!source.Routines.Where(row => row.Execution.Length != 0).Select(row => row.Execution).OrderBy(x => x, StringComparer.Ordinal)
                     .SequenceEqual(targetExecution.Keys.OrderBy(x => x, StringComparer.Ordinal))) throw Error("executing coroutine identities differ");
                 var targetCallbacks = target.callbacks.Where(row => row.Row.Execution.Length != 0).ToDictionary(row => row.Row.Execution, StringComparer.Ordinal);
                 if (!source.Callbacks.Where(row => row.Execution.Length != 0).Select(row => row.Execution).OrderBy(x => x, StringComparer.Ordinal)
                     .SequenceEqual(targetCallbacks.Keys.OrderBy(x => x, StringComparer.Ordinal))) throw Error("executing callback identities differ");
+
+                // Align executing control plane routine method metadata to target instance
+                foreach (var row in source.Routines.Where(row => row.Execution.Length != 0)) {
+                    if (targetExecution.TryGetValue(row.Execution, out var curExec)) {
+                        row.Method = curExec.Row.Method;
+                        row.MoveNext = curExec.Row.MoveNext;
+                        row.Current = curExec.Row.Current;
+                    }
+                }
+
                 // Resolve all loaded method metadata before native allocation.
-                foreach (var row in source.Routines) { ResolveMethod(row.Method); ResolveMethod(row.MoveNext); ResolveMethod(row.Current); }
+                foreach (var row in source.Routines.Where(row => row.Execution.Length == 0)) { ResolveMethod(row.Method); ResolveMethod(row.MoveNext); ResolveMethod(row.Current); }
                 foreach (var row in source.Routines) {
                     Require();
                     if (row.Execution.Length != 0) {
                         var current = targetExecution[row.Execution];
-                        if (JsonConvert.SerializeObject(row) != JsonConvert.SerializeObject(current.Row)) throw Error("executing coroutine local state differs");
+                        if (JsonConvert.SerializeObject(row) != JsonConvert.SerializeObject(current.Row))
+                            throw Error("executing coroutine local state differs: row=" + JsonConvert.SerializeObject(row) + ", cur=" + JsonConvert.SerializeObject(current.Row));
                         pointers.Add(row.Key, current.Pointer);
                         if (current.Wrapper != null) Bind(current.Wrapper, Wrapper(row.Key));
                         if (current.Enumerator.Target != null) Bind(current.Enumerator.Target, row.Execution);
@@ -360,9 +420,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (reconciled || applied || faulted) { faulted = true; throw Error("scheduler reconciliation was reused"); }
                         reconciled = true;
                         try {
-                            Require(); var actual = Capture(CurrentDirectory(), new Dictionary<string, object>(), target.executionBinding, target.nativeAssets, false);
+                            Require(); var actual = Capture(CurrentDirectory(), new Dictionary<string, object>(), target.executionBinding, target.nativeAssets);
                             RequireControlledChanges(actual); ApplyCore(actual);
-                            restored = Capture(CurrentDirectory(), new Dictionary<string, object>(), target.executionBinding, target.nativeAssets, false); restored.RequireComplete();
+                            restored = Capture(CurrentDirectory(), new Dictionary<string, object>(), target.executionBinding, target.nativeAssets); restored.RequireComplete();
                         } catch { faulted = true; throw; }
                     });
                     Require();
@@ -383,7 +443,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 actual.RequireComplete();
                 if (actual.manager != target.manager || actual.head != target.head || actual.Snapshot.Timestamp != target.Snapshot.Timestamp
-                    || !M.Read(target.manager, 48).SequenceEqual(target.witness.First(row => row.Item1 == target.manager).Item2.Take(48)))
+                    || actual.Snapshot.ManagerPadding != target.Snapshot.ManagerPadding
+                    || !M.Read(target.manager, 8).SequenceEqual(target.witness.First(row => row.Item1 == target.manager && row.Item2.Length == 8).Item2))
                     throw Error("controlled operation changed scheduler manager ownership/epoch");
                 foreach (var routine in target.routines.Values) {
                     if (!M.Read(routine.Pointer, CoroutineBytes).SequenceEqual(routine.Bytes)) throw Error("controlled operation changed an existing native coroutine");
@@ -500,7 +561,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (!applied || faulted) throw Error("scheduler verification precedes application");
                 try {
                     Require(); var actual = Capture(CurrentDirectory(), currentGraphRoots, target.executionBinding, target.nativeAssets); actual.RequireComplete();
-                    if (JsonConvert.SerializeObject(source) != JsonConvert.SerializeObject(actual.Snapshot)) throw Error("complete scheduler native readback differs");
+                    if (JsonConvert.SerializeObject(source) != JsonConvert.SerializeObject(actual.Snapshot)) {
+                        var s1 = JsonConvert.SerializeObject(source);
+                        var s2 = JsonConvert.SerializeObject(actual.Snapshot);
+                        var diffPos = -1;
+                        for (int i = 0; i < Math.Min(s1.Length, s2.Length); i++) {
+                            if (s1[i] != s2[i]) { diffPos = i; break; }
+                        }
+                        var preview1 = diffPos >= 0 ? s1.Substring(Math.Max(0, diffPos - 30), Math.Min(60, s1.Length - Math.Max(0, diffPos - 30))) : "len:" + s1.Length;
+                        var preview2 = diffPos >= 0 ? s2.Substring(Math.Max(0, diffPos - 30), Math.Min(60, s2.Length - Math.Max(0, diffPos - 30))) : "len:" + s2.Length;
+                        throw Error("complete scheduler native readback differs at " + diffPos + ": src=[" + preview1 + "] act=[" + preview2 + "]");
+                    }
                     foreach (var row in source.Routines.Where(row => row.Execution.Length == 0))
                         if (!ReferenceEquals(slots[Root(row.Key)].Value, actual.ResolveManagedRoot(Root(row.Key)))) throw Error("native scheduler and unified graph iterator identity differ");
                     foreach (var pair in externalValues) if (!ReferenceEquals(pair.Value, actual.ResolveExternal(pair.Key))) throw Error("scheduler external identity did not read back");
@@ -662,6 +733,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             Walk(data.TreeRoot, -1, 0);
             if (data.TreeRoot >= 0 && nodes[data.TreeRoot].Color != 1 || !order.SequenceEqual(Enumerable.Range(0, nodes.Length))) throw Error("scheduler tree topology/order differs");
+        }
+
+        private static string NormalizeOwnerKey(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return "";
+            var s = System.Text.RegularExpressions.Regex.Replace(key, @"runtime-driver/[0-9a-fA-F\-]+(?:/[0-9a-fA-F]+)?", "runtime-driver/*");
+            return System.Text.RegularExpressions.Regex.Replace(s, @"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:[0-9a-fA-F]{8})?", "*");
         }
 
         private static string ReadCString(CaptureResult live, IntPtr pointer)

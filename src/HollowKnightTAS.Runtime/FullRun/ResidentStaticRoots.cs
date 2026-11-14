@@ -162,6 +162,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             => before.State == after.State && before.NativeVtableAbsent == after.NativeVtableAbsent && before.NativeClass == after.NativeClass
                 && before.NativeType == after.NativeType && before.NativeGenericClass == after.NativeGenericClass && before.NativeVtable == after.NativeVtable;
 
+        private static bool CompatibleObservation(Observation before, Observation after)
+        {
+            if (SameObservation(before, after)) return true;
+            if (!before.Type.ContainsGenericParameters && before.State == Initialization.Dormant && after.State == Initialization.Dormant
+                && before.NativeClass == after.NativeClass && before.NativeType == after.NativeType && before.NativeGenericClass == after.NativeGenericClass
+                && before.NativeVtableAbsent && !after.NativeVtableAbsent && after.NativeVtable != IntPtr.Zero)
+                return true;
+            return false;
+        }
+
         internal static string InitializationDifference(Observation[] before, Observation[] after)
         {
             var prior = before.GroupBy(value => value.Type).ToDictionary(group => group.Key, group => group.First());
@@ -213,6 +223,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         // Creates a read-only proof for control owners too. Metadata lookup or
         // calling an export cannot stand in for proving that its .cctor already
         // ran before the first static value is observed.
+        internal static bool IsInitialized(Type type) => MonoReader.Value.ReadOne(type).State == Initialization.Initialized;
+
         internal static Action CreateInitializationGuard(params Type[] types)
         {
             if (types == null || types.Length == 0 || types.Any(type => type == null || type.ContainsGenericParameters))
@@ -280,8 +292,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 foreach (var metadata in schema.Fields) {
                     var field = metadata.Field; var storage = metadata.Storage;
                     var fieldKey = ResidentStaticManifestWire.SlotKey(key, field.MetadataToken);
-                    layout.Add(new FieldData { Key = fieldKey, Name = field.Name, Token = field.MetadataToken,
-                        Attributes = (int)field.Attributes, Signature = metadata.Signature, Storage = storage });
+                    var descriptor = new FieldData { Key = fieldKey, Name = field.Name, Token = field.MetadataToken,
+                        Attributes = (int)field.Attributes, Signature = metadata.Signature, Storage = storage };
+                    layout.Add(descriptor);
                     if (metadata.Gap != null) { gaps.Add(metadata.Gap + ":" + fieldKey); continue; }
                     if (field.IsLiteral || type.ContainsGenericParameters || item.State != Initialization.Initialized) continue;
                     if (storage != "static") { gaps.Add(storage + ":" + fieldKey); continue; }
@@ -295,7 +308,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                     // Only the already-initialized branch may read static data.
                     var access = metadata.Accessors();
                     access.Read(slot);
-                    bindings.Add(new Binding(fieldKey, field, slot, valueField, access));
+                    var value = field.FieldType == typeof(IntPtr) || field.FieldType == typeof(UIntPtr) ? valueField.GetValue(slot) : null;
+                    var nullHandle = value is IntPtr signed && signed == IntPtr.Zero || value is UIntPtr unsigned && unsigned == UIntPtr.Zero;
+                    // A null static native slot carries no cross-process address.
+                    // Its target must independently have the same null state.
+                    if (nullHandle) descriptor.Storage = "null-native-handle";
+                    bindings.Add(new Binding(fieldKey, field, slot, valueField, access, nullHandle));
                 }
                 types.Add(new TypeData { Key = key, Type = CopyReference(schema.Type),
                     Initialization = item.State.ToString(), Fields = layout.ToArray() });
@@ -321,7 +339,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 Snapshot = snapshot; this.bindings = bindings; this.classify = classify; this.reader = reader;
                 observed = observations.ToDictionary(value => value.Type);
-                ManagedRoots = bindings.ToDictionary(value => value.Key, value => value.Slot, StringComparer.Ordinal);
+                ManagedRoots = bindings.Where(binding => !binding.WitnessOnly).ToDictionary(value => value.Key, value => value.Slot, StringComparer.Ordinal);
             }
             internal void RequireUnchanged(CanonicalCarryGraphCodec codec)
             {
@@ -343,7 +361,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (!modules.SequenceEqual(expectedModules)) throw Error("gameplay modules changed during observation: " + ModuleDifference(expectedModules, modules));
                 var actual = reader.Read(selected);
                 if (actual.Length != observed.Count || actual.Select(value => value.Type).Distinct().Count() != actual.Length
-                    || actual.Any(value => !observed.TryGetValue(value.Type, out var before) || !SameObservation(before, value)))
+                    || actual.Any(value => !observed.TryGetValue(value.Type, out var before) || !CompatibleObservation(before, value)))
                     throw Error("type initialization changed during observation: " + InitializationDifference(observed.Values.ToArray(), actual));
             }
             internal Binding[] Bindings => bindings;
@@ -351,6 +369,15 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal static Plan Prepare(Data source, CaptureResult target, Action admitted)
             => new Plan(source, target, admitted);
+
+        private static bool IsControlPlaneAssembly(string? assembly)
+        {
+            if (string.IsNullOrEmpty(assembly)) return false;
+            return assembly!.StartsWith("MonoMod", StringComparison.Ordinal)
+                || assembly!.StartsWith("Mono.Cecil", StringComparison.Ordinal)
+                || assembly == "HollowKnightTAS" || assembly == "HollowKnightTAS.Core"
+                || assembly == "HollowKnightTAS.ClockPayload" || assembly == "Newtonsoft.Json";
+        }
 
         internal sealed class Plan
         {
@@ -366,11 +393,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 this.target = target; this.admitted = admitted;
                 var gaps = new SortedSet<string>(source.Unsupported.Concat(target.Unsupported), StringComparer.Ordinal);
                 if (source.RuntimeAbi != target.Snapshot.RuntimeAbi) gaps.Add("static-runtime-abi-differs");
-                var sourceModules = source.Modules.Where(value => value.Ownership == ModuleOwnership.Gameplay.ToString()).ToArray();
-                var targetModules = target.Snapshot.Modules.Where(value => value.Ownership == ModuleOwnership.Gameplay.ToString()).ToArray();
+                var sourceModules = source.Modules.Where(value => value.Ownership == ModuleOwnership.Gameplay.ToString() && !IsControlPlaneAssembly(value.Assembly)).ToArray();
+                var targetModules = target.Snapshot.Modules.Where(value => value.Ownership == ModuleOwnership.Gameplay.ToString() && !IsControlPlaneAssembly(value.Assembly)).ToArray();
                 if (JsonConvert.SerializeObject(sourceModules) != JsonConvert.SerializeObject(targetModules)) gaps.Add("static-gameplay-modules-differ");
-                var targetTypes = target.Snapshot.Types.ToDictionary(value => value.Key, StringComparer.Ordinal);
+                var targetTypes = target.Snapshot.Types.Where(t => !IsControlPlaneAssembly(t.Type?.Assembly) && !t.Key.Contains("MonoMod.")).ToDictionary(value => value.Key, StringComparer.Ordinal);
                 foreach (var type in source.Types) {
+                    if (IsControlPlaneAssembly(type.Type?.Assembly) || type.Key.Contains("MonoMod.")) continue;
                     if (!targetTypes.TryGetValue(type.Key, out var other)) { gaps.Add("static-type-absent:" + type.Key); continue; }
                     targetTypes.Remove(type.Key);
                     if (type.Initialization != other.Initialization) gaps.Add("static-initialization-differs:" + type.Key + ":" + type.Initialization + "->" + other.Initialization);
@@ -404,6 +432,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 admitted(); target.RequireInitializationUnchanged();
                 foreach (var binding in target.Bindings) {
                     admitted();
+                    if (binding.WitnessOnly) {
+                        if (!binding.Access.Same(binding.Slot)) throw Error("null native static slot changed: " + binding.Key);
+                        continue;
+                    }
                     try { binding.Access.Write(binding.Slot); }
                     catch (Exception error) { throw new InvalidOperationException("Resident static slot write failed: " + binding.Key, error); }
                 }
@@ -431,7 +463,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var fieldKeys = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var field in type.Fields)
                     if (field == null || string.IsNullOrEmpty(field.Key) || !fieldKeys.Add(field.Key) || field.Token <= 0 || field.Name == null
-                        || field.Signature == null || field.Storage != "static" && field.Storage != "literal" && field.Storage != "thread-static" && field.Storage != "context-static")
+                        || field.Signature == null || field.Storage != "static" && field.Storage != "null-native-handle" && field.Storage != "literal" && field.Storage != "thread-static" && field.Storage != "context-static")
                         throw Error("static field manifest differs");
             }
             if (source.Modules.Any(value => value == null || string.IsNullOrEmpty(value.Assembly) || !Guid.TryParseExact(value.Module, "D", out _)
@@ -546,8 +578,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal readonly FieldInfo Field, Value;
             internal readonly object Slot;
             internal readonly SlotAccess Access;
-            internal Binding(string key, FieldInfo field, object slot, FieldInfo value, SlotAccess access)
-            { Key = key; Field = field; Slot = slot; Value = value; Access = access; }
+            internal readonly bool WitnessOnly;
+            internal Binding(string key, FieldInfo field, object slot, FieldInfo value, SlotAccess access, bool witnessOnly = false)
+            { Key = key; Field = field; Slot = slot; Value = value; Access = access; WitnessOnly = witnessOnly; }
         }
 
         private sealed class MonoInitializationReader : IInitializationReader, IMetadataShapeReader

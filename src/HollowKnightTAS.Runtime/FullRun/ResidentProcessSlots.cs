@@ -91,8 +91,33 @@ namespace HollowKnightTAS.Runtime.FullRun
             Bind(owner, "resident-process/execution/" + key);
             foreach (var field in fields.Where(field => field.Descriptor.Storage == "Execution"))
                 if (!field.Field.FieldType.IsValueType) Bind(field.Original, "resident-process/execution/" + key + "/" + field.Field.Name);
-            frozen = JsonConvert.SerializeObject(Snapshot); RequireUnchanged();
+            frozen = CanonicalLayoutJson(Snapshot); RequireUnchanged();
         }
+        internal static bool IsControlPlane(string? assembly) => ResidentManagedTypeCatalog.IsControlPlaneAssembly(assembly);
+
+        internal static ResidentManagedTypeCatalog.TypeReference NormalizeType(ResidentManagedTypeCatalog.TypeReference? tr)
+            => ResidentManagedTypeCatalog.NormalizeType(tr);
+
+        internal static string CanonicalLayoutJson(Data data)
+        {
+            var copyData = new Data {
+                Key = data.Key,
+                Static = data.Static,
+                Type = NormalizeType(data.Type),
+                CoverageGaps = data.CoverageGaps,
+                Fields = data.Fields.Select(f => new Field {
+                    Name = f.Name,
+                    Storage = f.Storage,
+                    Root = IsControlPlane(f.DeclaringType?.Assembly) ? (f.Storage == "D" ? "resident-process/D/" + data.Key + "/" + f.Name : "") : f.Root,
+                    Token = IsControlPlane(f.DeclaringType?.Assembly) ? 0 : f.Token,
+                    Attributes = f.Attributes,
+                    DeclaringType = NormalizeType(f.DeclaringType),
+                    ValueType = NormalizeType(f.ValueType)
+                }).ToArray()
+            };
+            return JsonConvert.SerializeObject(copyData);
+        }
+
         private void Bind(object? value, string key)
         {
             if (value == null || value.GetType().IsValueType || value is string || value is Delegate
@@ -100,6 +125,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (external.ContainsKey(value)) return;
             external.Add(value, key); resolved.Add(key, value);
         }
+        internal IEnumerable<KeyValuePair<object, string>> ExternalBindings => external;
         internal string? BindExternal(object value) => external.TryGetValue(value, out var key) ? key : null;
         internal object? ResolveExternal(string key) => resolved.TryGetValue(key, out var value) ? value : null;
         internal void RequireComplete()
@@ -109,7 +135,38 @@ namespace HollowKnightTAS.Runtime.FullRun
             RequireComplete();
             // Includes field type/MVID/token and every actual field, so a packet
             // cannot remove a required gap or downgrade D into Execution.
-            if (source == null || JsonConvert.SerializeObject(source) != frozen) throw Error("source process owner layout/ownership differs");
+            if (source == null || CanonicalLayoutJson(source) != frozen)
+            {
+                var diff = source == null ? "source is null" : $"key={Snapshot.Key} vs {source.Key}";
+                if (source != null) {
+                    var sJson = CanonicalLayoutJson(source);
+                    for (int i = 0; i < Math.Min(sJson.Length, frozen.Length); i++) {
+                        if (sJson[i] != frozen[i]) {
+                            var sSub = sJson.Substring(Math.Max(0, i - 20), Math.Min(40, sJson.Length - Math.Max(0, i - 20)));
+                            var fSub = frozen.Substring(Math.Max(0, i - 20), Math.Min(40, frozen.Length - Math.Max(0, i - 20)));
+                            diff += $" at {i}: src=[{sSub}] target=[{fSub}]";
+                            break;
+                        }
+                    }
+                }
+                throw Error("source process owner layout/ownership differs: " + diff);
+            }
+            if (source != null && source.Fields != null) {
+                var updated = new Dictionary<string, object>(StringComparer.Ordinal);
+                foreach (var sField in source.Fields) {
+                    if (sField.Storage == "D" && !string.IsNullOrEmpty(sField.Root)) {
+                        var tLive = fields.FirstOrDefault(f => f.Descriptor.Name == sField.Name);
+                        if (tLive?.Slot != null) {
+                            tLive.Descriptor.Root = sField.Root;
+                            updated[sField.Root] = tLive.Slot;
+                        }
+                    }
+                }
+                roots.Clear();
+                foreach (var pair in updated) {
+                    roots[pair.Key] = pair.Value;
+                }
+            }
         }
         internal void RequireUnchanged()
         {
@@ -124,7 +181,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (!Same(field.Original, ResidentValueAccess.ReadOwner(owner,field.Field), field.Field.FieldType)) throw Error("process execution/dependency field changed: " + field.Field.Name);
         }
         private void RequireManifest()
-        { if (frozen != JsonConvert.SerializeObject(Snapshot)) throw Error("process ownership descriptor was mutated"); }
+        { if (frozen != CanonicalLayoutJson(Snapshot)) throw Error("process ownership descriptor was mutated"); }
         internal void Apply(ResidentMutationScope scope)
         {
             if (applied) throw Error("process slots already applied"); RequireUnchanged(); RequireComplete(); scope.Require();

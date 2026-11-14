@@ -92,7 +92,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         if (source.Native != frame || source.Movie != movieFrame || source.ConsumedSamples != input.ConsumedSamples) throw ResidentError("sealed source cursor changed");
                         if (phase == "d-exp-source-info") {
                             Count(2); reply["length"] = source.Packet.Length.ToString(CultureInfo.InvariantCulture);
-                            reply["sha256"] = Sha256Utility.ComputeHex(source.Packet);
+                            reply["sha256"] = residentExport.Hash;
                         }
                         if (phase == "d-exp-source-resume") {
                             Count(3); ResumeResidentSuffix("source", Get("endMovie"), frame); reply["status"] = "ResumingOriginalSourceSuffix";
@@ -150,7 +150,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (actualDImport != null) Array.Clear(actualDImport, 0, actualDImport.Length);
                     actualDImport = null; FaultResidentSession(error); throw;
                 }
-            });
+            }, timeoutMilliseconds: phase == "d-exp-apply" ? 360000 : 30000);
         }
         private void RequireResidentImportedPacket()
         {
@@ -159,6 +159,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private void ResumeResidentSuffix(string role, string text, long native)
         {
+            ResidentBoundaryProcessState.s_CachedFrameCatalog = null;
+            ResidentBoundaryCoordinator.ClearFrameCaches();
             if (!long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var end) || end <= movieFrame || end > replayLength)
                 throw ResidentError("suffix endpoint is outside the exact continuation Movie");
             var origin = residentTraceOrigin ?? throw ResidentError("verified source boundary identity is absent");
@@ -189,14 +191,38 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || scene.handle != UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle)
                     throw ResidentError("observed frame, input cursor or native phase changed");
             }
-            (checkpointSaves ?? throw ResidentError("frame observer has no protected save context")).AssertActive();
-            RequireFrame();
-            using var process = ResidentBoundaryProcessState.OpenFrameObservation(this, phase, RequireFrame);
-            var coordinator = new ResidentBoundaryCoordinator(CreateResidentOwnership(), ClassifyResidentModule, process);
-            var groups = coordinator.ObserveContinuationFrame(phase); process.Complete(); RequireFrame();
-            trace.Sample(phase == 1 ? "before" : "after", native, movie, consumed, ready, boundary, scene.name, groups);
-            if (phase == 3 && movie == residentTraceEnd) {
-                trace.Seal(native, movie, consumed); residentContinuationTrace = null;
+            ResidentBoundaryProcessState? process = null;
+            try
+            {
+                (checkpointSaves ?? throw ResidentError("frame observer has no protected save context")).AssertActive();
+                RequireFrame();
+                process = ResidentBoundaryProcessState.OpenFrameObservation(this, phase, RequireFrame);
+                var coordinator = new ResidentBoundaryCoordinator(CreateResidentOwnership(), ClassifyResidentModule, process);
+                var groups = coordinator.ObserveContinuationFrame(phase);
+                process.Complete();
+                RequireFrame();
+                trace.Sample(phase == 1 ? "before" : "after", native, movie, consumed, ready, boundary, scene.name, groups);
+                if (phase == 3 && movie == residentTraceEnd) {
+                    trace.Seal(native, movie, consumed); residentContinuationTrace = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    File.WriteAllText(Path.Combine(sessionDirectory, "resident-continuation-fault.txt"),
+                        $"phase={phase};native={native};movie={movie};consumed={consumed};ready={ready};boundary={boundary}\n{ex}\n");
+                }
+                catch { }
+                if (process != null)
+                {
+                    try { process.Fault(ex); } catch { }
+                }
+                throw;
+            }
+            finally
+            {
+                process?.Dispose();
             }
         }
     }

@@ -11,7 +11,7 @@ import unittest
 spec = importlib.util.spec_from_file_location("resident_compare", Path(__file__).resolve().parents[1] / "Compare-ResidentContinuation.py")
 compare = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compare)
-NAMES = "admission assetManifest assetValues clock componentNative directory globalNative input managedGraph objectNative process rng scheduler staticRoots typeManifest".split()
+NAMES = "admission assetManifest assetValues clock componentNative directory input managedGraph objectNative process rng scheduler staticRoots typeManifest".split()
 PACKET = b"fixture-source-packet"
 
 

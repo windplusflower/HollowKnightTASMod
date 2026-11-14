@@ -9,7 +9,7 @@ from pathlib import Path
 
 def inspect(path):
     raw = path.read_bytes()
-    if not 0 < len(raw) <= 32 * 1024 * 1024:
+    if not 0 < len(raw) <= 256 * 1024 * 1024:
         raise ValueError('Invalid carry payload size')
     data = memoryview(raw)
     cursor = 0
@@ -33,8 +33,8 @@ def inspect(path):
 
     if integer() != 0x44434348 or integer() != 1:
         raise ValueError('Unsupported carry wire format')
-    strings = [bytes(take(count(32 * 1024 * 1024))).decode('utf-8') for _ in range(count(1000000))]
-    if strings != sorted(set(strings)) or sum(len(s) for s in strings) > 8 * 1024 * 1024:
+    strings = [bytes(take(count(256 * 1024 * 1024))).decode('utf-8') for _ in range(count(1000000))]
+    if strings != sorted(set(strings)) or sum(len(s) for s in strings) > 256 * 1024 * 1024:
         raise ValueError('Noncanonical or unbounded string table')
 
     def text():

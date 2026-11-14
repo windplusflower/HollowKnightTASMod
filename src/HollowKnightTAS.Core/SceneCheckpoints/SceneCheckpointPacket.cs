@@ -157,7 +157,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
 
     public sealed class SceneCheckpointPacket
     {
-        public const int MaximumPayloadBytes = 32 * 1024 * 1024;
+        public const int MaximumPayloadBytes = 256 * 1024 * 1024;
         public const int ChunkBytes = 48 * 1024;
         private static readonly string[] Sections = { "playerData", "sceneData", "transition", "unityRng", "continuation" };
         private readonly byte[] payload;

@@ -9,6 +9,43 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
 public sealed class ResidentMonoNativeStateTests
 {
     [TestMethod]
+    public void SerializationCacheRequiresClassBindingAndAllowsTargetLazyMetadata()
+    {
+        var api = new Api(); var expected = api.Cache(); var actual = api.Cache();
+        api.Set(expected, "SerializationPresent", true);
+        api.Reject("RequireCacheEqual", expected, actual);
+        api.Set(expected, "SerializationClassBound", true);
+        api.Call("RequireCacheEqual", expected, actual);
+        api.Set(actual, "SerializationClassBound", true);
+        api.Reject("ValidateCache", actual);
+        api.Set(actual, "SerializationPresent", true);
+        api.Call("RequireCacheEqual", expected, actual);
+    }
+
+    [TestMethod]
+    public void SerializationClassLookupUsesTriangularProbesAndSkipsDeletedEntries()
+    {
+        var api = new Api(); var header = new byte[80];
+        void Put(int offset, ulong value) => Buffer.BlockCopy(BitConverter.GetBytes(value), 0, header, offset, 8);
+        Put(8, 1); Put(24, ulong.MaxValue - 1); Put(40, ulong.MaxValue); Put(56, 4096); Put(64, 8); Put(72, 3); header[16] = 1;
+        var reads = 0;
+        byte[] Read(IntPtr address, int size) {
+            Assert.AreEqual(16, size); reads++;
+            var bucket = (address.ToInt64() - 4096) / 16;
+            var key = bucket == 2 ? 123UL : bucket == 3 ? ulong.MaxValue - 1 : bucket == 5 ? 456UL : ulong.MaxValue;
+            var bytes = new byte[16]; Buffer.BlockCopy(BitConverter.GetBytes(key), 0, bytes, 0, 8); return bytes;
+        }
+        var reader = (Func<IntPtr, int, byte[]>)Read;
+        Assert.AreEqual(new IntPtr(4096 + 5 * 16), api.Call("FindSerializationCacheEntry", header, 456UL, 2UL, reader));
+        Assert.AreEqual(3, reads);
+        Put(8, 0); // The ordinary no-tombstone table still has occupied entries.
+        Assert.AreEqual(new IntPtr(4096 + 2 * 16), api.Call("FindSerializationCacheEntry", header, 123UL, 2UL, reader));
+        Put(8, 1);
+        api.Reject("FindSerializationCacheEntry", header, 789UL, 2UL, reader);
+        Put(64, 7); api.Reject("FindSerializationCacheEntry", header, 456UL, 2UL, reader);
+    }
+
+    [TestMethod]
     public void ScriptCacheMustPreserveMethodsOrderAndSharedOwnership()
     {
         var api = new Api(); var expected = api.Cache(); var actual = api.Cache();
@@ -90,6 +127,7 @@ public sealed class ResidentMonoNativeStateTests
         internal object Valid(bool asset)
         {
             var result = New("Data"); Set(result, "Owner", "actual-instance"); Set(result, "Type", Metadata(asset ? scriptable : mono));
+            Set(result, "Gui", New("GuiData"));
             Set(result, "Name", "原生名字"); Set(result, "ReferenceVtable", 123); Set(result, "CacheMethodsMatch", true); Set(result, "Scriptable", asset);
             if (asset) { Set(result, "ScriptableFlags", new byte[7]); Set(result, "ScriptableNodes", new int[5]); }
             return result;

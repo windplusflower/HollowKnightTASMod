@@ -37,6 +37,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal sealed class TextureValue
         {
             public string Binding = "", DefaultName = "", ScaleOffset = "", TexelSize = "", HdrDecode = "";
+            public bool DefaultNameIsEmpty;
             public int AssignedDimension, RequiredDimension, VrUsage;
             public uint BindMs;
         }
@@ -119,10 +120,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                     for (var element = 0; element < elements; element++) {
                         var at = offset + element * stride;
                         var textureKey = ResidentNativeAssetReference.BindTexture(M.I32(values, at),bind);
+                        var defaultId = M.I32(values, at + 20);
+                        var defaultName = Name(nameReader, defaultId, true);
                         if (textureKey == ResidentNativeAssetReference.Missing) gaps.Add("unbound-native-texture:" + row.Name + ":" + element);
                         row.Textures[element] = new TextureValue { Binding = textureKey, AssignedDimension = M.I32(values, at + 4),
                             RequiredDimension = M.I32(values, at + 8), VrUsage = M.I32(values, at + 12), BindMs = M.U32(values, at + 16),
-                            DefaultName = Name(nameReader, M.I32(values, at + 20), true), ScaleOffset = VectorName(M.I32(values, at + 24)),
+                            DefaultName = defaultName, DefaultNameIsEmpty = defaultId != -1 && defaultName.Length == 0, ScaleOffset = VectorName(M.I32(values, at + 24)),
                             TexelSize = VectorName(M.I32(values, at + 28)), HdrDecode = VectorName(M.I32(values, at + 32)) };
                     }
                 }
@@ -158,8 +161,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             var vectors = properties.Where(row => row.Kind == 1).Select((row, index) => new { row.Name, index }).ToDictionary(row => row.Name, row => row.index, StringComparer.Ordinal);
             var intern = new Dictionary<string, int>(StringComparer.Ordinal);
             var idNames = new Dictionary<int, string>();
-            int Id(string name) {
-                if (name.Length == 0) return -1;
+            int Id(string name, bool explicitEmpty = false) {
+                if (name.Length == 0 && !explicitEmpty) return -1;
                 if (!intern.TryGetValue(name, out var id)) {
                     id = propertyId(name);
                     if (id == -1 || idNames.TryGetValue(id, out var other) && other != name) throw Error("property name interning collapsed distinct identities");
@@ -184,7 +187,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                             if (resource == 0) throw Error("bound texture has no renderer resource identity");
                         }
                         writer.Write(resource); writer.Write(texture.AssignedDimension); writer.Write(texture.RequiredDimension); writer.Write(texture.VrUsage);
-                        writer.Write(texture.BindMs); writer.Write(Id(texture.DefaultName)); writer.Write(Auxiliary(texture.ScaleOffset));
+                        writer.Write(texture.BindMs); writer.Write(Id(texture.DefaultName, texture.DefaultNameIsEmpty)); writer.Write(Auxiliary(texture.ScaleOffset));
                         writer.Write(Auxiliary(texture.TexelSize)); writer.Write(Auxiliary(texture.HdrDecode));
                     } else throw Error("unresolved buffer resource reached property rebuilding");
                     at++;
@@ -208,7 +211,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             for (var index = 0; index < 16384; index++) {
                 var value = M.Read(IntPtr.Add(pointer, index), 1)[0]; if (value == 0) {
                     var name = new UTF8Encoding(false, true).GetString(bytes.ToArray());
-                    if (name.Length == 0) throw Error("native property has an empty name"); return name;
+                    if (name.Length == 0 && (!optional || Shader.PropertyToID(name) != id))
+                        throw Error("native property has an unbound empty name;id=" + id + ";optional=" + optional);
+                    return name;
                 }
                 bytes.Add(value);
             }
@@ -234,6 +239,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (row.Values.Length != 0 || row.Textures.Length != row.Elements) throw Error("texture property shape differs");
                     foreach (var value in row.Textures) {
                         if (value == null || new[] { value.Binding, value.DefaultName, value.ScaleOffset, value.TexelSize, value.HdrDecode }.Any(text => text == null || text.Length > 16384)
+                            || value.DefaultNameIsEmpty && value.DefaultName.Length != 0
                             || new[] { value.ScaleOffset, value.TexelSize, value.HdrDecode }.Any(text => text.Length != 0 && !vectors.Contains(text)))
                             throw Error("texture binding or auxiliary-vector alias differs");
                     }

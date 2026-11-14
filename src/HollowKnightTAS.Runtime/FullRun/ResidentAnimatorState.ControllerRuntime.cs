@@ -92,7 +92,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static byte[] DirectArray(MemoryReader reader, IntPtr pointer, int count, int stride)
         {
-            if ((pointer == IntPtr.Zero) != (count == 0)) throw Error("native workspace count/allocations differ");
+            if (count != 0 && pointer == IntPtr.Zero) throw Error("nonempty workspace array has no storage: count=" + count);
             return reader.ReadOwned(pointer, checked(count * stride));
         }
         // Source, if supplied, contributes only scalar contents and local

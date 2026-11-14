@@ -25,6 +25,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private const string EngineSha256 = "d97e92a7640b10580b4e60139eacf01828f74baaef53f75e08b9fdd6193fbe5e";
         [ThreadStatic] private static CheckpointValidation? checkpointValidation;
         [ThreadStatic] private static ActualDValidation? actualDValidation;
+        private static ProcessModule? cachedEngine;
 
         // Only the synchronous, parked actual-D command may share validation
         // across its smaller native readback scopes. Keep the hashed file open
@@ -38,20 +39,25 @@ namespace HollowKnightTAS.Runtime.FullRun
             private long validations;
             internal long ModuleIdentityChecks => validations;
             private bool disposed;
+            private static bool engineVerifiedOnce;
+
             internal ActualDValidation()
             {
                 if (actualDValidation != null || checkpointValidation != null)
                     throw new InvalidOperationException("Actual D engine validation cannot nest or borrow an earlier transaction.");
-                engine = Process.GetCurrentProcess().Modules.Cast<ProcessModule>().Single(m => m.ModuleName == "UnityPlayer.dll");
+                engine = cachedEngine ??= Process.GetCurrentProcess().Modules.Cast<ProcessModule>().Single(m => m.ModuleName == "UnityPlayer.dll");
                 thread = System.Threading.Thread.CurrentThread.ManagedThreadId;
                 address = engine.BaseAddress; size = engine.ModuleMemorySize;
                 file = File.Open(engine.FileName, FileMode.Open, FileAccess.Read, FileShare.Read);
                 try {
-                    var timer = Stopwatch.StartNew();
-                    if (BitConverter.ToString(CanonicalEngineFileSha256.ComputeHash(file)).Replace("-", "").ToLowerInvariant() != EngineSha256)
-                        throw new InvalidOperationException("Actual D requires the exact installed engine build.");
+                    if (!engineVerifiedOnce) {
+                        var timer = Stopwatch.StartNew();
+                        if (BitConverter.ToString(CanonicalEngineFileSha256.ComputeHash(file)).Replace("-", "").ToLowerInvariant() != EngineSha256)
+                            throw new InvalidOperationException("Actual D requires the exact installed engine build.");
+                        engineVerifiedOnce = true;
+                        Modding.Logger.Log("[HKTAS] Actual D engine validation: fullHashes=1;fileBytes=" + file.Length + ";hashMilliseconds=" + timer.ElapsedMilliseconds);
+                    }
                     RequireEngine(); actualDValidation = this;
-                    Modding.Logger.Log("[HKTAS] Actual D engine validation: fullHashes=1;fileBytes=" + file.Length + ";hashMilliseconds=" + timer.ElapsedMilliseconds);
                 } catch { disposed = true; file.Dispose(); throw; }
             }
             internal ProcessModule RequireEngine()
@@ -116,7 +122,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 return checkedEngine;
             }
             if (transactionEngine != null) return transactionEngine;
-            var engine = Process.GetCurrentProcess().Modules.Cast<ProcessModule>().Single(m => m.ModuleName == "UnityPlayer.dll");
+            var engine = cachedEngine ??= Process.GetCurrentProcess().Modules.Cast<ProcessModule>().Single(m => m.ModuleName == "UnityPlayer.dll");
             using (var file = File.OpenRead(engine.FileName))
                 if (BitConverter.ToString(CanonicalEngineFileSha256.ComputeHash(file)).Replace("-", "").ToLowerInvariant() != EngineSha256)
                     throw new InvalidOperationException("Native loading experiments require the exact installed engine build.");

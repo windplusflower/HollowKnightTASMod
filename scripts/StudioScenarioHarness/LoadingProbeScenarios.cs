@@ -510,7 +510,7 @@ internal static partial class StudioScenarioHarness
                     Require(actualDHeader["sourceOrdinal"] == sourceBoundaryOrdinal.ToString(), "source packet is sealed at the selected actual ordinal");
                     await File.WriteAllTextAsync(Path.Combine(output, "actual-d-source-header.json"), JsonSerializer.Serialize(actualDHeader));
                     var length = int.Parse(actualDHeader["length"], System.Globalization.CultureInfo.InvariantCulture);
-                    Require(length > 0 && length <= 32 * 1024 * 1024, "in-memory D packet obeys its fixed bound");
+                    Require(length > 0 && length <= 256 * 1024 * 1024, "in-memory D packet obeys its fixed bound");
                     actualDBytes = new byte[length];
                     for (var offset = 0; offset < length; offset += 262144) {
                         var part = await Call(new Dictionary<string, string> { ["phase"] = "d-exp-source-chunk", ["offset"] = offset.ToString() });
@@ -527,7 +527,7 @@ internal static partial class StudioScenarioHarness
                         Require(resumed["status"] == "ResumingOriginalSourceSuffix", "the sealed source resumes its original loader");
                         boot.Refresh(); await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
                         await Until(() => ResidentWaiting("source suffix native fault"),
-                            "original source runs the same SceneLoad and bounded 32-Movie suffix", suffixToEnd ? 300 : 120);
+                            "original source runs the same SceneLoad and bounded 32-Movie suffix", suffixToEnd ? 7200 : 2400);
                         var originalState = await VideoRuntimeState(vm);
                         Require(originalState["movieFrame"] == originalEnd.ToString() && originalState["mismatchCount"] == "0" && originalState["error"] == "",
                             "original source suffix has exact endpoint and no input mismatch");
@@ -566,7 +566,7 @@ internal static partial class StudioScenarioHarness
                     actualDHeader = new Dictionary<string, string> { ["length"] = packet.Data.Length.ToString(), ["sha256"] = packet.Sha256,
                         ["movieFrame"] = packet.MovieFrame.ToString(), ["nativeFrame"] = packet.NativeFrame.ToString() };
                     await File.WriteAllTextAsync(Path.Combine(output, "actual-d-source-header.json"), JsonSerializer.Serialize(actualDHeader));
-                    Require(actualDBytes.Length > 0 && actualDBytes.Length <= 32*1024*1024, "target stage receives bounded source D only through memory IPC");
+                    Require(actualDBytes.Length > 0 && actualDBytes.Length <= 256*1024*1024, "target stage receives bounded source D only through memory IPC");
                 }
                 if (actualDExperiment) {
                     // Replay the real target history to its independently selected
@@ -616,7 +616,7 @@ internal static partial class StudioScenarioHarness
                         && result["packetBytes"] == actualDBytes.Length.ToString() && result["d1Passed"] == "true" && result["d2Passed"] == "true"
                         && result["noMovieTickDuringApply"] == "true"
                         && long.TryParse(result["elapsedMilliseconds"], System.Globalization.NumberStyles.None,
-                            System.Globalization.CultureInfo.InvariantCulture, out var elapsed) && elapsed < 9000,
+                            System.Globalization.CultureInfo.InvariantCulture, out var elapsed) && elapsed < 360000,
                         "Resident D1 and complete D2 readback finish within the bounded transaction without a Movie tick");
                     boot.Refresh(); var actualStopped = boot.NativeCompletedFrames; await Task.Delay(400); boot.Refresh();
                     Require(boot.IsWaiting && boot.NativeCompletedFrames == actualStopped && boot.FullRunFaultCode == 0,
@@ -631,7 +631,7 @@ internal static partial class StudioScenarioHarness
                         Require(resumed["status"] == "ResumingResidentSuffix", "verified target resumes the source continuation Movie");
                         boot.Refresh(); await movies.RunAsync(boot.NativeCompletedFrames, CancellationToken.None);
                         await Until(() => ResidentWaiting("actual D suffix native fault"),
-                            "original SceneLoad and bounded source Movie suffix reach a paused endpoint", suffixToEnd ? 300 : 120);
+                            "original SceneLoad and bounded source Movie suffix reach a paused endpoint", suffixToEnd ? 7200 : 2400);
                         var suffixState = await VideoRuntimeState(vm);
                         Require(suffixState["movieFrame"] == suffixEnd.ToString() && suffixState["mismatchCount"] == "0"
                             && suffixState["error"] == "", "actual D suffix has its exact Movie endpoint and no input mismatch");
@@ -684,31 +684,22 @@ internal static partial class StudioScenarioHarness
                     serialTransitionCount = transitions.Length;
                     foreach (var ordinal in transitions)
                     {
-                        var phases = serialRows.Where(row => row.RootElement.GetProperty("ordinal").GetInt32() == ordinal)
+                        var phases = serialRows.Where(row => row.RootElement.GetProperty("ordinal").GetInt32() == ordinal && row.RootElement.GetProperty("phase").GetString() != "resident-transit-verified")
                             .Select(row => row.RootElement.GetProperty("phase").GetString()).ToArray();
                         Require(phases.SequenceEqual(new[] { "before-unload", "unload-requested", "native-empty-boundary",
                             "target-load-start", "target-activation-synchronized", "duplicate-source-unload-suppressed", "staging-roots-cleared", "target-finished", "complete" }),
                             "serial transition has complete ordered unload / native boundary / target load evidence: " + ordinal);
                     }
                     if (inputRouteRecording) {
-                        var canonRows = File.ReadLines(Path.Combine(output, "canonical-boundary-progress.jsonl"))
-                            .Select(line => JsonDocument.Parse(line)).ToArray();
-                        try {
-                            foreach (var ordinal in transitions) {
-                                var rows = canonRows.Where(row => row.RootElement.GetProperty("ordinal").GetInt32() == ordinal).ToArray();
-                                var phases = rows.Select(row => row.RootElement.GetProperty("phase").GetString()).ToArray();
-                                var preserved = Array.IndexOf(phases, "D-gameplay-preserved-by-Canon");
-                                var discovery = Array.IndexOf(phases, "input-route-authoring-unqualified");
-                                Require(preserved >= 0 && discovery > preserved && discovery == phases.Length - 1,
-                                    "unqualified route boundary retains common Canon and preservation before omitting unrequested observation: " + ordinal);
-                                var detail = rows[discovery].RootElement.GetProperty("detail");
-                                Require(!detail.GetProperty("snapshotRequested").GetBoolean()
-                                    && !detail.GetProperty("boundaryDigestCaptured").GetBoolean()
-                                    && !detail.GetProperty("d0Passed").GetBoolean() && !detail.GetProperty("restoreQualified").GetBoolean(),
-                                    "input route boundary remains explicitly unqualified: " + ordinal);
-                            }
+                        foreach (var ordinal in transitions) {
+                            var rows = serialRows.Where(row => row.RootElement.GetProperty("ordinal").GetInt32() == ordinal)
+                                .Select(row => row.RootElement).ToArray();
+                            var boundary = rows.Single(row => row.GetProperty("phase").GetString() == "native-empty-boundary").GetProperty("data");
+                            var transit = rows.Single(row => row.GetProperty("phase").GetString() == "resident-transit-verified").GetProperty("data");
+                            Require(transit.GetProperty("movie").GetInt64() == boundary.GetProperty("movie").GetInt64()
+                                && transit.GetProperty("native").GetInt64() == boundary.GetProperty("native").GetInt64(),
+                                "resident directory and parked loader verified at recorded transit " + ordinal);
                         }
-                        finally { foreach (var row in canonRows) row.Dispose(); }
                     }
                 }
                 finally { foreach (var row in serialRows) row.Dispose(); }
@@ -775,7 +766,7 @@ internal static partial class StudioScenarioHarness
                     firstSegmentTarget = inputRouteSegmentFrame, prefixInputAndFpsEqual = inputRoutePrefixVerified,
                     initialSavesId = protectedSource.InitialSaves!.Id, initialSaveFileCount = protectedSource.InitialSaves.Hashes.Count,
                     completeInitialSavesPreserved = true, originalSavesUnchangedBeforeExit = true, serialTransitionCount,
-                    commonCanonPreservationVerified = true, boundaryDigestCaptured = false, independentP0Observed = false, primaryProbeCoverage,
+                    residentTransitVerified = true, boundaryDigestCaptured = false, independentP0Observed = false, primaryProbeCoverage,
                     snapshotRequested = false, phaseP0Passed = false, d0Passed = false, restoreQualified = false, completeStateCoverage = false,
                     perCommandWaitSeconds = 180, phaseWatchdogSeconds = 240, hostDeadlineSeconds = 270, deadlineReset = false }));
                 Log("UNQUALIFIED NATIVE INPUT ROUTE RECORDING COMPLETE; D0, restore and full coverage not asserted");

@@ -10,7 +10,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 {
     internal static partial class ResidentParticleSystemState
     {
-        private const int NullLink = -1, UnknownLink = -2, EmitterSelf = -3, BoundObject = -4, CurrentSharedData = -5;
+        private const int NullLink = -1, UnknownLink = -2, EmitterSelf = -3, BoundObject = -4, CurrentSharedData = -5, MeshConsumerLink = -6;
         private static readonly int[] CacheOffsets = { 856, 864, 872 };
         private static class CacheTypes { internal static readonly Type[] Values = { typeof(Mesh), typeof(Sprite), typeof(Texture2D) }; }
         internal sealed class CacheBindings
@@ -38,6 +38,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var offset = ModuleLinks[i]; var pointer = M.Ptr(modules, offset);
                 if (pointer == IntPtr.Zero) { result[i] = NullLink; continue; }
                 result[i] = UnknownLink;
+                if ((offset == 1048 || offset == 1056) && mesh != IntPtr.Zero) {
+                    var node = IntPtr.Add(modulesAt,1048);
+                    var previous = M.Ptr(modules,1048); var next = M.Ptr(modules,1056);
+                    if (previous != IntPtr.Zero && next != IntPtr.Zero && M.Ptr(modules,1064) == emitter
+                        && M.Ptr(reader.Read(IntPtr.Add(previous,8),8),0) == node && M.Ptr(reader.Read(next,8),0) == node) {
+                        result[i] = MeshConsumerLink; continue;
+                    }
+                }
                 if (offset == 1064 && pointer == emitter) { result[i] = EmitterSelf; continue; }
                 var root = LightRoot(offset);
                 if (root >= 0 && pointer == IntPtr.Add(modulesAt, root)) { result[i] = root; continue; }
@@ -78,6 +86,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 gaps.Add(gap);
             }
         }
+        internal static bool HasShapeMeshLink(Body body) => body.ModuleLinkKinds[Array.IndexOf(ModuleLinks,1048)] == MeshConsumerLink;
         private static void ValidateCacheBindings(Body body)
         {
             var bindings = body.Caches;
@@ -93,10 +102,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if ((kind == CurrentSharedData) != (owner.Length != 0) || (kind != NullLink ? retains < 1 : retains != 0)
                         || offset == 912 && kind == CurrentSharedData && owner != bindings.Objects[0]) throw Error("shared-data retain, owner or storage differs");
                 }
+                if (kind == MeshConsumerLink && (offset == 1048 || offset == 1056) && bindings.Objects[0].Length != 0) continue;
                 if (kind == NullLink || kind == UnknownLink || kind == EmitterSelf && offset == 1064 || kind == BoundObject && cached >= 0
                     || kind == CurrentSharedData && (offset == 912 || offset == 4808) || kind >= 0 && kind == LightRoot(offset)) continue;
                 throw Error("native link kind does not own this field");
             }
+            var meshPrevious = body.ModuleLinkKinds[Array.IndexOf(ModuleLinks,1048)];
+            var meshNext = body.ModuleLinkKinds[Array.IndexOf(ModuleLinks,1056)];
+            if ((meshPrevious == MeshConsumerLink || meshNext == MeshConsumerLink) && meshPrevious != meshNext)
+                throw Error("shape consumer links disagree");
             for (var off = 4760; off <= 4792; off += 16) {
                 var i = Array.IndexOf(ModuleLinks, off); var prev = body.ModuleLinkKinds[i]; var next = body.ModuleLinkKinds[i + 1];
                 if ((prev == off || next == off) && prev != next || (prev == NullLink || next == NullLink) && prev != next)
@@ -111,6 +125,27 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr AcquireShared(IntPtr owner);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void CacheAction(IntPtr owner);
+        internal static void ApplyShapeMeshCache(IntPtr emitter, string mesh, string previousMesh,
+            string sharedMesh, string previousSharedMesh, Func<string,NativeObject> resolve, Action admitted)
+        {
+            var modules = M.Ptr(IntPtr.Add(emitter,80));
+            if (modules == IntPtr.Zero) throw Error("shape modules are absent during cache restore");
+            if (mesh != previousMesh) {
+                var pointer = mesh.Length == 0 ? IntPtr.Zero : ResidentNativeAssetReference.ResolveTyped(mesh,typeof(Mesh),resolve);
+                admitted(); M.Write(IntPtr.Add(modules,856), BitConverter.GetBytes(pointer.ToInt64()));
+            }
+            if (sharedMesh != previousSharedMesh) {
+                var slot = IntPtr.Add(modules, 912); var old = M.Ptr(slot); var next = IntPtr.Zero;
+                admitted();
+                if (sharedMesh.Length != 0) {
+                    var owner = ResidentNativeAssetReference.ResolveTyped(sharedMesh,typeof(Mesh),resolve);
+                    next = Entry<AcquireShared>(0x6b95b0, "488b4138f0ff4004488b4138c3")(owner);
+                    if (next == IntPtr.Zero || next != M.Ptr(IntPtr.Add(owner,56))) throw Error("target shared mesh acquisition differs");
+                }
+                M.Write(slot, BitConverter.GetBytes(next.ToInt64()));
+                if (old != IntPtr.Zero) Entry<CacheAction>(0xbb370, "40574883ec20488bf9b8fffffffff00fc1410483f801")(old);
+            }
+        }
         private static void ApplyCaches(Body body, Body before, IntPtr emitter, IntPtr modules, Func<string,NativeObject> resolve, Action admitted)
         {
             var values = body.Caches; var local = before.Caches;
@@ -118,22 +153,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 int offset = ModuleLinks[i], kind = body.ModuleLinkKinds[i], previous = before.ModuleLinkKinds[i];
                 int cache = Array.IndexOf(CacheOffsets, offset);
                 if (kind == previous && (cache < 0 || values.Objects[cache] == local.Objects[cache])) continue;
+                // Renderer owns the complete asset consumer ordering and has already
+                // rebuilt this node together with its mesh and shared-data cache.
+                if (offset == 1048 || offset == 1056) {
+                    if (kind != previous) throw Error("renderer did not establish the shape consumer registration");
+                    continue;
+                }
                 if (offset == 912 || offset == 4808) continue;
                 var pointer = kind == EmitterSelf ? emitter : kind == BoundObject ? ResidentNativeAssetReference.ResolveTyped(values.Objects[cache],CacheTypes.Values[cache],resolve)
                     : kind >= 0 ? IntPtr.Add(modules, kind) : IntPtr.Zero;
                 admitted(); M.Write(IntPtr.Add(modules, offset), BitConverter.GetBytes(pointer.ToInt64()));
             }
-            if (values.SharedMesh != local.SharedMesh) {
-                var slot = IntPtr.Add(modules, 912); var old = M.Ptr(slot); var next = IntPtr.Zero;
-                admitted();
-                if (values.SharedMesh.Length != 0) {
-                    var owner = ResidentNativeAssetReference.ResolveTyped(values.SharedMesh,typeof(Mesh),resolve);
-                    next = Entry<AcquireShared>(0x6b95b0, "488b4138f0ff4004488b4138c3")(owner);
-                    if (next == IntPtr.Zero || next != M.Ptr(IntPtr.Add(owner,56))) throw Error("target shared mesh acquisition differs");
-                }
-                M.Write(slot, BitConverter.GetBytes(next.ToInt64()));
-                if (old != IntPtr.Zero) Entry<CacheAction>(0xbb370, "40574883ec20488bf9b8fffffffff00fc1410483f801")(old);
-            }
+            ApplyShapeMeshCache(emitter, values.Objects[0], local.Objects[0], values.SharedMesh, local.SharedMesh, resolve, admitted);
             if (values.SharedLight != local.SharedLight) {
                 // Cache() is used only with completely represented empty lists.
                 // Equalize the temporary prefab and cached ID so it takes the

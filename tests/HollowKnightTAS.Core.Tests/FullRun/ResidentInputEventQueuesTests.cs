@@ -90,7 +90,7 @@ public sealed class ResidentInputEventQueuesTests
     {
         var api = new Api();
         var q = api.Queue();
-        Assert.IsTrue(api.Gaps(q).Contains("native-input/accepted-event-producer-and-consumer-admission"));
+        Assert.IsFalse(api.Gaps(q).Contains("native-input/accepted-event-producer-and-consumer-admission"));
         var record = Event(State, BitConverter.GetBytes(0x48494420).Concat(BitConverter.GetBytes(0x12345678abcdUL)).ToArray(), 700);
         var rows = api.Parse(record, 1, false, 1, 3);
         var row = rows.GetValue(0)!;

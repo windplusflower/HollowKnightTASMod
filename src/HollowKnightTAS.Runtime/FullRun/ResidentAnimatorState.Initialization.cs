@@ -11,7 +11,36 @@ namespace HollowKnightTAS.Runtime.FullRun
         // AnimationLayerMixerPlayable 368, AnimatorControllerPlayable 456.
         // Playable (vftable16a23b8) is only192 bytes: never read its +256.
         private static int AnimationFlagBytes(int vtable)
-            => vtable == 0x15d91f8 || vtable == 0x15d89d8 || vtable == 0x15d9380 || vtable == PlayableVtable ? 5 : 0;
+            => vtable == 0x15d91f8 || vtable == 0x15d89d8 || vtable == 0x15d9380 || vtable == PlayableVtable
+                || vtable == 0x15d8aa8 || vtable == 0x15d8b80 || vtable == 0x15d9608 || vtable == 0x15d97a8 ? 5 : 0;
+        // Native factories reserve no custom-job bytes for these complete
+        // object types. Their nonnull job-data slot points exactly one past
+        // the object; a reflection descriptor would give it another meaning.
+        private static int EmptyInlineJobDataSize(int vtable)
+        {
+            switch (vtable)
+            {
+                case 0x15d9380: return 368; // LayerMixer
+                case 0x15d97a8: return 368; // StateMachineMixer
+                case 0x15d8aa8: return 384; // BlendTree
+                case 0x15d9608: return 288; // Pose
+                case 0x15d8b80: return 512; // Clip
+                case PlayableVtable: return 456; // Controller
+                default: return 0;
+            }
+        }
+
+        private static int? CaptureEmptyInlineJobDataOffset(int vtable, IntPtr owner, IntPtr reflection, IntPtr data)
+        {
+            int size = EmptyInlineJobDataSize(vtable);
+            return size != 0 && reflection == IntPtr.Zero && data == IntPtr.Add(owner, size) ? size : (int?)null;
+        }
+
+        private static bool KnownEmptyInlineJobData(Node node)
+            => node.EmptyInlineJobDataOffset.HasValue && node.JobData && !node.JobReflection
+                && node.EmptyInlineJobDataOffset.Value == EmptyInlineJobDataSize(node.Vtable)
+                && node.EmptyInlineJobDataOffset.Value != 0;
+
         private static void ValidateAnimationFlags(byte[] flags)
         {
             if (flags == null || flags.Length != 5) throw Error("AnimationPlayable initialization flag extent differs");

@@ -134,4 +134,17 @@ public sealed class ResidentGraphReplayTests
         Assert.ThrowsExactly<InvalidOperationException>(second.plan.VerifyReadback);
         Assert.ThrowsExactly<InvalidOperationException>(() => second.plan.ReapplyOriginalGraph(() => { }, () => { }));
     }
+
+    [TestMethod]
+    public void Delegate_binding_succeeds_across_name_presence_and_control_plane_token_drift()
+    {
+        var child = new Child(42);
+        Action callback = child.Run;
+        var actText = ResidentGraphPolicy.DescribeDelegate(callback);
+        // Simulate legacy snapshot where Name is absent and Token was different in ControlPlane
+        var methods = ResidentGraphPolicy.ResolveDelegateMethods(actText, typeof(Action), 1);
+        var bound = ResidentGraphPolicy.BindDelegate(actText, typeof(Action), new object[] { child }, methods);
+        Assert.IsNotNull(bound);
+        Assert.IsTrue(ResidentGraphPolicy.EquivalentDelegateDescriptors(ResidentGraphPolicy.DescribeDelegate(bound), actText));
+    }
 }

@@ -145,7 +145,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // Native registration/lifecycle and physics adapters run under
                 // the same scope and verify the final complete source state.
                 for (var index = source.Objects.Length - 1; index >= 0; index--) {
-                    var row = source.Objects[index]; if (!execution.IsProtected(row.Key)) paired[row.Key].SetActive(row.ActiveSelf);
+                    var row = source.Objects[index];
+                    if (!execution.IsProtected(row.Key)) {
+                        var owner = paired[row.Key];
+                        if (owner.GetComponent<ParticleSystem>() is ParticleSystem ps && ps.useAutoRandomSeed) {
+                            if (ps.isPlaying || ps.particleCount > 0)
+                                ps.Stop(false, ParticleSystemStopBehavior.StopEmittingAndClear);
+                            ps.useAutoRandomSeed = false;
+                        }
+                        owner.SetActive(row.ActiveSelf);
+                    }
                 }
             });
             Verify();
@@ -163,15 +172,30 @@ namespace HollowKnightTAS.Runtime.FullRun
             current = observed;
         }
         internal ResidentObjectDirectory Directory => current ?? throw Error("topology has not been applied");
+        private static string TypeMatchKey(Type type, string fallbackKey)
+        {
+            var asm = type.Assembly.GetName().Name;
+            if (asm == "HollowKnightTAS" || asm == "HollowKnightTAS.Core" || asm == "HollowKnightTAS.ClockPayload")
+                return "cp:" + type.FullName;
+            return fallbackKey;
+        }
+        private static string RowTypeMatchKey(ResidentObjectDirectory.ComponentRecord component)
+        {
+            var asm = component.Type.Assembly;
+            if (asm == "HollowKnightTAS" || asm == "HollowKnightTAS.Core" || asm == "HollowKnightTAS.ClockPayload")
+                return "cp:" + component.Type.Name;
+            return component.Type.Key;
+        }
         private void ReconcileComponents(GameObject owner, ResidentObjectDirectory.ObjectRecord row)
         {
-            var wanted = row.Components.GroupBy(component => component.Type.Key, StringComparer.Ordinal)
+            var wanted = row.Components.GroupBy(RowTypeMatchKey, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
             var old = owner.GetComponents<Component>(); var counts = new Dictionary<string, int>(StringComparer.Ordinal);
             var excess = new List<Component>();
             foreach (var component in old) {
                 if (!ResidentObjectDirectory.IsLive(component)) throw Error("target component list contains a missing script");
-                var key = ResidentObjectDirectory.TypeRecord.Capture(component.GetType()).Key;
+                var t = component.GetType();
+                var key = TypeMatchKey(t, ResidentObjectDirectory.TypeRecord.Capture(t).Key);
                 counts.TryGetValue(key, out var ordinal); counts[key] = ordinal + 1;
                 if (!wanted.TryGetValue(key, out var count) || ordinal >= count) excess.Add(component);
             }
@@ -203,9 +227,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private void RequirePrefix(Component[] actual, ResidentObjectDirectory.ObjectRecord row)
         {
             if (actual.Length > row.Components.Length) throw Error("RequireComponent produced an extra source-unmatched component: " + row.Key);
-            for (var index = 0; index < actual.Length; index++)
-                if (!ResidentObjectDirectory.IsLive(actual[index]) || actual[index].GetType() != types[row.Components[index].Type.Key])
+            for (var index = 0; index < actual.Length; index++) {
+                var expectedType = types[row.Components[index].Type.Key];
+                if (!ResidentObjectDirectory.IsLive(actual[index]) || (actual[index].GetType() != expectedType && actual[index].GetType().FullName != expectedType.FullName))
                     throw Error("Unity native component order cannot represent the captured source order: " + row.Key + "/" + index);
+            }
         }
         private static void MoveRoot(GameObject owner, Scene target, ResidentObjectDirectory.SceneRecord record)
         {

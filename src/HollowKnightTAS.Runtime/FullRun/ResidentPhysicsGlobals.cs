@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using UnityEngine;
 using M = HollowKnightTAS.Runtime.FullRun.ResidentNativeMemory;
 
@@ -232,15 +234,25 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (source.ManagerVtable != other.ManagerVtable || source.InterestCapacity != other.InterestCapacity || source.SceneCapacity != other.SceneCapacity
                 || source.InterestUnused != other.InterestUnused || source.SceneUnused != other.SceneUnused || target.SceneHandles.Values.Any(handle => handle >= source.NextSceneHandle)
                 || !source.TransformHandles.SequenceEqual(other.TransformHandles) || !source.Interests.Select(row => row.Owner).SequenceEqual(other.Interests.Select(row => row.Owner))
-                || !source.Scenes.Select(row => row.Key).SequenceEqual(other.Scenes.Select(row => row.Key))) throw Error("manager registration/topology needs a common Canon");
+                || !source.Scenes.Select(row => row.Key).SequenceEqual(other.Scenes.Select(row => row.Key))) {
+                var diff = $"vtable={source.ManagerVtable}/{other.ManagerVtable}, intCap={source.InterestCapacity}/{other.InterestCapacity}, intUnused={source.InterestUnused}/{other.InterestUnused}, " +
+                    $"sceneCap={source.SceneCapacity}/{other.SceneCapacity}, sceneUnused={source.SceneUnused}/{other.SceneUnused}, nextHandle={source.NextSceneHandle}/[{string.Join(",", target.SceneHandles.Values)}], " +
+                    $"tx=[{string.Join(",", source.TransformHandles)}]/[{string.Join(",", other.TransformHandles)}], " +
+                    $"intCnt={source.Interests.Length}/{other.Interests.Length}, intOnlySrc=[{string.Join(",", source.Interests.Select(r => r.Owner).Except(other.Interests.Select(r => r.Owner)).Take(5))}], " +
+                    $"intOnlyTgt=[{string.Join(",", other.Interests.Select(r => r.Owner).Except(source.Interests.Select(r => r.Owner)).Take(5))}], " +
+                    $"scenes=[{string.Join(",", source.Scenes.Select(r => r.Key))}]/[{string.Join(",", other.Scenes.Select(r => r.Key))}]";
+                throw Error("manager registration/topology needs a common Canon: " + diff);
+            }
             for (var i = 0; i < source.Scenes.Length; i++) {
                 var a = source.Scenes[i]; var b = other.Scenes[i];
                 if (a.FilterVtable != b.FilterVtable || a.ListenerVtable != b.ListenerVtable || a.ContactsVtable != b.ContactsVtable
                     || a.IgnoreCapacity != b.IgnoreCapacity || a.CallbackIndexCapacity != b.CallbackIndexCapacity || a.IgnoreUnused != b.IgnoreUnused || a.CallbackIndexUnused != b.CallbackIndexUnused
                     || a.Blocks.ChunkCapacity != b.Blocks.ChunkCapacity
-                    || a.Blocks.Chunks.Length != b.Blocks.Chunks.Length) throw Error("world allocation owners require synchronized topology");
+                    || a.Blocks.Chunks.Length != b.Blocks.Chunks.Length)
+                    throw Error($"world allocation owners require synchronized topology: key={a.Key}, igCap={a.IgnoreCapacity}/{b.IgnoreCapacity}, igUn={a.IgnoreUnused}/{b.IgnoreUnused}, cbCap={a.CallbackIndexCapacity}/{b.CallbackIndexCapacity}, cbUn={a.CallbackIndexUnused}/{b.CallbackIndexUnused}, blkChunkCap={a.Blocks.ChunkCapacity}/{b.Blocks.ChunkCapacity}, blkChunks={a.Blocks.Chunks.Length}/{b.Blocks.Chunks.Length}");
                 for (var chunk = 0; chunk < a.Blocks.Chunks.Length; chunk++) if (a.Blocks.Chunks[chunk].BlockSize != b.Blocks.Chunks[chunk].BlockSize
-                    || !a.Blocks.Chunks[chunk].Owners.SequenceEqual(b.Blocks.Chunks[chunk].Owners)) throw Error("block allocation placement requires synchronized topology");
+                    || !a.Blocks.Chunks[chunk].Owners.SequenceEqual(b.Blocks.Chunks[chunk].Owners))
+                    throw Error($"block allocation placement requires synchronized topology: key={a.Key}, chunk={chunk}, size={a.Blocks.Chunks[chunk].BlockSize}/{b.Blocks.Chunks[chunk].BlockSize}");
             }
         }
 
@@ -386,6 +398,80 @@ namespace HollowKnightTAS.Runtime.FullRun
             if ((capacity & (capacity - 1)) != 0) throw Error("global map capacity is not a power of two");
             return capacity;
         }
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void ResizeInterestMap(IntPtr header, int mask);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void FreeInterestNodes(IntPtr nodes, int label, IntPtr file, int line);
+
+        internal static bool NeedsInterestMapSync(Data source, Data target)
+        {
+            return source.InterestCapacity != target.InterestCapacity || source.InterestUnused != target.InterestUnused;
+        }
+
+        internal static void SynchronizeInterestMap(Data source, Live target, Action admitted)
+        {
+            if (source == null || target == null || admitted == null) throw new ArgumentNullException();
+            if (!NeedsInterestMapSync(source, target.Data)) return;
+            if (!source.Interests.Select(row => row.Owner).SequenceEqual(target.Data.Interests.Select(row => row.Owner)))
+                throw Error("interest map owner set differs before resize");
+            admitted();
+            target.Frozen();
+            var header = IntPtr.Add(target.Manager, 40);
+            var h = M.Read(header, 28);
+            var p = M.Ptr(h, 0);
+            var sentinel = IntPtr.Add(target.Engine, 0x1723b3c);
+            if (source.InterestCapacity == 1) {
+                if (source.Interests.Length != 0 || M.I32(h, 12) != 0) throw Error("static empty interest map cannot hold live keys");
+                if (p != sentinel) {
+                    var free = IntPtr.Add(target.Engine, 0x56b640);
+                    RequireCodeSha256(free, 94, "2890014de154460d79e3ec3357c76ec9af9f8198edd1243f07e27c9708f58447", "interest free procedure differs");
+                    if (M.U32(M.Read(sentinel, 4), 0) != uint.MaxValue) throw Error("shared empty hash sentinel differs");
+                    ((FreeInterestNodes)Marshal.GetDelegateForFunctionPointer(free, typeof(FreeInterestNodes)))(
+                        p, M.I32(h, 24), IntPtr.Add(target.Engine, 0x15c6004), 0x3c5);
+                    var reset = (byte[])h.Clone();
+                    Array.Copy(BitConverter.GetBytes(sentinel.ToInt64()), 0, reset, 0, 8);
+                    Array.Clear(reset, 8, 12);
+                    Array.Copy(BitConverter.GetBytes(source.InterestUnused), 0, reset, 20, 4);
+                    M.Write(header, reset);
+                }
+                return;
+            }
+            var scaledMask = checked((source.InterestCapacity - 1) * 4);
+            if (M.I32(h, 12) >= source.InterestCapacity) throw Error("resized interest map cannot hold live keys");
+            var resize = IntPtr.Add(target.Engine, 0x26e900);
+            RequireCodeSha256(resize, 322, "5c4255bd685ef505a11f634fbc34560301f7446c985d45cd8a10bb550600e7bd", "interest resize procedure differs");
+            ((ResizeInterestMap)Marshal.GetDelegateForFunctionPointer(resize, typeof(ResizeInterestMap)))(header, scaledMask);
+            h = M.Read(header, 28);
+            p = M.Ptr(h, 0);
+            if (p == IntPtr.Zero || p == sentinel || M.I32(h, 8) != scaledMask) throw Error("interest map resize readback differs");
+            var freshGrowth = M.U32(h, 20);
+            if (source.InterestUnused > freshGrowth) throw Error("source interest unused budget exceeds resized map");
+            var tombstonesNeeded = checked((int)(freshGrowth - source.InterestUnused));
+            if (tombstonesNeeded > 0) {
+                var nodes = M.Read(p, checked(source.InterestCapacity * 12));
+                var virginLeft = 0;
+                for (var i = 0; i < source.InterestCapacity; i++) if (M.U32(nodes, i * 12) == uint.MaxValue) virginLeft++;
+                if (virginLeft - tombstonesNeeded < 1) throw Error("interest map tombstone quota leaves no virgin empty sentinel");
+                var placed = 0;
+                for (var i = source.InterestCapacity - 1; i >= 0 && placed < tombstonesNeeded; i--) {
+                    var at = i * 12;
+                    if (M.U32(nodes, at) != uint.MaxValue) continue;
+                    Array.Copy(BitConverter.GetBytes(0xfffffffeu), 0, nodes, at, 4);
+                    Array.Clear(nodes, at + 4, 8);
+                    placed++;
+                }
+                if (placed != tombstonesNeeded) throw Error("interest map tombstone placement incomplete");
+                M.Write(p, nodes);
+                M.Write(IntPtr.Add(header, 20), BitConverter.GetBytes(source.InterestUnused));
+            }
+        }
+
+        private static void RequireCodeSha256(IntPtr address, int length, string expectedHex, string reason)
+        {
+            using (var sha = SHA256.Create()) {
+                var actual = BitConverter.ToString(sha.ComputeHash(M.Read(address, length))).Replace("-", "").ToLowerInvariant();
+                if (actual != expectedHex) throw Error(reason);
+            }
+        }
+
         private static void RequireEntry(IntPtr engine, int rva, string expected)
         { if (BitConverter.ToString(M.Read(IntPtr.Add(engine, rva), expected.Length / 2)).Replace("-", "").ToLowerInvariant() != expected) throw Error("native entry ABI differs"); }
         private static void Pointer(IntPtr slot, IntPtr value) => M.Write(slot, BitConverter.GetBytes(value.ToInt64()));

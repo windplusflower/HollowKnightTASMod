@@ -39,6 +39,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             private readonly Func<string, NativeObject> resolve;
             private readonly Func<object, string?> bind;
             private readonly Action admitted;
+            private readonly ExpiredTopologyPlan? expiredWeak;
             private bool applied;
             internal Plan(Data source, ResidentObjectDirectory directory, ResidentMutationScope scope, Func<string, NativeObject> resolve,
                 Func<object, string?> bind, Action admitted)
@@ -60,17 +61,24 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 foreach (var row in source.Listeners) { Owner(row.Owner, row.Type); Dependency(row.AlternateTransform, typeof(Transform)); }
                 admitted();
+                if (AllChannels(source).Concat(AllChannels(before)).Any(channel => channel.WeakOwner)
+                    || source.Sources.Concat(before.Sources).Any(row=>row.OneShots.Length!=0 || row.CachedCapacity!=0 || row.ProviderCapacity!=0))
+                    expiredWeak = PrepareExpiredWeak(source,before,key => M.Owner(directory.Resolve(key)),admitted);
             }
             internal void Apply()
             {
                 if (applied) throw Error("audio native application is single-use"); scope.Require(); admitted(); RequireEqual(before, Capture(directory, bind));
+                Exception? primary = null;
                 try {
                     scope.Mutate(() => {
+                        expiredWeak?.Allocate();
                         foreach (var row in source.Sources) {
                             scope.Require(); admitted(); var pointer = M.Owner(directory.Resolve(row.Owner));
                             for (var index = 0; index < row.Curves.Length; index++) ResidentManagedNativeWrappers.ApplyCurveNative(row.Curves[index], IntPtr.Add(pointer, 64 + index * 104), admitted);
-                            EmptyChannels(IntPtr.Add(pointer, 760), row.Cached.Length, row.CachedCapacity, admitted);
-                            EmptyChannels(IntPtr.Add(pointer, 976), row.Providers.Length, row.ProviderCapacity, admitted);
+                            if (expiredWeak == null) {
+                                EmptyChannels(IntPtr.Add(pointer, 760), row.Cached.Length, row.CachedCapacity, admitted);
+                                EmptyChannels(IntPtr.Add(pointer, 976), row.Providers.Length, row.ProviderCapacity, admitted);
+                            }
                             M.Write(IntPtr.Add(pointer, 824), BitConverter.GetBytes(Id(row.Clip, resolve)).Concat(BitConverter.GetBytes(Id(row.Mixer, resolve))).ToArray());
                             M.Write(IntPtr.Add(pointer, 880), BitConverter.GetBytes(Pointer(row.ScheduledSource, resolve).ToInt64()));
                             ApplyRanges(pointer, SourceRanges, row.Scalars);
@@ -79,10 +87,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                             scope.Require(); admitted(); var pointer = M.Owner(directory.Resolve(row.Owner));
                             M.Write(IntPtr.Add(pointer, 92), BitConverter.GetBytes(Id(row.AlternateTransform, resolve))); ApplyRanges(pointer, ListenerRanges, row.Scalars);
                         }
+                        expiredWeak?.Publish();
                         ApplyRegistry(source, directory, admitted);
                     });
+                    expiredWeak?.ReleaseAnchors(null);
                     applied = true; Verify();
-                } catch (Exception error) { scope.Fault(error); throw; }
+                } catch (Exception error) { primary = error; scope.Fault(error); throw; }
+                finally { expiredWeak?.ReleaseAnchors(primary); }
             }
             internal void Verify()
             {

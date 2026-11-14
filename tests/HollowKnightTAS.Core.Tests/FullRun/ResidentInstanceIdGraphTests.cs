@@ -96,8 +96,12 @@ public sealed class ResidentInstanceIdGraphTests
         semantic.Fields![semanticIndex].Value.Kind = "scalar"; semantic.Fields[semanticIndex].Value.Text = "-17";
         Assert.ThrowsExactly<InvalidDataException>(() => targetCodec.PrepareOwnedGraph(raw, Roots(target), NoBinding)); Assert.AreEqual(1234, target.Ordinary); Assert.IsNull(target.Collision);
         var forged = codec.Decode(bytes); var ordinary = forged.Nodes.Single(node => node.Type == CanonicalCarryGraphCodec.Identity(typeof(State)));
-        var ordinaryIndex = Array.FindIndex(ordinary.Fields!, field => field.Name.EndsWith("/Ordinary", StringComparison.Ordinal));
-        ordinary.Fields![ordinaryIndex].Value.Kind = "instance-id"; ordinary.Fields[ordinaryIndex].Value.Text = "directory/collider[71]";
+        // Ordinary scalars occupy packed fields. A forged semantic edge must
+        // reject before any live write even when paired with valid packed bytes.
+        ordinary.Fields = ordinary.Fields!.Concat(new[] { new CanonicalCarryGraphData.Field {
+            Name = CanonicalCarryGraphCodec.Identity(typeof(State)) + "/Ordinary",
+            Value = new CanonicalCarryGraphData.Value { Kind = "instance-id", Text = "directory/collider[71]" }
+        } }).ToArray();
         Assert.ThrowsExactly<InvalidDataException>(() => targetCodec.PrepareOwnedGraph(forged, Roots(target), NoBinding)); Assert.AreEqual(1234, target.Ordinary);
     }
 

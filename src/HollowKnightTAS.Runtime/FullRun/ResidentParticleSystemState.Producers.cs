@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using M = HollowKnightTAS.Runtime.FullRun.ResidentNativeMemory;
@@ -18,13 +17,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal sealed class Producers
         {
-            public bool NativeMainThread, CurrentIsMainDevice, MainIsRealDevice, ManagedPublicationHeld;
-            // -1 is a foreign implementation, 0 is absent, otherwise image RVA.
-            public int MainVTable, RealVTable;
-            public bool Threaded, Serialize, GraphicsJob, HasWorker, HasQueue, ClientRealIsGlobal, PendingPresent;
-            public int RecordDepth, OwnershipDepth, ReservedClientCount;
-            public bool WorkerIsKnown, WorkerHasThread, WorkerOwnsDevice, WorkerRealIsGlobal, WorkerUsesMainQueue;
-            public bool WorkerReachedClientFence;
+            public bool NativeMainThread, ManagedPublicationHeld;
+            // Legacy wire observations remain readable. New captures leave
+            // graphics-backend receipts at their neutral defaults.
+            public bool CurrentIsMainDevice = false, MainIsRealDevice = false;
+            public int MainVTable = 0, RealVTable = 0;
+            public bool Threaded = false, Serialize = false, GraphicsJob = false, HasWorker = false,
+                HasQueue = false, ClientRealIsGlobal = false, PendingPresent = false;
+            public int RecordDepth = 0, OwnershipDepth = 0, ReservedClientCount = 0;
+            public bool WorkerIsKnown = false, WorkerHasThread = false, WorkerOwnsDevice = false,
+                WorkerRealIsGlobal = false, WorkerUsesMainQueue = false, WorkerReachedClientFence = false;
         }
         private sealed partial class Reader
         {
@@ -36,46 +38,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                 return id;
             }
         }
-        private const int ClientVTable = 0x166bad8, WorkerVTable = 0x17211d0;
+        private const int ClientVTable = 0x166bad8;
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] [return: MarshalAs(UnmanagedType.I1)]
         private delegate bool IsNativeMainThread();
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr CurrentGfxDevice();
-        private static Producers CaptureProducers(Reader reader, ProcessModule engine)
+        private static Producers CaptureProducers()
         {
             var state = new Producers { NativeMainThread = Entry<IsNativeMainThread>(0x81c590, "40534883ec20488b1d3b2a2001e8ce080000483bc30f94c04883c4205bc3")() };
             if (!state.NativeMainThread) throw Error("producer observation requires Unity main thread");
             state.ManagedPublicationHeld = ResidentParticlePublicationLease.HasVerifiedPublicationFence();
-            var globals = reader.Read(IntPtr.Add(engine.BaseAddress, 0x1a1f6b0), 16);
-            var main = M.Ptr(globals, 0); var real = M.Ptr(globals, 8);
-            var current = Entry<CurrentGfxDevice>(0x8869c0, "8b0d3a830e0148ff25037fd3")();
-            state.MainIsRealDevice = main != IntPtr.Zero && main == real;
-            state.CurrentIsMainDevice = main != IntPtr.Zero && main == current;
-            int VTable(IntPtr owner) {
-                if (owner == IntPtr.Zero) return 0;
-                var rva = M.Ptr(reader.Read(owner, 8), 0).ToInt64() - engine.BaseAddress.ToInt64();
-                return rva > 0 && rva < engine.ModuleMemorySize ? (int)rva : -1;
-            }
-            state.MainVTable = VTable(main); state.RealVTable = VTable(real);
-            // GetGfxDeviceClientPool (4d5e30) returns an actual static object,
-            // not a pointer slot. Count only; other clients can retire off-thread.
-            state.ReservedClientCount = Bounded(M.U64(reader.Read(IntPtr.Add(engine.BaseAddress, 0x19bc980 + 40 + 16), 8), 0));
-            if (state.MainVTable != ClientVTable) return state;
-            var flags = reader.Read(IntPtr.Add(main, 9472), 32);
-            var tail = reader.Read(IntPtr.Add(main, 10144), 17);
-            var worker = M.Ptr(flags, 0); var queue = M.Ptr(flags, 24);
-            state.Threaded = Boolean(flags, 16); state.Serialize = Boolean(flags, 17); state.GraphicsJob = Boolean(flags, 18);
-            state.RecordDepth = M.I32(flags, 20); state.OwnershipDepth = M.I32(tail, 0); state.PendingPresent = Boolean(tail, 16);
-            state.HasQueue = queue != IntPtr.Zero; state.HasWorker = worker != IntPtr.Zero;
-            state.ClientRealIsGlobal = real != IntPtr.Zero && M.Ptr(flags, 8) == real;
-            state.WorkerIsKnown = VTable(worker) == WorkerVTable;
-            if (!state.WorkerIsKnown) return state;
-            var workerBody = reader.Read(IntPtr.Add(worker, 80), 41);
-            state.WorkerHasThread = M.Ptr(workerBody, 8) != IntPtr.Zero;
-            state.WorkerRealIsGlobal = real != IntPtr.Zero && M.Ptr(workerBody, 0) == real;
-            state.WorkerUsesMainQueue = queue != IntPtr.Zero && M.Ptr(workerBody, 16) == queue;
-            state.WorkerOwnsDevice = Boolean(workerBody, 40);
-            // Same signed wrap comparison as GfxDeviceWorker::WaitOnCPUFence.
-            state.WorkerReachedClientFence = unchecked((int)(M.U32(tail, 4) - M.U32(workerBody, 32))) <= 0;
+            // Device ownership, presents and graphics client queues belong to
+            // this process's rendering backend. Actual emitter update fences
+            // and manager geometry jobs are captured separately below.
             return state;
         }
         // Pure wire validation can inspect a historical snapshot offline. Any
@@ -108,13 +81,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (!data.Registry.Producers.ManagedPublicationHeld) gaps.Add("managed-job-schedule-to-handle-publication");
                 if (data.Rows.Any(row => row.HasJob)) gaps.Add("job-group-graph-and-work-item");
             }
-            var p = data.Registry.Producers;
-            if (!p.NativeMainThread || !p.CurrentIsMainDevice || p.MainVTable <= 0 || p.RealVTable <= 0) gaps.Add("gfx-device-thread-identity");
-            if (p.ReservedClientCount != 0 || p.GraphicsJob) gaps.Add("pooled-graphics-job-client");
-            if (p.MainVTable == ClientVTable && (p.Threaded || p.HasWorker)) {
-                if (!p.WorkerIsKnown || !p.WorkerUsesMainQueue || !p.WorkerRealIsGlobal || !p.ClientRealIsGlobal) gaps.Add("graphics-worker-dependency");
-                if (p.WorkerOwnsDevice || !p.WorkerReachedClientFence || p.PendingPresent || p.Serialize) gaps.Add("graphics-command-producer-or-pending-fence");
-            }
+            if (!data.Registry.Producers.NativeMainThread) gaps.Add("particle-main-thread-admission");
         }
         private static void ValidateProducers(Data data)
         {

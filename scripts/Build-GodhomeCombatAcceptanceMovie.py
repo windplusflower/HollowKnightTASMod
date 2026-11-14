@@ -206,10 +206,28 @@ def package_observed_authoring(args, parser):
         if endpoint["scene"] != "GG_Lost_Kin" or endpoint["heroResources"]["health"] <= 0:
             raise ValueError("The endpoint must show a living Hero in the next P4 boss scene")
     progress_path = evidence / "canonical-boundary-progress.jsonl"
-    progress = [json.loads(line) for line in progress_path.read_text(encoding="utf-8-sig").splitlines() if line]
-    boundaries = [{key: row[key] for key in ("ordinal", "source", "target", "movie", "native", "phase")}
-                  for row in progress if row.get("phase") == "input-route-authoring-unqualified"
-                  and row["movie"] <= args.end_frame]
+    if progress_path.exists():
+        progress = [json.loads(line) for line in progress_path.read_text(encoding="utf-8-sig").splitlines() if line]
+        boundaries = [{key: row[key] for key in ("ordinal", "source", "target", "movie", "native", "phase")}
+                      for row in progress if row.get("phase") == "input-route-authoring-unqualified"
+                      and row["movie"] <= args.end_frame]
+    else:
+        journals = [p for p in evidence.glob("serial-scenes-*.jsonl") if p.stem.removeprefix("serial-scenes-").isdigit()]
+        if len(journals) != 1:
+            raise ValueError("Expected one resident serial journal")
+        progress_path = journals[0]
+        progress = [json.loads(line) for line in progress_path.read_text(encoding="utf-8-sig").splitlines() if line]
+        verified = {(r["ordinal"], r["data"]["movie"], r["data"]["native"]) for r in progress
+                    if r["phase"] == "resident-transit-verified"}
+        boundaries = []
+        for row in progress:
+            if row["phase"] != "native-empty-boundary" or row["data"]["movie"] > args.end_frame:
+                continue
+            data = row["data"]
+            if (row["ordinal"], data["movie"], data["native"]) not in verified:
+                raise ValueError("Recorded boundary lacks its resident transit receipt")
+            boundaries.append(dict(ordinal=row["ordinal"], phase="resident-transit-verified",
+                                   **{key: data[key] for key in ("source", "target", "movie", "native")}))
     p1_route = None
     if args.sequence == "sequence-tier1":
         victory, failed_attempts, p1_route = observed_p1_route(boundaries, endpoint)
