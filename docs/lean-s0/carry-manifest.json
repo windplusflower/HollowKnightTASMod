@@ -1,0 +1,312 @@
+{
+  "schema": "lean-s0-carry-manifest-v1",
+  "phase": "T1",
+  "s0HookPoint": {
+    "vanillaFlow": {
+      "entryMethod": "GameManager.BeginSceneTransition",
+      "entrySource": "../hkapi/Assembly-CSharp/GameManager.cs:399-403",
+      "routineMethod": "GameManager.BeginSceneTransitionRoutine",
+      "routineSource": "../hkapi/Assembly-CSharp/GameManager.cs:411-505",
+      "sceneLoadMethod": "SceneLoad.BeginRoutine",
+      "sceneLoadSource": "../hkapi/Assembly-CSharp/SceneLoad.cs:99-200",
+      "modHooksBeforeSceneLoadUsableAsS0": false,
+      "reason": "ModHooks.BeforeSceneLoad runs at GameManager.cs:401 before old scene unload; vanilla SceneLoad activates target scene additively before ActivationComplete unloads lastSceneName (GameManager.cs:476-478)."
+    },
+    "recommendedHook": {
+      "hookType": "MonoMod.RuntimeDetour.Hook",
+      "targetMethod": "SceneLoad.BeginRoutine",
+      "verifiedImplementation": "src/HollowKnightTAS.Runtime/FullRun/LoadingSerialSceneProbe.cs:126-281",
+      "stagingScene": "__HKTAS_SerialBoundary_v6",
+      "s0CallbackSite": "LoadingSerialSceneProbe.ObserveNativeBoundary (lines 250-281), after UnloadSceneAsync(source) and 1 PlayerLoop yield return null, before original(load).",
+      "timingNote": "WillActivate (GameManager.DestroyPersonalPools at GameManager.cs:470-473) has not executed yet at ObserveNativeBoundary; T2 S0Gate must normalize/recycle LEVEL_UNLOAD pooled objects explicitly or allow pool cleanup at S0."
+    }
+  },
+  "rngAudit": {
+    "singleSourceConfirmed": true,
+    "managedIlScan": {
+      "Assembly-CSharp.dll": {
+        "unityEngineRandomCalls": 415,
+        "systemRandomCalls": 0,
+        "initStateOrSeedSetCalls": 0
+      },
+      "Assembly-CSharp-firstpass.dll": {
+        "unityEngineRandomCalls": 11,
+        "systemRandomCalls": 0,
+        "initStateOrSeedSetCalls": 0
+      },
+      "PlayMaker.dll": {
+        "unityEngineRandomCalls": 0,
+        "systemRandomCalls": 0,
+        "initStateOrSeedSetCalls": 0
+      }
+    },
+    "sourceFilesWithUnityRandom": 152,
+    "sourceNewSystemRandomCount": 0,
+    "s0Action": "UnityEngine.Random.InitState(Hash(boundaryOrdinal, targetSceneName, entryGateName))"
+  },
+  "specialVerifications": {
+    "objectPool": {
+      "revertToStartStateCallers": [
+        "../hkapi/Assembly-CSharp/CheatManager.cs:366"
+      ],
+      "recycleAllNoArgCallers": [
+        "../hkapi/Assembly-CSharp/ObjectPool.cs:112",
+        "../hkapi/Assembly-CSharp/QuitToMenu.cs:34"
+      ],
+      "normalTransitionCleanup": [
+        "GameManager.DestroyPersonalPools invoked in SceneLoad.WillActivate (../hkapi/Assembly-CSharp/GameManager.cs:470-473)",
+        "PersonalObjectPool.DestroyMyPooledObjects (../hkapi/Assembly-CSharp/PersonalObjectPool.cs:44-54)",
+        "AutoRecycleSelf(AfterEvent.LEVEL_UNLOAD).RecycleSelf (../hkapi/Assembly-CSharp/AutoRecycleSelf.cs:22-25,83-85)"
+      ],
+      "liveObservation": "history-a boundaries 1,3,4,6,7 had spawnedTotalCount=0; b02 and b05 had spawnedTotalCount=1 (Run Effects(Clone) pending WillActivate). Carry of inactive GlobalPool children is NOT required."
+    },
+    "cameraRepositioning": {
+      "repositionedOnEntry": true,
+      "carryRequired": false,
+      "evidence": [
+        "CameraController.OnLevelUnload releases all lock zones (../hkapi/Assembly-CSharp/CameraController.cs:741-751)",
+        "CameraController.SceneInit & CameraTarget.SceneInit reset mode, velocity, lock bounds, startLockedTimer (CameraController.cs:24-66, CameraTarget.cs:19-42)",
+        "HeroController.heroInPosition -> CameraController.DoPositionToHero -> CameraTarget.PositionToStart snaps camera to hero & scene bounds (CameraController.cs:516-600, CameraTarget.cs:505-595)"
+      ]
+    },
+    "dreamGateSameSceneReload": {
+      "reloadsScene": true,
+      "validS0Boundary": true,
+      "evidence": "../hkapi/Assembly-CSharp/GameManager.cs:613-627 (WarpToDreamGate unconditionally invokes BeginSceneTransition with dreamGateScene, entryGate='dreamGate', Visualization=Dream)."
+    }
+  },
+  "carryCategories": [
+    {
+      "id": "C1",
+      "name": "PlayerData",
+      "decision": "carry",
+      "details": "Full PlayerData via game built-in JSON serialization (JsonUtility)."
+    },
+    {
+      "id": "C2",
+      "name": "SceneData",
+      "decision": "carry",
+      "details": "Full SceneData (persistentBoolItems, persistentIntItems, geoRocks) via game built-in JSON serialization."
+    },
+    {
+      "id": "C3",
+      "name": "BossSequenceController",
+      "decision": "carry",
+      "fields": [
+        "currentData (bindings, timer, knightDamaged, playerData, previousCompletion, previousEquippedCharms, wasOvercharmed, bossSequenceName)",
+        "currentSequence (asset name rebind)",
+        "bossIndex",
+        "WasCompleted"
+      ],
+      "evidence": "../hkapi/Assembly-CSharp/BossSequenceController.cs:455,498-549; history-a b04 static dump"
+    },
+    {
+      "id": "C4",
+      "name": "StaticVariableList.variables",
+      "decision": "carry",
+      "evidence": "../hkapi/Assembly-CSharp/StaticVariableList.cs:6-46; cleared only on ReturnToMainMenu (GameManager.cs:3054)"
+    },
+    {
+      "id": "C5",
+      "name": "PlayMakerGlobals",
+      "decision": "trimmed",
+      "totalObservedVariables": 32,
+      "ddolAutoBoundObjectVarsExcluded": 27,
+      "remainingVariables": [
+        "bool:Is HUD Out",
+        "go:Orb Target",
+        "go:MenuStagMap",
+        "go:Geo Counter",
+        "go:Track 1",
+        "go:Orbit Shield (re-bound cleanly when Orbit Shield respawns on LEVEL LOADED)"
+      ],
+      "evidence": "history-c b02 full globalVars dump & diff-historyA-vs-historyC-b02.json"
+    },
+    {
+      "id": "C6",
+      "name": "TransitionInfo",
+      "decision": "carry",
+      "fields": [
+        "SceneName",
+        "EntryGateName",
+        "HeroLeaveDirection",
+        "Visualization",
+        "EntryDelay",
+        "AlwaysUnloadUnusedAssets",
+        "PreventCameraFadeOut",
+        "IsFirstLevelForPlayer"
+      ],
+      "evidence": "../hkapi/Assembly-CSharp/GameManager.cs:399-468,613-627"
+    },
+    {
+      "id": "C7",
+      "name": "HeroController",
+      "decision": "trimmed_carry_and_normalize",
+      "carryFields": [
+        { "field": "cState.facingRight", "source": "HeroControllerStates.cs:60", "note": "Unreset on GatePosition.top and non-forced bottom gates (HeroController.cs:1805-1906)" },
+        { "field": "exitedSuperDashing", "source": "HeroController.cs:5981", "note": "Set at GameManager.cs:429, consumed at EnterScene" },
+        { "field": "exitedQuake", "source": "HeroController.cs:5984", "note": "Set at GameManager.cs:433, consumed at EnterScene top gate" },
+        { "field": "enterWithoutInput", "source": "HeroController.cs:5855", "note": "Consumed in FinishedEnteringScene (3146-3149)" },
+        { "field": "attack_cooldown", "source": "HeroController.cs:5498", "note": "Carry if > 0" },
+        { "field": "dashCooldownTimer", "source": "HeroController.cs:5543", "note": "Carry if > 0" },
+        { "field": "shadowDashTimer", "source": "HeroController.cs:5540", "note": "Carry if > 0" },
+        { "field": "parryInvulnTimer", "source": "HeroController.cs:5567", "note": "Carry if > 0" },
+        { "field": "preventCastByDialogueEndTimer", "source": "HeroController.cs:6180", "note": "Carry if > 0; clamp expired <= 0" },
+        { "field": "hitsSinceShielded", "source": "HeroController.cs:5867", "note": "Carefree Melody hit counter" },
+        { "field": "wieldingLantern", "source": "HeroController.cs:5915", "note": "Lantern toggle across dark rooms" },
+        { "field": "takeNoDamage", "source": "HeroController.cs:5999", "note": "Unreset flag" },
+        { "field": "blockerFix", "source": "HeroController.cs:6014", "note": "Set once in SceneInit" }
+      ],
+      "recomputeViaCharmUpdateOnRestore": [
+        "carefreeShieldEquipped (HeroController.cs:5082-5089, 5864)",
+        "joniBeam (HeroController.cs:5076, 6002)",
+        "nailChargeTime (HeroController.cs:5055-5060, 5996)"
+      ],
+      "s0NormalizeFields": [
+        { "field": "OnTakenDamage", "source": "HeroController.cs:40 & BossSceneController.cs:112,180,209", "action": "Remove stale delegates targeting destroyed BossSceneController.SetKnightDamaged discovered in Pair 2 diff." },
+        { "field": "cState.altAttack & altAttackTime", "source": "HeroControllerStates.cs:123 & HeroController.cs:673,837,5504", "action": "Normalize to false/0f (or relative remaining window) because altAttackTime stores absolute Time.timeSinceLevelLoad." },
+        { "field": "cState.invulnerable", "source": "HeroControllerStates.cs:162", "action": "Normalize to false at boundary if no transition invuln coroutine active." },
+        { "field": "cState.nailCharging", "source": "HeroControllerStates.cs:75", "action": "Normalize to false (EnterScene only calls ResetAttacksDash)." }
+      ],
+      "excludedResetByEnterScene": [
+        "transform.position", "rb2d.velocity", "transition_vel", "airDashed", "doubleJumped",
+        "attack_time", "cState.attacking", "cState.upAttacking", "cState.downAttacking",
+        "hardLandingTimer", "wallLocked", "nailChargeTimer", "positionHistory[0..1]", "transitionState",
+        "recoilVector", "attackDuration", "attackQueueSteps"
+      ]
+    },
+    {
+      "id": "C8",
+      "name": "KnightFSMs",
+      "decision": "carry_minimal_and_normalize_spore",
+      "observedAtS0Count": 12,
+      "observedStates": {
+        "ProxyFSM": "Idle (prev: Leaving Scene)",
+        "Spell Control": "Inactive (prev: Reset Damage Mode)",
+        "Map Control": "Inactive (prev: Reset Timer)",
+        "Roar Lock": "Detect (prev: Cancel Effects)",
+        "Superdash": "Inactive (prev: Cancel)",
+        "Nail Arts": "Inactive (prev: Cancel All)",
+        "Surface Water": "Inactive (prev: Cancel All)",
+        "Dream Nail": "Inactive (prev: Cancel; normalize float:Queue Timer)",
+        "Dream Return": "Idle (prev: Check)",
+        "Spore Cooldown": "Idle (prev: Init; NOTE: lacks LEAVING SCENE transition, so carry Cooldown/Dung state or S0-reset to Idle)",
+        "Globalise": "Init (prev: Init)",
+        "Control Interpolation": "Idle or Check Pause (Wait 0.1s polling idle)"
+      },
+      "d4IdleVerification": "Confirmed all 12 Knight FSMs are idle/polling at S0 boundaries (b02, b04, b07)."
+    },
+    {
+      "id": "C9",
+      "name": "CharmMinions",
+      "decision": "d2_option_b_carry_grimmchild_and_hatchling_count",
+      "findings": [
+        {
+          "minion": "Weaverling (Charm 39)",
+          "hasAutoRecycleLevelUnload": true,
+          "fsmBehavior": "Charm Effects/Weaverling Control respawns 3 fresh instances on LEVEL LOADED (Charm_Effects__Weaverling_Control__fsm_1076.md:321-336)",
+          "liveEvidence": "history-c frame 2261 had 3 DDOL Weaverling roots; frame 2266 (target-finished) recycled all 3 back to GlobalPool (DDOL roots 16 -> 13).",
+          "recommendation": "S0 reset (no carry)"
+        },
+        {
+          "minion": "Orbit Shield / Dreamshield (Charm 38)",
+          "hasAutoRecycleLevelUnload": true,
+          "fsmBehavior": "Charm Effects/Spawn Orbit Shield respawns fresh on LEVEL LOADED (Charm_Effects__Spawn_Orbit_Shield__fsm_1082.md:100-150,247)",
+          "liveEvidence": "history-c b02 AutoRecycleSelf.afterEvent = LEVEL_UNLOAD; recycles at WillActivate and respawns by target-finished.",
+          "recommendation": "S0 reset (no carry)"
+        },
+        {
+          "minion": "Knight Hatchling / Glowing Womb (Charm 22)",
+          "hasAutoRecycleLevelUnload": false,
+          "fsmBehavior": "Charm Effects/Hatchling Spawn counts live hatchlings on LEAVING SCENE into int Hatchlings, then respawns int Hatchlings with QUICK SPAWN on LEVEL LOADED (Charm_Effects__Hatchling_Spawn__fsm_972.md:330-457,701-702).",
+          "recommendation": "Carry only Hatchling Spawn FSM int Hatchlings (& bool Dreamgate Entry); do not carry Hatchling GameObjects."
+        },
+        {
+          "minion": "Grimmchild (Charm 40)",
+          "hasAutoRecycleLevelUnload": false,
+          "fsmBehavior": "Charm Effects/Spawn Grimmchild skips spawning if FindGameObject('Grimmchild') is not null (Charm_Effects__Spawn_Grimmchild__fsm_1056.md:135-160,551).",
+          "liveEvidence": "history-c frame 2259 (before-unload), 2261 (S0), and 2266 (target-finished) all retained live ddol/Grimmchild(Clone) with Attack Timer, ObjectBounce.velocity, and position.",
+          "decision": "D2 Option B approved by @coordinator: Preserve vanilla behavior; when ddol/Grimmchild(Clone) exists at source S0, carry Transform (localPosition/localRotation/localScale), Rigidbody2D (position/velocity), ObjectBounce (velocity/lastPos/speed/stepCounter/bouncing), Control FSM state + runtime variables/timers; on restore spawn from Spawn Grimmchild prefab or reuse existing instance (and recycle extra target instance if source had none).",
+          "carryFields": [
+            "exists / activeSelf",
+            "Transform: localPosition, localRotation, localScale",
+            "Rigidbody2D: position, velocity",
+            "ObjectBounce: velocity, lastPos, speed, stepCounter, bouncing",
+            "PlayMakerFSM(Control): activeStateName, previousStateName, runtime bool/float/int/string/vec3 variables (notably Attack Timer, Away Timer, Away, Not Away, Dream Appear, Scene Appear, Speed, Distance, Hero Scale, Offset, Self Pos, Absorb Pos, Damage, Grimm Level), Wait.timer / GrimmChildFly.timer"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C10",
+      "name": "PreviousFrameInput",
+      "decision": "carry_tas_input_only",
+      "details": "Carry TAS virtual controller previous-frame state for WasPressed/WasReleased; ignore InControl UpdateTick/GUID/lastVectorPressedTime."
+    },
+    {
+      "id": "C11",
+      "name": "TimeRelated",
+      "decision": "trimmed",
+      "details": "Carry only Time.timeScale / GameManager.timeSlowedCount if active (normally 1.0 / 0 at boundary); ignore sessionPlayTimer and Unity Time.* counters."
+    },
+    {
+      "id": "C12",
+      "name": "TASControlPlane",
+      "decision": "carry",
+      "details": "Movie frame, ClockBridge frame state, and input queue."
+    }
+  ],
+  "dualHistoryDiffEvidence": {
+    "artifactRoot": "artifacts/scene-checkpoints/p3b/lean-s0-probe-20261114-143044",
+    "runs": [
+      {
+        "name": "history-a",
+        "description": "Original P3B movie to frame 5800",
+        "boundariesCaptured": [1, 2, 3, 4, 5, 6, 7],
+        "exitCode": 0,
+        "hygiene": "saves=31 matched, mods=restored, processes=clean, signature=Valid"
+      },
+      {
+        "name": "history-b",
+        "description": "P3B movie with +120 menu idle frames before play",
+        "boundariesCaptured": [1, 2, 3, 4],
+        "exitCode": 1,
+        "note": "Boundaries 1-4 completed cleanly; post-boundary run faulted at movie=4136 (domain=director reason=40) before EndFrame=4220.",
+        "hygiene": "saves=31 matched, mods=restored, processes=clean, signature=Valid"
+      },
+      {
+        "name": "history-c",
+        "description": "P3B movie with minion charms [22, 38, 39, 40] equipped in user4.dat",
+        "boundariesCaptured": [1, 2],
+        "exitCode": 0,
+        "hygiene": "saves=31 matched, mods=restored, processes=clean, signature=Valid"
+      }
+    ],
+    "diffReports": [
+      {
+        "file": "diff-pair1-b02.json",
+        "comparison": "history-a b02 vs history-b b02",
+        "totalDiffs": 61,
+        "summary": "Only wall/frame clocks, audio times, InControl ticks, HUD transition Wait timers, sandbox saveDirPath, and sub-1e-5 camera/particle residuals; 0 gameplay misses."
+      },
+      {
+        "file": "diff-pair1-b04.json",
+        "comparison": "history-a b04 vs history-b b04",
+        "totalDiffs": 61,
+        "summary": "Identical RNG state and gameplay fields; only time-based Wait/InControl/audio/camera/saveDirPath diffs."
+      },
+      {
+        "file": "diff-pair2-b04-vs-b07.json",
+        "comparison": "history-a b04 vs history-a b07 (before vs after Crystal Guardian 2 fight & Atrium return)",
+        "totalDiffs": 4708,
+        "summary": "Exposed HeroController.OnTakenDamage stale BossSceneController delegate and altAttackTime=92.836 for S0 normalization; rest classified cleanly into Carry (PlayerData/HeroController timers) vs Ignore (GlobalPool 2697, HUD/Vignette/Particles 1367, FsmEvent LUTs 348, NailSlash visuals 197)."
+      },
+      {
+        "file": "diff-historyA-vs-historyC-b02.json",
+        "comparison": "history-a b02 vs history-c b02",
+        "totalDiffs": 6197,
+        "summary": "Confirmed Grimmchild, Orbit Shield, Weaverling, and globalVars.go:Orbit Shield behavior at S0."
+      }
+    ]
+  }
+}

@@ -261,6 +261,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             var start = ResidentNativeMemory.WallMilliseconds();
             self.Inventory("native-empty-boundary", movie, native);
             LoadingBoundaryInventory.Capture(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native);
+            S0SemanticProbe.CaptureIfEnabled(
+                self.ordinal,
+                self.sourceName,
+                self.transition.TargetSceneName,
+                self.checkpointLoadInfo?.EntryGateName ?? "",
+                self.checkpointLoadInfo?.HeroLeaveDirection?.ToString(),
+                self.checkpointLoadInfo?.Visualization.ToString() ?? "",
+                movie,
+                native);
             if (session.TryParkResidentImport(native, self.ordinal, self.sourceName, self.transition.TargetSceneName))
                 return true; // The iterator still cannot advance. Restore enters the same Canon inside its measured transaction.
             if (!session.EnterResidentBoundary(self.ordinal, movie, native)) {

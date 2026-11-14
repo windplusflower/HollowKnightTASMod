@@ -28,6 +28,8 @@ __pycache__/
 !/docs/AI-CONTROL.en.md
 !/docs/BUILD.en.md
 !/docs/HELPER-MOD-COMPATIBILITY.md
+!/docs/lean-s0/
+!/docs/lean-s0/*
 /packaging/*.md
 /scripts/*/README.md
 
