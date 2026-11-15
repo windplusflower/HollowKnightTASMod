@@ -41,6 +41,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private string leanS0UploadExpectedHash = string.Empty;
         private LeanS0Packet? leanS0TargetPacket;
         private LeanS0TargetJob? leanS0TargetJob;
+        private long leanS0TargetResumeNativeFrame = -1;
         private LeanS0K3TraceWriter? leanS0K3Trace;
         private long leanS0K3StartMovie = -1;
         private long leanS0K3EndMovie = -1;
@@ -72,12 +73,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             out bool parkedForTransfer)
         {
             parkedForTransfer = false;
-            if (!LeanS0Mode.Enabled)
+            bool serialProfile = NativeExecutionProfile.UsesSerialScenes(NativeExecutionProfile.SelectedProfileId);
+            if (!serialProfile && !LeanS0Mode.Enabled)
             {
                 return false;
             }
 
-            if (LeanS0Mode.IsTargetRole && leanS0TargetArmed && !leanS0TargetParked)
+            if (leanS0TargetArmed && !leanS0TargetParked)
             {
                 if (!string.Equals(targetScene, leanS0ExpectedTargetScene, StringComparison.Ordinal))
                 {
@@ -137,18 +139,13 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private bool ShouldPauseBeforeNextNativeFrameLeanS0(long completed)
         {
-            if (!LeanS0Mode.Enabled)
-            {
-                return false;
-            }
-
             return (leanS0SourceParked && mode == "LeanS0SourcePaused")
                 || (leanS0TargetParked && mode == "LeanS0TargetPaused");
         }
 
         private void SyncLeanS0RandomSeedHandleIfNeeded(int sceneHandle, string sceneName)
         {
-            if (!LeanS0Mode.Enabled || !leanS0RandomSeededForTargetScene)
+            if (!leanS0RandomSeededForTargetScene)
             {
                 return;
             }
@@ -176,15 +173,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
         }
 
-        private void CaptureLeanS0SourceAtBoundary(
+        private LeanS0CaptureContext BuildLeanS0CaptureContext(
             int ordinal,
             string sourceScene,
             string targetScene,
             GameManager.SceneLoadInfo? loadInfo,
-            long movie,
             long native)
         {
-            var sw = Stopwatch.StartNew();
             MovieV2Document sourceMovie = mode == "Recording"
                 ? journal!.Freeze(recordingHeader!, movieFrame)
                 : replayMovie ?? throw new InvalidOperationException("Source replay Movie is absent at S0.");
@@ -193,7 +188,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             string prefixSha256 = Sha256Utility.ComputeHex(Encoding.UTF8.GetBytes(prefixCanonical));
             var receipt = lastLeanS0GateReceipt ?? throw new InvalidOperationException("LeanS0Gate receipt is missing at capture.");
 
-            var ctx = new LeanS0CaptureContext
+            return new LeanS0CaptureContext
             {
                 Ordinal = ordinal,
                 SourceSceneName = sourceScene,
@@ -227,6 +222,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                 ExportClockObserverBytes = () => (byte[])CheckpointClockMethod("ExportCheckpointClockObserver").Invoke(null, null)!,
                 MoviePrefixSha256 = prefixSha256
             };
+        }
+
+        private void CaptureLeanS0SourceAtBoundary(
+            int ordinal,
+            string sourceScene,
+            string targetScene,
+            GameManager.SceneLoadInfo? loadInfo,
+            long movie,
+            long native)
+        {
+            var sw = Stopwatch.StartNew();
+            LeanS0CaptureContext ctx = BuildLeanS0CaptureContext(ordinal, sourceScene, targetScene, loadInfo, native);
+            var receipt = lastLeanS0GateReceipt!;
 
             input.SetNativeFrameActive(false);
             LeanS0Packet packet = LeanS0SnapshotRuntime.Capture(ctx);
@@ -410,6 +418,94 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
         }
 
+        private static int ExtractSaveSlotFromPlayerDataJson(string playerDataJson)
+        {
+            if (string.IsNullOrWhiteSpace(playerDataJson))
+            {
+                throw new InvalidDataException("LeanS0 PlayerData JSON is missing.");
+            }
+            var parsed = JsonConvert.DeserializeObject<Dictionary<string, object>>(playerDataJson);
+            if (parsed == null || !parsed.TryGetValue("profileID", out var rawSlot) || rawSlot == null)
+            {
+                throw new InvalidDataException("LeanS0 PlayerData JSON is missing profileID.");
+            }
+            int slot = Convert.ToInt32(rawSlot, CultureInfo.InvariantCulture);
+            if (slot < 1 || slot > 4)
+            {
+                throw new InvalidDataException("LeanS0 profileID is outside valid save slots 1..4: " + slot);
+            }
+            return slot;
+        }
+
+        private void BeginLeanS0TargetSaveLoad(LeanS0Packet packet, long frame, int slot)
+        {
+            leanS0TargetPacket = packet;
+            leanS0TargetResumeNativeFrame = -1;
+            leanS0TargetJob = new LeanS0TargetJob(frame);
+            mode = "LeanS0TargetLoading";
+            input.SetNativeFrameActive(false);
+            frameInputEnabled = false;
+            input.SetFrameInputEnabled(false);
+            mouse.SetFrameInputEnabled(false);
+            AttachLeanS0TargetHooks();
+            (GameManager.instance ?? throw new InvalidOperationException("GameManager is null.")).LoadGameFromUI(slot);
+        }
+
+        private LeanS0GateReceipt ApplyLeanS0PacketAtTargetS0(LeanS0Packet packet, long currentNativeFrame)
+        {
+            LeanS0SnapshotRuntime.ApplyAtTargetS0(
+                packet,
+                currentNativeFrame,
+                clock,
+                input,
+                mouse,
+                replayMovie ?? throw new InvalidOperationException("Target replayMovie is null."),
+                (bytes, cursor) => CheckpointClockMethod("ImportCheckpointRandomState").Invoke(null, new object[] { bytes, cursor }),
+                (bytes, cursor) => CheckpointClockMethod("ImportCheckpointClockObserver").Invoke(null, new object[] { bytes, cursor }),
+                out CanonicalInputEpoch restoredOrigin);
+
+            // Execute the identical S0Gate after restoring state so target & source share the exact same S0 invariant.
+            LeanS0GateReceipt targetReceipt = LeanS0Gate.Execute(
+                packet.BoundaryOrdinal,
+                packet.TargetSceneName,
+                packet.EntryGateName,
+                applyUnityRuntime: true,
+                rngDigestReader: ReadCurrentRngSha256Safe);
+
+            if (targetReceipt.Seed != packet.RngSeed
+                || !string.Equals(targetReceipt.RngSha256, packet.RngSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"LeanS0 target RNG seed/digest mismatch after S0Gate: source=({packet.RngSeed},{packet.RngSha256}) target=({targetReceipt.Seed},{targetReceipt.RngSha256}).");
+            }
+
+            var c12 = packet.C12_ControlPlane;
+            movieFrame = c12.MovieFrame;
+            skippedLoadFrames = c12.SkippedLoadingFrames;
+            expectedNativeStart = c12.NativeFrame;
+            timingRunIndex = c12.TimingRunIndex;
+            timingRunStart = c12.TimingRunStart;
+            activeFrameRate = c12.ActiveFrameRate;
+            recordingFrameRate = c12.RecordingFrameRate;
+            titleReadySeen = c12.TitleReadySeen;
+            firstLevelActivationPending = c12.FirstLevelActivationPending;
+            randomSeedSceneName = c12.RandomSeedScene;
+            randomSeedSceneHandle = -1;
+            leanS0RandomSeededForTargetScene = true;
+            lastGameUpdateNativeFrame = c12.LastGameUpdateNativeFrame;
+            gameUpdateDeltaSeconds = c12.GameUpdateDeltaSeconds;
+            gameUpdateTimeSeconds = c12.GameUpdateTimeSeconds;
+            executedMovieSeconds = c12.ExecutedMovieSeconds;
+            movieInputNativeOrigin = c12.MovieInputNativeOrigin;
+            movieInputControlOrigin = restoredOrigin;
+            frameInputEnabled = false;
+            lastLeanS0GateReceipt = targetReceipt;
+            leanS0ParkedOrdinal = packet.BoundaryOrdinal;
+            leanS0TargetParked = false;
+            LoadingSerialSceneProbe.SetLeanS0Ordinal(packet.BoundaryOrdinal);
+            return targetReceipt;
+        }
+
         private Dictionary<string, string> LeanS0Command(IReadOnlyDictionary<string, string> fields)
         {
             if (!LeanS0Mode.Enabled)
@@ -574,18 +670,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                         }
 
                         LeanS0Packet packet = LeanS0PacketCodec.Decode(rawBytes);
-                        leanS0TargetPacket = packet;
                         leanS0ExportedBytes = rawBytes;
                         leanS0ExportedHash = Sha256Utility.ComputeHex(rawBytes);
-
-                        leanS0TargetJob = new LeanS0TargetJob(frame);
-                        mode = "LeanS0TargetLoading";
-                        input.SetNativeFrameActive(false);
-                        frameInputEnabled = false;
-                        input.SetFrameInputEnabled(false);
-                        mouse.SetFrameInputEnabled(false);
-                        AttachLeanS0TargetHooks();
-                        (GameManager.instance ?? throw new InvalidOperationException("GameManager is null.")).LoadGameFromUI(slot);
+                        BeginLeanS0TargetSaveLoad(packet, frame, slot);
 
                         reply["status"] = "LeanS0TargetLoadingStarted";
                         reply["targetScene"] = packet.TargetSceneName;
@@ -614,55 +701,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                         long endMovie = ParseLeanS0EndMovie(Get("endMovie"));
                         var sw = Stopwatch.StartNew();
 
-                        LeanS0SnapshotRuntime.ApplyAtTargetS0(
-                            packet,
-                            frame,
-                            clock,
-                            input,
-                            mouse,
-                            replayMovie ?? throw new InvalidOperationException("Target replayMovie is null."),
-                            (bytes, cursor) => CheckpointClockMethod("ImportCheckpointRandomState").Invoke(null, new object[] { bytes, cursor }),
-                            (bytes, cursor) => CheckpointClockMethod("ImportCheckpointClockObserver").Invoke(null, new object[] { bytes, cursor }),
-                            out CanonicalInputEpoch restoredOrigin);
-
-                        // Execute the identical S0Gate after restoring state so target & source share the exact same S0 invariant.
-                        LeanS0GateReceipt targetReceipt = LeanS0Gate.Execute(
-                            packet.BoundaryOrdinal,
-                            packet.TargetSceneName,
-                            packet.EntryGateName,
-                            applyUnityRuntime: true,
-                            rngDigestReader: ReadCurrentRngSha256Safe);
-
-                        if (targetReceipt.Seed != packet.RngSeed
-                            || !string.Equals(targetReceipt.RngSha256, packet.RngSha256, StringComparison.Ordinal))
-                        {
-                            throw new InvalidDataException(
-                                $"LeanS0 target RNG seed/digest mismatch after S0Gate: source=({packet.RngSeed},{packet.RngSha256}) target=({targetReceipt.Seed},{targetReceipt.RngSha256}).");
-                        }
-
+                        LeanS0GateReceipt targetReceipt = ApplyLeanS0PacketAtTargetS0(packet, frame);
                         var c12 = packet.C12_ControlPlane;
-                        movieFrame = c12.MovieFrame;
-                        skippedLoadFrames = c12.SkippedLoadingFrames;
-                        expectedNativeStart = c12.NativeFrame;
-                        timingRunIndex = c12.TimingRunIndex;
-                        timingRunStart = c12.TimingRunStart;
-                        activeFrameRate = c12.ActiveFrameRate;
-                        recordingFrameRate = c12.RecordingFrameRate;
-                        titleReadySeen = c12.TitleReadySeen;
-                        firstLevelActivationPending = c12.FirstLevelActivationPending;
-                        randomSeedSceneName = c12.RandomSeedScene;
-                        randomSeedSceneHandle = -1;
-                        leanS0RandomSeededForTargetScene = true;
-                        lastGameUpdateNativeFrame = c12.LastGameUpdateNativeFrame;
-                        gameUpdateDeltaSeconds = c12.GameUpdateDeltaSeconds;
-                        gameUpdateTimeSeconds = c12.GameUpdateTimeSeconds;
-                        executedMovieSeconds = c12.ExecutedMovieSeconds;
-                        movieInputNativeOrigin = c12.MovieInputNativeOrigin;
-                        movieInputControlOrigin = restoredOrigin;
-                        frameInputEnabled = false;
-                        lastLeanS0GateReceipt = targetReceipt;
-                        leanS0ParkedOrdinal = packet.BoundaryOrdinal;
-                        LoadingSerialSceneProbe.SetLeanS0Ordinal(packet.BoundaryOrdinal);
 
                         if (endMovie <= movieFrame || endMovie > replayLength)
                         {

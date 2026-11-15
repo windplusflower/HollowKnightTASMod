@@ -1,10 +1,28 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace HollowKnightTAS.ClockPayload
 {
     public static partial class ClockController
     {
+        [DllImport("HollowKnightTAS.ClockBridge.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int HktasClockBridge_RequireResidentBoundary(ulong token, ulong expectedFrame);
+        [DllImport("HollowKnightTAS.ClockBridge.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int HktasClockBridge_RequireResidentWritableBoundary(ulong token, ulong expectedFrame);
+
+        internal static void RequireResidentClockBoundary(ulong token, bool importing)
+        {
+            if (token == 0 || !fullRunRenderIsolationEnabled || fullRunRenderEntered
+                || GetCurrentThreadId() != (uint)StartupHookThreadId)
+                throw new InvalidOperationException("Resident clock operation is outside its owned native boundary.");
+            var frame = HktasClockBridge_GetCompletedPlayerLoops();
+            if (HktasClockBridge_RequireResidentBoundary(token, frame) != 1
+                || importing && HktasClockBridge_RequireResidentWritableBoundary(token, frame) != 1)
+                throw new InvalidOperationException("Native resident epoch does not admit this clock operation.");
+            RequireClockObserverHealth(importing);
+        }
+
         private static readonly ResidentRandomProducerGate residentRandomProducerGate = new ResidentRandomProducerGate(
             RequireResidentRandomProducerThread, RequireResidentRandomProducerBoundary);
 

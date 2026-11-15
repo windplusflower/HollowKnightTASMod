@@ -15,6 +15,7 @@ namespace HollowKnightTAS.Companion.ViewModels
         // Lifetime follows Studio, not RuntimeSessionClient or a game-process registration.
         public HollowKnightTAS.Core.SceneCheckpoints.SceneCheckpointStore SceneCheckpoints { get; } = new();
         public SceneCheckpointClient CreateSceneCheckpointClient(RuntimeSessionClient runtime) => new(SceneCheckpoints, runtime);
+        public static string FormatBranchId(int leafId) => leafId.ToString("x32");
         private StudioTimelineStore? worldlines;
         private TimelineTree? freshTimeline = new TimelineTree { Name = "当前空序列（未存档）" };
         private TimelineTree? selectedTimelineTree;
@@ -234,11 +235,13 @@ namespace HollowKnightTAS.Companion.ViewModels
             var initialSaves = GetTimelineInitialSaves(tree);
             var changedTree = activeDraftTree != tree.Id;
             await fullRunMovies.PauseForDocumentChangeAsync(CancellationToken.None);
-            var scope = SceneCheckpoints.ActivateBranch(tree.Id, leaf.Id.ToString());
+
+            var scope = SceneCheckpoints.ActivateBranch(tree.Id, FormatBranchId(leaf.Id));
             var available = SceneCheckpoints.Catalog(scope)
                 .Where(h => h.RestoreQualified && h.ResumeMovieFrame <= node.Frame)
                 .OrderByDescending(h => h.ResumeMovieFrame)
                 .FirstOrDefault();
+
             // Keep the chosen world's future inputs even when restoring an ancestor.
             await RestartDraftAtAsync(node.Frame, leaf.Movie, switchSequence: true, sourceSaves: initialSaves);
             if (changedTree) ResetSequenceSaveTarget(null);
@@ -276,7 +279,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                 var removedList = tree.Subtree(node.Id);
                 foreach (var removedId in removedList)
                 {
-                    try { SceneCheckpoints.DeleteBranch(tree.Id, removedId.ToString()); } catch { }
+                    try { SceneCheckpoints.DeleteBranch(tree.Id, FormatBranchId(removedId)); } catch { }
                 }
                 RefreshWorldlines(tree.Id); TimelineTreeStatus = $"已删除 {count} 个存档节点；其他世界线保留。";
             }

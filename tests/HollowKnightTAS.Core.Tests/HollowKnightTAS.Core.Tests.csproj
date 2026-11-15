@@ -30,16 +30,6 @@
     <Reference Include="MonoMod.RuntimeDetour"><HintPath>$(HKManagedDir)\MonoMod.RuntimeDetour.dll</HintPath></Reference>
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CheckpointDataCodec.cs" Link="FullRun\CheckpointDataCodec.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryGraphCodec.cs" Link="FullRun\CanonicalCarryGraphCodec.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\ResidentGraphPolicy.cs" Link="FullRun\ResidentGraphPolicy.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\ResidentManagedTypeCatalog.cs" Link="FullRun\ResidentManagedTypeCatalog.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\ResidentGuiValues.cs" Link="FullRun\ResidentGuiValues.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\ResidentPackedFieldLayout.cs" Link="FullRun\ResidentPackedFieldLayout.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\ResidentValueAccess*.cs" Link="FullRun\%(Filename)%(Extension)" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\ResidentDirectorFence.cs" Link="FullRun\ResidentDirectorFence.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\ResidentMonoGenericMetadata.cs" Link="FullRun\ResidentMonoGenericMetadata.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\ResidentStaticRoots.cs" Link="FullRun\ResidentStaticRoots.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\ResidentStaticManifestWire.cs" Link="FullRun\ResidentStaticManifestWire.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\ResidentMetadataWire.cs" Link="FullRun\ResidentMetadataWire.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalEaseCallback.cs" Link="FullRun\CanonicalEaseCallback.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalActualDRoute.cs" Link="FullRun\CanonicalActualDRoute.cs" />
 

@@ -54,8 +54,6 @@ namespace HollowKnightTAS.ClockPayload
 
         internal static void RestoreCheckpointParticleRandomState(uint[] source)
             => (particles ?? throw new InvalidOperationException("Actual particle manager is unavailable.")).RestoreCheckpoint(source);
-        internal static void RestoreResidentParticleRandomState(uint[] source, ulong token)
-            => (particles ?? throw new InvalidOperationException("Actual particle manager is unavailable.")).RestoreResident(source, token);
 
         public static void TestSessionOnline()
         {

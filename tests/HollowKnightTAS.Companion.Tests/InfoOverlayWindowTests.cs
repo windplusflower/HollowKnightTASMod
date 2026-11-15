@@ -19,8 +19,7 @@ namespace HollowKnightTAS.Companion.Tests
         [TestMethod]
         public void GeometryFollowsMovingOwnerWithoutAnyNewDataSnapshot()
         {
-            Exception? failure = null;
-            var thread = new Thread(() =>
+            WpfTestApplication.Run(() =>
             {
                 Window? owner = null; InfoOverlayWindow? overlay = null;
                 try
@@ -52,22 +51,18 @@ namespace HollowKnightTAS.Companion.Tests
                     }
                     NotifyWinEvent(0xB, ownerHandle, 0, 0); Pump(); Assert.IsFalse(overlay.IsOwnerMoving);
                 }
-                catch (Exception ex) { failure = ex; }
                 finally { overlay?.Close(); owner?.Close(); }
-            });
-            thread.SetApartmentState(ApartmentState.STA); thread.Start();
-            Assert.IsTrue(thread.Join(TimeSpan.FromSeconds(15)));
-            if (failure != null) throw new AssertFailedException("Window following failed: " + failure, failure);
+            }, TimeSpan.FromSeconds(15));
         }
         [TestMethod]
         public void OverlayRendersClampsAllAnchorsAndOnlyAcceptsMouseWhileAdjusting()
         {
-            Exception? failure = null;
-            var thread = new Thread(() =>
+            WpfTestApplication.Run(() =>
             {
+                InfoOverlayWindow? window = null;
                 try
                 {
-                    var window = new InfoOverlayWindow();
+                    window = new InfoOverlayWindow();
                     var handle = new WindowInteropHelper(window).EnsureHandle();
                     Assert.AreNotEqual(0L, GetWindowLongPtr(handle, -20).ToInt64() & 0x20L);
                     window.SetAdjusting(true);
@@ -98,13 +93,9 @@ namespace HollowKnightTAS.Companion.Tests
                     Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                     var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
                     using (var stream = File.Create(path)) encoder.Save(stream);
-                    window.Close();
                 }
-                catch (Exception ex) { failure = ex; }
-            });
-            thread.SetApartmentState(ApartmentState.STA); thread.Start();
-            Assert.IsTrue(thread.Join(TimeSpan.FromSeconds(20)));
-            if (failure != null) throw new AssertFailedException("Overlay WPF test failed: " + failure, failure);
+                finally { window?.Close(); }
+            }, TimeSpan.FromSeconds(20));
         }
         [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
         private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);

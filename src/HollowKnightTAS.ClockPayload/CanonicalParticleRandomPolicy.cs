@@ -19,7 +19,6 @@ namespace HollowKnightTAS.ClockPayload
         private readonly IntPtr managerSlot;
         private readonly IntPtr manager;
         private bool checkpointImported;
-        private ulong residentImportedToken;
         [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ReadProcessMemory(
             IntPtr process, IntPtr address, [Out] byte[] buffer, UIntPtr size, out UIntPtr read);
@@ -98,15 +97,6 @@ namespace HollowKnightTAS.ClockPayload
                 throw new InvalidOperationException("Particle random continuation requires one valid source state.");
             checkpointImported = true;
             RestoreWords(source);
-        }
-        internal void RestoreResident(uint[] source, ulong token)
-        {
-            ClockController.RequireResidentClockBoundary(token, true);
-            if (token == 0 || token <= residentImportedToken || source == null || source.Length != 4 || source.All(word => word == 0))
-                throw new InvalidOperationException("Particle continuation requires one valid resident epoch.");
-            residentImportedToken = token;
-            RestoreWords(source);
-            ClockController.RequireResidentClockBoundary(token, true);
         }
         private void RestoreWords(uint[] source)
         {

@@ -13,8 +13,7 @@ namespace HollowKnightTAS.Companion.Tests
         [TestMethod]
         public void DialogAcceptsDecimalAndRejectsExcessPrecision()
         {
-            Exception? failure = null;
-            var thread = new System.Threading.Thread(() =>
+            WpfTestApplication.Run(() =>
             {
                 FrameRateWindow? window = null;
                 try
@@ -26,6 +25,7 @@ namespace HollowKnightTAS.Companion.Tests
                     var error = (System.Windows.Controls.TextBlock)panel.Children[2];
                     var buttons = (System.Windows.Controls.StackPanel)panel.Children[3];
                     var ok = (System.Windows.Controls.Button)buttons.Children[0];
+                    Exception? dialogFailure = null;
                     window.Loaded += (_, _) => window.Dispatcher.BeginInvoke(new Action(() =>
                     {
                         try
@@ -37,18 +37,14 @@ namespace HollowKnightTAS.Companion.Tests
                             input.Text = "99.999";
                             ok.RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
                         }
-                        catch (Exception ex) { failure = ex; window.Close(); }
+                        catch (Exception ex) { dialogFailure = ex; window.Close(); }
                     }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                     Assert.IsTrue(window.ShowDialog());
+                    if (dialogFailure != null) throw new AssertFailedException(dialogFailure.ToString(), dialogFailure);
                     Assert.AreEqual("99.999", window.Value);
                 }
-                catch (Exception ex) { failure = ex; }
                 finally { window?.Close(); }
-            });
-            thread.SetApartmentState(System.Threading.ApartmentState.STA);
-            thread.Start();
-            Assert.IsTrue(thread.Join(TimeSpan.FromSeconds(15)));
-            if (failure != null) throw new AssertFailedException(failure.ToString());
+            }, TimeSpan.FromSeconds(15), loadStudioTheme: true);
         }
 
         [TestMethod]

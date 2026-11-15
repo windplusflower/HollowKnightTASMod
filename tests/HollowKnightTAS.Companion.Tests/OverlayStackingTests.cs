@@ -17,8 +17,7 @@ public sealed class OverlayStackingTests
     [DataRow(true)]
     public void RefreshAndReshowKeepGameBelowOtherWindows(bool information)
     {
-        Exception? failure = null;
-        var thread = new Thread(() =>
+        WpfTestApplication.Run(() =>
         {
             Window? game = null, studio = null, overlay = null;
             try
@@ -61,12 +60,8 @@ public sealed class OverlayStackingTests
                 AssertAbove(overlayHandle, gameHandle);
                 Assert.AreEqual(foreground, GetForegroundWindow());
             }
-            catch (Exception error) { failure = error; }
             finally { overlay?.Close(); studio?.Close(); game?.Close(); }
-        });
-        thread.SetApartmentState(ApartmentState.STA); thread.Start();
-        Assert.IsTrue(thread.Join(TimeSpan.FromSeconds(20)));
-        if (failure != null) throw new AssertFailedException("Native overlay stacking failed: " + failure, failure);
+        }, TimeSpan.FromSeconds(20));
     }
 
     private static void AssertAbove(IntPtr above, IntPtr below)

@@ -21,11 +21,9 @@ public class CustomKeyUiTests
     [TestMethod]
     public void AddPaintUndoRemoveReopenAndRenderOffline()
     {
-        Exception? failure = null;
-        var thread = new Thread(() =>
+        WpfTestApplication.Run(() =>
         {
             MainWindow? window = null;
-            Application? ownedApplication = null;
             try
             {
                 using var sessions = new SessionRegistry("custom-key-ui");
@@ -35,11 +33,6 @@ public class CustomKeyUiTests
                     MovieProtocolV2.ActionSchemaId,false,"none",0,0), new[]{new NativeFrameRun(20, Array.Empty<GameInputSample>(),new MovieSourceSpan("keys",1,1,1))});
                 vm.MovieText = new MovieV2Codec().WriteCanonical(movie);
                 vm.RefreshGridCommand.Execute(null);
-                var theme = XDocument.Load(Path.Combine(AppContext.BaseDirectory,"fixtures","studio-theme.xaml"));
-                XNamespace wpf = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
-                var resources = new XElement(wpf + "ResourceDictionary", new XAttribute(XNamespace.Xmlns + "x", "http://schemas.microsoft.com/winfx/2006/xaml"), theme.Root!.Element(wpf + "Application.Resources")!.Elements());
-                var app = Application.Current ?? (ownedApplication = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown });
-                app.Resources = (ResourceDictionary)XamlReader.Parse(resources.ToString());
                 window = new MainWindow { DataContext = vm };
                 var grid = (DataGrid)window.FindName("InputGrid");
                 vm.SelectedCustomKey = 282; vm.AddCustomKeyCommand.Execute(null);
@@ -72,11 +65,7 @@ public class CustomKeyUiTests
                 using var output = File.Create(Path.Combine(AppContext.BaseDirectory,"custom-keys-ui.png")); encoder.Save(output);
                 Assert.AreEqual(0,sessions.ConnectedCount);
             }
-            catch(Exception ex) { failure=ex; }
-            finally { if (window != null) { window.DataContext = null; window.Close(); } if (ownedApplication != null) { ownedApplication.Shutdown(); Dispatcher.CurrentDispatcher.BeginInvokeShutdown(DispatcherPriority.Background); Dispatcher.Run(); } }
-        });
-        thread.SetApartmentState(ApartmentState.STA); thread.Start();
-        Assert.IsTrue(thread.Join(TimeSpan.FromSeconds(30)),"UI test timed out.");
-        if(failure!=null) throw failure;
+            finally { if (window != null) { window.DataContext = null; window.Close(); } }
+        }, TimeSpan.FromSeconds(30), loadStudioTheme: true);
     }
 }

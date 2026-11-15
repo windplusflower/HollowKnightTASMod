@@ -124,6 +124,20 @@ namespace HollowKnightTAS.Runtime.FullRun
             return new LoadingBoundaryProbe(directory, first, end, movieFrame, nativeFrame, rngHash);
         }
 
+        private static readonly string[] NailSlashBindings = { "normalSlash", "alternateSlash", "upSlash", "downSlash", "wallSlash" };
+        private static readonly FieldInfo[] NailSlashScalarFields = CheckpointScalarFields.Declared(typeof(NailSlash))
+            .Where(f => f.FieldType.IsPrimitive || f.FieldType.IsEnum || f.FieldType == typeof(string) || f.FieldType == typeof(Vector3)).ToArray();
+        private static string NailSlashScalarDigest(HeroController hero)
+        {
+            var values = NailSlashBindings.Select(binding =>
+            {
+                var slash = (NailSlash?)typeof(HeroController).GetField(binding)?.GetValue(hero);
+                return slash == null ? binding + ":missing" : binding + ":" + string.Join(";",
+                    CheckpointScalarFields.Capture(slash, NailSlashScalarFields).Select(pair => pair.Key + "=" + pair.Value));
+            });
+            return HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(System.Text.Encoding.UTF8.GetBytes(string.Join("|", values)));
+        }
+
         public void Sample(string phase, string boundary)
         {
             if (sealedTrace || !InWindow(movieFrame())) return;
@@ -165,7 +179,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Add("heroBodyX", values.X);
                     Add("heroBodyY", values.Y);
                     Add("heroState", hero.hero_state);
-                    Add("nailSlashes", CheckpointNailSlashState.ScalarDigest(hero));
+                    Add("nailSlashes", NailSlashScalarDigest(hero));
                     if (!light) Add("heroFlags", HashFields(hero.cState));
                     if (Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_FIELDS") == "hero")
                     {

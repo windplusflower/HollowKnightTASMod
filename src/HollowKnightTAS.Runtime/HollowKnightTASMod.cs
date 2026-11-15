@@ -55,17 +55,6 @@ namespace HollowKnightTAS.Runtime
             return Version;
         }
 
-        internal bool OwnsResidentSession(RuntimeFullRunSession session)
-            => ReferenceEquals(fullRunSession, session) && modStartup != null && protectedSaves != null;
-
-        internal ModStartupCompatibility RequireResidentStartup(RuntimeFullRunSession session)
-        {
-            if (!OwnsResidentSession(session))
-                throw new InvalidOperationException("Resident boundary is not owned by this active protected Mod session.");
-            protectedSaves!.AssertActive();
-            return modStartup!;
-        }
-
         public override void Initialize(
             Dictionary<string, Dictionary<string, GameObject>> preloadedObjects)
         {

@@ -22,7 +22,6 @@ namespace HollowKnightTAS.Companion.Tests
         [TestMethod]
         public void AuthoringThemeUsesLightTextOnDarkPanels()
         {
-            Exception? failure = null;
             var languagePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HollowKnightTAS", "studio-language.txt");
             var originalLanguage = File.Exists(languagePath) ? File.ReadAllBytes(languagePath) : null;
             var languageIndex = UiText.Current.LanguageIndex;
@@ -31,23 +30,15 @@ namespace HollowKnightTAS.Companion.Tests
             var originalInfoPath = infoPathProperty.GetValue(null);
             var infoTestPath = Path.Combine(AppContext.BaseDirectory, "info-theme-" + Guid.NewGuid().ToString("N") + ".json");
             infoPathProperty.SetValue(null, infoTestPath);
-            var thread = new Thread(() =>
+            WpfTestApplication.Run(() =>
             {
+                MainWindow? window = null;
                 try
                 {
                     UiText.Current.LanguageIndex = 0;
                     // Reserve space for the native window frame at the 900x600 minimum.
                     const double contentWidth = 880;
                     const double contentHeight = 560;
-                    // Use the production theme, but never instantiate App: its dispatcher
-                    // startup acquires the real single-instance lock and launches services.
-                    var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-                    var theme = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "fixtures", "studio-theme.xaml"));
-                    XNamespace wpf = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
-                    var resources = new XElement(wpf + "ResourceDictionary",
-                        new XAttribute(XNamespace.Xmlns + "x", "http://schemas.microsoft.com/winfx/2006/xaml"),
-                        theme.Root!.Element(wpf + "Application.Resources")!.Elements());
-                    app.Resources = (ResourceDictionary)XamlReader.Parse(resources.ToString());
                     // No registration server or game connection is started. Local settings
                     // may be read by the VM, but no settings/save command is executed.
                     using var sessions = new SessionRegistry("studio-ui-test");
@@ -58,7 +49,7 @@ namespace HollowKnightTAS.Companion.Tests
                     vm.MovieText = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
                         "fixtures", "actions-v1.canonical.hktas"));
                     vm.RefreshGridCommand.Execute(null);
-                    var window = new MainWindow();
+                    window = new MainWindow();
                     window.DataContext = vm;
                     window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                     var follow = Find<CheckBox>(window).Single(box =>
@@ -346,22 +337,17 @@ namespace HollowKnightTAS.Companion.Tests
                     vm.UndoGridCommand.Execute(null); Assert.IsNull(vm.InputRows[4].RngSeed);
                     vm.RedoGridCommand.Execute(null); Assert.AreEqual(0, vm.InputRows[4].RngSeed);
                     window.Close();
-                    app.Shutdown();
                 }
-                catch (Exception error) { failure = error; }
                 finally
                 {
+                    if (window != null) { window.DataContext = null; window.Close(); }
                     UiText.Current.LanguageIndex = languageIndex;
                     if (originalLanguage == null) File.Delete(languagePath);
                     else File.WriteAllBytes(languagePath, originalLanguage);
                     infoPathProperty.SetValue(null, originalInfoPath);
                     File.Delete(infoTestPath); File.Delete(infoTestPath + ".new");
                 }
-            });
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            Assert.IsTrue(thread.Join(TimeSpan.FromSeconds(30)), "Theme rendering timed out.");
-            if (failure != null) throw new AssertFailedException("Theme rendering failed: " + failure, failure);
+            }, TimeSpan.FromSeconds(30), loadStudioTheme: true);
         }
 
         private static void VerifyAxisDialog(MainViewModel vm)

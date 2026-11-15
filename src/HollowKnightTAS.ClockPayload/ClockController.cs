@@ -730,7 +730,9 @@ namespace HollowKnightTAS.ClockPayload
         }
 
         private static readonly bool leanS0RenderIsolationActive =
-            string.Equals(Environment.GetEnvironmentVariable("HKTAS_LEAN_S0"), "1", StringComparison.Ordinal);
+            HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesSerialScenes(
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)
+            || string.Equals(Environment.GetEnvironmentVariable("HKTAS_LEAN_S0"), "1", StringComparison.Ordinal);
 
         private static void OnFullRunDrawNoise(
             On.UnityStandardAssets.ImageEffects.FastNoise.orig_DrawNoiseQuadGrid original,

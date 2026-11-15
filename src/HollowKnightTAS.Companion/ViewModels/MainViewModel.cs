@@ -1045,6 +1045,7 @@ namespace HollowKnightTAS.Companion.ViewModels
             {
                 if (fullRunMovies?.IsPending == true)
                     await fullRunMovies.PauseForDocumentChangeAsync(CancellationToken.None);
+                await CancelAutoSceneCheckpointCaptureAsync();
                 await SaveCurrentBranchAsync(closing: true);
                 var replayProfileBefore = MovieProtocolV2.SelectedNativeProfileId;
                 if (candidate.V2Document != null)

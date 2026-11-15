@@ -228,35 +228,138 @@ namespace HollowKnightTAS.Companion.ViewModels
             GridStatus = "正在恢复，请稍候…";
             cancellationToken.ThrowIfCancellationRequested();
             timing?.Mark("movie-prepared");
+
+            // 1. 查找当前活跃世界线分支下是否具备适用的已验证场景快照
+            HollowKnightTAS.Core.SceneCheckpoints.SceneCheckpointHeader? availableCheckpoint = null;
+            if (activeDraftTree != null && activeDraftTip != null && activeDraftTree.Length == 32)
+            {
+                try
+                {
+                    var scope = SceneCheckpoints.ActivateBranch(activeDraftTree, FormatBranchId(activeDraftTip.Value));
+                    availableCheckpoint = SceneCheckpoints.Catalog(scope)
+                        .Where(h => h.RestoreQualified && h.ResumeMovieFrame <= frame)
+                        .OrderByDescending(h => h.ResumeMovieFrame)
+                        .FirstOrDefault();
+                }
+                catch { }
+            }
+
+            await CancelAutoSceneCheckpointCaptureAsync();
+            var restoredViaCheckpoint = false;
             await restartProtectedGame();
             timing?.Mark("restart-ready");
             cancellationToken.ThrowIfCancellationRequested();
-            fullRunMovies!.ArmReplay(candidate, frame == 0 && !pauseWhenInputReadyZero ? -1 : frame);
-            timing?.Mark("replay-armed");
-            restoreReplayStarted = true;
-            currentFullRunMovieFrame = 0;
-            RefreshInputGrid();
-            if (frame > 0)
+
+            if (availableCheckpoint != null)
             {
-                var started = await fullRunMovies.RunAsync(0, cancellationToken);
-                if (started.Mode == "Fault") throw new InvalidOperationException(started.Error);
-                var deadline = DateTime.UtcNow.AddMinutes(10);
-                var progressObserved = false;
-                while (true)
+                try
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    startupBoot!.Refresh();
-                    if (!progressObserved && currentFullRunMovieFrame > 0)
+                    timing?.Mark("checkpoint-restore-start");
+                    // 先将新游戏实例推进并停在 Movie 0，使 Runtime 会话与受保护存档上下文完成初始化。
+                    fullRunMovies!.ArmReplay(candidate, 0);
+                    var bootStarted = await fullRunMovies.RunAsync(0, cancellationToken);
+                    if (bootStarted.Mode == "Fault") throw new InvalidOperationException(bootStarted.Error);
+                    var bootDeadline = DateTime.UtcNow.AddSeconds(60);
+                    while (true)
                     {
-                        timing?.Mark("first-movie-progress-observed");
-                        progressObserved = true;
+                        cancellationToken.ThrowIfCancellationRequested();
+                        startupBoot!.Refresh();
+                        if (startupBoot.FullRunFaultCode != 0) throw new InvalidOperationException("检查点启动遇到原生错误：" + startupBoot.FullRunFaultCode);
+                        if (startupBoot.IsWaiting && SelectedSession?.Client.IsConnected == true) break;
+                        if (DateTime.UtcNow >= bootDeadline) throw new TimeoutException("检查点替换实例启动超时。");
+                        await Task.Delay(50, cancellationToken);
                     }
-                    if (startupBoot.FullRunFaultCode != 0) throw new InvalidOperationException("重放遇到原生错误：" + startupBoot.FullRunFaultCode);
-                    if (startupBoot.IsWaiting) break;
-                    if (DateTime.UtcNow >= deadline) throw new TimeoutException("重放等待超时，可手动暂停检查状态。");
-                    await Task.Delay(100, cancellationToken);
+
+                    var session = SelectedSession!.Client;
+                    var checkpointClient = CreateSceneCheckpointClient(session);
+                    var scope = availableCheckpoint.Scope;
+                    var binding = availableCheckpoint.Binding;
+                    var checkpointId = availableCheckpoint.CheckpointId;
+
+                    await checkpointClient.StageAsync(checkpointId, scope, binding, cancellationToken);
+                    await checkpointClient.StartRestoreAsync(checkpointId, scope, binding, cancellationToken);
+
+                    // 放行原生时钟推进目标存档加载，直到目标到达对应 S0 边界并重新暂停。
+                    startupBoot!.Refresh();
+                    var loadStarted = await fullRunMovies.RunAsync(startupBoot.NativeCompletedFrames, cancellationToken);
+                    if (loadStarted.Mode == "Fault") throw new InvalidOperationException(loadStarted.Error);
+
+                    var cDeadline = DateTime.UtcNow.AddSeconds(60);
+                    while (true)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        startupBoot.Refresh();
+                        if (startupBoot.FullRunFaultCode != 0) throw new InvalidOperationException("检查点加载阶段遇到原生错误：" + startupBoot.FullRunFaultCode);
+                        var status = await checkpointClient.RestoreStatusAsync(checkpointId, cancellationToken);
+                        if (status.TryGetValue("status", out var s) && s == "AwaitingApplyAtC" && startupBoot.IsWaiting) break;
+                        if (s == "Failed" || s == "Cancelled") throw new InvalidOperationException("检查点准备阶段失败: " + s);
+                        if (DateTime.UtcNow >= cDeadline) throw new TimeoutException("等待目标 S0 边界超时。");
+                        await Task.Delay(50, cancellationToken);
+                    }
+
+                    await checkpointClient.ApplyRestoreAsync(checkpointId, scope, binding, cancellationToken, targetMovieFrame: frame);
+                    startupBoot.Refresh();
+                    timing?.Mark("replay-armed");
+                    restoreReplayStarted = true;
+                    currentFullRunMovieFrame = availableCheckpoint.ResumeMovieFrame;
+                    RefreshInputGrid();
+
+                    // 从 S0 推进经过 K 并精确停在目标帧（K 或 frame）。
+                    var resumeStarted = await fullRunMovies.RunAsync(startupBoot.NativeCompletedFrames, cancellationToken);
+                    if (resumeStarted.Mode == "Fault") throw new InvalidOperationException(resumeStarted.Error);
+                    var deadline = DateTime.UtcNow.AddMinutes(10);
+                    while (true)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        startupBoot.Refresh();
+                        if (startupBoot.FullRunFaultCode != 0) throw new InvalidOperationException("检查点补跑遇到原生错误：" + startupBoot.FullRunFaultCode);
+                        if (startupBoot.IsWaiting) break;
+                        if (DateTime.UtcNow >= deadline) throw new TimeoutException("重放等待超时，可手动暂停检查状态。");
+                        await Task.Delay(100, cancellationToken);
+                    }
+
+                    restoredViaCheckpoint = true;
+                    timing?.Mark("checkpoint-restore-completed");
+                }
+                catch (Exception)
+                {
+                    // 恢复异常安全回退红线：安全回退到从第 0 帧完整冷重播！
+                    timing?.Mark("checkpoint-restore-failed-fallback");
+                    restoredViaCheckpoint = false;
+                    await restartProtectedGame();
                 }
             }
+
+            if (!restoredViaCheckpoint)
+            {
+                fullRunMovies!.ArmReplay(candidate, frame == 0 && !pauseWhenInputReadyZero ? -1 : frame);
+                timing?.Mark("replay-armed");
+                restoreReplayStarted = true;
+                currentFullRunMovieFrame = 0;
+                RefreshInputGrid();
+                if (frame > 0)
+                {
+                    var started = await fullRunMovies.RunAsync(0, cancellationToken);
+                    if (started.Mode == "Fault") throw new InvalidOperationException(started.Error);
+                    var deadline = DateTime.UtcNow.AddMinutes(10);
+                    var progressObserved = false;
+                    while (true)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        startupBoot!.Refresh();
+                        if (!progressObserved && currentFullRunMovieFrame > 0)
+                        {
+                            timing?.Mark("first-movie-progress-observed");
+                            progressObserved = true;
+                        }
+                        if (startupBoot.FullRunFaultCode != 0) throw new InvalidOperationException("重放遇到原生错误：" + startupBoot.FullRunFaultCode);
+                        if (startupBoot.IsWaiting) break;
+                        if (DateTime.UtcNow >= deadline) throw new TimeoutException("重放等待超时，可手动暂停检查状态。");
+                        await Task.Delay(100, cancellationToken);
+                    }
+                }
+            }
+
             if (frame > 0)
             {
                 var observed = await ReadReadyFrameSnapshotAsync();
@@ -268,7 +371,9 @@ namespace HollowKnightTAS.Companion.ViewModels
             draftRequiresRestart = false;
             earliestGridEdit = long.MaxValue;
             TrackGridFrame(frame, true);
-            GridStatus = $"已停在第 {frame} 帧边界。";
+            GridStatus = restoredViaCheckpoint
+                ? $"已通过场景检查点快速恢复并停在第 {frame} 帧边界（K={availableCheckpoint!.ResumeMovieFrame}）。"
+                : $"已停在第 {frame} 帧边界。";
         }
     }
 }

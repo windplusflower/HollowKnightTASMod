@@ -41,8 +41,9 @@ namespace HollowKnightTAS.Companion.Services
                 DispatcherPriority.Background, OnPoll, dispatcher ?? Dispatcher.CurrentDispatcher);
             // The event-handler constructor starts the timer immediately; the setting is opt-in.
             pollTimer.Stop();
-            if (System.Windows.Application.Current != null)
-                System.Windows.Application.Current.Exit += OnApplicationExit;
+            var application = System.Windows.Application.Current;
+            if (application != null && application.Dispatcher.CheckAccess())
+                application.Exit += OnApplicationExit;
         }
 
         public void SetEnabled(bool value)
@@ -228,8 +229,9 @@ namespace HollowKnightTAS.Companion.Services
             cancellation.Cancel();
             pollTimer.Stop();
             pollTimer.Tick -= OnPoll;
-            if (System.Windows.Application.Current != null)
-                System.Windows.Application.Current.Exit -= OnApplicationExit;
+            var application = System.Windows.Application.Current;
+            if (application != null && application.Dispatcher.CheckAccess())
+                application.Exit -= OnApplicationExit;
             window?.SetSnapshot(null);
             window?.Close();
             window = null;

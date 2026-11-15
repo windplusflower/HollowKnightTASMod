@@ -112,12 +112,13 @@ namespace HollowKnightTAS.Companion.ViewModels
             SetGridApplying(true);
             try
             {
+                await CancelAutoSceneCheckpointCaptureAsync();
                 await SaveCurrentBranchAsync(closing: true);
                 selectedTimelineTree = TimelineTrees.Single(t => t.Id == treeId);
                 selectedWorldline = selectedTimelineTree.Nodes.Single(n => n.Id == leafId);
                 selectedTimelineNode = selectedWorldline;
                 UseSelectedWorldline();
-                SceneCheckpoints.ActivateBranch(treeId, leafId.ToString());
+                SceneCheckpoints.ActivateBranch(treeId, FormatBranchId(leafId));
                 NotifyWorldlines();
             }
             catch (Exception exception) { Status = TimelineTreeStatus = "切换世界线失败：" + exception.Message; }

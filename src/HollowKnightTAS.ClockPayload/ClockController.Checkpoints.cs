@@ -15,7 +15,8 @@ namespace HollowKnightTAS.ClockPayload
         [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
         private static void RequireCheckpointRandomBoundary()
         {
-            if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") != "1"
+            if ((!NativeExecutionProfile.SupportsSceneCheckpoints(NativeExecutionProfile.SelectedProfileId)
+                    && Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") != "1")
                 || !fullRunRenderIsolationEnabled || fullRunRenderEntered
                 || GetCurrentThreadId() != (uint)StartupHookThreadId)
                 throw new InvalidOperationException("Random continuation requires the controlled engine boundary.");

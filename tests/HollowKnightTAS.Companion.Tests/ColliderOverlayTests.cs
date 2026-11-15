@@ -255,19 +255,7 @@ namespace HollowKnightTAS.Companion.Tests
             return Path.GetFullPath(path);
         }
 
-        private static void RunSta(Action action)
-        {
-            Exception? failure = null;
-            var thread = new Thread(() =>
-            {
-                try { action(); }
-                catch (Exception exception) { failure = exception; }
-            });
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            thread.Join();
-            if (failure != null) throw new AssertFailedException(failure.ToString());
-        }
+        private static void RunSta(Action action) => WpfTestApplication.Run(action);
 
         [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
         private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);

@@ -11,6 +11,8 @@ using HollowKnightTAS.Runtime.Rng;
 using HollowKnightTAS.Runtime.Input;
 using System.Reflection;
 using HollowKnightTAS.Runtime.ReplaySave;
+using Newtonsoft.Json;
+using System.Text;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
@@ -22,8 +24,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         private Task<SceneCheckpointPacket>? checkpointEncoding;
         private SceneCheckpointReceiver? checkpointImport;
         private SceneCheckpointPacket? stagedCheckpoint;
+        private LeanS0Packet? stagedLeanS0Packet;
         private string checkpointFailure = "";
         private string checkpointCaptureId = "";
+        private string checkpointRestoreActiveId = "";
+        private bool checkpointRestoreApplied;
+        private bool checkpointRestoreCancelled;
         private Dictionary<string, string>? checkpointExecutionFiles;
         private ProtectedSaveRedirector? checkpointSaves;
         private string checkpointInitialSavesSha256 = "";
@@ -34,54 +40,28 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Install verified the complete shadow file set before any game input.
             // Bind that immutable descriptor, never a caller-supplied current hash.
             checkpointInitialSavesSha256 = SceneCheckpointBinding.HashInitialSaves(saves.Descriptor.OriginalFileSha256);
-            if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") == "1" || CanonicalActualDExperiment.Enabled)
-                checkpointExecutionFiles = new Dictionary<string, string>
+            if (NativeExecutionProfile.SupportsSceneCheckpoints(NativeExecutionProfile.SelectedProfileId)
+                || Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") == "1"
+                || CanonicalActualDExperiment.Enabled)
+            {
+                checkpointExecutionFiles = new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["runtime"] = Sha256Utility.ComputeHex(File.ReadAllBytes(typeof(RuntimeFullRunSession).Assembly.Location)),
                     ["core"] = Sha256Utility.ComputeHex(File.ReadAllBytes(typeof(SceneCheckpointPacket).Assembly.Location)),
                     ["clockPayload"] = Sha256Utility.ComputeHex(File.ReadAllBytes(CheckpointClockMethod("ExportCheckpointRandomState").DeclaringType!.Assembly.Location)),
                     ["clockBridge"] = clock.CheckpointBridgeSha256
                 };
+            }
             checkpointSaves = saves;
         }
-        private static readonly CheckpointDataCodec CheckpointCodec = new CheckpointDataCodec(
-            new[] { typeof(PlayerData), typeof(SceneData), typeof(CheckpointTransitionData), typeof(GameManager.SceneLoadInfo),
-                typeof(CheckpointContinuationData), typeof(CheckpointInputState), typeof(CheckpointActionSetState),
-                typeof(CheckpointMouseState), typeof(CheckpointMouseModule), typeof(CheckpointMouseValue),
-                typeof(CheckpointManagedWorldData), typeof(CheckpointSceneLoadState), typeof(CheckpointBossContext), typeof(CanonicalInputEpoch) },
-            new[] { typeof(UnityEngine.Vector3), typeof(UnityEngine.Vector2), typeof(UnityEngine.Quaternion) });
         private static MethodInfo CheckpointClockMethod(string name) => AppDomain.CurrentDomain.GetAssemblies()
             .Single(assembly => assembly.GetName().Name == "HollowKnightTAS.ClockPayload")
             .GetType("HollowKnightTAS.ClockPayload.ClockController", true)!.GetMethod(name, BindingFlags.Static | BindingFlags.Public)
             ?? throw new MissingMethodException("Clock payload continuation method is unavailable: " + name);
-        private CheckpointContinuationData CaptureCheckpointContinuation(long nativeFrame)
+        private void RequireCheckpointExecutionFiles(IReadOnlyDictionary<string, string>? executionFiles)
         {
-            if (randomSeedHandshakePending) throw new InvalidOperationException("Checkpoint cannot capture an unfinished random handshake.");
-            var movie = mode == "Recording" ? journal!.Freeze(recordingHeader!, movieFrame) : replayMovie!;
-            var data = new CheckpointContinuationData
-            {
-                MovieFrame = movieFrame, NativeFrame = nativeFrame, SkippedLoadingFrames = skippedLoadFrames,
-                ExecutionFiles = new Dictionary<string, string>(checkpointExecutionFiles ?? throw new InvalidOperationException("Checkpoint execution identities are absent.")),
-                MoviePrefixSha256 = Sha256Utility.ComputeHex(System.Text.Encoding.UTF8.GetBytes(new MovieV2Codec().WriteCanonical(MovieV2Prefix.Take(movie, movieFrame)))),
-                TimingRunIndex = timingRunIndex, TimingRunStart = timingRunStart,
-                ActiveFrameRate = activeFrameRate, RecordingFrameRate = recordingFrameRate,
-                TitleReadySeen = titleReadySeen, FirstLevelActivationPending = firstLevelActivationPending,
-                RandomSeedScene = randomSeedSceneName, LastGameUpdateNativeFrame = lastGameUpdateNativeFrame,
-                GameUpdateDeltaSeconds = gameUpdateDeltaSeconds, GameUpdateTimeSeconds = gameUpdateTimeSeconds,
-                ExecutedMovieSeconds = executedMovieSeconds, NativeClock = clock.ExportContinuation(),
-                Random = (byte[])CheckpointClockMethod("ExportCheckpointRandomState").Invoke(null, null),
-                ClockObserver = (byte[])CheckpointClockMethod("ExportCheckpointClockObserver").Invoke(null, null),
-                Input = input.CaptureCheckpoint(), Mouse = mouse.CaptureCheckpoint(), ManagedWorld = CheckpointManagedWorldData.Capture(),
-                SceneLoad = LoadingSerialSceneProbe.CaptureCheckpointLoadState(),
-                InputEpoch = CanonicalInputEpochRuntime.Capture(movieInputNativeOrigin, nativeFrame,
-                    movieInputControlOrigin ?? throw new InvalidOperationException("Actual input control origin is absent."))
-            };
-            data.Validate(movieFrame, nativeFrame); return data;
-        }
-        private void RequireCheckpointExecutionIdentity(CheckpointContinuationData data)
-        {
-            if (checkpointExecutionFiles == null || data.ExecutionFiles.Count != checkpointExecutionFiles.Count
-                || checkpointExecutionFiles.Any(file => !data.ExecutionFiles.TryGetValue(file.Key, out var actual) || actual != file.Value))
+            if (checkpointExecutionFiles == null || executionFiles == null || executionFiles.Count != checkpointExecutionFiles.Count
+                || checkpointExecutionFiles.Any(file => !executionFiles.TryGetValue(file.Key, out var actual) || actual != file.Value))
                 throw new InvalidDataException("Checkpoint execution assemblies or native bridge differ from the replacement.");
         }
 
@@ -89,28 +69,118 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (fields.TryGetValue("phase", out var leanS0Phase) && leanS0Phase.StartsWith("lean-s0-", StringComparison.Ordinal))
                 return LeanS0Command(fields);
-            if (fields.TryGetValue("phase", out var actualPhase) && actualPhase.StartsWith("d-exp-", StringComparison.Ordinal))
-                return ActualDExperimentCommand(fields);
             if (fields.TryGetValue("phase", out var observationPhase) && observationPhase.StartsWith("s0-", StringComparison.Ordinal))
                 return S0ObservationCommand(fields);
             CanonicalPhaseOneTrace.RequireCheckpointAllowed(CanonicalPhaseOneTrace.Enabled);
-            if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") != "1")
-                throw new InvalidOperationException("Scene checkpoint development is disabled.");
             if (!NativeExecutionProfile.SupportsSceneCheckpoints(NativeExecutionProfile.SelectedProfileId))
                 throw new InvalidOperationException("This recorded execution profile supports full replay only; scene checkpoints require the canonical boundary profile.");
-            if (fields.TryGetValue("phase", out var restorePhase) && restorePhase.StartsWith("restore-", StringComparison.Ordinal))
-                throw new InvalidDataException("Legacy managed-only scene checkpoints cannot be restored; a qualified resident boundary packet is required.");
             string Get(string key) => fields.TryGetValue(key, out var value) ? value : throw new InvalidDataException("Missing checkpoint command field: " + key);
             void Require(params string[] keys)
             {
                 if (fields.Count != keys.Length + 2 || keys.Any(k => !fields.ContainsKey(k)))
                     throw new InvalidDataException("Unexpected checkpoint command fields.");
             }
+            string requestedPhase = Get("phase");
+            if (requestedPhase == "restore-start" || requestedPhase == "restore-apply" || requestedPhase == "restore-cancel")
+            {
+                int timeoutMs = requestedPhase == "restore-apply" ? 120000 : 30000;
+                return observationQueue.Invoke(frame =>
+                {
+                    var restoreReply = new Dictionary<string, string>(StringComparer.Ordinal) { ["requestId"] = Get("requestId") };
+                    lock (checkpointSync)
+                    {
+                        if (disposed) throw new ObjectDisposedException(nameof(RuntimeFullRunSession));
+                        switch (requestedPhase)
+                        {
+                            case "restore-start":
+                            {
+                                Require("checkpointId");
+                                string checkpointId = Get("checkpointId");
+                                var packet = stagedLeanS0Packet;
+                                if (stagedCheckpoint == null || stagedCheckpoint.Header.CheckpointId != checkpointId || packet == null)
+                                    throw new InvalidOperationException("Target LeanS0 checkpoint must be staged before restore-start.");
+                                if (mode != "Replay" || !inputReady || movieFrame != 0 || !clock.IsPaused || clock.IsFinished || input.ConsumedSamples != 0)
+                                    throw new InvalidOperationException("Checkpoint restore requires a fresh paused Movie 0 process in Replay mode.");
+                                int slot = ExtractSaveSlotFromPlayerDataJson(packet.C1_PlayerDataJson);
+                                checkpointRestoreActiveId = checkpointId;
+                                checkpointRestoreApplied = false;
+                                checkpointRestoreCancelled = false;
+                                BeginLeanS0TargetSaveLoad(packet, frame, slot);
+                                restoreReply["status"] = "LoadingInitialSave";
+                                restoreReply["checkpointId"] = checkpointId;
+                                restoreReply["restoreQualified"] = "true";
+                                return restoreReply;
+                            }
+                            case "restore-apply":
+                            {
+                                string checkpointId = Get("checkpointId");
+                                bool hasTarget = fields.ContainsKey("targetMovieFrame");
+                                if (hasTarget) Require("checkpointId", "targetMovieFrame");
+                                else Require("checkpointId");
+                                if (stagedCheckpoint == null || stagedCheckpoint.Header.CheckpointId != checkpointId || leanS0TargetPacket == null)
+                                    throw new InvalidOperationException("Target LeanS0 checkpoint is absent for restore-apply.");
+                                if (mode != "LeanS0TargetPaused" || !clock.IsPaused || clock.IsFinished)
+                                    throw new InvalidOperationException("Target process must be parked at target S0 before restore-apply.");
+                                var packet = leanS0TargetPacket;
+                                ApplyLeanS0PacketAtTargetS0(packet, frame);
+                                long targetMovie = hasTarget ? long.Parse(Get("targetMovieFrame"), NumberStyles.None, CultureInfo.InvariantCulture) : movieFrame;
+                                if (targetMovie > movieFrame)
+                                {
+                                    SetPauseTarget(targetMovie, packet.C12_ControlPlane.NativeFrame);
+                                    leanS0TargetResumeNativeFrame = -1;
+                                }
+                                else if (targetMovie == movieFrame)
+                                {
+                                    leanS0TargetResumeNativeFrame = stagedCheckpoint.Header.ResumeNativeFrame;
+                                }
+                                else
+                                {
+                                    throw new InvalidDataException($"Checkpoint target movie frame {targetMovie} precedes checkpoint frame {movieFrame}.");
+                                }
+                                leanS0TargetPacket = null;
+                                checkpointRestoreApplied = true;
+                                LoadingSerialSceneProbe.MarkLeanS0BoundaryObserved();
+                                mode = "Replay";
+                                restoreReply["status"] = "RebuildingCToK";
+                                restoreReply["checkpointId"] = checkpointId;
+                                restoreReply["restoreQualified"] = "true";
+                                restoreReply["stateApplied"] = "true";
+                                restoreReply["resumeMovieFrame"] = movieFrame.ToString(CultureInfo.InvariantCulture);
+                                restoreReply["resumeNativeFrame"] = stagedCheckpoint.Header.ResumeNativeFrame.ToString(CultureInfo.InvariantCulture);
+                                restoreReply["appliedNativeFrame"] = packet.C12_ControlPlane.NativeFrame.ToString(CultureInfo.InvariantCulture);
+                                return restoreReply;
+                            }
+                            case "restore-cancel":
+                            {
+                                Require("checkpointId");
+                                string checkpointId = Get("checkpointId");
+                                if (stagedCheckpoint?.Header.CheckpointId == checkpointId || checkpointRestoreActiveId == checkpointId)
+                                {
+                                    stagedCheckpoint = null;
+                                    stagedLeanS0Packet = null;
+                                    leanS0TargetPacket = null;
+                                    leanS0TargetArmed = false;
+                                    leanS0TargetParked = false;
+                                    leanS0TargetResumeNativeFrame = -1;
+                                    leanS0TargetJob = null;
+                                    checkpointRestoreActiveId = "";
+                                    checkpointRestoreCancelled = true;
+                                    DetachLeanS0TargetHooks();
+                                }
+                                restoreReply["status"] = "Cancelled";
+                                restoreReply["checkpointId"] = checkpointId;
+                                return restoreReply;
+                            }
+                        }
+                    }
+                    return restoreReply;
+                }, timeoutMilliseconds: timeoutMs);
+            }
             var reply = new Dictionary<string, string>(StringComparer.Ordinal) { ["requestId"] = Get("requestId") };
             lock (checkpointSync)
             {
                 if (disposed) throw new ObjectDisposedException(nameof(RuntimeFullRunSession));
-                switch (Get("phase"))
+                switch (requestedPhase)
                 {
                     case "arm":
                         Require("captureId", "studioSessionId", "treeId", "branchId", "generation", "environmentSha256", "initialSavesSha256", "nativeProfileId", "trigger");
@@ -155,6 +225,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     case "import-begin":
                         var header = SceneCheckpointHeader.FromFields(fields);
                         Require(header.ToFields().Keys.ToArray());
+                        if (!header.RestoreQualified || header.Schema != SceneCheckpointHeader.LeanS0SchemaVersion)
+                            throw new InvalidDataException("Only qualified Lean S0 scene checkpoints can be staged for restore.");
                         if (checkpointImport != null || stagedCheckpoint != null) throw new InvalidOperationException("A checkpoint import is already present.");
                         if (header.Binding.EnvironmentSha256 != environmentSha256 || header.Binding.NativeProfileId != NativeExecutionProfile.SelectedProfileId
                             || header.Binding.InitialSavesSha256 != checkpointInitialSavesSha256)
@@ -177,21 +249,52 @@ namespace HollowKnightTAS.Runtime.FullRun
                         try
                         {
                             var imported = receiver.Complete(); var sections = imported.CopySections();
-                            CheckpointCodec.Decode<PlayerData>(sections["playerData"]); CheckpointCodec.Decode<SceneData>(sections["sceneData"]);
-                            CheckpointCodec.Decode<CheckpointTransitionData>(sections["transition"]);
-                            var continuation = CheckpointCodec.Decode<CheckpointContinuationData>(sections["continuation"]);
-                            continuation.Validate(imported.Header.CaptureMovieFrame, imported.Header.CaptureNativeFrame);
-                            RequireCheckpointExecutionIdentity(continuation);
-                            stagedCheckpoint = imported; reply["status"] = "Staged"; reply["checkpointId"] = imported.Header.CheckpointId;
-                            reply["restoreQualified"] = imported.Header.RestoreQualified ? "true" : "false";
+                            if (!imported.Header.RestoreQualified || imported.Header.Schema != SceneCheckpointHeader.LeanS0SchemaVersion)
+                                throw new InvalidDataException("Unsupported checkpoint schema for Lean S0 restore.");
+                            var leanS0 = LeanS0PacketCodec.Decode(sections["leanS0"]);
+                            if (leanS0.C12_ControlPlane.MovieFrame != imported.Header.CaptureMovieFrame
+                                || leanS0.C12_ControlPlane.NativeFrame != imported.Header.CaptureNativeFrame)
+                                throw new InvalidDataException("Checkpoint Lean S0 cursor mismatches header.");
+                            _ = ExtractSaveSlotFromPlayerDataJson(leanS0.C1_PlayerDataJson);
+                            var executionFiles = JsonConvert.DeserializeObject<Dictionary<string, string>>(Encoding.UTF8.GetString(sections["executionFiles"]));
+                            RequireCheckpointExecutionFiles(executionFiles);
+                            stagedCheckpoint = imported;
+                            stagedLeanS0Packet = leanS0;
+                            checkpointRestoreActiveId = imported.Header.CheckpointId;
+                            checkpointRestoreApplied = false;
+                            checkpointRestoreCancelled = false;
+                            reply["status"] = "Staged"; reply["checkpointId"] = imported.Header.CheckpointId;
+                            reply["restoreQualified"] = "true";
                         }
                         finally { receiver.Dispose(); checkpointImport = null; }
                         break;
                     case "import-cancel":
                         Require("checkpointId");
                         if (checkpointImport?.Header.CheckpointId == Get("checkpointId")) { checkpointImport.Dispose(); checkpointImport = null; }
-                        if (stagedCheckpoint?.Header.CheckpointId == Get("checkpointId")) stagedCheckpoint = null;
+                        if (stagedCheckpoint?.Header.CheckpointId == Get("checkpointId"))
+                        { stagedCheckpoint = null; stagedLeanS0Packet = null; }
                         reply["status"] = "ImportCancelled"; break;
+                    case "restore-status":
+                    {
+                        Require("checkpointId");
+                        string checkpointId = Get("checkpointId");
+                        if (checkpointRestoreActiveId != checkpointId && stagedCheckpoint?.Header.CheckpointId != checkpointId)
+                            throw new InvalidDataException("Checkpoint restore ID differs.");
+                        reply["checkpointId"] = checkpointId;
+                        reply["restoreQualified"] = (stagedCheckpoint?.Header.RestoreQualified ?? false) ? "true" : "false";
+                        reply["stateApplied"] = checkpointRestoreApplied ? "true" : "false";
+                        if (error.Length != 0 || leanS0TargetJob?.Phase == "Failed")
+                        {
+                            reply["status"] = "Failed";
+                            reply["detail"] = error.Length != 0 ? error : leanS0TargetJob?.Error ?? string.Empty;
+                        }
+                        else if (checkpointRestoreCancelled) reply["status"] = "Cancelled";
+                        else if (mode == "LeanS0TargetPaused" || leanS0TargetJob?.Phase == "PausedAtTargetS0") reply["status"] = "AwaitingApplyAtC";
+                        else if (mode == "LeanS0TargetLoading") reply["status"] = "LoadingInitialSave";
+                        else if (checkpointRestoreApplied) reply["status"] = "RebuildingCToK";
+                        else reply["status"] = "Staged";
+                        break;
+                    }
                     default: throw new InvalidDataException("Unknown checkpoint command phase.");
                 }
             }
@@ -214,29 +317,26 @@ namespace HollowKnightTAS.Runtime.FullRun
                 try
                 {
                     var boundary = LoadingSerialSceneProbe.GetCheckpointBoundary();
-                    // The first prototype rebuilds an initialized existing-game
-                    // transition. Keep the one-shot request armed across save entry.
                     if (boundary.Item2.IsFirstLevelForPlayer || boundary.Item3 == "Menu_Title" || HeroController.SilentInstance == null) return;
+                    if (checkpointExecutionFiles == null) throw new InvalidOperationException("Checkpoint execution identities are absent.");
+                    loadingBoundaryProbe?.Sample("checkpoint-c", boundary.Item2.SceneName);
                     loadingBoundaryProbe?.IncludeCheckpointK(movieFrame);
                     checkpointSaves!.AssertActive();
-                    var rng = UnityRandomStateCodec_1_5_78_11833.Resolve();
-                    if (!rng.Ready || rng.Codec == null) throw new InvalidDataException("Unity RNG checkpoint codec is unavailable.");
-                    // All live reads end here, on C's game-thread boundary. The worker receives only owned byte arrays.
                     var captureElapsed = System.Diagnostics.Stopwatch.StartNew();
+                    var ctx = BuildLeanS0CaptureContext(boundary.Item1, boundary.Item3, boundary.Item2.SceneName, boundary.Item2, nativeFrame);
+                    LeanS0Packet packet = LeanS0SnapshotRuntime.Capture(ctx);
+                    byte[] leanS0Bytes = LeanS0PacketCodec.Encode(packet);
+                    byte[] executionBytes = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(checkpointExecutionFiles));
                     var sections = new Dictionary<string, byte[]>(StringComparer.Ordinal)
                     {
-                        ["playerData"] = CheckpointCodec.Encode(PlayerData.instance ?? throw new InvalidDataException("PlayerData is missing.")),
-                        ["sceneData"] = CheckpointCodec.Encode(GameManager.instance?.sceneData ?? throw new InvalidDataException("SceneData is missing.")),
-                        ["transition"] = CheckpointCodec.Encode(new CheckpointTransitionData { SourceScene = boundary.Item3, LoadInfo = boundary.Item2 }),
-                        ["unityRng"] = rng.Codec.Encode(UnityEngine.Random.state),
-                        ["continuation"] = CheckpointCodec.Encode(CaptureCheckpointContinuation(nativeFrame))
+                        ["leanS0"] = leanS0Bytes,
+                        ["executionFiles"] = executionBytes
                     };
                     frozenCheckpoint = new FrozenCheckpoint(checkpointArm, boundary.Item1, movieFrame, nativeFrame, sections);
-                    // Both policies submit a single eligible-boundary request. P4 owns automatic re-arming.
                     checkpointArm = null;
-                    Modding.Logger.Log("[HKTAS] Checkpoint C data frozen: wallMs=" + captureElapsed.ElapsedMilliseconds
-                        + " continuationBytes=" + sections["continuation"].Length);
-                    Modding.Logger.LogDebug("[HKTAS] Checkpoint data frozen at C: Movie=" + movieFrame + " native=" + nativeFrame + " transition=" + boundary.Item1);
+                    Modding.Logger.Log("[HKTAS] LeanS0 checkpoint C data frozen: wallMs=" + captureElapsed.ElapsedMilliseconds
+                        + " leanS0Bytes=" + leanS0Bytes.Length);
+                    Modding.Logger.LogDebug("[HKTAS] LeanS0 checkpoint data frozen at C: Movie=" + movieFrame + " native=" + nativeFrame + " transition=" + boundary.Item1);
                 }
                 catch (Exception exception)
                 {
@@ -256,8 +356,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 { checkpointFailure = "Movie input was consumed between C and K."; checkpointArm = null; frozenCheckpoint = null; return; }
                 checkpointEncoding = Task.Run(() =>
                 {
-                    var bytes = SceneCheckpointPacket.EncodeSections(frozen.Sections);
-                    var header = new SceneCheckpointHeader(frozen.Arm.CaptureId, frozen.Arm.Scope, frozen.Arm.Binding,
+                    var bytes = SceneCheckpointPacket.EncodeSections(frozen.Sections, SceneCheckpointHeader.LeanS0SchemaVersion);
+                    var header = SceneCheckpointHeader.CreateLeanS0(frozen.Arm.CaptureId, frozen.Arm.Scope, frozen.Arm.Binding,
                         frozen.Arm.Trigger, frozen.TransitionId, frozen.MovieFrame, frozen.NativeFrame, resumeFrame, nativeFrame,
                         bytes.Length, Sha256Utility.ComputeHex(bytes));
                     return new SceneCheckpointPacket(header, bytes);
@@ -271,7 +371,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             On.GameManager.FadeSceneInWithDelay -= OnS0BootstrapFade;
             On.HeroController.Respawn -= OnS0BootstrapRespawn;
-            lock (checkpointSync) { ClearCheckpointCapture(); checkpointImport?.Dispose(); checkpointImport = null; stagedCheckpoint = null; }
+            DetachLeanS0TargetHooks();
+            lock (checkpointSync) { ClearCheckpointCapture(); checkpointImport?.Dispose(); checkpointImport = null; stagedCheckpoint = null; stagedLeanS0Packet = null; }
         }
         internal void DiscardCheckpointTransfersOnDisconnect()
         {
@@ -287,12 +388,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             internal SceneCheckpointBinding Binding { get; }
             internal SceneCheckpointTrigger Trigger { get; }
             internal string CaptureId { get; }
-        }
-        [Serializable]
-        private sealed class CheckpointTransitionData
-        {
-            public string SourceScene = "";
-            public GameManager.SceneLoadInfo LoadInfo = null!;
         }
         private sealed class FrozenCheckpoint
         {

@@ -103,6 +103,9 @@ public sealed class StudioAutomationSyncTests
         using var h = new Harness();
         h.Set("savingBranch", true);
         var pending = h.Update(h.Original);
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher != null && !dispatcher.CheckAccess())
+            await dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Background);
         Assert.IsFalse(pending.IsCompleted);
         Assert.IsFalse(h.Vm.IsInputGridInteractive);
         h.Set("savingBranch", false);

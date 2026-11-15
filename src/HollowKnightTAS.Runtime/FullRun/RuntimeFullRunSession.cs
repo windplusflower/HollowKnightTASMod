@@ -514,14 +514,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 LoadingOnlineIsolationObservation.CheckFailure();
                 if (LoadingSerialSceneProbe.ObserveNativeBoundary(this, movieFrame, completed))
                 {
-                    if (ShouldPauseBeforeNextNativeFrameLeanS0(completed) || residentImportLoader != null || TryParkResidentSource(completed)) return;
+                    if (ShouldPauseBeforeNextNativeFrameLeanS0(completed)) return;
                     loadingGameplayOracle?.Sample("candidate", "serial-source-unloaded");
                     CaptureSceneCheckpointAtBoundary(completed);
                 }
                 var activeScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
                 var sceneHandle = activeScene.handle;
                 SyncLeanS0RandomSeedHandleIfNeeded(sceneHandle, activeScene.name);
-                if (!LeanS0Mode.Enabled && ready && sceneHandle != randomSeedSceneHandle)
+                if (!LeanS0Mode.Enabled && !leanS0RandomSeededForTargetScene && ready && sceneHandle != randomSeedSceneHandle)
                 {
                     if (randomSeedRequest == null || randomSeedAcknowledged == null)
                     {
@@ -593,7 +593,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // Keep the hook chain alive so the clock can acknowledge the seed;
                 // SetFrameInputEnabled above separately suppresses Movie samples.
                 input.SetNativeFrameActive(true);
-                ObserveResidentContinuation(1, completed);
             }
             catch (Exception exception)
             {
@@ -694,7 +693,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 {
                     SampleLeanS0LoadingDiag(completed, "loading-after", frameBoundary);
                     skippedLoadFrames++;
-                    ObserveResidentContinuation(3, completed);
+                    if (leanS0TargetResumeNativeFrame == completed)
+                    {
+                        leanS0TargetResumeNativeFrame = -1;
+                        clock.RequestPause();
+                        input.PrepareFrame(movieFrame);
+                    }
                     return;
                 }
                 if (movieFrame == leanS0K3StartMovie)
@@ -715,7 +719,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 leanS0K3Trace?.SampleFrame(movieFrame, completed, frameBoundary);
                 if (mode == "Recording") journal!.CompleteFrame(movieFrame, activeFrameRate);
                 movieFrame++;
-                ObserveResidentContinuation(3, completed);
                 loadingBoundaryProbe?.Completed();
                 loadingGameplayOracle?.Completed();
                 actualDSuffixOracle?.Completed();
@@ -813,21 +816,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Runtime input frame origin cannot be invalid or rebound.");
             movieInputNativeOrigin = frame;
             if (NativeExecutionProfile.UsesCanonicalBoundary(NativeExecutionProfile.SelectedProfileId)) {
-                // Resolve immutable metadata on the same bootstrap path for
-                // recording and replay, before either publishes Movie zero.
-                // Every later boundary still reads its actual modules, native
-                // class/vtable inventory, initialization and static values.
-                try {
-                    var gained = ResidentStaticRoots.PrepareMetadata(ClassifyResidentModule);
-                    if (gained.Length != 0) Modding.Logger.Log("[HKTAS] Resident metadata dependencies: " + string.Join(";", gained));
-                } catch (Exception failure) {
-                    ResidentFailureEvidence.Record(failure);
-                    // The decision is final. A diagnostic census at this point
-                    // cannot change metadata preparation, gameplay, or eligibility.
-                    try { ResidentNativeGlobalObjects.RecordProbeTypeCounts(() => { }, rejectedBootstrap: true); }
-                    catch (Exception evidenceError) { Modding.Logger.LogWarn("Rejected bootstrap census unavailable: " + evidenceError.Message); }
-                    throw;
-                }
                 movieInputControlOrigin = CanonicalInputEpochRuntime.Capture(frame, frame);
             }
             loadingBoundaryProbe = LoadingBoundaryProbe.Create(sessionDirectory, () => movieFrame,
@@ -1028,7 +1016,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             loadingBoundaryProbe?.Dispose();
             loadingGameplayOracle?.Dispose();
             actualDSuffixOracle?.Dispose();
-            residentContinuationTrace?.Dispose();
             restoreDrawing.Dispose();
             videoCapture?.Dispose();
             observationQueue.Dispose();

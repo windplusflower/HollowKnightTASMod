@@ -23,18 +23,11 @@ public sealed class DiagnosticSettingsUiTests
     [TestMethod]
     public void ExportIsBoundAndVisibleAtBottomOfSettings()
     {
-        Exception? failure = null;
-        var thread = new Thread(() =>
+        WpfTestApplication.Run(() =>
         {
-            Application? app = null;
             MainWindow? window = null;
             try
             {
-                app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-                var theme = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "fixtures", "studio-theme.xaml"));
-                XNamespace wpf = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
-                var resources = new XElement(wpf + "ResourceDictionary", new XAttribute(XNamespace.Xmlns + "x", "http://schemas.microsoft.com/winfx/2006/xaml"), theme.Root!.Element(wpf + "Application.Resources")!.Elements());
-                app.Resources = (ResourceDictionary)XamlReader.Parse(resources.ToString());
                 using var sessions = new SessionRegistry("diagnostic-ui-test");
                 using var broker = new AutomationBroker(sessions, automationDirectory: Path.Combine(AppContext.BaseDirectory, "diagnostic-ui-test"));
                 var vm = new MainViewModel(sessions, new MovieEditorService(), new CapabilityBroker(), new NativeHostLauncher(AppContext.BaseDirectory), broker);
@@ -60,12 +53,7 @@ public sealed class DiagnosticSettingsUiTests
                 using var output = File.Create(Path.Combine(AppContext.BaseDirectory, "diagnostic-settings.png"));
                 encoder.Save(output);
             }
-            catch (Exception ex) { failure = ex; }
-            finally { if (window != null) { window.DataContext = null; window.Close(); } app?.Shutdown(); }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.IsTrue(thread.Join(TimeSpan.FromSeconds(30)));
-        if (failure != null) throw new AssertFailedException(failure.ToString());
+            finally { if (window != null) { window.DataContext = null; window.Close(); } }
+        }, TimeSpan.FromSeconds(30), loadStudioTheme: true);
     }
 }

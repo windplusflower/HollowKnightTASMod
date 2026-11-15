@@ -141,5 +141,49 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
             Assert.ThrowsExactly<InvalidDataException>(() => store.Publish(current, oldPacket));
             Assert.AreEqual("Rejected", current.State); Assert.AreEqual(0, store.Catalog(scope).Count);
         }
+
+        [TestMethod]
+        public void LeanS0HeaderAndSectionsRoundTripThroughReceiverWithRestoreQualifiedTrue()
+        {
+            var scope = new SceneCheckpointScope(Id(), Id(), Id(), 1);
+            var sections = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+            {
+                ["leanS0"] = new byte[] { 1, 2, 3, 4 },
+                ["executionFiles"] = new byte[] { 5, 6 }
+            };
+            var payload = SceneCheckpointPacket.EncodeSections(sections, SceneCheckpointHeader.LeanS0SchemaVersion);
+            var header = SceneCheckpointHeader.CreateLeanS0(Id(), scope, Binding, SceneCheckpointTrigger.ManualNextEligibleLoadBoundary,
+                4, 1421, 1500, 1421, 1520, payload.Length, Sha256Utility.ComputeHex(payload));
+            var parsedHeader = SceneCheckpointHeader.FromFields(header.ToFields());
+            Assert.AreEqual(SceneCheckpointHeader.LeanS0SchemaVersion, parsedHeader.Schema);
+            Assert.AreEqual(SceneCheckpointHeader.LeanS0AdapterId, parsedHeader.Adapter);
+            Assert.IsTrue(parsedHeader.RestoreQualified);
+
+            var packet = new SceneCheckpointPacket(parsedHeader, payload);
+            using var receiver = new SceneCheckpointReceiver(parsedHeader, scope, Binding);
+            for (var index = 0; index < packet.ChunkCount; index++)
+                receiver.Append(index, packet.ReadChunk(index));
+            var received = receiver.Complete();
+            Assert.IsTrue(received.Header.RestoreQualified);
+            CollectionAssert.AreEqual(sections["leanS0"], received.CopySections()["leanS0"]);
+            CollectionAssert.AreEqual(sections["executionFiles"], received.CopySections()["executionFiles"]);
+        }
+
+        [TestMethod]
+        public void ForgedLegacySchemaRestoreQualifiedHeaderAndIncompleteLeanS0SectionsAreRejected()
+        {
+            var scope = new SceneCheckpointScope(Id(), Id(), Id(), 1);
+            var legacyPacket = Packet(scope);
+            var forgedFields = legacyPacket.Header.ToFields();
+            forgedFields["restoreQualified"] = "true";
+            Assert.ThrowsExactly<InvalidDataException>(() => SceneCheckpointHeader.FromFields(forgedFields));
+
+            var incompleteSections = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+            {
+                ["leanS0"] = new byte[] { 1, 2, 3 }
+            };
+            Assert.ThrowsExactly<InvalidDataException>(() =>
+                SceneCheckpointPacket.EncodeSections(incompleteSections, SceneCheckpointHeader.LeanS0SchemaVersion));
+        }
     }
 }

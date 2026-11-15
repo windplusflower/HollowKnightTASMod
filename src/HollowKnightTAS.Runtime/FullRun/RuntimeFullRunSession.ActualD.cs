@@ -6,10 +6,6 @@ namespace HollowKnightTAS.Runtime.FullRun
 {
     public sealed partial class RuntimeFullRunSession
     {
-        private byte[]? actualDImport;
-        private int actualDImportOffset;
-        private string actualDImportHash = "";
-        private bool actualDApplicationStarted;
         private void StartActualDSuffixOracle(string role, long end)
         {
             if (actualDSuffixOracle != null || !movieInputNativeOrigin.HasValue)

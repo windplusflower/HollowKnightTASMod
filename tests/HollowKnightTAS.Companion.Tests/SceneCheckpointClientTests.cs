@@ -92,7 +92,7 @@ namespace HollowKnightTAS.Companion.Tests
             Assert.IsFalse(peer.Applied);
             await client.ApplyRestorePrototypeAsync(packet.Header.CheckpointId, scope, binding, CancellationToken.None);
             var status = await client.RestoreStatusAsync(packet.Header.CheckpointId, CancellationToken.None);
-            Assert.IsTrue(peer.Applied); Assert.AreEqual("false", status["restoreQualified"]);
+            Assert.IsTrue(peer.Applied); Assert.AreEqual("true", status["restoreQualified"]);
             Assert.AreEqual(packet.Header.CheckpointId, status["checkpointId"]);
         }
         [TestMethod]
@@ -132,8 +132,9 @@ namespace HollowKnightTAS.Companion.Tests
                         var scope = new SceneCheckpointScope(fields["studioSessionId"], fields["treeId"], fields["branchId"], long.Parse(fields["generation"], CultureInfo.InvariantCulture));
                         var binding = new SceneCheckpointBinding(fields["environmentSha256"], fields["initialSavesSha256"], fields["nativeProfileId"]);
                         var payload = SceneCheckpointPacket.EncodeSections(new Dictionary<string, byte[]>
-                        { ["playerData"] = Enumerable.Range(0, 100000).Select(n => (byte)n).ToArray(), ["sceneData"] = new byte[] { 2 }, ["transition"] = new byte[] { 3 }, ["unityRng"] = new byte[16], ["continuation"] = new byte[] { 4 } });
-                        Captured = new SceneCheckpointPacket(new SceneCheckpointHeader(fields["captureId"], scope, binding,
+                        { ["leanS0"] = Enumerable.Range(0, 100000).Select(n => (byte)n).ToArray(), ["executionFiles"] = new byte[] { 4 } },
+                            SceneCheckpointHeader.LeanS0SchemaVersion);
+                        Captured = new SceneCheckpointPacket(SceneCheckpointHeader.CreateLeanS0(fields["captureId"], scope, binding,
                             Enum.Parse<SceneCheckpointTrigger>(fields["trigger"]), 1, 4, 8, 4, 12, payload.Length, Sha256Utility.ComputeHex(payload)), payload);
                         reply["status"] = "Pending"; break;
                     case "status": reply = Captured!.Header.ToFields(); reply["status"] = "Captured"; reply["requestId"] = fields["requestId"]; break;
@@ -146,13 +147,13 @@ namespace HollowKnightTAS.Companion.Tests
                     case "cancel": if (Captured?.Header.CheckpointId == fields["captureId"]) Captured = null; reply["status"] = "Cancelled"; break;
                     case "import-begin": var header = SceneCheckpointHeader.FromFields(fields); import = new SceneCheckpointReceiver(header, header.Scope, header.Binding); reply["status"] = "ImportPending"; break;
                     case "import-chunk": import!.Append(int.Parse(fields["index"], CultureInfo.InvariantCulture), Convert.FromBase64String(fields["data"])); reply["status"] = "ImportPending"; break;
-                    case "import-end": Staged = import!.Complete(); import = null; reply["status"] = "Staged"; reply["checkpointId"] = Staged.Header.CheckpointId; reply["restoreQualified"] = "false"; break;
+                    case "import-end": Staged = import!.Complete(); import = null; reply["status"] = "Staged"; reply["checkpointId"] = Staged.Header.CheckpointId; reply["restoreQualified"] = Staged.Header.RestoreQualified ? "true" : "false"; break;
                     case "import-cancel": import?.Dispose(); import = null; Staged = null; reply["status"] = "ImportCancelled"; break;
                     case "restore-start":
                     case "restore-apply":
                     case "restore-status":
                         reply["checkpointId"] = Staged!.Header.CheckpointId;
-                        reply["restoreQualified"] = InvalidRestoreReceipt ? "invalid" : "false";
+                        reply["restoreQualified"] = InvalidRestoreReceipt ? "invalid" : (Staged.Header.RestoreQualified ? "true" : "false");
                         reply["status"] = fields["phase"] == "restore-start" ? "LoadingInitialSave" : "RebuildingCToK";
                         if (fields["phase"] == "restore-apply") Applied = true;
                         reply["stateApplied"] = Applied ? "true" : "false";

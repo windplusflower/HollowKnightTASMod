@@ -22,8 +22,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         // independently of the 32 MiB packet ceiling and the legacy format limits.
         internal const int MaximumResidentNodes = 262144;
         internal const int MaximumPackedNodes = SceneCheckpointPacket.MaximumPayloadBytes / 6, MaximumPackedValues = SceneCheckpointPacket.MaximumPayloadBytes;
-        private int NodeLimit => residentPolicy == null ? MaximumNodes : MaximumPackedNodes;
-        private int ValueLimit => residentPolicy == null ? MaximumValues : MaximumPackedValues;
+        private int NodeLimit => MaximumNodes;
+        private int ValueLimit => MaximumValues;
         private readonly Dictionary<string, Layout> layouts = new Dictionary<string, Layout>(StringComparer.Ordinal);
         private readonly Dictionary<string, Type> types = new Dictionary<string, Type>(StringComparer.Ordinal);
         private readonly Dictionary<Type, string> typeIdentities = new Dictionary<Type, string>();
@@ -40,7 +40,6 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Action<CanonicalCarryGraphData>? importValidation;
         private readonly bool easeCallbacks;
         private readonly bool bossCallbacks;
-        private readonly ResidentGraphPolicy? residentPolicy;
         private readonly Func<object, FieldInfo, string?>? fieldFailureDetails;
         private sealed class ReadbackMeasurement { internal int FieldSlots; internal long Calls, Ticks; }
         private readonly List<ReadbackMeasurement> readbackMeasurements = new List<ReadbackMeasurement>();
@@ -51,36 +50,32 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal CanonicalCarryGraphCodec(IEnumerable<Type> registered, string schema, Func<object, string?>? portability = null,
             Func<object, string?>? allocationPortability = null, Action<CanonicalCarryGraphData>? importValidation = null,
-            bool compiledReadbackFields = true, Func<object, FieldInfo, string?>? fieldFailureDetails = null,
-            ResidentGraphPolicy? residentPolicy = null)
+            bool compiledReadbackFields = true, Func<object, FieldInfo, string?>? fieldFailureDetails = null)
         {
-            this.residentPolicy = residentPolicy;
             this.fieldFailureDetails = fieldFailureDetails;
             if (string.IsNullOrEmpty(schema)) throw new ArgumentException("Carry schema identity is required.", nameof(schema));
-            this.schema = schema + "\nframework-list-static-empty-v1"
-                + (residentPolicy == null ? "\ncanonical-contact-impulse-unused-zero-v1" : "");
-            if (residentPolicy == null && HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalRetiredUiCallbacks(
+            this.schema = schema + "\nframework-list-static-empty-v1\ncanonical-contact-impulse-unused-zero-v1";
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalRetiredUiCallbacks(
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
                 this.schema += "\n" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalRetiredUiCallbackPolicyId
                     + "\n" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalRetiredFallTrailTweenPolicyId;
             var registeredTypes = registered.Distinct().ToArray();
-            bossCallbacks = residentPolicy == null && HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(
+            bossCallbacks = HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId) && registeredTypes.Contains(CanonicalBossChallengeCallback.Target);
-            if (residentPolicy == null && HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
                 this.schema += "\n" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalHudPresentationPolicyId;
-            if (residentPolicy == null && HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
+            if (HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalBossChallengeContext(HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
                 this.schema += "\n" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalSoulOrbContinuationPolicyId;
             if (bossCallbacks) this.schema += "\n" + HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalBossChallengeContextPolicyId;
-            easeCallbacks = residentPolicy == null && HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalRetiredUiCallbacks(
+            easeCallbacks = HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesCanonicalRetiredUiCallbacks(
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)
                 && CanonicalEaseCallback.OwnerType != null && registeredTypes.Any(type => CanonicalEaseCallback.OwnerType.IsAssignableFrom(type));
             if (easeCallbacks) this.schema += "\noriginal-easing-closed-graph-node-v1";
-            if (residentPolicy != null) this.schema += "\n" + ResidentGraphPolicy.Identity;
             listEmptyArrays = new CanonicalListEmptyArrayBindings(registeredTypes);
             this.portability = portability;
             this.allocationPortability = allocationPortability;
             this.importValidation = importValidation;
-            Func<FieldInfo, Func<object, object?>> prepareReadback = residentPolicy != null ? ResidentValueAccess.PrepareRead : compiledReadbackFields
+            Func<FieldInfo, Func<object, object?>> prepareReadback = compiledReadbackFields
                 ? LoadingFieldReader.PrepareSharedReadback : field => field.GetValue;
             foreach (var type in new[] { typeof(bool), typeof(byte), typeof(sbyte), typeof(char), typeof(short), typeof(ushort),
                 typeof(int), typeof(uint), typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(string), typeof(decimal) })
@@ -88,15 +83,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var type in registeredTypes)
             {
                 if (type.ContainsGenericParameters || type.IsPointer || type.IsByRef || type == typeof(IntPtr) || type == typeof(UIntPtr)
-                    || (residentPolicy == null && typeof(Delegate).IsAssignableFrom(type)) || typeof(MemberInfo).IsAssignableFrom(type)
+                    || typeof(Delegate).IsAssignableFrom(type) || typeof(MemberInfo).IsAssignableFrom(type)
                     || typeof(MarshalByRefObject).IsAssignableFrom(type) || type.IsInterface || type.IsAbstract
-                    || (residentPolicy == null && Hierarchy(type).Any(t => t.FullName == "UnityEngine.Object")))
+                    || Hierarchy(type).Any(t => t.FullName == "UnityEngine.Object"))
                     throw new InvalidDataException("Carry allocation type is not managed data: " + type.FullName);
                 var id = Identity(type);
                 types[id] = type;
                 typeIdentities[type] = id;
-                if (!IsScalar(type) && !type.IsArray && !ResidentGraphPolicy.IsDelegate(type))
-                    layouts.Add(id, new Layout(type, residentPolicy?.ManagedFields(type) ?? Fields(type), prepareReadback, residentPolicy));
+                if (!IsScalar(type) && !type.IsArray)
+                    layouts.Add(id, new Layout(type, Fields(type), prepareReadback));
             }
             if (easeCallbacks) {
                 var type = CanonicalEaseCallback.CallbackType ?? throw new InvalidDataException("Original Ease callback type is absent."); var id = Identity(type);
@@ -107,7 +102,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             // Only these common, recursively pure value layouts use local
             // parsing templates. Every returned box is still independent.
-            if (residentPolicy == null) foreach (var type in new[] { typeof(bool), typeof(byte), typeof(int), typeof(uint), typeof(UnityEngine.Vector2),
+            foreach (var type in new[] { typeof(bool), typeof(byte), typeof(int), typeof(uint), typeof(UnityEngine.Vector2),
                 typeof(UnityEngine.Vector3), typeof(UnityEngine.Quaternion), typeof(UnityEngine.Color) }) {
                 if (!types.TryGetValue(Identity(type), out var registeredType) || registeredType != type
                     || !IsScalar(type) && LeafSize(type) <= 0) continue;
@@ -117,61 +112,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
         }
 
-        // Reference-free values use their exact managed stride on the pinned
-        // little-endian runtime. Pointers and semantic native instance IDs stay
-        // in the field codec. One node per array preserves every incoming alias.
-        private static readonly ConcurrentDictionary<Type, int> PackedWidths = new ConcurrentDictionary<Type, int>();
-        internal static int PackedWidth(Type type) => PackedWidths.GetOrAdd(type, arrayType => {
-            if (!arrayType.IsArray || !BitConverter.IsLittleEndian) return 0;
-            var element = arrayType.GetElementType()!;
-            if (!element.IsValueType || arrayType != element.MakeArrayType()) return 0;
-            var policy = new ResidentGraphPolicy(_ => null);
-            var seen = new HashSet<Type>();
-            bool Portable(Type value) {
-                if (!value.IsValueType || value == typeof(IntPtr) || value == typeof(UIntPtr)) return false;
-                if (value.IsPrimitive || value.IsEnum) return true;
-                if (!seen.Add(value)) return true;
-                return Fields(value).All(field => !field.FieldType.IsPointer && !field.FieldType.IsByRef
-                    && policy.InstanceIdTarget(field) == null && Portable(field.FieldType));
-            }
-            if (!Portable(element)) return 0;
-            // sizeof measures the actual managed array stride, including private
-            // fields and padding. Source and target pin the same Mono/assembly ABI.
-            var method = new DynamicMethod("resident_value_stride", typeof(int), Type.EmptyTypes, typeof(CanonicalCarryGraphCodec).Module, true);
-            var il = method.GetILGenerator(); il.Emit(OpCodes.Sizeof, element); il.Emit(OpCodes.Ret);
-            var width = ((Func<int>)method.CreateDelegate(typeof(Func<int>)))();
-            return width > 0 && width <= 4096 ? width : 0;
-        });
-        internal static byte[] PackedBytes(Array array)
-        {
-            var bytes = new byte[checked(array.Length * PackedWidth(array.GetType()))];
-            if (bytes.Length == 0) return bytes;
-            var pin = System.Runtime.InteropServices.GCHandle.Alloc(array, System.Runtime.InteropServices.GCHandleType.Pinned);
-            try { System.Runtime.InteropServices.Marshal.Copy(pin.AddrOfPinnedObject(), bytes, 0, bytes.Length); }
-            finally { pin.Free(); }
-            return bytes;
-        }
-        internal static void WritePacked(byte[] bytes, Array array)
-        {
-            if (bytes.Length != checked(array.Length * PackedWidth(array.GetType()))) throw new InvalidDataException("Packed array byte length differs.");
-            if (bytes.Length == 0) return;
-            var pin = System.Runtime.InteropServices.GCHandle.Alloc(array, System.Runtime.InteropServices.GCHandleType.Pinned);
-            try { System.Runtime.InteropServices.Marshal.Copy(bytes, 0, pin.AddrOfPinnedObject(), bytes.Length); }
-            finally { pin.Free(); }
-        }
-        private static bool IsPackedKind(string kind) => kind == "primitive-vector" || kind == "value-vector";
-        internal static int ResidentArrayLimit(Type type)
-        {
-            var width = PackedWidth(type);
-            return width == 0 ? MaximumPackedValues / 3 : SceneCheckpointPacket.MaximumPayloadBytes / width;
-        }
-
-        private Type RuntimeType(object value) => residentPolicy == null ? value.GetType() : ResidentValueAccess.TypeOf(value);
-        private bool ActualInstance(Type expected, object? value) => value != null && (expected.IsInstanceOfType(value)
-            || residentPolicy != null && ResidentValueAccess.IsView(value) && expected.IsAssignableFrom(ResidentValueAccess.TypeOf(value)));
-        private object? ReadArray(Array array, int index) => residentPolicy == null ? array.GetValue(index) : ResidentValueAccess.ReadArray(array, index);
-        private void WriteArray(Array array, object? value, int index) { if (residentPolicy == null) array.SetValue(value, index); else ResidentValueAccess.WriteArray(array, index, value); }
-        private void WriteField(FieldInfo field, object owner, object? value) { if (residentPolicy == null) field.SetValue(owner, value); else ResidentValueAccess.WriteField(owner, field, value); }
+        private Type RuntimeType(object value) => value.GetType();
+        private bool ActualInstance(Type expected, object? value) => value != null && expected.IsInstanceOfType(value);
+        private object? ReadArray(Array array, int index) => array.GetValue(index);
+        private void WriteArray(Array array, object? value, int index) => array.SetValue(value, index);
+        private void WriteField(FieldInfo field, object owner, object? value) => field.SetValue(owner, value);
         private static readonly ConcurrentDictionary<Type, string> TypeNames = new ConcurrentDictionary<Type, string>();
         private static readonly ConcurrentDictionary<FieldInfo, string> FieldNames = new ConcurrentDictionary<FieldInfo, string>();
         private static readonly ConcurrentDictionary<Type, FieldInfo[]> FieldLayouts = new ConcurrentDictionary<Type, FieldInfo[]>();
@@ -187,8 +132,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             || type.IsEnum || (type.IsPrimitive && type != typeof(IntPtr) && type != typeof(UIntPtr));
 
         internal object ResolveExternalBinding(string binding, Func<string, object> other)
-            => residentPolicy != null && residentPolicy.TryResolveMetadata(binding, out var metadata)
-                ? metadata : listEmptyArrays.Resolve(binding, other);
+            => listEmptyArrays.Resolve(binding, other);
         // Most graph slots are valid. Format their provenance only when reporting a
         // fault or when a caller explicitly requests the full diagnostic path.
         private readonly struct CaptureLocation
@@ -261,12 +205,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (++count > ValueLimit || depth > 128) throw new InvalidDataException("Carry field graph exceeds its bound at " + path
                     + ";values=" + count + ";depth=" + depth);
-                if (residentPolicy != null && sourceField != null && residentPolicy.InstanceIdTarget(sourceField) != null) {
-                    try {
-                        if (declared != typeof(int) || value is not int instanceId) throw new InvalidDataException("Resident instance-ID slot type differs.");
-                        return new CanonicalCarryGraphData.Value { Kind = "instance-id", Type = TypeIdentity(typeof(int)), Text = residentPolicy.CaptureInstanceId(sourceField, instanceId) };
-                    } catch (InvalidDataException error) { unsupported.Add(path + ":" + error.Message); return Unsupported(TypeIdentity(typeof(int)), error.Message); }
-                }
                 if (value == null) return new CanonicalCarryGraphData.Value { Kind = "null" };
                 var type = RuntimeType(value); var id = TypeIdentity(type);
                 var issue = portability?.Invoke(value);
@@ -284,15 +222,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                 // into object/interface storage stays a node to retain aliases.
                 if (declared.IsValueType && types.ContainsKey(id) && LeafSize(type) > 0)
                 {
-                    if (residentPolicy == null) count = checked(count + LeafSize(type) - 1);
+                    count = checked(count + LeafSize(type) - 1);
                     if (count > ValueLimit) throw new InvalidDataException("Carry leaf field count exceeds its bound at " + path);
                     return new CanonicalCarryGraphData.Value { Kind = "value", Type = id, Text = EncodeLeaf(value, type) };
-                }
-                if (residentPolicy != null && (ResidentGraphPolicy.IsDelegate(type) || residentPolicy.IsDestroyed(value)
-                    || residentPolicy.BindNativeOwner(value) != null)) {
-                    if (!types.ContainsKey(id) || !ResidentGraphPolicy.IsDelegate(type) && !layouts.ContainsKey(id))
-                        throw new InvalidDataException("Resident graph type is absent from its captured manifest: " + id);
-                    return new CanonicalCarryGraphData.Value { Kind = "node", Type = id, Reference = AddNode(value, depth, path) };
                 }
                 // Root references remain inside the graph, even if the caller
                 // also has an external binding for the same singleton.
@@ -316,7 +248,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (seen.TryGetValue(value, out var existing))
                     return new CanonicalCarryGraphData.Value { Kind = "node", Type = id, Reference = existing };
                 string? binding;
-                try { binding = residentPolicy?.BindMetadata(value) ?? listEmptyArrays.Bind(value) ?? externalBinding(value); }
+                try { binding = listEmptyArrays.Bind(value) ?? externalBinding(value); }
                 catch (InvalidDataException error)
                 { var details = fieldOwner == null || sourceField == null ? null : fieldFailureDetails?.Invoke(fieldOwner, sourceField);
                     var reason = error.Message + (details == null ? "" : ";provenance=" + details);
@@ -358,14 +290,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var frameworkEmpty = listEmptyArrays.ObserveList(owner);
                 if (frameworkEmpty != null && seen.ContainsKey(frameworkEmpty))
                     unsupported.Add(path + ":framework-list-static-empty-was-allocated-before-original-list-provenance");
-                if (residentPolicy != null && owner is Delegate residentDelegate) {
-                    node.Kind = "delegate"; node.Text = ResidentGraphPolicy.DescribeDelegate(residentDelegate);
-                    var calls = residentDelegate.GetInvocationList();
-                    if (sourceFields != null) sourceFields[entry.Id - 1] = calls.Select(call => call.Target).ToArray();
-                    node.Items = calls.Select((call, index) =>
-                        Visit(call.Target, typeof(object), path + "/invocation[" + index + "]/target", entry.Depth + 1)).ToArray();
-                }
-                else if (easeCallbacks && owner.GetType() == CanonicalEaseCallback.CallbackType) {
+                if (easeCallbacks && owner.GetType() == CanonicalEaseCallback.CallbackType) {
                     var callback = (Delegate)owner;
                     if (callback.Target == null || !seen.TryGetValue(callback.Target, out var target))
                         throw new InvalidDataException("Ease callback target is outside the captured graph.");
@@ -381,12 +306,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 { node.Kind = "boxed-scalar"; node.Text = CachedEncodeScalar(owner, RuntimeType(owner)); }
                 else if (owner is Array array)
                 {
-                    if (array.Rank != 1 || array.GetLowerBound(0) != 0 || array.Length > (residentPolicy == null ? MaximumNodes : ResidentArrayLimit(array.GetType())))
+                    if (array.Rank != 1 || array.GetLowerBound(0) != 0 || array.Length > MaximumNodes)
                         throw new InvalidDataException("Carry array shape exceeds its bound.");
-                    if (residentPolicy != null && PackedWidth(array.GetType()) != 0) {
-                        node.Kind = array.GetType().GetElementType()!.IsPrimitive ? "primitive-vector" : "value-vector"; node.Packed = PackedBytes(array);
-                        continue;
-                    }
                     node.Kind = "array"; node.Items = new CanonicalCarryGraphData.Value[array.Length];
                     var element = array.GetType().GetElementType()!;
                     var frozen = sourceFields == null ? null : new object?[array.Length];
@@ -400,71 +321,23 @@ namespace HollowKnightTAS.Runtime.FullRun
                 else
                 {
                     node.Kind = "object";
-                    if (residentPolicy != null && residentPolicy.IsUnityType(owner.GetType())) {
-                        if (residentPolicy.IsDestroyed(owner)) node.Kind = "destroyed-unity";
-                        else {
-                            node.Kind = "native-owner";
-                            node.Text = residentPolicy.BindNativeOwner(owner) ?? throw new InvalidDataException("Resident native owner lost its captured binding.");
-                            if (nativeValues.TryGetValue(node.Text, out var previousNative) && !ReferenceEquals(owner, previousNative))
-                                throw new InvalidDataException("Resident native owner binding is ambiguous: " + node.Text);
-                            nativeValues[node.Text] = owner;
-                        }
-                    }
                     var layout = layouts[node.Type];
-                    var selected = layout.Packed?.Bytes > 0 ? layout.Packed.References : Enumerable.Range(0, layout.Fields.Length).ToArray();
-                    if (layout.Packed?.Bytes > 0) node.Packed = layout.Packed.Read(owner);
-                    node.Fields = new CanonicalCarryGraphData.Field[selected.Length];
-                    var frozen = sourceFields == null ? null : new object?[selected.Length];
+                    node.Fields = new CanonicalCarryGraphData.Field[layout.Fields.Length];
+                    var frozen = sourceFields == null ? null : new object?[layout.Fields.Length];
                     if (sourceFields != null) sourceFields[entry.Id - 1] = frozen;
-                    for (var index = 0; index < selected.Length; index++) {
-                        var at = selected[index]; var field = layout.Fields[at]; var identity = layout.FieldIdentities[at];
-                        var value = layout.Readers[at](owner);
+                    for (var index = 0; index < layout.Fields.Length; index++) {
+                        var field = layout.Fields[index]; var identity = layout.FieldIdentities[index];
+                        var value = layout.Readers[index](owner);
                         if (frozen != null) frozen[index] = value;
                         node.Fields[index] = new CanonicalCarryGraphData.Field { Name = identity,
                             Value = Visit(value, field.FieldType, path.Field(identity), entry.Depth + 1, owner, field) };
                     }
                 }
             }
-            var result = new CanonicalCarryGraphData { Version = residentPolicy == null ? 1 : 2, WireRevision = residentPolicy == null ? 0 : 6, Schema = schema, Roots = rootData, Nodes = nodes.ToArray(),
+            var result = new CanonicalCarryGraphData { Version = 1, WireRevision = 0, Schema = schema, Roots = rootData, Nodes = nodes.ToArray(),
                 Externals = externals.ToArray(), Unsupported = unsupported.ToArray() };
             if (capturedReadback != null) {
-                if (residentPolicy == null) throw new InvalidOperationException("Source witness requires resident field semantics.");
-                var packet = Encode(result);
-                capturedReadback(() => {
-                    if (!packet.SequenceEqual(Encode(result))) throw new InvalidOperationException("Captured graph packet was mutated.");
-                    if (roots.Count != result.Roots.Length || result.Roots.Any(root => !roots.TryGetValue(root.Binding, out var current)
-                        || !ReferenceEquals(current, sourceOwners![root.Node - 1]))) throw new InvalidOperationException("Source root bindings changed.");
-                    for (var index = 0; index < result.Nodes.Length; index++) {
-                        var node = result.Nodes[index]; var owner = sourceOwners![index]; var frozen = sourceFields![index];
-                        if (IsPackedKind(node.Kind)) {
-                            if (!node.Packed!.SequenceEqual(PackedBytes((Array)owner))) throw new InvalidOperationException("Source primitive vector changed.");
-                        } else if (node.Kind == "boxed-scalar") {
-                            if (EncodeScalar(owner, RuntimeType(owner)) != node.Text) throw new InvalidOperationException("Source scalar box changed.");
-                        } else if (node.Kind == "delegate") {
-                            var calls = ((Delegate)owner).GetInvocationList();
-                            if (ResidentGraphPolicy.DescribeDelegate((Delegate)owner) != node.Text || calls.Length != frozen!.Length
-                                || calls.Where((call, i) => !ReferenceEquals(call.Target, frozen[i])).Any())
-                                throw new InvalidOperationException("Source delegate changed.");
-                        } else if (owner is Array array) {
-                            if (array.Length != frozen!.Length) throw new InvalidOperationException("Source array shape changed.");
-                            var element = array.GetType().GetElementType()!;
-                            for (var i = 0; i < array.Length; i++)
-                                if (!SameRawSlot(frozen[i], ReadArray(array, i), element, 0, scalarStrings: true)) throw new InvalidOperationException("Source array slot changed.");
-                        } else {
-                            if (node.Kind == "destroyed-unity" && !residentPolicy.IsDestroyed(owner)
-                                || node.Kind == "native-owner" && residentPolicy.BindNativeOwner(owner) != node.Text)
-                                throw new InvalidOperationException("Source native wrapper identity changed.");
-                            var layout = layouts[node.Type];
-                            var selected = node.Packed == null ? Enumerable.Range(0, layout.Fields.Length).ToArray() : layout.Packed!.References;
-                            if (node.Packed != null && !layout.Packed!.Matches(owner, node.Packed)) throw new InvalidOperationException("Source packed fields changed.");
-                            for (var i = 0; i < selected.Length; i++) {
-                                var at = selected[i];
-                                if (!SameRawSlot(frozen![i], layout.Readers[at](owner), layout.Fields[at].FieldType, 0, scalarStrings: true))
-                                    throw new InvalidOperationException("Source managed field changed: " + layout.FieldIdentities[at]);
-                            }
-                        }
-                    }
-                });
+                throw new InvalidOperationException("Source witness requires resident field semantics.");
             }
             return result;
         }
@@ -503,8 +376,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Domain checks receive the frozen input before allocation or
             // external resolution. All generic checks still run afterwards.
             importValidation?.Invoke(value);
-            if (value.Version != (residentPolicy == null ? 1 : 2))
-                throw new InvalidDataException("Carry graph version differs: exp=" + (residentPolicy == null ? 1 : 2) + ", act=" + value.Version);
+            if (value.Version != 1)
+                throw new InvalidDataException("Carry graph version differs: exp=1, act=" + value.Version);
             if (value.Schema != schema)
                 throw new InvalidDataException("Carry graph schema differs: exp=" + schema + ", act=" + value.Schema);
             if (value.Unsupported != null && value.Unsupported.Length != 0)
@@ -525,37 +398,21 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             var objects = new object[value.Nodes.Length];
             var nodeTypes = new Type[value.Nodes.Length];
-            var residentDelegateMethods = new Dictionary<int, MethodInfo[]>();
             for (var i = 0; i < value.Nodes.Length; i++)
             {
                 var node = value.Nodes[i];
                 if (node == null || node.Id != i + 1 || node.Type == null || !types.TryGetValue(node.Type, out var type))
                     throw new InvalidDataException("Carry node type differs: " + (i + 1));
-                if (IsPackedKind(node.Kind)) {
-                    var width = PackedWidth(type);
-                    if (residentPolicy == null || width == 0 || node.Packed == null || node.Packed.Length % width != 0
-                        || (node.Kind == "primitive-vector") != type.GetElementType()!.IsPrimitive
-                        || node.Packed.Length > SceneCheckpointPacket.MaximumPayloadBytes || node.Items != null || node.Text != null || node.Fields != null)
-                        throw new InvalidDataException("Invalid resident primitive vector.");
-                } else if (node.Packed != null && (residentPolicy == null || !layouts.TryGetValue(node.Type, out var packedLayout)
-                    || packedLayout.Packed == null || packedLayout.Packed.Bytes == 0 || node.Packed.Length != packedLayout.Packed.Bytes))
+                if (node.Kind == "primitive-vector" || node.Kind == "value-vector")
+                    throw new InvalidDataException("Invalid resident primitive vector.");
+                if (node.Packed != null)
                     throw new InvalidDataException("Unexpected packed field payload.");
-                if (IsPackedKind(node.Kind)) { nodeTypes[i] = type; continue; }
-                if (residentPolicy != null && residentPolicy.IsUnityType(type)) {
-                    if ((node.Kind != "destroyed-unity" && node.Kind != "native-owner") || node.Items != null
-                        || (node.Kind == "destroyed-unity" ? node.Text != null : string.IsNullOrEmpty(node.Text))
-                        || !layouts.TryGetValue(node.Type, out var nativeLayout) || !FieldsMatch(node.Fields, node.Packed == null ? nativeLayout.FieldIdentities : nativeLayout.ReferenceNames))
-                        throw new InvalidDataException("Resident Unity node kind, binding or complete managed layout differs: " + (i + 1));
-                } else if (residentPolicy != null && ResidentGraphPolicy.IsDelegate(type)) {
-                    if (node.Kind != "delegate" || node.Fields != null || node.Text == null || node.Items == null)
-                        throw new InvalidDataException("Resident delegate node shape differs: " + (i + 1));
-                    residentDelegateMethods.Add(i, ResidentGraphPolicy.ResolveDelegateMethods(node.Text, type, node.Items.Length));
-                } else if (node.Kind != (easeCallbacks && type == CanonicalEaseCallback.CallbackType ? "ease-callback" : bossCallbacks && CanonicalBossChallengeCallback.IsType(type) ? "boss-challenge-callback" : type.IsArray ? "array" : IsScalar(type) ? "boxed-scalar" : "object")
+                if (node.Kind != (easeCallbacks && type == CanonicalEaseCallback.CallbackType ? "ease-callback" : bossCallbacks && CanonicalBossChallengeCallback.IsType(type) ? "boss-challenge-callback" : type.IsArray ? "array" : IsScalar(type) ? "boxed-scalar" : "object")
                     || (easeCallbacks && type == CanonicalEaseCallback.CallbackType || bossCallbacks && CanonicalBossChallengeCallback.IsType(type) ? node.Text == null || node.Items == null || node.Items.Length != 1 || node.Fields != null
                         : IsScalar(type) ? node.Text == null || node.Items != null || node.Fields != null || !type.IsValueType
-                        : type.IsArray ? node.Items == null || node.Items.Length > (residentPolicy == null ? MaximumNodes : ResidentArrayLimit(type)) || node.Fields != null || node.Text != null
+                        : type.IsArray ? node.Items == null || node.Items.Length > MaximumNodes || node.Fields != null || node.Text != null
                         : node.Items != null || node.Text != null || node.Fields == null || !layouts.ContainsKey(node.Type)
-                        || !FieldsMatch(node.Fields, node.Packed == null ? layouts[node.Type].FieldIdentities : layouts[node.Type].ReferenceNames)))
+                        || !FieldsMatch(node.Fields, layouts[node.Type].FieldIdentities)))
                     throw new InvalidDataException("Carry node type or field layout differs: " + (i + 1));
                 nodeTypes[i] = type;
             }
@@ -630,22 +487,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             // boxes by their incoming declared slots. A reference/interface or
             // delegate-target edge requires a real box and preserves its aliases;
             // value-only nodes use tool slots without creating a gameplay vtable.
-            var residentBoxes = new HashSet<int>();
-            if (residentPolicy != null) {
-                void Incoming(CanonicalCarryGraphData.Value item, Type declared) {
-                    if (item.Kind == "node" && !declared.IsValueType && item.Reference >= 1 && item.Reference <= nodeTypes.Length && nodeTypes[item.Reference - 1].IsValueType)
-                        residentBoxes.Add(item.Reference - 1);
-                }
-                for (var index = 0; index < value.Nodes.Length; index++) {
-                    var node = value.Nodes[index];
-                    if (node.Items != null) {
-                        var declared = nodeTypes[index].IsArray ? nodeTypes[index].GetElementType()! : typeof(object);
-                        foreach (var item in node.Items) Incoming(item, declared);
-                    }
-                    if (node.Fields != null && layouts.TryGetValue(node.Type, out var incomingLayout))
-                        for (var field = 0; field < node.Fields.Length; field++) Incoming(node.Fields[field].Value, incomingLayout.Fields[field].FieldType);
-                }
-            }
             var lifecycleNames = lifecycleWriteRoots == null ? new HashSet<string>(StringComparer.Ordinal)
                 : new HashSet<string>(lifecycleWriteRoots, StringComparer.Ordinal);
             if (lifecycleWriteRoots != null && (lifecycleNames.Count == 0 || lifecycleNames.Count != lifecycleWriteRoots.Count
@@ -655,16 +496,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (value.Roots.Any(root => lifecycleNodes.Contains(root.Node) && !lifecycleNames.Contains(root.Binding)))
                 throw new InvalidDataException("Lifecycle root selection omits an owner alias.");
             var boundNodes = new HashSet<int>(); var boundObjects = new Dictionary<object, int>(new References());
-            var nativePointers = new Dictionary<int, IntPtr>();
-            void RequireNativeOwner(int index, object owner)
-            {
-                if (residentPolicy == null || !residentPolicy.IsUnityType(nodeTypes[index])) return;
-                var pointer = residentPolicy.NativePointer(owner); var node = value.Nodes[index];
-                if (node.Kind == "destroyed-unity" ? pointer != IntPtr.Zero
-                    : pointer == IntPtr.Zero || residentPolicy.BindNativeOwner(owner) != node.Text)
-                    throw new InvalidDataException("Resident native/dead owner binding differs: " + (index + 1));
-                nativePointers[index] = pointer;
-            }
             foreach (var root in value.Roots)
             {
                 if (root.Node < 1 || root.Node > objects.Length || roots[root.Binding] == null
@@ -676,27 +507,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || boundObjects.TryGetValue(owner, out var prior) && prior != root.Node)
                     throw new InvalidDataException("Carry live root aliases differ.");
                 objects[root.Node - 1] = owner; boundNodes.Add(root.Node); boundObjects[owner] = root.Node;
-                RequireNativeOwner(root.Node - 1, owner);
             }
             for (var i = 0; i < objects.Length; i++)
                 if (objects[i] == null && !(easeCallbacks && nodeTypes[i] == CanonicalEaseCallback.CallbackType)
-                    && !(bossCallbacks && CanonicalBossChallengeCallback.IsType(nodeTypes[i])) && !residentDelegateMethods.ContainsKey(i))
+                    && !(bossCallbacks && CanonicalBossChallengeCallback.IsType(nodeTypes[i])))
                 {
                     var type = nodeTypes[i];
-                    if (value.Nodes[i].Kind == "native-owner") {
-                        var owner = ResolveExternalBinding(value.Nodes[i].Text!, resolveExternal);
-                        if (owner == null || owner.GetType() != type || boundObjects.ContainsKey(owner))
-                            throw new InvalidDataException("Resident native owner type or graph alias differs: " + value.Nodes[i].Text);
-                        objects[i] = owner; boundNodes.Add(i + 1); boundObjects.Add(owner, i + 1);
-                        RequireNativeOwner(i, owner); continue;
-                    }
 #pragma warning disable SYSLIB0050
                     objects[i] = IsScalar(type) ? DecodeBox(value.Nodes[i].Text!, type)
-                        : type.IsArray ? Array.CreateInstance(type.GetElementType()!, value.Nodes[i].Packed is byte[] payload ? payload.Length / PackedWidth(type) : value.Nodes[i].Items!.Length)
-                        : residentPolicy != null && type.IsValueType && !residentBoxes.Contains(i) ? ResidentValueAccess.Create(type)
+                        : type.IsArray ? Array.CreateInstance(type.GetElementType()!, value.Nodes[i].Items!.Length)
                         : FormatterServices.GetUninitializedObject(type);
 #pragma warning restore SYSLIB0050
-                    RequireNativeOwner(i, objects[i]);
                 }
             for (var i = 0; i < objects.Length; i++) if (easeCallbacks && nodeTypes[i] == CanonicalEaseCallback.CallbackType) {
                 var item = value.Nodes[i].Items![0];
@@ -722,31 +543,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidDataException("Carry external type or alias binding differs: " + saved.Binding);
                 external[i] = owner;
             }
-            var residentDelegateTargets = new Dictionary<int, object?[]>();
-            while (residentDelegateTargets.Count != residentDelegateMethods.Count) {
-                var progressed = false;
-                foreach (var pair in residentDelegateMethods) {
-                    if (residentDelegateTargets.ContainsKey(pair.Key)) continue;
-                    var node = value.Nodes[pair.Key]; var targets = new object?[node.Items!.Length]; var ready = true;
-                    for (var targetIndex = 0; targetIndex < targets.Length; targetIndex++) {
-                        var item = node.Items[targetIndex];
-                        if (item.Kind == "null" && item.Type == null && item.Text == null && item.Reference == 0) targets[targetIndex] = null;
-                        else if (item.Kind == "node" && item.Text == null && item.Reference >= 1 && item.Reference <= objects.Length
-                            && item.Type == value.Nodes[item.Reference - 1].Type) {
-                            targets[targetIndex] = objects[item.Reference - 1];
-                            if (targets[targetIndex] == null) ready = false;
-                        } else if (item.Kind == "external" && item.Text == null && item.Reference >= 1 && item.Reference <= external.Length
-                            && item.Type == value.Externals[item.Reference - 1].Type) targets[targetIndex] = external[item.Reference - 1];
-                        else if (item.Kind == "scalar" && item.Reference == 0 && item.Type != null && item.Text != null
-                            && types.TryGetValue(item.Type, out var scalar) && IsScalar(scalar)) targets[targetIndex] = DecodeScalar(item.Text, scalar);
-                        else throw new InvalidDataException("Resident delegate target graph reference differs.");
-                    }
-                    if (!ready) continue;
-                    objects[pair.Key] = ResidentGraphPolicy.BindDelegate(node.Text!, nodeTypes[pair.Key], targets, pair.Value);
-                    residentDelegateTargets.Add(pair.Key, targets); progressed = true;
-                }
-                if (!progressed) throw new InvalidDataException("Resident delegates contain an unconstructable direct target cycle.");
-            }
             var visitedNodes = new HashSet<int>(); var visitedExternal = new HashSet<int>(); var valueCount = 0;
             // This preparation only: no live owners, reader results, strings or
             // explicit boxed graph nodes enter the bounded source-value cache.
@@ -767,15 +563,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             object? Read(CanonicalCarryGraphData.Value item, Type expected, FieldInfo? sourceField = null)
             {
                 if (++valueCount > ValueLimit) throw new InvalidDataException("Carry value count exceeds its bound.");
-                var instanceIdField = residentPolicy != null && sourceField != null && residentPolicy.InstanceIdTarget(sourceField) != null;
-                if (instanceIdField != (item.Kind == "instance-id")) throw new InvalidDataException("Resident instance-ID field storage kind differs.");
                 object? result;
                 switch (item.Kind)
                 {
-                    case "instance-id":
-                        if (residentPolicy == null || sourceField == null || expected != typeof(int) || item.Type != TypeIdentity(typeof(int)) || item.Reference != 0 || item.Text == null)
-                            throw new InvalidDataException("Resident instance-ID value schema differs.");
-                        result = residentPolicy.ResolveInstanceId(sourceField, item.Text); break;
                     case "null":
                         if (item.Type != null || item.Text != null || item.Reference != 0 || expected.IsValueType && Nullable.GetUnderlyingType(expected) == null)
                             throw new InvalidDataException("Carry null field is invalid.");
@@ -803,24 +593,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                         visitedExternal.Add(item.Reference); result = external[item.Reference - 1]; break;
                     default: throw new InvalidDataException("Unresolved carry field kind.");
                 }
-                if (residentPolicy != null && !expected.IsValueType && result != null && ResidentValueAccess.IsView(result)) result = ResidentValueAccess.BoxValue(result);
-                if (residentPolicy != null && expected.IsArray && result is Array arr && !expected.IsAssignableFrom(arr.GetType())) {
-                    var elemType = expected.GetElementType()!;
-                    if (arr.Length == 0) {
-                        result = Array.CreateInstance(elemType, 0);
-                    } else if (elemType.IsClass || elemType.IsInterface) {
-                        bool allCompatible = true;
-                        for (int i = 0; i < arr.Length; i++) {
-                            var val = arr.GetValue(i);
-                            if (val != null && !elemType.IsInstanceOfType(val)) { allCompatible = false; break; }
-                        }
-                        if (allCompatible) {
-                            var newArr = Array.CreateInstance(elemType, arr.Length);
-                            Array.Copy(arr, newArr, arr.Length);
-                            result = newArr;
-                        }
-                    }
-                }
                 if (!ActualInstance(expected, result) && !(Nullable.GetUnderlyingType(expected) is Type nullable && ActualInstance(nullable, result)))
                     {
                     var actType = result == null ? "null" : (result.GetType().FullName + " (asm=" + result.GetType().Assembly.GetName().Name + ")");
@@ -835,18 +607,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             // Fill detached nodes first. Value-type nodes must be filled before
             // their parent copies the boxed struct into a field or array.
             var status = new byte[objects.Length]; var writes = new List<Action>();
-            var replayWrites = new List<Action>(); var replayGuards = new List<Action>();
             var lifecycleInitial = new List<Action>(); var lifecycleFreeze = new List<Action>();
             var beforeChecks = new List<Action>(); var afterChecks = new List<Action>();
-            foreach (var pair in nativePointers) {
-                var owner = objects[pair.Key]; var pointer = pair.Value; var node = value.Nodes[pair.Key];
-                Action nativeCheck = () => {
-                    if (residentPolicy!.NativePointer(owner) != pointer || node.Kind == "native-owner" && residentPolicy.BindNativeOwner(owner) != node.Text)
-                        throw new InvalidOperationException("Resident native pointer/binding changed during managed restoration: " + node.Id);
-                };
-                beforeChecks.Add(nativeCheck); afterChecks.Add(nativeCheck);
-                replayGuards.Add(nativeCheck);
-            }
             var externalSlots = new List<Tuple<int, Func<object?>, Action<object>>>();
             var copiedExternal = new HashSet<int>();
             var rootOwners = roots.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
@@ -860,10 +622,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             var preparedFields = preflight == null ? null : new object?[objects.Length][];
             void Fill(int index, int depth)
             {
-                if (depth > (residentPolicy == null ? 128 : 2048)) throw new InvalidDataException("Carry restore graph exceeds its depth bound: depth=" + depth);
+                if (depth > 128) throw new InvalidDataException("Carry restore graph exceeds its depth bound: depth=" + depth);
                 if (status[index] == 2) return;
                 if (status[index] == 1)
-                { if (nodeTypes[index].IsValueType && (residentPolicy == null || !residentBoxes.Contains(index))) throw new InvalidDataException("Carry value-type cycle is invalid."); return; }
+                { if (nodeTypes[index].IsValueType) throw new InvalidDataException("Carry value-type cycle is invalid."); return; }
                 status[index] = 1;
                 var node = value.Nodes[index]; var owner = objects[index];
                 object? Prepared(CanonicalCarryGraphData.Value item, Type expected, FieldInfo? sourceField = null)
@@ -872,14 +634,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (item.Kind == "node") Fill(item.Reference - 1, depth + 1);
                     return result;
                 }
-                if (node.Kind == "delegate") {
-                    var targets = new object?[node.Items!.Length];
-                    for (var targetIndex = 0; targetIndex < targets.Length; targetIndex++) targets[targetIndex] = Prepared(node.Items[targetIndex], typeof(object));
-                    ResidentGraphPolicy.RequireDelegate((Delegate)owner, node.Text!, targets);
-                    afterChecks.Add(() => ResidentGraphPolicy.RequireDelegate((Delegate)owner, node.Text!, targets));
-                    replayGuards.Add(() => ResidentGraphPolicy.RequireDelegate((Delegate)owner, node.Text!, targets));
-                }
-                else if (node.Kind == "ease-callback") {
+                if (node.Kind == "ease-callback") {
                     var target = Read(node.Items![0], CanonicalEaseCallback.OwnerType!);
                     if (!ReferenceEquals(((Delegate)owner).Target, target)) throw new InvalidDataException("Ease callback prepared target alias differs.");
                 }
@@ -888,24 +643,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (!ReferenceEquals(((Delegate)owner).Target, target)) throw new InvalidDataException("Challenge callback prepared alias differs.");
                     Fill(node.Items[0].Reference - 1, depth + 1);
                 }
-                else if (node.Kind == "boxed-scalar") {
-                    if (residentPolicy != null) {
-                        var expected = DecodeBox(node.Text!, nodeTypes[index]); var boxWrite = BoxedValueWriter(nodeTypes[index]);
-                        replayWrites.Add(() => boxWrite(owner, expected));
-                        afterChecks.Add(() => {
-                            if (EncodeScalar(owner, nodeTypes[index]) != node.Text) throw new InvalidOperationException("Resident boxed scalar readback differs.");
-                        });
-                    }
-                }
-                else if (IsPackedKind(node.Kind)) {
-                    var array = (Array)owner;
-                    var bytes = (byte[])node.Packed!.Clone();
-                    void WriteVector() => WritePacked(bytes, array);
-                    WriteVector(); replayWrites.Add(WriteVector);
-                    afterChecks.Add(() => {
-                        if (!PackedBytes(array).SequenceEqual(bytes)) throw new InvalidOperationException("Primitive vector readback differs.");
-                    });
-                }
+                else if (node.Kind == "boxed-scalar") { }
                 else if (node.Kind == "array")
                 {
                     var array = (Array)owner; var element = nodeTypes[index].GetElementType()!;
@@ -913,12 +651,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     // Every array here is detached until its owning field is
                     // applied; preparation cannot mutate an existing array.
                     for (var i = 0; i < node.Items!.Length; i++) {
-                        var expectedItem = Prepared(node.Items[i], element); var itemIndex = i;
-                        var itemExternal = node.Items[i].Kind == "external" ? node.Items[i].Reference - 1 : -1;
+                        var expectedItem = Prepared(node.Items[i], element);
                         WriteArray(array, expectedItem, i);
-                        if (residentPolicy != null) replayWrites.Add(() => WriteArray(array, itemExternal >= 0 ? external[itemExternal] : expectedItem, itemIndex));
-                        if (residentPolicy != null) afterChecks.Add(() => CheckSlot(itemExternal >= 0 ? external[itemExternal] : expectedItem,
-                            ReadArray(array, itemIndex), element, "array[" + itemIndex + "]"));
                         if (node.Items[i].Kind == "external") {
                             var at = i;
                             externalSlots.Add(Tuple.Create(node.Items[i].Reference - 1,
@@ -930,48 +664,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 {
                     var layout = layouts[node.Type];
                     if (preparedFields != null) preparedFields[index] = new object?[layout.Fields.Length];
-                    var selected = node.Packed == null ? Enumerable.Range(0, layout.Fields.Length).ToArray() : layout.Packed!.References;
-                    if (node.Packed != null) {
-                        var bytes = (byte[])node.Packed.Clone(); var packed = layout.Packed!;
-                        void WriteValues() => packed.Write(owner, bytes);
-                        if (preparedFields != null) {
-                            var temporary = FormatterServices.GetUninitializedObject(nodeTypes[index]);
-                            packed.Write(temporary, bytes);
-                            for (var fieldIndex = 0; fieldIndex < layout.Fields.Length; fieldIndex++)
-                                preparedFields[index][fieldIndex] = layout.Readers[fieldIndex](temporary);
-                        }
-                        if (boundNodes.Contains(index + 1)) {
-                            var previous = packed.Read(owner);
-                            Action InitialCheck = () => { if (!packed.Matches(owner, previous)) throw new InvalidOperationException("Packed target fields changed before application."); };
-                            if (lifecycleNodes.Contains(index + 1)) {
-                                lifecycleInitial.Add(InitialCheck);
-                                lifecycleFreeze.Add(() => {
-                                    var expected = packed.Read(owner);
-                                    beforeChecks.Add(() => { if (!packed.Matches(owner, expected)) throw new InvalidOperationException("Packed lifecycle fields changed after freeze."); });
-                                });
-                            } else beforeChecks.Add(InitialCheck);
-                            writes.Add(WriteValues);
-                        } else WriteValues();
-                        replayWrites.Add(WriteValues);
-                        afterChecks.Add(() => { if (!packed.Matches(owner, bytes)) throw new InvalidOperationException("Packed field readback differs."); });
-                    }
-                    for (var slot = 0; slot < selected.Length; slot++)
+                    for (var i = 0; i < layout.Fields.Length; i++)
                     {
-                        var i = selected[slot];
-                        var field = layout.Fields[i]; var readField = layout.Readers[i]; var fieldValue = Prepared(node.Fields![slot].Value, field.FieldType, field);
-                        if (residentPolicy != null && field.DeclaringType?.FullName == "DesktopPlatform" && field.Name == "saveDirPath")
-                            fieldValue = readField(owner);
-                        if (node.Fields[slot].Value.Kind == "instance-id") {
-                            var binding = node.Fields[slot].Value.Text!;
-                            afterChecks.Add(() => {
-                                if (residentPolicy!.CaptureInstanceId(field, (int)readField(owner)!) != binding)
-                                    throw new InvalidOperationException("Resident instance-ID semantic readback differs: " + field.Name);
-                            });
-                        }
+                        var field = layout.Fields[i]; var readField = layout.Readers[i]; var fieldValue = Prepared(node.Fields![i].Value, field.FieldType, field);
                         if (easeCallbacks && fieldValue is Delegate callback && callback.GetType() == CanonicalEaseCallback.CallbackType
                             && (!CanonicalEaseCallback.IsSlot(owner, field) || !ReferenceEquals(callback.Target, owner)))
                             throw new InvalidDataException("Ease callback field owner alias differs.");
-                        var externalIndex = node.Fields[slot].Value.Kind == "external" ? node.Fields[slot].Value.Reference - 1 : -1;
+                        var externalIndex = node.Fields[i].Value.Kind == "external" ? node.Fields[i].Value.Reference - 1 : -1;
                         if (externalIndex >= 0) {
                             if (nodeTypes[index].IsValueType) copiedExternal.Add(externalIndex);
                             var at = i;
@@ -979,7 +678,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 (Action<object>)(next => { WriteField(field, owner, next); if (preparedFields != null) preparedFields[index][at] = next; })));
                         }
                         if (preparedFields != null) preparedFields[index][i] = fieldValue;
-                        if (residentPolicy != null) replayWrites.Add(() => WriteField(field, owner, externalIndex >= 0 ? external[externalIndex] : fieldValue));
                         if (boundNodes.Contains(index + 1)) {
                             var previous = readField(owner);
                             var fieldIdentity = layout.FieldIdentities[i];
@@ -997,9 +695,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                         }
                         else {
                             WriteField(field, owner, fieldValue);
-                            var fieldIdentity = layout.FieldIdentities[i];
-                            if (residentPolicy != null) afterChecks.Add(() => CheckSlot(externalIndex >= 0 ? external[externalIndex] : fieldValue,
-                                readField(owner), field.FieldType, fieldIdentity));
                         }
                     }
                 }
@@ -1033,14 +728,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 lifecycle.GuardReady(GuardOwnersAndFields);
             }
             var measurement = new ReadbackMeasurement { FieldSlots = afterChecks.Count }; readbackMeasurements.Add(measurement);
-            var originalExternal = (object[])external.Clone();
-            void GuardReplay()
-            {
-                GuardRootOwners();
-                for (var i = 0; i < originalExternal.Length; i++) if (!ReferenceEquals(originalExternal[i], external[i]))
-                    throw new InvalidOperationException("Resident graph replay external owner changed.");
-                foreach (var check in replayGuards) check();
-            }
             var plan = new CanonicalPreparedWritePlan(Guard, () => { foreach (var write in writes) write(); },
                 () => {
                     var started = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -1048,9 +735,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         void Verify() { foreach (var check in afterChecks) check(); }
                         if (lifecycle == null) Verify(); else lifecycle.GuardReady(Verify);
                     } finally { measurement.Calls++; measurement.Ticks += System.Diagnostics.Stopwatch.GetTimestamp() - started; }
-                }, residentPolicy == null ? rootOwners.Values.ToArray() : boundObjects.Keys.ToArray(),
-                residentPolicy == null ? (Action?)null : GuardReplay,
-                residentPolicy == null ? (Action?)null : () => { foreach (var write in replayWrites) write(); });
+                }, rootOwners.Values.ToArray());
             if (lifecycle != null) exposeLifecycleWrites!(lifecycle);
             exposeExternalRebinding?.Invoke(new ExternalRebinding(value.Externals, external, externalSlots, copiedExternal,
                 rootOwners.Values.ToArray(), plan));
@@ -1243,7 +928,6 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static bool SameScalarBits(object expected, object current, Type type)
         {
-            expected = ResidentValueAccess.Scalar(expected); current = ResidentValueAccess.Scalar(current);
             if (type.IsEnum) { var underlying = Enum.GetUnderlyingType(type); expected = Convert.ChangeType(expected, underlying, CultureInfo.InvariantCulture); current = Convert.ChangeType(current, underlying, CultureInfo.InvariantCulture); }
             if (type == typeof(float)) return new SingleBits { Value = (float)expected }.Bits == new SingleBits { Value = (float)current }.Bits;
             if (type == typeof(double)) return BitConverter.DoubleToInt64Bits((double)expected) == BitConverter.DoubleToInt64Bits((double)current);
@@ -1299,7 +983,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private string CachedEncodeScalar(object value, Type type)
         {
             if (type != typeof(float)) return EncodeScalar(value, type);
-            var bits = new SingleBits { Value = (float)ResidentValueAccess.Scalar(value) }.Bits;
+            var bits = new SingleBits { Value = (float)value }.Bits;
             if (singleTexts.TryGetValue(bits, out var text)) return text;
             text = bits.ToString("x8", CultureInfo.InvariantCulture);
             if (singleTexts.Count < 4096) singleTexts.Add(bits, text);
@@ -1307,7 +991,6 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static string EncodeScalar(object value, Type type)
         {
-            value = ResidentValueAccess.Scalar(value);
             if (type == typeof(string)) return (string)value;
             if (type == typeof(float)) return new SingleBits { Value = (float)value }.Bits.ToString("x8", CultureInfo.InvariantCulture);
             if (type == typeof(double)) return BitConverter.DoubleToInt64Bits((double)value).ToString("x16", CultureInfo.InvariantCulture);
@@ -1326,26 +1009,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             var total = 1;
             foreach (var field in layout.Fields)
             {
-                if (residentPolicy?.InstanceIdTarget(field) != null) { leafSizes.Add(type, 0); return 0; }
                 var size = LeafSize(field.FieldType);
                 if (size == 0) { leafSizes.Add(type, 0); return 0; }
                 total = checked(total + size);
             }
             if (layout.Fields.Length == 0) total = 0;
             leafSizes.Add(type, total); return total;
-        }
-        private Action<object, object> BoxedValueWriter(Type type)
-        {
-            if (boxedValueWriters.TryGetValue(type, out var cached)) return cached;
-            if (!type.IsValueType || !IsScalar(type)) throw new InvalidDataException("Resident boxed replay type is not a scalar value.");
-            if (residentPolicy != null) {
-                Action<object, object> typed = (owner, value) => ResidentValueAccess.WriteBox(owner, value, type);
-                boxedValueWriters.Add(type, typed); return typed;
-            }
-            var method = new DynamicMethod("hktas_restore_boxed_value", typeof(void), new[] { typeof(object), typeof(object) }, typeof(CanonicalCarryGraphCodec).Module, true);
-            var il = method.GetILGenerator(); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Unbox, type); il.Emit(OpCodes.Ldarg_1);
-            il.Emit(OpCodes.Unbox_Any, type); il.Emit(OpCodes.Stobj, type); il.Emit(OpCodes.Ret);
-            var write = (Action<object, object>)method.CreateDelegate(typeof(Action<object, object>)); boxedValueWriters.Add(type, write); return write;
         }
         private string EncodeLeaf(object value, Type type)
         {
@@ -1370,7 +1039,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     return DecodeScalar(parts[cursor++], current);
                 }
 #pragma warning disable SYSLIB0050
-                var result = residentPolicy != null ? ResidentValueAccess.Create(current) : FormatterServices.GetUninitializedObject(current);
+                var result = FormatterServices.GetUninitializedObject(current);
 #pragma warning restore SYSLIB0050
                 foreach (var field in layouts[TypeIdentity(current)].Fields) WriteField(field, result, Read(field.FieldType));
                 return result;
@@ -1389,7 +1058,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 else if (type == typeof(double)) value = BitConverter.Int64BitsToDouble(long.Parse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture));
                 else if (type == typeof(decimal)) value = new decimal(text.Split(',').Select(part => int.Parse(part, NumberStyles.HexNumber, CultureInfo.InvariantCulture)).ToArray());
                 else if (type == typeof(char)) value = (char)ushort.Parse(text, NumberStyles.None, CultureInfo.InvariantCulture);
-                else if (type.IsEnum) { var bits = Convert.ChangeType(text, Enum.GetUnderlyingType(type), CultureInfo.InvariantCulture)!; value = residentPolicy != null ? ResidentValueAccess.Enum(type, bits) : Enum.ToObject(type, bits); }
+                else if (type.IsEnum) { var bits = Convert.ChangeType(text, Enum.GetUnderlyingType(type), CultureInfo.InvariantCulture)!; value = Enum.ToObject(type, bits); }
                 else value = Convert.ChangeType(text, type, CultureInfo.InvariantCulture)!;
             }
             catch (Exception error) when (error is FormatException || error is OverflowException || error is ArgumentException)
@@ -1401,30 +1070,19 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             // Array.GetValue returns a fresh boxed value. Distinct source boxes
             // must not collapse merely because their scalar bits are equal.
-            if (residentPolicy != null) return ResidentValueAccess.BoxValue(DecodeScalar(text, type));
             var array = Array.CreateInstance(type, 1);
             array.SetValue(DecodeScalar(text, type), 0);
             return array.GetValue(0)!;
         }
         private sealed class Layout
         {
-            internal Layout(Type type, FieldInfo[] fields, Func<FieldInfo, Func<object, object?>> prepareReadback, ResidentGraphPolicy? policy) {
+            internal Layout(Type type, FieldInfo[] fields, Func<FieldInfo, Func<object, object?>> prepareReadback) {
                 Type = type; Fields = fields; FieldIdentities = fields.Select(FieldIdentity).ToArray();
-                Packed = policy == null ? null : ResidentPackedFieldLayout.For(type, fields, policy);
-                ReferenceNames = Packed == null ? FieldIdentities : Packed.References.Select(index => FieldIdentities[index]).ToArray();
                 Readers = new Func<object, object?>[fields.Length];
-                var explicitSlots = new bool[fields.Length];
-                if (Packed?.Bytes > 0) foreach (var index in Packed.References) explicitSlots[index] = true;
                 for (var i = 0; i < fields.Length; i++) {
-                    var field = fields[i];
-                    // Compact packets read the value block in one operation. Only
-                    // old full-field packets or optional preflight need these readers.
-                    Readers[i] = Packed?.Bytes > 0 && !explicitSlots[i]
-                        ? owner => ResidentValueAccess.ReadField(owner, field) : prepareReadback(field);
+                    Readers[i] = prepareReadback(fields[i]);
                 }
             }
-            internal readonly ResidentPackedFieldLayout? Packed;
-            internal readonly string[] ReferenceNames;
             internal readonly Func<object, object?>[] Readers;
             internal Type Type { get; }
             internal FieldInfo[] Fields { get; }

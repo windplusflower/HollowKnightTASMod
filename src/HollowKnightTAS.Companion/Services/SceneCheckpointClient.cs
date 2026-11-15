@@ -99,8 +99,8 @@ namespace HollowKnightTAS.Companion.Services
         // Restoring an engine scene consumes no Movie history until resume.
         public Task StartRestoreAsync(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding, CancellationToken token)
             => StartRestorePrototypeAsync(checkpointId, scope, binding, token);
-        public Task ApplyRestoreAsync(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding, CancellationToken token)
-            => ApplyRestorePrototypeAsync(checkpointId, scope, binding, token);
+        public Task ApplyRestoreAsync(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding, CancellationToken token, long? targetMovieFrame = null)
+            => ApplyRestorePrototypeAsync(checkpointId, scope, binding, token, targetMovieFrame);
         public Task CancelRestoreAsync(string checkpointId, CancellationToken token)
             => CancelRestorePrototypeAsync(checkpointId, token);
 
@@ -120,12 +120,14 @@ namespace HollowKnightTAS.Companion.Services
             var result = await Call(new Dictionary<string, string> { ["phase"] = "restore-status", ["checkpointId"] = checkpointId }, token);
             ValidateRestoreReply(result, checkpointId); return result;
         }
-        public async Task ApplyRestorePrototypeAsync(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding, CancellationToken token)
+        public async Task ApplyRestorePrototypeAsync(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding, CancellationToken token, long? targetMovieFrame = null)
         {
             _ = store.Get(checkpointId, scope, binding);
             try
             {
-                var result = await Call(new Dictionary<string, string> { ["phase"] = "restore-apply", ["checkpointId"] = checkpointId }, token);
+                var requestFields = new Dictionary<string, string> { ["phase"] = "restore-apply", ["checkpointId"] = checkpointId };
+                if (targetMovieFrame.HasValue) requestFields["targetMovieFrame"] = targetMovieFrame.Value.ToString(CultureInfo.InvariantCulture);
+                var result = await Call(requestFields, token);
                 Expect(result, "RebuildingCToK"); ValidateRestoreReply(result, checkpointId);
                 if (!result.TryGetValue("stateApplied", out var applied) || applied != "true") throw new InvalidDataException("Invalid checkpoint application receipt.");
                 _ = store.Get(checkpointId, scope, binding);
@@ -173,7 +175,12 @@ namespace HollowKnightTAS.Companion.Services
                     && Environment.GetEnvironmentVariable("HKTAS_LOADING_CLOCK_APPLY_EXPERIMENT") == "1";
                 var actualD = fields.TryGetValue("phase", out var actualPhase) && actualPhase.StartsWith("d-exp-", StringComparison.Ordinal)
                     && Environment.GetEnvironmentVariable("HKTAS_LOADING_ACTUAL_D_EXPERIMENT") == "1";
-                timeout.CancelAfter(TimeSpan.FromSeconds(clockCanon ? 10 : (actualD ? (actualPhase == "d-exp-apply" ? 360 : 30) : 2)));
+                int timeoutSeconds = phase == "restore-apply" ? 120
+                    : phase != null && phase.StartsWith("restore-", StringComparison.Ordinal) ? 30
+                    : clockCanon ? 10
+                    : actualD ? (actualPhase == "d-exp-apply" ? 360 : 30)
+                    : 10;
+                timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
                 return await completion.Task.WaitAsync(timeout.Token);
             }
             finally { runtime.EnvelopeReceived -= Received; }

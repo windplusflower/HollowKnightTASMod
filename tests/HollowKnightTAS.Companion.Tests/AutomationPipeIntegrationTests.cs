@@ -128,6 +128,17 @@ namespace HollowKnightTAS.Companion.Tests
             using var broker = CreateBroker(sessions);
             try
             {
+                // Let the initial background stream prime finish so its unrequested full snapshot cannot race with statusOnly=true.
+                for (var attempt = 0; attempt < 50; attempt++)
+                {
+                    var initialStatus = await broker.ExecuteHumanAsync(AutomationCommandIds.GetStatus,
+                        AutomationScope.ObserveStatus, new Dictionary<string, string>(),
+                        string.Empty, null, cancellation.Token);
+                    if (initialStatus.Success && initialStatus.Data.ContainsKey("runtimeStatusJson"))
+                        break;
+                    await Task.Delay(20, cancellation.Token);
+                }
+
                 var human = await broker.ExecuteHumanAsync(AutomationCommandIds.GetState,
                     AutomationScope.ObserveStateSummary,
                     new Dictionary<string, string> { ["statusOnly"] = "true" },

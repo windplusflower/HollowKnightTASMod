@@ -124,8 +124,12 @@ namespace HollowKnightTAS.Runtime.Timing
             clock.requestObservation = Load<NativeInt>("HktasClockBridge_RequestObservation");
             clock.stepTicks = Load<NativeFrame>("HktasClockBridge_GetDeterministicClockStepTicks");
             clock.frequency = Load<NativeFrame>("HktasClockBridge_GetDeterministicClockFrequency");
-            // Experimental exports are optional for ordinary movies/older bridges.
-            if (Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") == "1")
+            // Continuation exports are required for scene checkpoints and loaded
+            // automatically whenever supported by the profile or present in the bridge.
+            bool loadContinuation = NativeExecutionProfile.SupportsSceneCheckpoints(expectedProfileId)
+                || Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") == "1"
+                || GetProcAddress(module, "HktasClockBridge_GetContinuationBytes") != IntPtr.Zero;
+            if (loadContinuation)
             {
                 if (Load<NativeInt>("HktasClockBridge_GetContinuationBytes")() != ContinuationBytes)
                     throw new InvalidOperationException("Native continuation layout differs.");

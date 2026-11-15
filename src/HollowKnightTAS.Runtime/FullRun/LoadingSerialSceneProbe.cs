@@ -29,6 +29,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static LoadingSerialSceneProbe? instance;
         private SceneLoad? transition;
         private GameManager.SceneLoadInfo? checkpointLoadInfo;
+        private IEnumerator? serialBeginRoutine;
         private Scene source;
         private string sourceName = "";
         private Scene staging;
@@ -125,12 +126,12 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private IEnumerator Begin(OriginalBegin original, SceneLoad load)
         {
-            if (residentBeginRoutine != null) throw Fail("Serial boundary iterator reentered.");
-            residentBeginRoutine = BeginResidentRoutine(original, load);
-            return residentBeginRoutine;
+            if (serialBeginRoutine != null) throw Fail("Serial boundary iterator reentered.");
+            serialBeginRoutine = BeginSerialRoutine(original, load);
+            return serialBeginRoutine;
         }
 
-        private IEnumerator BeginResidentRoutine(OriginalBegin original, SceneLoad load)
+        private IEnumerator BeginSerialRoutine(OriginalBegin original, SceneLoad load)
         {
             if (transition != null) throw Fail("Serial scene transition reentered.");
             transition = load;
@@ -206,7 +207,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 checkpointTransitionRoutine = null;
                 checkpointTransitionFinished = false;
                 checkpointBossBindings = null;
-                residentBeginRoutine = null;
+                serialBeginRoutine = null;
             }
         }
 
@@ -276,7 +277,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (target.IsValid() && target.isLoaded)
                 throw new InvalidOperationException("Serial native boundary already has the target scene.");
             if (session == null) throw new ArgumentNullException(nameof(session));
-            var start = ResidentNativeMemory.WallMilliseconds();
             self.Inventory("native-empty-boundary", movie, native);
             LoadingBoundaryInventory.Capture(self.ordinal, self.sourceName, self.transition.TargetSceneName, movie, native);
             S0SemanticProbe.CaptureIfEnabled(
@@ -304,19 +304,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 self.observedBoundary = true;
                 return true;
             }
-            if (session.TryParkResidentImport(native, self.ordinal, self.sourceName, self.transition.TargetSceneName))
-                return true; // The iterator still cannot advance. Restore enters the same Canon inside its measured transaction.
-            if (!session.EnterResidentBoundary(self.ordinal, movie, native)) {
-                var elapsedMs = ResidentNativeMemory.WallMilliseconds() - start;
-                self.Write("resident-transit-verified", new { movie, native, elapsedMs });
-            }
             self.observedBoundary = true;
             return true;
         }
 
         internal static bool OwnsBoundaryIterator(IEnumerator iterator)
         {
-            return instance != null && instance.awaitingBoundary && ReferenceEquals(iterator, instance.residentBeginRoutine);
+            return instance != null && instance.awaitingBoundary && ReferenceEquals(iterator, instance.serialBeginRoutine);
         }
         internal static string ExperimentalTargetStage => "no-canon";
         internal static Tuple<int, GameManager.SceneLoadInfo, string> GetCheckpointBoundary()
@@ -501,10 +495,32 @@ namespace HollowKnightTAS.Runtime.FullRun
             throw new InvalidOperationException("Original Canon is absent; the legacy clock reapply bridge is retired.");
         }
 
+        internal static GameObject[] LoadedGameObjects()
+        {
+            var scenes = new List<Scene>();
+            for (var i = 0; i < USceneManager.sceneCount; i++)
+            {
+                var scene = USceneManager.GetSceneAt(i);
+                if (scene.IsValid() && scene.isLoaded) scenes.Add(scene);
+            }
+            var manager = GameManager.UnsafeInstance;
+            if (manager == null) throw new InvalidDataException("Serial scene loader is absent.");
+            var persistent = manager.gameObject.scene;
+            if (!persistent.IsValid() || !persistent.isLoaded || persistent.name != "DontDestroyOnLoad")
+                throw new InvalidDataException("Scene loader has no live persistent scene.");
+            if (!scenes.Contains(persistent)) scenes.Add(persistent);
+            var owners = new List<GameObject>();
+            foreach (var scene in scenes)
+                foreach (var root in scene.GetRootGameObjects())
+                    foreach (var transform in root.GetComponentsInChildren<Transform>(true))
+                        owners.Add(transform.gameObject);
+            return owners.ToArray();
+        }
+
         private void Inventory(string phase, long? movie = null, long? native = null)
         {
             if (report == null) return;
-            var objects = ResidentSceneMembership.LoadedGameObjects();
+            var objects = LoadedGameObjects();
             if (objects.Length > 100000) throw new InvalidOperationException("Serial inventory exceeded object budget.");
             var components = objects.SelectMany(go => go.GetComponents<Component>()).Where(c => c != null).ToArray();
             var groups = objects.GroupBy(go => go.scene.name).OrderBy(g => g.Key, StringComparer.Ordinal)

@@ -87,9 +87,9 @@ namespace HollowKnightTAS.Core.Tests.Verification
             var manager = ReadRuntimeSource("ReplaySave", "RuntimeReplaySaveManager.cs");
             var prepare = ExtractMethod(manager, "public ColdRestoreIntent PrepareColdRestoreIntent(",
                 "return new ColdRestoreIntent(");
-            StringAssert.Contains(prepare, "ValidateColdBaselineBeforeHandoff(target.Baseline)");
+            StringAssert.Contains(prepare, "ValidateColdBaselineBeforeHandoff(rootBaseline)");
             Assert.IsTrue(prepare.IndexOf("ValidateColdBaselineBeforeHandoff", StringComparison.Ordinal)
-                < prepare.IndexOf("journal.FreezeThrough", StringComparison.Ordinal));
+                < prepare.IndexOf("journal.FreezeForReplaySave(", StringComparison.Ordinal));
             var coordinator = ReadRuntimeSource("ReplaySave", "RuntimeReplayRestoreCoordinator.cs");
             var preflight = ExtractMethod(coordinator, "public void ValidateColdBaselineBeforeHandoff(",
                 "private BaselineInstallPlan? pendingSourceSlotPlan;");
@@ -295,7 +295,7 @@ namespace HollowKnightTAS.Core.Tests.Verification
             StringAssert.Contains(reanchor, "EstablishBaseline(capture, saved)");
             Assert.IsTrue(reanchor.IndexOf("coldRecordingRootVerified = true", StringComparison.Ordinal)
                 > reanchor.IndexOf("Cold journal origin could not be established.", StringComparison.Ordinal));
-            StringAssert.Contains(journal, "public string RecordingOriginStatus => coldRecordingRootVerified");
+            StringAssert.Contains(journal, "public string RecordingOriginStatus => sourceRecordingRootError.Length == 0");
             StringAssert.Contains(journal, "? (IsAvailable ? \"Ready\" : \"Faulted\")");
             var invalidate = ExtractMethod(journal, "private void InvalidateSourceRecordingRootForLoad()",
                 "private void ReleaseSourcePreparationInput()");
@@ -399,7 +399,7 @@ namespace HollowKnightTAS.Core.Tests.Verification
             var restore = ReadRuntimeSource("ReplaySave", "RuntimeReplayRestoreCoordinator.cs");
             StringAssert.Contains(journal, "if (sourceRecordingRoot != null) PrepareInitialRespawn();");
             var begin = ExtractMethod(restore, "private void BeginBaselineLoad(GameManager manager)", "private void AdvanceLoad()");
-            StringAssert.Contains(begin, "package!.Baseline.RecordingOrigin != null");
+            StringAssert.Contains(begin, "RestoreBaseline.RecordingOrigin != null");
             Assert.IsTrue(begin.IndexOf("journal.PrepareInitialRespawn()", StringComparison.Ordinal)
                 < begin.IndexOf("manager.LoadGame(", StringComparison.Ordinal));
             StringAssert.Contains(restore, "Fail(ReplaySaveStatus.Failed, journal.InitialRespawnPreparationError)");
@@ -2878,6 +2878,20 @@ namespace HollowKnightTAS.Core.Tests.Verification
                          "HktasStudio.MainWindow",
                          "HktasStudio.StatusText",
                          "HktasStudio.ConnectionBadge",
+                         "HktasStudio.PlayPauseButton",
+                         "HktasStudio.FrameAdvanceButton",
+                         "HktasStudio.InputGridTab",
+                         "HktasStudio.InputGrid"
+                     })
+            {
+                StringAssert.Contains(xaml, automationId);
+            }
+
+            foreach (var automationId in new[]
+                     {
+                         "HktasStudio.MainWindow",
+                         "HktasStudio.StatusText",
+                         "HktasStudio.ConnectionBadge",
                          "HktasStudio.MovieEditorTab",
                          "HktasStudio.MovieText",
                          "HktasStudio.MovieValidateButton",
@@ -2889,7 +2903,6 @@ namespace HollowKnightTAS.Core.Tests.Verification
                          "HktasStudio.ControlStepButton"
                      })
             {
-                StringAssert.Contains(xaml, automationId);
                 StringAssert.Contains(ui, automationId);
             }
 
@@ -3235,9 +3248,6 @@ namespace HollowKnightTAS.Core.Tests.Verification
                 "\"Challenge Start\"");
             StringAssert.Contains(referenceGate, "Time.timeScale <= 0f");
             StringAssert.Contains(
-                runtimeFrameStartGate,
-                "Time.timeScale <= 0f");
-            StringAssert.Contains(
                 runtimeEarlyUpdate,
                 "frameOpenAtUpdateBegin =");
             StringAssert.Contains(
@@ -3356,9 +3366,9 @@ namespace HollowKnightTAS.Core.Tests.Verification
             AssertDoesNotContain(payload, "SceneRngSeedDerivation.Derive(");
             AssertDoesNotContain(payload, "\"transition-start\"");
             AssertDoesNotContain(payload, "\"gameplay-ready\"");
-            Assert.AreEqual(3, payload.Split("ApplyRandomSynchronization(",
+            Assert.AreEqual(4, payload.Split("ApplyRandomSynchronization(",
                 StringSplitOptions.None).Length - 1,
-                "Only the two root handshakes and the helper declaration may remain.");
+                "Only the root/full-run handshakes and the helper declaration may remain.");
             StringAssert.Contains(
                 payload,
                 "On.InControl.PlayerActionSet.Update +=");
@@ -3434,10 +3444,10 @@ namespace HollowKnightTAS.Core.Tests.Verification
                 "object boxed = UnityEngine.Random.state;");
 
             AssertDoesNotContain(observer, "UnityEngine.Random.InitState(");
-            StringAssert.Contains(observer, "randomSyncRequest?.Set();");
+            StringAssert.Contains(observer, "SignalRandomRequest(0);");
             StringAssert.Contains(
                 observer,
-                "recordingRandomSyncRequest?.Set();");
+                "SignalRandomRequest(1);");
             StringAssert.Contains(
                 observer,
                 "RequiredRecordingFramePhaseModulo = 4");

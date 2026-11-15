@@ -17,27 +17,30 @@ namespace HollowKnightTAS.Companion.Tests
         [TestMethod]
         public void NativeFaultWithoutFrameAdvanceRefreshesPlaybackControls()
         {
-            using var sessions = new SessionRegistry("grid-fault-test");
-            using var broker = new AutomationBroker(sessions);
-            using var boot = new StartupBootController();
-            var vm = new MainViewModel(sessions, new MovieEditorService(),
-                new CapabilityBroker(), new NativeHostLauncher(AppContext.BaseDirectory),
-                broker, startupBoot: boot);
-            var gate = boot.BeginV2();
-            using var mapping = System.IO.MemoryMappedFiles.MemoryMappedFile.OpenExisting(
-                "Local\\HKTAS.Boot." + gate.Token + ".V2State");
-            using var view = mapping.CreateViewAccessor();
-            boot.Refresh();
-            var changes = 0;
-            vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(vm.PlayPauseLabel)) changes++; };
-            view.Write(88, 41);
-            view.Write(76, 3);
-            boot.Refresh();
-            Assert.AreEqual(1, changes, "A fault must notify even when frames and pending state do not change.");
-            StringAssert.Contains(vm.PlayPauseLabel, "需重启");
-            StringAssert.Contains(vm.Status, "41");
-            Assert.IsFalse(vm.TogglePauseCommand.CanExecute(null));
-            Assert.IsFalse(vm.StepCommand.CanExecute(null));
+            WpfTestApplication.Run(() =>
+            {
+                using var sessions = new SessionRegistry("grid-fault-test");
+                using var broker = new AutomationBroker(sessions);
+                using var boot = new StartupBootController();
+                var vm = new MainViewModel(sessions, new MovieEditorService(),
+                    new CapabilityBroker(), new NativeHostLauncher(AppContext.BaseDirectory),
+                    broker, startupBoot: boot);
+                var gate = boot.BeginV2();
+                using var mapping = System.IO.MemoryMappedFiles.MemoryMappedFile.OpenExisting(
+                    "Local\\HKTAS.Boot." + gate.Token + ".V2State");
+                using var view = mapping.CreateViewAccessor();
+                boot.Refresh();
+                var changes = 0;
+                vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(vm.PlayPauseLabel)) changes++; };
+                view.Write(88, 41);
+                view.Write(76, 3);
+                boot.Refresh();
+                Assert.AreEqual(1, changes, "A fault must notify even when frames and pending state do not change.");
+                StringAssert.Contains(vm.PlayPauseLabel, "需重启");
+                StringAssert.Contains(vm.Status, "41");
+                Assert.IsFalse(vm.TogglePauseCommand.CanExecute(null));
+                Assert.IsFalse(vm.StepCommand.CanExecute(null));
+            });
         }
 
         [TestMethod]

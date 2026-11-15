@@ -188,16 +188,16 @@ public sealed class SequenceBindingTests
 
     [TestMethod] public void SaveJsonWindowRendersEditableTextAndRejectsInvalidJson()
     {
-        Exception? failure = null;
-        var thread = new Thread(() =>
+        WpfTestApplication.Run(() =>
         {
+            SequenceSavesWindow? window = null;
             try
             {
                 using var f = new Fixture();
                 f.Vm.MovieText = Movie();
                 Set(f.Vm, "sequenceInitialSaves", new InitialSaveSnapshot(new Dictionary<string, byte[]> {
                     ["user1.dat"] = System.Text.Encoding.UTF8.GetBytes("{\"playerData\":{\"geo\":123},\"sceneData\":{}}") }));
-                var window = new SequenceSavesWindow(f.Vm);
+                window = new SequenceSavesWindow(f.Vm);
                 var panel = (System.Windows.Controls.DockPanel)window.Content;
                 var editor = panel.Children.OfType<System.Windows.Controls.TextBox>().Single();
                 var status = panel.Children.OfType<System.Windows.Controls.TextBlock>().Last();
@@ -225,11 +225,8 @@ public sealed class SequenceBindingTests
                 var exported = SaveJsonDocument.Export(f.Vm.SequenceInitialSaves!, f.Root);
                 StringAssert.Contains(new SaveJsonDocument(File.ReadAllBytes(Path.Combine(exported, "user1.dat"))).Json, "456");
             }
-            catch (Exception ex) { failure = ex; }
-        });
-        thread.SetApartmentState(ApartmentState.STA); thread.Start();
-        Assert.IsTrue(thread.Join(TimeSpan.FromSeconds(15)));
-        if (failure != null) throw new AssertFailedException("Save editor UI failed: " + failure, failure);
+            finally { window?.Close(); }
+        }, TimeSpan.FromSeconds(15), loadStudioTheme: true);
     }
 
     private sealed class Fixture : IDisposable

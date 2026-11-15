@@ -262,6 +262,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                 return;
             if (!IsRestorePresentationFrozen)
             {
+                EnsureAutoSceneCheckpointCapture(session);
                 await SyncRecordingGridAsync();
                 try { await SaveCurrentBranchAsync(); }
                 catch (Exception exception) { GridStatus = "分支保存失败：" + exception.Message; }
