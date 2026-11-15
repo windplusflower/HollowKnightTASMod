@@ -1,13 +1,23 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using HollowKnightTAS.Core.Movie;
+using HollowKnightTAS.Core.SceneCheckpoints;
 
 namespace HollowKnightTAS.Companion.Services
 {
+    public sealed class TimelineCheckpoint
+    {
+        public string CheckpointId { get; set; } = "";
+        public long Frame { get; set; }
+        public long TransitionId { get; set; }
+        public string InputPrefixSha256 { get; set; } = "";
+    }
+
     public sealed class TimelineNode
     {
         public int Id { get; set; }
@@ -28,6 +38,7 @@ namespace HollowKnightTAS.Companion.Services
         public Dictionary<string, string> OriginalHashes { get; set; } = new();
         public string InitialSavesId { get; set; } = "";
         public List<TimelineNode> Nodes { get; set; } = new() { new TimelineNode() };
+        public List<TimelineCheckpoint> Checkpoints { get; set; } = new();
         [JsonIgnore] public IEnumerable<TimelineNode> Leaves => Nodes.Where(n => !Nodes.Any(c => c.ParentId == n.Id));
         public List<TimelineNode> PathTo(int id)
         {
@@ -129,11 +140,113 @@ namespace HollowKnightTAS.Companion.Services
             }
             return result;
         }
-        public void Delete(int id)
+
+        public void RecordCheckpoint(string checkpointId, long frame, long transitionId, string movie)
+        {
+            if (string.IsNullOrWhiteSpace(checkpointId) || frame < 0 || string.IsNullOrWhiteSpace(movie)) return;
+            var doc = Parse(movie);
+            var total = doc.Runs.Sum(r => r.RepeatCount);
+            if (frame > total) return;
+            var prefixSha = MovieV2Prefix.ComputeInputPrefixSha256(doc, frame);
+            Checkpoints.RemoveAll(c => c.CheckpointId == checkpointId
+                || (c.Frame == frame && c.TransitionId == transitionId && c.InputPrefixSha256 == prefixSha));
+            Checkpoints.Add(new TimelineCheckpoint
+            {
+                CheckpointId = checkpointId,
+                Frame = frame,
+                TransitionId = transitionId,
+                InputPrefixSha256 = prefixSha
+            });
+            Checkpoints.Sort((a, b) =>
+            {
+                var cmp = a.Frame.CompareTo(b.Frame);
+                return cmp != 0 ? cmp : a.TransitionId.CompareTo(b.TransitionId);
+            });
+        }
+
+        public SceneCheckpointHeader? FindNearestCheckpoint(
+            long targetFrame,
+            MovieV2Document targetMovie,
+            IReadOnlyList<SceneCheckpointHeader> treeHeaders,
+            string? fallbackBranchId = null)
+        {
+            if (treeHeaders == null || treeHeaders.Count == 0 || targetFrame <= 0) return null;
+            var totalFrames = targetMovie.Runs.Sum(r => r.RepeatCount);
+            var candidates = treeHeaders
+                .Where(h => h.RestoreQualified && h.ResumeMovieFrame <= targetFrame && h.ResumeMovieFrame <= totalFrames)
+                .OrderByDescending(h => h.ResumeMovieFrame)
+                .ThenByDescending(h => h.TransitionId);
+
+            foreach (var header in candidates)
+            {
+                var entry = Checkpoints.FirstOrDefault(c => c.CheckpointId == header.CheckpointId);
+                if (entry != null && !string.IsNullOrEmpty(entry.InputPrefixSha256))
+                {
+                    if (MovieV2Prefix.ComputeInputPrefixSha256(targetMovie, header.ResumeMovieFrame) == entry.InputPrefixSha256)
+                    {
+                        return header;
+                    }
+                    continue;
+                }
+
+                if (int.TryParse(header.Scope.BranchId, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var branchNodeId))
+                {
+                    var branchNode = Nodes.FirstOrDefault(n => n.Id == branchNodeId && n.Movie.Length > 0);
+                    if (branchNode != null)
+                    {
+                        var branchDoc = Parse(branchNode.Movie);
+                        if (branchDoc.Runs.Sum(r => r.RepeatCount) >= header.ResumeMovieFrame
+                            && MovieV2Prefix.MatchesInputPrefix(branchDoc, targetMovie, header.ResumeMovieFrame))
+                        {
+                            return header;
+                        }
+                    }
+                }
+
+                if (fallbackBranchId != null && header.Scope.BranchId == fallbackBranchId)
+                {
+                    return header;
+                }
+            }
+
+            return null;
+        }
+
+        public IReadOnlyList<string> Delete(int id)
         {
             var removed = Subtree(id);
             // Deleting the root clears its whole history, retaining a fresh frame-zero anchor.
             Nodes.RemoveAll(n => n.Id != 0 && removed.Contains(n.Id));
+            if (removed.Contains(0) && Nodes.Count == 1 && Nodes[0].Id == 0)
+            {
+                var allRemoved = Checkpoints.Select(c => c.CheckpointId).ToArray();
+                Checkpoints.Clear();
+                return allRemoved;
+            }
+            return PruneOrphanedCheckpoints();
+        }
+
+        public IReadOnlyList<string> PruneOrphanedCheckpoints()
+        {
+            if (Checkpoints.Count == 0) return Array.Empty<string>();
+            var parsedNodes = Nodes
+                .Where(n => n.Movie.Length > 0)
+                .Select(n =>
+                {
+                    var doc = Parse(n.Movie);
+                    return (Doc: doc, TotalFrames: doc.Runs.Sum(r => r.RepeatCount));
+                })
+                .ToArray();
+            var pruned = new List<string>();
+            Checkpoints.RemoveAll(c =>
+            {
+                bool matchesAny = parsedNodes.Any(n =>
+                    n.TotalFrames >= c.Frame
+                    && MovieV2Prefix.ComputeInputPrefixSha256(n.Doc, c.Frame) == c.InputPrefixSha256);
+                if (!matchesAny) pruned.Add(c.CheckpointId);
+                return !matchesAny;
+            });
+            return pruned;
         }
     }
 
@@ -185,25 +298,32 @@ namespace HollowKnightTAS.Companion.Services
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
+        internal static void ValidateTree(TimelineTree tree)
+        {
+            if (tree == null || string.IsNullOrWhiteSpace(tree.Id))
+                throw new InvalidDataException("时间线标识无效。");
+            tree.Checkpoints ??= new List<TimelineCheckpoint>();
+            var ids = tree.Nodes.Select(n => n.Id).ToHashSet();
+            if (ids.Count != tree.Nodes.Count || !ids.Contains(0) || tree.NextId <= ids.Max())
+                throw new InvalidDataException("时间线节点编号无效。");
+            var root = tree.Nodes.Single(n => n.Id == 0);
+            if (root.ParentId != null || root.Frame != 0) throw new InvalidDataException("时间线起点无效。");
+            foreach (var node in tree.Nodes.Where(n => n.Id != 0))
+                if (node.ParentId == null || node.ParentId < 0 || node.ParentId == node.Id || !ids.Contains(node.ParentId.Value)
+                    || node.Frame < tree.Nodes.Single(n => n.Id == node.ParentId).Frame || node.Movie.Length == 0)
+                    throw new InvalidDataException("时间线父子关系无效。");
+            foreach (var node in tree.Nodes) _ = tree.PathTo(node.Id);
+            if (tree.Nodes.Any(n => n.IsBranchTip && tree.Nodes.Any(c => c.ParentId == n.Id)))
+                throw new InvalidDataException("最远进度必须是叶子节点。");
+            foreach (var cp in tree.Checkpoints)
+                if (cp == null || string.IsNullOrWhiteSpace(cp.CheckpointId) || cp.Frame < 0 || cp.TransitionId < 1)
+                    throw new InvalidDataException("时间线快照索引无效。");
+        }
         private static void Validate(TimelineLibrary library)
         {
             if (library.Version != 1 || library.Trees.Select(t => t.Id).Distinct().Count() != library.Trees.Count)
                 throw new InvalidDataException("时间线版本或标识无效。");
-            foreach (var tree in library.Trees)
-            {
-                var ids = tree.Nodes.Select(n => n.Id).ToHashSet();
-                if (ids.Count != tree.Nodes.Count || !ids.Contains(0) || tree.NextId <= ids.Max())
-                    throw new InvalidDataException("时间线节点编号无效。");
-                var root = tree.Nodes.Single(n => n.Id == 0);
-                if (root.ParentId != null || root.Frame != 0) throw new InvalidDataException("时间线起点无效。");
-                foreach (var node in tree.Nodes.Where(n => n.Id != 0))
-                    if (node.ParentId == null || node.ParentId < 0 || node.ParentId == node.Id || !ids.Contains(node.ParentId.Value)
-                        || node.Frame < tree.Nodes.Single(n => n.Id == node.ParentId).Frame || node.Movie.Length == 0)
-                        throw new InvalidDataException("时间线父子关系无效。");
-                foreach (var node in tree.Nodes) _ = tree.PathTo(node.Id);
-                if (tree.Nodes.Any(n => n.IsBranchTip && tree.Nodes.Any(c => c.ParentId == n.Id)))
-                    throw new InvalidDataException("最远进度必须是叶子节点。");
-            }
+            foreach (var tree in library.Trees) ValidateTree(tree);
         }
     }
 }

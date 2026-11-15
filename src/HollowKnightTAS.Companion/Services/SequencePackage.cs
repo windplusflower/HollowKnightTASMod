@@ -10,6 +10,7 @@ using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using HollowKnightTAS.Core.Cryptography;
 using HollowKnightTAS.Core.ReplaySave;
+using HollowKnightTAS.Core.SceneCheckpoints;
 
 namespace HollowKnightTAS.Companion.Services;
 
@@ -54,14 +55,20 @@ public sealed class InitialSaveSnapshot
     }
 }
 
-public sealed record SequenceFile(string Movie, InitialSaveSnapshot? InitialSaves);
+public sealed record SequenceFile(
+    string Movie,
+    InitialSaveSnapshot? InitialSaves,
+    TimelineTree? Timeline = null,
+    IReadOnlyList<SceneCheckpointPacket>? Checkpoints = null);
 
 /// <summary>Portable sequence archive; never extracts archive paths to disk.</summary>
 public static class SequencePackage
 {
     public const string Extension = ".hktaspack";
     public const int MaximumMovieBytes = 16 * 1024 * 1024;
-    private const int MaximumManifestBytes = 128 * 1024;
+    public const int MaximumTimelineBytes = 32 * 1024 * 1024;
+    public const int MaximumCheckpoints = 512;
+    private const int MaximumManifestBytes = 512 * 1024;
     private static readonly UTF8Encoding Utf8 = new(false, true);
 
     public static SequenceFile Read(string path)
@@ -73,10 +80,10 @@ public static class SequencePackage
             using var reader = new StreamReader(input, Utf8);
             return new SequenceFile(reader.ReadToEnd(), null);
         }
-        if (input.Length > ProtectedSaveSession.MaximumTotalBytes + MaximumMovieBytes + 1024 * 1024)
+        if (input.Length > ProtectedSaveSession.MaximumTotalBytes + (long)MaximumMovieBytes + SceneCheckpointStore.MaximumStoredBytes + MaximumTimelineBytes + 1024L * 1024)
             throw new InvalidDataException("序列包过大。");
         using var archive = new ZipArchive(input, ZipArchiveMode.Read);
-        if (archive.Entries.Count > ProtectedSaveSession.MaximumFiles + 2)
+        if (archive.Entries.Count > ProtectedSaveSession.MaximumFiles + 3 + MaximumCheckpoints)
             throw new InvalidDataException("序列包文件数量过多。");
         var entries = new Dictionary<string, ZipArchiveEntry>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in archive.Entries)
@@ -111,13 +118,68 @@ public static class SequencePackage
             if (bytes.LongLength != item.Length || Sha256Utility.ComputeHex(bytes) != item.Sha256 || !files.TryAdd(item.Name, bytes))
                 throw new InvalidDataException("初始存档校验失败：" + item.Name);
         }
+
+        TimelineTree? loadedTimeline = null;
+        if (manifest.Timeline != null)
+        {
+            if (manifest.Timeline.Name != "timeline.json"
+                || manifest.Timeline.Length < 0
+                || manifest.Timeline.Length > MaximumTimelineBytes)
+                throw new InvalidDataException("时间线清单无效。");
+            var tBytes = ReadEntry("timeline.json", manifest.Timeline.Length);
+            if (tBytes.LongLength != manifest.Timeline.Length
+                || Sha256Utility.ComputeHex(tBytes) != manifest.Timeline.Sha256)
+                throw new InvalidDataException("时间线校验失败。");
+            loadedTimeline = JsonSerializer.Deserialize<TimelineTree>(tBytes)
+                ?? throw new InvalidDataException("时间线数据为空。");
+            StudioTimelineStore.ValidateTree(loadedTimeline);
+            if (!string.IsNullOrEmpty(loadedTimeline.InitialSavesId)
+                && loadedTimeline.InitialSavesId != manifest.InitialSavesId)
+                throw new InvalidDataException("时间线与初始存档绑定不一致。");
+        }
+
+        List<SceneCheckpointPacket>? loadedCheckpoints = null;
+        if (manifest.Checkpoints != null)
+        {
+            if (manifest.Checkpoints.Count > MaximumCheckpoints)
+                throw new InvalidDataException("场景快照数量超过限制。");
+            loadedCheckpoints = new List<SceneCheckpointPacket>(manifest.Checkpoints.Count);
+            var seenCheckpointNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            long totalCheckpointBytes = 0;
+            foreach (var item in manifest.Checkpoints)
+            {
+                if (item == null
+                    || string.IsNullOrEmpty(item.Name)
+                    || !item.Name.EndsWith(".bin", StringComparison.Ordinal)
+                    || item.Name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+                    || !seenCheckpointNames.Add(item.Name)
+                    || item.Length <= 0
+                    || item.Length > SceneCheckpointPacket.MaximumPayloadBytes + 64 * 1024
+                    || (totalCheckpointBytes += item.Length) > SceneCheckpointStore.MaximumStoredBytes + (long)MaximumCheckpoints * 64 * 1024)
+                    throw new InvalidDataException("场景快照清单无效。");
+                var cBytes = ReadEntry("checkpoints/" + item.Name, item.Length);
+                if (cBytes.LongLength != item.Length
+                    || Sha256Utility.ComputeHex(cBytes) != item.Sha256)
+                    throw new InvalidDataException("场景快照校验失败：" + item.Name);
+                var pkt = SceneCheckpointPacket.FromPortableBytes(cBytes);
+                if (pkt.Header.CheckpointId + ".bin" != item.Name)
+                    throw new InvalidDataException("场景快照标识不匹配：" + item.Name);
+                loadedCheckpoints.Add(pkt);
+            }
+        }
+
         if (entries.Count != 0) throw new InvalidDataException("序列包包含未声明文件。");
         var snapshot = new InitialSaveSnapshot(files);
         if (snapshot.Id != manifest.InitialSavesId) throw new InvalidDataException("初始存档集合校验失败。");
-        return new SequenceFile(Utf8.GetString(movieBytes), snapshot);
+        return new SequenceFile(Utf8.GetString(movieBytes), snapshot, loadedTimeline, loadedCheckpoints);
     }
 
-    public static async Task WriteAsync(string path, string movie, InitialSaveSnapshot? snapshot)
+    public static async Task WriteAsync(
+        string path,
+        string movie,
+        InitialSaveSnapshot? snapshot,
+        TimelineTree? timeline = null,
+        IReadOnlyList<SceneCheckpointPacket>? checkpoints = null)
     {
         var isPackage = path.EndsWith(Extension, StringComparison.OrdinalIgnoreCase);
         if (isPackage != (snapshot != null)) throw new InvalidDataException("绑定存档的序列必须保存为 .hktaspack；未绑定序列使用 .hktas。");
@@ -143,6 +205,41 @@ public static class SequencePackage
                         manifest.Files.Add(new SaveFile { Name = pair.Key, Length = pair.Value.LongLength, Sha256 = snapshot.Hashes[pair.Key] });
                         Write("initial-saves/" + pair.Key, pair.Value);
                     }
+                    if (timeline != null)
+                    {
+                        StudioTimelineStore.ValidateTree(timeline);
+                        var timelineBytes = JsonSerializer.SerializeToUtf8Bytes(timeline);
+                        if (timelineBytes.LongLength > MaximumTimelineBytes)
+                            throw new InvalidDataException("时间线数据超过 32 MiB。");
+                        manifest.Timeline = new SaveFile
+                        {
+                            Name = "timeline.json",
+                            Length = timelineBytes.LongLength,
+                            Sha256 = Sha256Utility.ComputeHex(timelineBytes)
+                        };
+                        Write("timeline.json", timelineBytes);
+                    }
+                    if (checkpoints != null && checkpoints.Count > 0)
+                    {
+                        if (checkpoints.Count > MaximumCheckpoints)
+                            throw new InvalidDataException("场景快照数量超过限制。");
+                        manifest.Checkpoints = new List<SaveFile>(checkpoints.Count);
+                        foreach (var packet in checkpoints
+                            .OrderBy(p => p.Header.ResumeMovieFrame)
+                            .ThenBy(p => p.Header.TransitionId)
+                            .ThenBy(p => p.Header.CheckpointId, StringComparer.Ordinal))
+                        {
+                            var bytes = packet.ToPortableBytes();
+                            var fileName = packet.Header.CheckpointId + ".bin";
+                            manifest.Checkpoints.Add(new SaveFile
+                            {
+                                Name = fileName,
+                                Length = bytes.LongLength,
+                                Sha256 = Sha256Utility.ComputeHex(bytes)
+                            });
+                            Write("checkpoints/" + fileName, bytes);
+                        }
+                    }
                     Write("movie.hktas", movieBytes);
                     Write("manifest.json", JsonSerializer.SerializeToUtf8Bytes(manifest));
                 }
@@ -161,6 +258,8 @@ public static class SequencePackage
         [JsonRequired] public string InitialSavesId { get; set; } = "";
         [JsonRequired] public string MovieSha256 { get; set; } = "";
         [JsonRequired] public List<SaveFile> Files { get; set; } = new();
+        public SaveFile? Timeline { get; set; }
+        public List<SaveFile>? Checkpoints { get; set; }
     }
     private sealed class SaveFile
     {

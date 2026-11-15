@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -7,6 +9,7 @@ using System.Windows.Input;
 using Microsoft.Win32;
 using HollowKnightTAS.Companion.Services;
 using HollowKnightTAS.Core.Movie;
+using HollowKnightTAS.Core.SceneCheckpoints;
 
 namespace HollowKnightTAS.Companion.ViewModels
 {
@@ -120,7 +123,10 @@ namespace HollowKnightTAS.Companion.ViewModels
                 var directory = Path.Combine(activeSequenceDirectory, "Autosave");
                 Directory.CreateDirectory(directory);
                 var path = Path.Combine(directory, "sequence-" + autoSaveName + (sequenceInitialSaves == null ? ".hktas" : SequencePackage.Extension));
-                await SequencePackage.WriteAsync(path, text, sequenceInitialSaves);
+                var (timeline, checkpoints) = sequenceInitialSaves != null
+                    ? GetPersistedTimelineAndCheckpoints(text)
+                    : (null, null);
+                await SequencePackage.WriteAsync(path, text, sequenceInitialSaves, timeline, checkpoints);
                 lastAutoSaveText = text;
                 SequenceSaveStatus = "序列自动保存：" + path;
             }
@@ -132,10 +138,29 @@ namespace HollowKnightTAS.Companion.ViewModels
         {
             var original = MovieText;
             var saved = WithCurrentExecutionProfile(original);
-            await SequencePackage.WriteAsync(path, saved, sequenceInitialSaves);
+            var (timeline, checkpoints) = sequenceInitialSaves != null
+                ? GetPersistedTimelineAndCheckpoints(saved)
+                : (null, null);
+            await SequencePackage.WriteAsync(path, saved, sequenceInitialSaves, timeline, checkpoints);
             sequenceSavePath = path;
             // Export current execution metadata without changing the live timeline's
             // header identity, input rows, undo history, or concurrent edits.
+        }
+
+        private (TimelineTree? Timeline, IReadOnlyList<SceneCheckpointPacket>? Checkpoints) GetPersistedTimelineAndCheckpoints(string savedMovie)
+        {
+            if (sequenceInitialSaves == null || worldlines == null || activeDraftTree == null || SceneCheckpoints == null)
+                return (null, null);
+            var tree = worldlines.Library.Trees.FirstOrDefault(t => t.Id == activeDraftTree);
+            if (tree == null) return (null, null);
+            var clone = JsonSerializer.Deserialize<TimelineTree>(JsonSerializer.Serialize(tree));
+            if (clone == null) return (null, null);
+            clone.InitialSavesId = sequenceInitialSaves.Id;
+            clone.OriginalHashes = new Dictionary<string, string>(sequenceInitialSaves.Hashes);
+            if (clone.Nodes.Count == 1 && clone.Nodes[0].Movie.Length == 0)
+                clone.Nodes[0].Movie = savedMovie;
+            var packets = SceneCheckpoints.GetTreePackets(tree.Id);
+            return (clone, packets);
         }
 
         private static string WithCurrentExecutionProfile(string source)
@@ -143,10 +168,11 @@ namespace HollowKnightTAS.Companion.ViewModels
             var parsed = new MovieAnyCodec().Parse(new StringReader(source), "<manual-save>");
             var movie = parsed.V2Document;
             if (!parsed.Success || movie == null
-                || movie.Header.NativeProfileId == MovieProtocolV2.NativeProfileId) return source;
+                || movie.Header.NativeProfileId == MovieProtocolV2.SelectedNativeProfileId
+                || NativeExecutionProfile.SupportsSceneCheckpoints(movie.Header.NativeProfileId)) return source;
             var old = movie.Header;
             var header = new MovieV2Header(old.GameVersion, old.ApiVersion, old.ModVersion,
-                MovieProtocolV2.NativeProfileId, old.ActionSchemaId, old.MouseEnabled,
+                MovieProtocolV2.SelectedNativeProfileId, old.ActionSchemaId, old.MouseEnabled,
                 old.EnvironmentSha256, old.ViewportWidth, old.ViewportHeight, old.CustomKeys);
             return new MovieV2Codec().WriteCanonical(new MovieV2Document(movie.SourceName, header, movie.Runs));
         }

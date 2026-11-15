@@ -81,6 +81,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                     ? fullRunMovies.OriginalHashes : tree.OriginalHashes;
                 tipId = tree.UpdateTip(frame, movie, hashes, oldTip).Id;
                 library.ActiveTreeId = id;
+                SyncTreeCheckpoints(tree, frame, movie, oldTip, tipId);
             });
             activeDraftTip = tipId;
             if (selectedTimelineTree?.Id == id)

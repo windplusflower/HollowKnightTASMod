@@ -32,6 +32,12 @@ namespace HollowKnightTAS.Companion
         protected override async void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("HKTAS_LOADING_CANONICAL_STARTUP_CLOCK")))
+            {
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.ConfigureReplayEnvironment(
+                    HollowKnightTAS.Core.Movie.NativeExecutionProfile.CanonicalBoundaryProfileId,
+                    Environment.SetEnvironmentVariable);
+            }
             applicationLog = new StudioApplicationLog(DiagnosticLogExporter.LocalRoot);
             System.Diagnostics.Trace.Listeners.Add(applicationLog);
             DispatcherUnhandledException += (_, args) => System.Diagnostics.Trace.WriteLine("Studio dispatcher exception: " + args.Exception);

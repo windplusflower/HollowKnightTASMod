@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using HollowKnightTAS.Companion.Services;
+using HollowKnightTAS.Core.SceneCheckpoints;
 
 namespace HollowKnightTAS.Companion.ViewModels
 {
@@ -145,11 +147,53 @@ namespace HollowKnightTAS.Companion.ViewModels
             selectedTimelineNode = selectedTimelineTree.PathTo(selectedWorldline.Id).FirstOrDefault(n => n.Id == nodeId) ?? selectedWorldline;
             NotifyWorldlines();
         }
-        private void StartTimeline(string movie)
+        private void StartTimeline(
+            string movie,
+            TimelineTree? importedTimeline = null,
+            IReadOnlyList<SceneCheckpointPacket>? importedCheckpoints = null)
         {
             InitializeWorldlines();
             if (worldlines == null) throw new InvalidOperationException(TimelineTreeStatus);
             string id = "";
+            if (importedTimeline != null)
+            {
+                worldlines.Update(library =>
+                {
+                    var clone = JsonSerializer.Deserialize<TimelineTree>(JsonSerializer.Serialize(importedTimeline))
+                        ?? throw new InvalidDataException("时间线数据为空。");
+                    clone.InitialSavesId = sequenceInitialSaves?.Id ?? clone.InitialSavesId;
+                    if (sequenceInitialSaves != null)
+                        clone.OriginalHashes = new Dictionary<string, string>(sequenceInitialSaves.Hashes);
+                    else if (fullRunMovies?.IsPending == true)
+                        clone.OriginalHashes = new Dictionary<string, string>(fullRunMovies.OriginalHashes);
+
+                    var existingIndex = library.Trees.FindIndex(t => t.Id == clone.Id);
+                    if (existingIndex >= 0) library.Trees[existingIndex] = clone;
+                    else
+                    {
+                        var emptyIndex = library.Trees.FindIndex(t => t.Nodes.Count == 1 && t.Nodes[0].Movie.Length == 0);
+                        if (emptyIndex >= 0) library.Trees[emptyIndex] = clone;
+                        else library.Trees.Add(clone);
+                    }
+                    id = library.ActiveTreeId = clone.Id;
+                });
+                if (importedCheckpoints != null)
+                {
+                    foreach (var pkt in importedCheckpoints)
+                        _ = SceneCheckpoints.ImportPacket(pkt);
+                }
+                freshTimeline = null;
+                var activeTree = worldlines.Library.Trees.Single(t => t.Id == id);
+                var selectedLeaf = activeTree.Leaves.FirstOrDefault(n => n.Movie == movie)
+                    ?? activeTree.Leaves.Last();
+                activeDraftTree = id;
+                activeDraftTip = selectedLeaf.IsBranchTip ? selectedLeaf.Id : null;
+                SceneCheckpoints.ActivateBranch(id, FormatBranchId(selectedLeaf.Id));
+                RefreshWorldlines(id, selectedLeaf.Id, selectedLeaf.Id);
+                lastSavedBranchMovie = null; lastSavedBranchNative = -1;
+                return;
+            }
+
             worldlines.Update(library =>
             {
                 var tree = library.Trees.FirstOrDefault(t => t.Nodes.Count == 1 && t.Nodes[0].Movie.Length == 0) ?? new TimelineTree();
@@ -172,6 +216,7 @@ namespace HollowKnightTAS.Companion.ViewModels
             var id = activeDraftTree ?? worldlines.Library.ActiveTreeId;
             int nodeId = 0;
             int? tipId = activeDraftTip;
+            var oldTip = activeDraftTip;
             var candidate = TimelineTree.Parse(snapshot.Movie);
             var actual = TimelineTree.Parse(observed.Movie);
             var verified = !draftRequiresRestart && snapshot.Frame <= observed.Frame
@@ -188,10 +233,15 @@ namespace HollowKnightTAS.Companion.ViewModels
                         && HollowKnightTAS.Core.Movie.MovieV2Prefix.Matches(actual, candidate, observed.Frame)
                         ? snapshot.Movie : observed.Movie;
                     tipId = tree.UpdateTip(observed.Frame, tipMovie, snapshot.OriginalHashes, tipId).Id;
+                    SyncTreeCheckpoints(tree, observed.Frame, tipMovie, oldTip, tipId);
                 }
                 nodeId = tree.Add(snapshot.Frame, snapshot.Movie, snapshot.OriginalHashes, !verified).Id;
                 var tip = tree.Nodes.FirstOrDefault(n => n.Id == tipId && n.IsBranchTip);
                 if (tip != null) tree.UpdateTip(tip.Frame, tip.Movie, snapshot.OriginalHashes, tip.Id);
+                if (verified)
+                {
+                    SyncTreeCheckpoints(tree, snapshot.Frame, snapshot.Movie, oldTip, tipId ?? nodeId);
+                }
             });
             activeDraftTip = tipId;
             activeDraftTree = id;
@@ -235,15 +285,19 @@ namespace HollowKnightTAS.Companion.ViewModels
             var initialSaves = GetTimelineInitialSaves(tree);
             var changedTree = activeDraftTree != tree.Id;
             await fullRunMovies.PauseForDocumentChangeAsync(CancellationToken.None);
+            await CancelAutoSceneCheckpointCaptureAsync();
+            await SaveCurrentBranchAsync(closing: true);
 
-            var scope = SceneCheckpoints.ActivateBranch(tree.Id, FormatBranchId(leaf.Id));
-            var available = SceneCheckpoints.Catalog(scope)
-                .Where(h => h.RestoreQualified && h.ResumeMovieFrame <= node.Frame)
-                .OrderByDescending(h => h.ResumeMovieFrame)
-                .FirstOrDefault();
+            activeDraftTree = tree.Id;
+            activeDraftTip = leaf.IsBranchTip ? leaf.Id : null;
+            selectedTimelineTree = tree;
+            selectedWorldline = leaf;
+            selectedTimelineNode = node;
+
+            var available = FindBestSceneCheckpoint(tree.Id, node.Frame, TimelineTree.Parse(leaf.Movie));
 
             // Keep the chosen world's future inputs even when restoring an ancestor.
-            await RestartDraftAtAsync(node.Frame, leaf.Movie, switchSequence: true, sourceSaves: initialSaves);
+            await RestartDraftAtAsync(node.Frame, leaf.Movie, switchSequence: true, sourceSaves: initialSaves, saveCurrentBranch: false);
             if (changedTree) ResetSequenceSaveTarget(null);
             worldlines!.Update(library => library.ActiveTreeId = tree.Id);
             freshTimeline = null;
@@ -264,11 +318,12 @@ namespace HollowKnightTAS.Companion.ViewModels
                     UiText.T("删除时间线子树"), MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             try
             {
+                IReadOnlyList<string> prunedCheckpoints = Array.Empty<string>();
                 worldlines!.Update(library =>
                 {
                     var target = library.Trees.Single(t => t.Id == tree.Id);
                     var removed = target.Subtree(node.Id);
-                    target.Delete(node.Id);
+                    prunedCheckpoints = target.Delete(node.Id);
                     foreach (var slot in library.QuickSlots.Where(p =>
                     {
                         var parts = p.Value.Split(':');
@@ -276,6 +331,10 @@ namespace HollowKnightTAS.Companion.ViewModels
                     }).Select(p => p.Key).ToArray())
                         library.QuickSlots.Remove(slot);
                 });
+                foreach (var checkpointId in prunedCheckpoints)
+                {
+                    try { SceneCheckpoints.RemoveCheckpoint(checkpointId); } catch { }
+                }
                 var removedList = tree.Subtree(node.Id);
                 foreach (var removedId in removedList)
                 {

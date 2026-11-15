@@ -128,6 +128,77 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
         {
             lock (sync) { RequireActive(scope); return Array.AsReadOnly(packets.Values.Where(p => SameBranch(p.Header.Scope, scope)).Select(p => p.Header).ToArray()); }
         }
+        public IReadOnlyList<SceneCheckpointHeader> CatalogTree(string treeId)
+        {
+            lock (sync)
+            {
+                CheckAlive();
+                SceneCheckpointScope.RequireId(treeId);
+                return Array.AsReadOnly(packets.Values
+                    .Where(p => p.Header.Scope.StudioSessionId == StudioSessionId && p.Header.Scope.TreeId == treeId)
+                    .OrderBy(p => p.Header.ResumeMovieFrame)
+                    .ThenBy(p => p.Header.TransitionId)
+                    .Select(p => p.Header)
+                    .ToArray());
+            }
+        }
+        public IReadOnlyList<SceneCheckpointPacket> GetTreePackets(string treeId)
+        {
+            lock (sync)
+            {
+                CheckAlive();
+                SceneCheckpointScope.RequireId(treeId);
+                return Array.AsReadOnly(packets.Values
+                    .Where(p => p.Header.Scope.StudioSessionId == StudioSessionId && p.Header.Scope.TreeId == treeId)
+                    .OrderBy(p => p.Header.ResumeMovieFrame)
+                    .ThenBy(p => p.Header.TransitionId)
+                    .ToArray());
+            }
+        }
+        public SceneCheckpointPacket ImportPacket(SceneCheckpointPacket packet)
+        {
+            if (packet == null) throw new ArgumentNullException(nameof(packet));
+            lock (sync)
+            {
+                CheckAlive();
+                var targetGeneration = Math.Max(generation, 1L);
+                var reBound = packet.WithScope(new SceneCheckpointScope(
+                    StudioSessionId,
+                    packet.Header.Scope.TreeId,
+                    packet.Header.Scope.BranchId,
+                    targetGeneration));
+                if (packets.TryGetValue(reBound.Header.CheckpointId, out var existing))
+                {
+                    if (existing.Header.PayloadSha256 != reBound.Header.PayloadSha256)
+                        throw new InvalidDataException("Imported checkpoint ID collision with different payload.");
+                    return existing;
+                }
+                var duplicate = packets.Values.FirstOrDefault(p =>
+                    p.Header.Scope.StudioSessionId == StudioSessionId
+                    && p.Header.Scope.TreeId == reBound.Header.Scope.TreeId
+                    && p.Header.Scope.BranchId == reBound.Header.Scope.BranchId
+                    && p.Header.TransitionId == reBound.Header.TransitionId
+                    && p.Header.CaptureNativeFrame == reBound.Header.CaptureNativeFrame
+                    && p.Header.PayloadSha256 == reBound.Header.PayloadSha256);
+                if (duplicate != null) return duplicate;
+                if (storedBytes > MaximumStoredBytes - reBound.Header.PayloadBytes)
+                    throw new InvalidOperationException("Studio checkpoint memory budget is full.");
+                packets.Add(reBound.Header.CheckpointId, reBound);
+                storedBytes += reBound.Header.PayloadBytes;
+                return reBound;
+            }
+        }
+        public bool RemoveCheckpoint(string checkpointId)
+        {
+            lock (sync)
+            {
+                CheckAlive();
+                if (!packets.TryGetValue(checkpointId, out var packet)) return false;
+                packets.Remove(checkpointId);
+                storedBytes -= packet.Header.PayloadBytes;
+                return true;
+            }
+        }
         public void Cancel(SceneCheckpointLease lease)
         {
             lock (sync) { if (ReferenceEquals(pending, lease)) RejectPending(); else if (lease.State == "Pending") lease.State = "Rejected"; }

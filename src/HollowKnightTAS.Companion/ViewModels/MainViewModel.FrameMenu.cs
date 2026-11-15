@@ -231,15 +231,11 @@ namespace HollowKnightTAS.Companion.ViewModels
 
             // 1. 查找当前活跃世界线分支下是否具备适用的已验证场景快照
             HollowKnightTAS.Core.SceneCheckpoints.SceneCheckpointHeader? availableCheckpoint = null;
-            if (activeDraftTree != null && activeDraftTip != null && activeDraftTree.Length == 32)
+            if (activeDraftTree != null && activeDraftTree.Length == 32)
             {
                 try
                 {
-                    var scope = SceneCheckpoints.ActivateBranch(activeDraftTree, FormatBranchId(activeDraftTip.Value));
-                    availableCheckpoint = SceneCheckpoints.Catalog(scope)
-                        .Where(h => h.RestoreQualified && h.ResumeMovieFrame <= frame)
-                        .OrderByDescending(h => h.ResumeMovieFrame)
-                        .FirstOrDefault();
+                    availableCheckpoint = FindBestSceneCheckpoint(activeDraftTree, frame, candidate);
                 }
                 catch { }
             }
@@ -272,7 +268,7 @@ namespace HollowKnightTAS.Companion.ViewModels
 
                     var session = SelectedSession!.Client;
                     var checkpointClient = CreateSceneCheckpointClient(session);
-                    var scope = availableCheckpoint.Scope;
+                    var scope = SceneCheckpoints.ActivateBranch(availableCheckpoint.Scope.TreeId, availableCheckpoint.Scope.BranchId);
                     var binding = availableCheckpoint.Binding;
                     var checkpointId = availableCheckpoint.CheckpointId;
 

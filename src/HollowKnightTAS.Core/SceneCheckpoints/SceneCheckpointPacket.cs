@@ -126,6 +126,10 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
         public string Adapter { get; }
         public bool RestoreQualified { get; }
 
+        public SceneCheckpointHeader WithScope(SceneCheckpointScope scope)
+            => new SceneCheckpointHeader(CheckpointId, scope, Binding, Trigger, TransitionId, CaptureMovieFrame, CaptureNativeFrame,
+                ResumeMovieFrame, ResumeNativeFrame, PayloadBytes, PayloadSha256, Schema, Adapter, RestoreQualified);
+
         public Dictionary<string, string> ToFields()
         {
             var fields = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -207,6 +211,53 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
         public SceneCheckpointHeader Header { get; }
         public int ChunkCount => (payload.Length + ChunkBytes - 1) / ChunkBytes;
         public byte[] CopyPayload() => (byte[])payload.Clone();
+        public SceneCheckpointPacket WithScope(SceneCheckpointScope scope) => new SceneCheckpointPacket(Header.WithScope(scope), payload);
+        public byte[] ToPortableBytes()
+        {
+            var headerBytes = IpcPayloadCodec.Serialize(Header.ToFields());
+            using (var stream = new MemoryStream(12 + headerBytes.Length + payload.Length))
+            using (var writer = new BinaryWriter(stream, new UTF8Encoding(false, true), true))
+            {
+                writer.Write(1);
+                writer.Write(headerBytes.Length);
+                writer.Write(headerBytes);
+                writer.Write(payload.Length);
+                writer.Write(payload);
+                return stream.ToArray();
+            }
+        }
+        public static SceneCheckpointPacket FromPortableBytes(byte[] bytes, string? studioSessionId = null, long? generation = null)
+        {
+            if (bytes == null || bytes.Length < 12) throw new InvalidDataException("Truncated portable checkpoint packet.");
+            using (var stream = new MemoryStream(bytes, false))
+            using (var reader = new BinaryReader(stream, new UTF8Encoding(false, true)))
+            {
+                var formatVersion = reader.ReadInt32();
+                if (formatVersion != 1) throw new InvalidDataException("Unsupported portable checkpoint format version.");
+                var headerLength = reader.ReadInt32();
+                if (headerLength < 1 || headerLength > 64 * 1024 || headerLength > stream.Length - stream.Position - 4)
+                    throw new InvalidDataException("Invalid portable checkpoint header length.");
+                var headerBytes = reader.ReadBytes(headerLength);
+                var payloadLength = reader.ReadInt32();
+                if (payloadLength < 1 || payloadLength > MaximumPayloadBytes || payloadLength != stream.Length - stream.Position)
+                    throw new InvalidDataException("Invalid portable checkpoint payload length.");
+                var payloadBytes = reader.ReadBytes(payloadLength);
+                var parsedFields = IpcPayloadCodec.TryDeserialize(headerBytes);
+                if (!parsedFields.Success || parsedFields.Fields == null)
+                    throw new InvalidDataException("Invalid portable checkpoint header fields.");
+                var header = SceneCheckpointHeader.FromFields(parsedFields.Fields);
+                if (studioSessionId != null || generation != null)
+                {
+                    var scope = new SceneCheckpointScope(
+                        studioSessionId ?? header.Scope.StudioSessionId,
+                        header.Scope.TreeId,
+                        header.Scope.BranchId,
+                        generation ?? header.Scope.Generation);
+                    header = header.WithScope(scope);
+                }
+                return new SceneCheckpointPacket(header, payloadBytes);
+            }
+        }
         public byte[] ReadChunk(int index)
         {
             if (index < 0 || index >= ChunkCount) throw new ArgumentOutOfRangeException(nameof(index));

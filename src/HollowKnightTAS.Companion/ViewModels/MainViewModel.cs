@@ -1059,7 +1059,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                 recordingGridNativeFrame = -1;
                 draftRequiresRestart = candidate.V2Document != null;
                 RefreshInputGrid();
-                if (candidate.V2Document != null) StartTimeline(MovieText);
+                if (candidate.V2Document != null) StartTimeline(MovieText, sequence.Timeline, sequence.Checkpoints);
                 if (!replayProfileChanged && sequence.InitialSaves == null && fullRunMovies?.IsPending == true && fullRunMovies.Mode == "Unarmed"
                     && startupBoot?.IsWaiting == true && startupBoot.NativeCompletedFrames == 0)
                 {
