@@ -441,10 +441,11 @@ int main(int argc, char **argv)
     CHECK(g_deterministic_clock_anchor.QuadPart == anchor && !g_continuation_imported);
     snapshot.fraction ^= 1; gate.mode = HKTAS_V2_MODE_RUN;
     CHECK(HktasClockBridge_ImportContinuation((BYTE *)&snapshot, sizeof(snapshot),0) == 0);
-    gate.mode = HKTAS_V2_MODE_PAUSED; SetEnvironmentVariableW(L"HKTAS_SCENE_CHECKPOINT_EXPERIMENT",NULL);
+    gate.mode = HKTAS_V2_MODE_RUN;
     CHECK(HktasClockBridge_ExportContinuation((BYTE *)&snapshot, sizeof(snapshot)) == 0);
-    puts("PASS wrong boundary/schema/phase/padding, running writes, repeated import and disabled experiment reject without mutation");
-    initialize(); rate(1,0); SetEnvironmentVariableW(L"HKTAS_SCENE_CHECKPOINT_EXPERIMENT",NULL);
+    gate.mode = HKTAS_V2_MODE_PAUSED;
+    puts("PASS wrong boundary/schema/phase/padding, running writes/exports and repeated import reject without mutation");
+    initialize(); rate(1,0);
     CHECK(HktasClockBridge_BeginResidentBoundary(0) == 0); /* No native callback owns this call. */
     gate.mode = HKTAS_V2_MODE_RUN; g_v2_boundary_callback_phase = 1;
     uint64_t first = HktasClockBridge_BeginResidentBoundary(0);

@@ -111,19 +111,22 @@ namespace HollowKnightTAS.Companion.ViewModels
         {
             if (gridApplying || sequenceSaving) return;
             SetGridApplying(true);
-            try
-            {
-                await CancelAutoSceneCheckpointCaptureAsync();
-                await SaveCurrentBranchAsync(closing: true);
-                selectedTimelineTree = TimelineTrees.Single(t => t.Id == treeId);
-                selectedWorldline = selectedTimelineTree.Nodes.Single(n => n.Id == leafId);
-                selectedTimelineNode = selectedWorldline;
-                UseSelectedWorldline();
-                SceneCheckpoints.ActivateBranch(treeId, FormatBranchId(leafId));
-                NotifyWorldlines();
-            }
+            try { await SwitchWorldlineCoreAsync(treeId, leafId); }
             catch (Exception exception) { Status = TimelineTreeStatus = "切换世界线失败：" + exception.Message; }
             finally { SetGridApplying(false); }
+        }
+
+        private async Task SwitchWorldlineCoreAsync(string treeId, int leafId)
+        {
+            if (sequenceSaving) throw new InvalidOperationException("请等待当前保存完成。");
+            await CancelAutoSceneCheckpointCaptureAsync();
+            await SaveCurrentBranchAsync(closing: true);
+            selectedTimelineTree = TimelineTrees.Single(t => t.Id == treeId);
+            selectedWorldline = selectedTimelineTree.Nodes.Single(n => n.Id == leafId);
+            selectedTimelineNode = selectedWorldline;
+            UseSelectedWorldline();
+            SceneCheckpoints.ActivateBranch(treeId, FormatBranchId(leafId));
+            NotifyWorldlines();
         }
     }
 }

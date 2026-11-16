@@ -30,77 +30,85 @@ namespace HollowKnightTAS.Companion.ViewModels
                 && (forward ? frame > currentFullRunMovieFrame && fullRunMovies.Mode != "Completed"
                     : frame < currentFullRunMovieFrame);
 
+        private string? lastRestoredCheckpointId;
+        private long lastRestoredCheckpointFrame = -1;
+
         public async Task FrameMenuAsync(string action, long frame)
         {
             if (gridApplying) return;
             SetGridApplying(true);
-            try
-            {
-                if (fullRunMovies?.IsPending != true)
-                    throw new InvalidOperationException("帧存档与定位需要从 Studio 启动全流程会话。");
-                if (action == "load" || action == "rebuild")
-                    await fullRunMovies.PauseForDocumentChangeAsync(CancellationToken.None);
-                else if (startupBoot?.IsWaiting != true)
-                    await fullRunMovies.PauseAsync(CancellationToken.None);
-                if (action == "load")
-                {
-                    InitializeWorldlines();
-                    var node = FindTimelineFrame(frame) ?? throw new InvalidOperationException("所选世界线此帧尚未存档，请到时间线选择其他分支。");
-                    await RestoreTimelineCoreAsync(selectedTimelineTree!, selectedWorldline!, node);
-                }
-                else if (action == "rebuild")
-                {
-                    if (frame < 0 || frame > gridTotalFrames)
-                        throw new InvalidOperationException("目标帧超出序列。");
-                    await RestartDraftAtAsync(frame);
-                }
-                else if (action == "seek" || action == "restore")
-                {
-                    if (frame < 0 || frame > gridTotalFrames)
-                        throw new InvalidOperationException("目标帧超出序列。");
-                    var snapshot = await ReadReadyFrameSnapshotAsync();
-                    if (action == "seek" ? frame <= snapshot.Frame : frame >= snapshot.Frame)
-                        throw new InvalidOperationException(action == "seek"
-                            ? "播放到帧只能选择当前帧之后的未来帧。" : "恢复到帧只能选择当前帧之前的过去帧。");
-                    if (action == "seek" && !draftRequiresRestart) await PlayForwardToFrameAsync(frame);
-                    else await RestartDraftAtAsync(frame);
-                }
-                else if (action == "save")
-                {
-                    // Saving records a replay target. It never navigates the game to that target.
-                    var observed = await ReadReadyFrameSnapshotAsync();
-                    if (frame == -1) frame = observed.Frame;
-                    var draft = movieEditor.ValidateAny(MovieText).V2Document
-                        ?? throw new InvalidOperationException("序列无效，请打开有效的 .hktas 文件。");
-                    var actual = TimelineTree.Parse(observed.Movie);
-                    if (!draftRequiresRestart && startupBoot?.NativeCompletedFrames > 0
-                        && fullRunMovies.Mode == "Recording" && !gridHasUserEdits)
-                    {
-                        var total = InputGridEditor.Count(draft);
-                        draft = new MovieV2Document(draft.SourceName, actual.Header,
-                            actual.Runs.Concat(total > observed.Frame
-                                ? SliceV2(draft, observed.Frame, total - observed.Frame).Runs
-                                : Array.Empty<NativeFrameRun>()));
-                    }
-                    else if (!draftRequiresRestart && draft.Header.EnvironmentSha256 == "none")
-                        draft = new MovieV2Document(draft.SourceName, actual.Header, draft.Runs);
-                    if (frame < 0 || frame > InputGridEditor.Count(draft))
-                        throw new InvalidOperationException("目标帧超出序列。");
-                    var snapshot = new FrameSave { Frame = frame,
-                        Movie = new MovieV2Codec().WriteCanonical(draft),
-                        OriginalHashes = new Dictionary<string, string>(fullRunMovies.OriginalHashes) };
-                    SaveTimelineSnapshot(snapshot, observed);
-
-                }
-            }
+            try { await FrameMenuCoreAsync(action, frame); }
             catch (Exception ex) { GridStatus = Status = ex.Message; }
             finally { SetGridApplying(false); }
+        }
+
+        private async Task FrameMenuCoreAsync(string action, long frame)
+        {
+            if (fullRunMovies?.IsPending != true)
+                throw new InvalidOperationException("帧存档与定位需要从 Studio 启动全流程会话。");
+            if (action == "load" || action == "rebuild" || (action == "seek" && fullRunMovies.Mode == "Completed"))
+                await fullRunMovies.PauseForDocumentChangeAsync(CancellationToken.None);
+            else if (startupBoot?.IsWaiting != true)
+                await fullRunMovies.PauseAsync(CancellationToken.None);
+            if (action == "load")
+            {
+                InitializeWorldlines();
+                var node = FindTimelineFrame(frame) ?? throw new InvalidOperationException("所选世界线此帧尚未存档，请到时间线选择其他分支。");
+                await RestoreTimelineCoreAsync(selectedTimelineTree!, selectedWorldline!, node);
+            }
+            else if (action == "rebuild")
+            {
+                if (frame < 0 || frame > gridTotalFrames)
+                    throw new InvalidOperationException("目标帧超出序列。");
+                await RestartDraftAtAsync(frame);
+            }
+            else if (action == "seek" || action == "restore")
+            {
+                if (frame < 0 || frame > gridTotalFrames)
+                    throw new InvalidOperationException("目标帧超出序列。");
+                var snapshot = await ReadReadyFrameSnapshotAsync();
+                if (action == "seek" ? frame <= snapshot.Frame : frame >= snapshot.Frame)
+                    throw new InvalidOperationException(action == "seek"
+                        ? "播放到帧只能选择当前帧之后的未来帧。" : "恢复到帧只能选择当前帧之前的过去帧。");
+                if (action == "seek" && !draftRequiresRestart) await PlayForwardToFrameAsync(frame);
+                else await RestartDraftAtAsync(frame);
+            }
+            else if (action == "save")
+            {
+                // Saving records a replay target. It never navigates the game to that target.
+                var observed = await ReadReadyFrameSnapshotAsync();
+                if (frame == -1) frame = observed.Frame;
+                var draft = movieEditor.ValidateAny(MovieText).V2Document
+                    ?? throw new InvalidOperationException("序列无效，请打开有效的 .hktas 文件。");
+                var actual = TimelineTree.Parse(observed.Movie);
+                if (!draftRequiresRestart && startupBoot?.NativeCompletedFrames > 0
+                    && fullRunMovies.Mode == "Recording" && !gridHasUserEdits)
+                {
+                    var total = InputGridEditor.Count(draft);
+                    draft = new MovieV2Document(draft.SourceName, actual.Header,
+                        actual.Runs.Concat(total > observed.Frame
+                            ? SliceV2(draft, observed.Frame, total - observed.Frame).Runs
+                            : Array.Empty<NativeFrameRun>()));
+                }
+                else if (!draftRequiresRestart && draft.Header.EnvironmentSha256 == "none")
+                    draft = new MovieV2Document(draft.SourceName, actual.Header, draft.Runs);
+                if (frame < 0 || frame > InputGridEditor.Count(draft))
+                    throw new InvalidOperationException("目标帧超出序列。");
+                var snapshot = new FrameSave { Frame = frame,
+                    Movie = new MovieV2Codec().WriteCanonical(draft),
+                    OriginalHashes = new Dictionary<string, string>(fullRunMovies.OriginalHashes) };
+                SaveTimelineSnapshot(snapshot, observed);
+            }
+            else
+            {
+                throw new InvalidOperationException("不支持的帧菜单操作：" + action);
+            }
         }
 
         private async Task<FrameSave> ReadFrameSnapshotAsync()
         {
             if (startupBoot?.NativeCompletedFrames == 0) return new FrameSave { Frame = 0, Movie = MovieText };
-            var result = await automationBroker!.ExecuteHumanAsync(AutomationCommandIds.FullRunSnapshot,
+            var result = await ExecuteStudioOrHumanAsync(AutomationCommandIds.FullRunSnapshot,
                 AutomationScope.MovieRead, null, "Paused", null, CancellationToken.None);
             RequireAutomationSuccess(result);
             var path = Path.GetFullPath(result.Data["path"]);
@@ -141,15 +149,25 @@ namespace HollowKnightTAS.Companion.ViewModels
                 }
             }
             if (fullRunMovies!.Mode == "Completed")
-                throw new InvalidOperationException("固定回放已结束；未来帧播放不会自动重启游戏。");
+            {
+                var current = await ReadReadyFrameSnapshotAsync();
+                var original = movieEditor.ValidateAny(current.Movie).V2Document!;
+                var draft = GridAny().V2Document!;
+                if (!MovieV2Prefix.Matches(original, draft, current.Frame))
+                    throw new InvalidOperationException("已修改过去的帧，请先点击回放到当前帧。");
+                await RestartDraftAtAsync(frame);
+                return;
+            }
             await ApplyPendingInputsAsync(withinGridOperation: true);
-            var result = await automationBroker.ExecuteHumanAsync(AutomationCommandIds.FullRunSeek,
+            var result = await ExecuteStudioOrHumanAsync(AutomationCommandIds.FullRunSeek,
                 AutomationScope.ControlPlayback, new Dictionary<string, string>
                 {
                     ["targetFrame"] = frame.ToString(CultureInfo.InvariantCulture),
                     ["expectedNativeFrame"] = startupBoot!.NativeCompletedFrames.ToString(CultureInfo.InvariantCulture)
                 }, "Paused", null, CancellationToken.None);
             RequireAutomationSuccess(result);
+            if (SelectedSession?.Client is { IsConnected: true } client)
+                EnsureAutoSceneCheckpointCapture(client);
             var started = await fullRunMovies.RunAsync(startupBoot.NativeCompletedFrames, CancellationToken.None);
             if (started.Mode == "Fault") throw new InvalidOperationException(started.Error);
             var deadline = DateTime.UtcNow.AddMinutes(10);
@@ -230,6 +248,8 @@ namespace HollowKnightTAS.Companion.ViewModels
             timing?.Mark("movie-prepared");
 
             // 1. 查找当前活跃世界线分支下是否具备适用的已验证场景快照
+            lastRestoredCheckpointId = null;
+            lastRestoredCheckpointFrame = -1;
             HollowKnightTAS.Core.SceneCheckpoints.SceneCheckpointHeader? availableCheckpoint = null;
             if (activeDraftTree != null && activeDraftTree.Length == 32)
             {
@@ -322,6 +342,13 @@ namespace HollowKnightTAS.Companion.ViewModels
                     // 恢复异常安全回退红线：安全回退到从第 0 帧完整冷重播！
                     timing?.Mark("checkpoint-restore-failed-fallback");
                     restoredViaCheckpoint = false;
+                    startupBoot?.Refresh();
+                    if (startupBoot != null && !startupBoot.IsWaiting && fullRunMovies != null && !fullRunMovies.IsTerminal)
+                    {
+                        try { await fullRunMovies.PauseForDocumentChangeAsync(CancellationToken.None); }
+                        catch { }
+                        startupBoot.Refresh();
+                    }
                     await restartProtectedGame();
                 }
             }
@@ -362,6 +389,8 @@ namespace HollowKnightTAS.Companion.ViewModels
                 if (observed.Frame != frame) throw new InvalidOperationException($"重放停在 {observed.Frame}，未到达目标 {frame}。");
             }
             timing?.Mark("target-verified");
+            lastRestoredCheckpointId = restoredViaCheckpoint ? availableCheckpoint!.CheckpointId : null;
+            lastRestoredCheckpointFrame = restoredViaCheckpoint ? availableCheckpoint!.ResumeMovieFrame : -1;
             currentFullRunMovieFrame = frame;
             gridHasUserEdits = false;
             draftRequiresRestart = false;

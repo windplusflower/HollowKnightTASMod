@@ -90,6 +90,16 @@ public sealed class RestorePresentationFailureTests
     }
 
     [TestMethod]
+    public void AttachTargetCanSafelyReattachCurrentProcess()
+    {
+        using var presentation = new RestorePresentation();
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        presentation.AttachTarget(self);
+        presentation.AttachTarget(self);
+        Assert.IsFalse(presentation.IsActive);
+    }
+
+    [TestMethod]
     public void StudioExceptionIsFlushedAndIncludedInExportWhileLoggerIsOpen()
     {
         var root = Path.Combine(Path.GetTempPath(), "hktas-studio-log-" + Guid.NewGuid().ToString("N"));

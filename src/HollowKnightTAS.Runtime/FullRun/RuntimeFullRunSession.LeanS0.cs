@@ -439,6 +439,15 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private void BeginLeanS0TargetSaveLoad(LeanS0Packet packet, long frame, int slot)
         {
+            if (checkpointSaves != null)
+            {
+                string slotPath = checkpointSaves.GetSlotPath(slot, ".dat");
+                if (!File.Exists(slotPath))
+                {
+                    throw new InvalidOperationException(
+                        $"LeanS0 target save slot {slot} has no initial save on disk (new-game path); falling back to cold replay.");
+                }
+            }
             leanS0TargetPacket = packet;
             leanS0TargetResumeNativeFrame = -1;
             leanS0TargetJob = new LeanS0TargetJob(frame);

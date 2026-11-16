@@ -256,7 +256,7 @@ namespace HollowKnightTAS.Companion
                         // A failed gate cannot service capture/style messages.
                         // The original saves are still checked before replacing
                         // this exact App-owned process through the normal launcher.
-                        if (startupBoot.FullRunFaultCode == 0)
+                        if (startupBoot.FullRunFaultCode == 0 && !restorePresentation.IsActive)
                             await restorePresentation.BeginAsync(process);
                         timing.Mark("source-cover-ready");
                         startupGame = null;

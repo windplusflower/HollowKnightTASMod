@@ -3252,7 +3252,7 @@ namespace HollowKnightTAS.Companion.Automation
                     break;
                 case AutomationCommandIds.GetWorldSnapshot:
                     required = Array.Empty<string>();
-                    optional = new[] { "snapshotId", "view", "includeInactive", "offset", "limit" };
+                    optional = new[] { "snapshotId", "view", "includeInactive", "offset", "limit", "watches" };
                     break;
                 case AutomationCommandIds.GetObjectDetails:
                     required = new[] { "objectId" };
@@ -3309,8 +3309,42 @@ namespace HollowKnightTAS.Companion.Automation
                     optional = new[] { "fps" };
                     break;
                 case AutomationCommandIds.BeginFullRunReplay:
-                    required = new[] { "expectedNativeFrame", "movieBase64" };
-                    optional = new[] { "pauseAtFrame" };
+                    required = new[] { "expectedNativeFrame" };
+                    optional = new[] { "movieBase64", "pauseAtFrame" };
+                    break;
+                case AutomationCommandIds.StudioEditInputs:
+                    required = new[] { "operation" };
+                    optional = new[] { "startFrame", "endFrame", "count", "minimumTotal", "action", "held", "runs", "fps", "rngSeed" };
+                    break;
+                case AutomationCommandIds.StudioGetMovie:
+                    required = Array.Empty<string>();
+                    optional = new[] { "startFrame", "frameCount", "includeFullText" };
+                    break;
+                case AutomationCommandIds.StudioFrameAction:
+                    required = new[] { "targetFrame" };
+                    optional = new[] { "action", "expectedNativeFrame" };
+                    break;
+                case AutomationCommandIds.StudioGetTimeline:
+                    required = Array.Empty<string>();
+                    break;
+                case AutomationCommandIds.StudioSaveTimelineNode:
+                    required = Array.Empty<string>();
+                    optional = new[] { "frame" };
+                    break;
+                case AutomationCommandIds.StudioRestoreTimelineNode:
+                    required = Array.Empty<string>();
+                    optional = new[] { "nodeId", "frame", "worldlineId", "treeId" };
+                    break;
+                case AutomationCommandIds.StudioSwitchWorldline:
+                    required = new[] { "leafId" };
+                    optional = new[] { "treeId" };
+                    break;
+                case AutomationCommandIds.StudioDeleteTimelineNode:
+                    required = new[] { "nodeId" };
+                    break;
+                case AutomationCommandIds.StudioSaveSequence:
+                case AutomationCommandIds.StudioOpenSequence:
+                    required = new[] { "path" };
                     break;
                 case AutomationCommandIds.CancelRecordingRestart:
                     required = new[] { "operationId" };
@@ -3515,10 +3549,89 @@ namespace HollowKnightTAS.Companion.Automation
                         && arguments["mouseEnabled"] != "false")
                         return "mouseEnabled must be true or false.";
                     if (command.CommandId == AutomationCommandIds.BeginFullRunReplay
-                        && (arguments["movieBase64"].Length == 0
-                            || arguments["movieBase64"].Length
+                        && arguments.TryGetValue("movieBase64", out var replayMovieBase64)
+                        && (replayMovieBase64.Length == 0
+                            || replayMovieBase64.Length
                                 > MovieProtocolV2.MaximumSourceUtf8Bytes * 4 / 3 + 8))
                         return "movieBase64 is empty or too large.";
+                    break;
+                case AutomationCommandIds.StudioEditInputs:
+                    if (arguments["operation"] is not ("paint" or "set_runs" or "insert_frames" or "delete_frames"
+                        or "append_blank_frames" or "set_fps" or "set_rng_seed" or "undo" or "redo"))
+                        return "operation is invalid.";
+                    if (arguments.TryGetValue("startFrame", out var editStart)
+                        && !TryInt64(editStart, 0, MovieProtocolV2.MaximumExpandedFrames, out _))
+                        return "startFrame is out of bounds.";
+                    if (arguments.TryGetValue("endFrame", out var editEnd)
+                        && !TryInt64(editEnd, 0, MovieProtocolV2.MaximumExpandedFrames, out _))
+                        return "endFrame is out of bounds.";
+                    if (arguments.TryGetValue("count", out var editCount)
+                        && !TryInt64(editCount, 1, MovieProtocolV2.MaximumExpandedFrames, out _))
+                        return "count is out of bounds.";
+                    if (arguments.TryGetValue("minimumTotal", out var editMin)
+                        && !TryInt64(editMin, 1, MovieProtocolV2.MaximumExpandedFrames, out _))
+                        return "minimumTotal is out of bounds.";
+                    if (arguments.TryGetValue("held", out var editHeld) && editHeld != "true" && editHeld != "false")
+                        return "held must be true or false.";
+                    if (arguments.TryGetValue("runs", out var editRuns) && (editRuns.Length == 0 || editRuns.Length > 900000))
+                        return "runs is invalid.";
+                    if (arguments.TryGetValue("fps", out var editFps) && !MovieFrameRate.TryParse(editFps, out _))
+                        return "fps is invalid.";
+                    break;
+                case AutomationCommandIds.StudioGetMovie:
+                    if (arguments.TryGetValue("startFrame", out var movieStart)
+                        && !TryInt64(movieStart, 0, MovieProtocolV2.MaximumExpandedFrames, out _))
+                        return "startFrame is out of bounds.";
+                    if (arguments.TryGetValue("frameCount", out var movieCount)
+                        && !TryInt64(movieCount, 1, 10000, out _))
+                        return "frameCount must be in [1,10000].";
+                    if (arguments.TryGetValue("includeFullText", out var includeFull)
+                        && includeFull != "true" && includeFull != "false")
+                        return "includeFullText must be true or false.";
+                    break;
+                case AutomationCommandIds.StudioFrameAction:
+                    if (!TryInt64(arguments["targetFrame"], 0, MovieProtocolV2.MaximumExpandedFrames, out _))
+                        return "targetFrame is out of bounds.";
+                    if (arguments.TryGetValue("action", out var frameAction)
+                        && frameAction is not ("auto" or "seek" or "restore" or "rebuild" or "load"))
+                        return "action must be auto, seek, restore, rebuild, or load.";
+                    if (arguments.TryGetValue("expectedNativeFrame", out var frameExpectedNative)
+                        && !TryInt64(frameExpectedNative, 0, long.MaxValue, out _))
+                        return "expectedNativeFrame must be a non-negative Int64.";
+                    break;
+                case AutomationCommandIds.StudioSaveTimelineNode:
+                    if (arguments.TryGetValue("frame", out var saveFrame)
+                        && saveFrame != "-1"
+                        && !TryInt64(saveFrame, 0, MovieProtocolV2.MaximumExpandedFrames, out _))
+                        return "frame is out of bounds.";
+                    break;
+                case AutomationCommandIds.StudioRestoreTimelineNode:
+                    if (arguments.TryGetValue("nodeId", out var restoreNodeId) && !TryInt64(restoreNodeId, 0, int.MaxValue, out _))
+                        return "nodeId is invalid.";
+                    if (arguments.TryGetValue("frame", out var restoreFrame)
+                        && !TryInt64(restoreFrame, 0, MovieProtocolV2.MaximumExpandedFrames, out _))
+                        return "frame is out of bounds.";
+                    if (arguments.TryGetValue("worldlineId", out var restoreLeaf) && !TryInt64(restoreLeaf, 0, int.MaxValue, out _))
+                        return "worldlineId is invalid.";
+                    if (arguments.TryGetValue("treeId", out var restoreTree) && !IpcIdentifier.IsValid(restoreTree, 64))
+                        return "treeId is invalid.";
+                    break;
+                case AutomationCommandIds.StudioSwitchWorldline:
+                    if (!TryInt64(arguments["leafId"], 0, int.MaxValue, out _))
+                        return "leafId is invalid.";
+                    if (arguments.TryGetValue("treeId", out var switchTree) && !IpcIdentifier.IsValid(switchTree, 64))
+                        return "treeId is invalid.";
+                    break;
+                case AutomationCommandIds.StudioDeleteTimelineNode:
+                    if (!TryInt64(arguments["nodeId"], 0, int.MaxValue, out _))
+                        return "nodeId is invalid.";
+                    break;
+                case AutomationCommandIds.StudioSaveSequence:
+                case AutomationCommandIds.StudioOpenSequence:
+                    if (string.IsNullOrWhiteSpace(arguments["path"])
+                        || arguments["path"].Length > 1024
+                        || !Path.IsPathFullyQualified(arguments["path"]))
+                        return "path must be an absolute path of at most 1024 characters.";
                     break;
                 case AutomationCommandIds.GetState:
                     if (arguments.TryGetValue("statusOnly", out var statusOnly) && statusOnly != "true")
@@ -3532,8 +3645,13 @@ namespace HollowKnightTAS.Companion.Automation
                     if (arguments.TryGetValue("view", out var view)
                         && view != "world"
                         && view != "all"
-                        && view != "colliders")
-                        return "view must be world, all, or colliders.";
+                        && view != "colliders"
+                        && view != "fsmCatalog"
+                        && view != "fsms"
+                        && view != "info")
+                        return "view must be world, all, colliders, fsmCatalog, fsms, or info.";
+                    if (arguments.TryGetValue("watches", out var watches) && watches.Length > 20000)
+                        return "watches must be at most 20000 characters.";
                     if (arguments.TryGetValue("includeInactive", out var includeInactive)
                         && includeInactive != "true"
                         && includeInactive != "false")

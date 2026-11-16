@@ -312,37 +312,43 @@ namespace HollowKnightTAS.Companion.ViewModels
         private void DeleteTimelineSelection()
         {
             if (gridApplying || selectedTimelineTree == null || selectedTimelineNode == null) return;
+            try { DeleteTimelineSelectionCore(requireConfirmation: true); }
+            catch (Exception ex) { TimelineTreeStatus = ex.Message; }
+        }
+
+        private (int RemovedNodes, int PrunedCheckpoints) DeleteTimelineSelectionCore(bool requireConfirmation)
+        {
+            if (selectedTimelineTree == null || selectedTimelineNode == null)
+                throw new InvalidOperationException("请先选择时间线节点。");
             var tree = selectedTimelineTree; var node = selectedTimelineNode;
             var count = tree.Subtree(node.Id).Count - (node.Id == 0 ? 1 : 0);
-            if (MessageBox.Show(UiText.T($"删除 {node.Label} 及其子树？将移除 {count} 个存档节点。此操作不可撤销。\n第 0 帧起点会保留；当前游戏和输入草稿不会改变。"),
-                    UiText.T("删除时间线子树"), MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-            try
+            if (requireConfirmation && MessageBox.Show(UiText.T($"删除 {node.Label} 及其子树？将移除 {count} 个存档节点。此操作不可撤销。\n第 0 帧起点会保留；当前游戏和输入草稿不会改变。"),
+                    UiText.T("删除时间线子树"), MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                return (0, 0);
+            IReadOnlyList<string> prunedCheckpoints = Array.Empty<string>();
+            worldlines!.Update(library =>
             {
-                IReadOnlyList<string> prunedCheckpoints = Array.Empty<string>();
-                worldlines!.Update(library =>
+                var target = library.Trees.Single(t => t.Id == tree.Id);
+                var removed = target.Subtree(node.Id);
+                prunedCheckpoints = target.Delete(node.Id);
+                foreach (var slot in library.QuickSlots.Where(p =>
                 {
-                    var target = library.Trees.Single(t => t.Id == tree.Id);
-                    var removed = target.Subtree(node.Id);
-                    prunedCheckpoints = target.Delete(node.Id);
-                    foreach (var slot in library.QuickSlots.Where(p =>
-                    {
-                        var parts = p.Value.Split(':');
-                        return parts[0] == tree.Id && parts.Skip(1).Any(id => int.TryParse(id, out var n) && removed.Contains(n));
-                    }).Select(p => p.Key).ToArray())
-                        library.QuickSlots.Remove(slot);
-                });
-                foreach (var checkpointId in prunedCheckpoints)
-                {
-                    try { SceneCheckpoints.RemoveCheckpoint(checkpointId); } catch { }
-                }
-                var removedList = tree.Subtree(node.Id);
-                foreach (var removedId in removedList)
-                {
-                    try { SceneCheckpoints.DeleteBranch(tree.Id, FormatBranchId(removedId)); } catch { }
-                }
-                RefreshWorldlines(tree.Id); TimelineTreeStatus = $"已删除 {count} 个存档节点；其他世界线保留。";
+                    var parts = p.Value.Split(':');
+                    return parts[0] == tree.Id && parts.Skip(1).Any(id => int.TryParse(id, out var n) && removed.Contains(n));
+                }).Select(p => p.Key).ToArray())
+                    library.QuickSlots.Remove(slot);
+            });
+            foreach (var checkpointId in prunedCheckpoints)
+            {
+                try { SceneCheckpoints.RemoveCheckpoint(checkpointId); } catch { }
             }
-            catch (Exception ex) { TimelineTreeStatus = ex.Message; }
+            var removedList = tree.Subtree(node.Id);
+            foreach (var removedId in removedList)
+            {
+                try { SceneCheckpoints.DeleteBranch(tree.Id, FormatBranchId(removedId)); } catch { }
+            }
+            RefreshWorldlines(tree.Id); TimelineTreeStatus = $"已删除 {count} 个存档节点；其他世界线保留。";
+            return (count, prunedCheckpoints.Count);
         }
 
         private async Task RunTimelineQuickSlotAsync(bool save)

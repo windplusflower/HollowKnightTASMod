@@ -962,7 +962,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                 return;
             }
 
-            var result = await automationBroker.ExecuteHumanAsync(
+            var result = await ExecuteStudioOrHumanAsync(
                 AutomationCommandIds.QuitGame, AutomationScope.ControlPlayback,
                 null, "Paused", null, CancellationToken.None);
             if (!result.Success && result.ResultCode == "RuntimeNotReady")
@@ -1030,9 +1030,21 @@ namespace HollowKnightTAS.Companion.ViewModels
             await ApplySequenceAsync(SequencePackage.Read(path), path);
         }
 
+        internal async Task OpenMovieFileWithinGridAsync(string path)
+        {
+            if (sequenceSaving) throw new InvalidOperationException("请等待当前保存完成。");
+            await ApplySequenceCoreAsync(SequencePackage.Read(path), path, withinGridOperation: true);
+        }
+
         private async Task ApplySequenceAsync(SequenceFile sequence, string? path)
         {
             if (gridApplying || sequenceSaving) throw new InvalidOperationException("请等待当前恢复或保存完成。");
+            await ApplySequenceCoreAsync(sequence, path, withinGridOperation: false);
+        }
+
+        private async Task ApplySequenceCoreAsync(SequenceFile sequence, string? path, bool withinGridOperation)
+        {
+            if ((!withinGridOperation && gridApplying) || sequenceSaving) throw new InvalidOperationException("请等待当前恢复或保存完成。");
             var text = sequence.Movie;
             var candidate = movieEditor.ValidateAny(text, path ?? "<save-editor>");
             if (!candidate.Success) throw new InvalidDataException("序列文件无效，当前草稿未改变。");
@@ -1040,7 +1052,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                 throw new InvalidDataException("绑定存档的序列包需要 v2 全流程序列。");
             if (fullRunMovies?.IsPending == true && candidate.V2Document == null)
                 throw new InvalidDataException("当前会话需要 v2 全流程序列，当前草稿未改变。");
-            SetGridApplying(true);
+            if (!withinGridOperation) SetGridApplying(true);
             try
             {
                 if (fullRunMovies?.IsPending == true)
@@ -1070,7 +1082,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                 Status = draftRequiresRestart ? "序列已切换；播放将从起点开始，也可右键恢复到指定帧。" : "序列已打开。";
                 OnPropertyChanged(nameof(PlayPauseLabel));
             }
-            finally { SetGridApplying(false); }
+            finally { if (!withinGridOperation) SetGridApplying(false); }
         }
 
         private void ValidateMovie(bool applyFormat)
@@ -1976,6 +1988,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                     {
                         readySessions.Add(session.SessionId);
                         UpdateConnectionStatus();
+                        EnsureAutoSceneCheckpointCapture(session);
                         Status = "全流程 Runtime 已连接。";
                     });
                     return;

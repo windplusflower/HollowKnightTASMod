@@ -42,9 +42,7 @@ static BOOL hktas_clock_engine_context(LONG observation_phase)
 static BOOL hktas_continuation_engine_context(void) { return hktas_clock_engine_context(0); }
 static BOOL hktas_continuation_context(void)
 {
-    wchar_t enabled[4];
-    return GetEnvironmentVariableW(L"HKTAS_SCENE_CHECKPOINT_EXPERIMENT", enabled, 4) == 1
-        && enabled[0] == L'1' && hktas_continuation_engine_context();
+    return hktas_continuation_engine_context();
 }
 
 static void hktas_continuation_engine_copy(BYTE *destination, const BYTE *source)

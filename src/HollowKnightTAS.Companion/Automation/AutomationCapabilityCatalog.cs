@@ -70,6 +70,26 @@ namespace HollowKnightTAS.Companion.Automation
                     AutomationScope.ControlPlayback, mode),
                 Write(AutomationCommandIds.FullRunPause,
                     AutomationScope.ControlPlayback, mode),
+                Write(AutomationCommandIds.StudioEditInputs,
+                    AutomationScope.ControlInput, mode),
+                Read(AutomationCommandIds.StudioGetMovie,
+                    AutomationScope.MovieRead),
+                Write(AutomationCommandIds.StudioFrameAction,
+                    AutomationScope.ControlPlayback, mode),
+                Read(AutomationCommandIds.StudioGetTimeline,
+                    AutomationScope.ObserveStatus),
+                Write(AutomationCommandIds.StudioSaveTimelineNode,
+                    AutomationScope.ControlReplaySave, mode),
+                Write(AutomationCommandIds.StudioRestoreTimelineNode,
+                    AutomationScope.ControlReplaySave, mode),
+                Write(AutomationCommandIds.StudioSwitchWorldline,
+                    AutomationScope.ControlReplaySave, mode),
+                Write(AutomationCommandIds.StudioDeleteTimelineNode,
+                    AutomationScope.ControlReplaySave, mode),
+                Write(AutomationCommandIds.StudioSaveSequence,
+                    AutomationScope.ControlPlayback, mode),
+                Write(AutomationCommandIds.StudioOpenSequence,
+                    AutomationScope.ControlPlayback, mode),
                 Read(
                     AutomationCommandIds.GetRestoreStrategy,
                     AutomationScope.ObserveStatus),
@@ -208,7 +228,17 @@ namespace HollowKnightTAS.Companion.Automation
                 || item.CommandId == AutomationCommandIds.FullRunStop
                 || item.CommandId == AutomationCommandIds.StartVideoExport
                 || item.CommandId == AutomationCommandIds.CancelVideoExport
-                || item.CommandId == AutomationCommandIds.QuitGame) : items;
+                || item.CommandId == AutomationCommandIds.QuitGame
+                || item.CommandId == AutomationCommandIds.StudioEditInputs
+                || item.CommandId == AutomationCommandIds.StudioGetMovie
+                || item.CommandId == AutomationCommandIds.StudioFrameAction
+                || item.CommandId == AutomationCommandIds.StudioGetTimeline
+                || item.CommandId == AutomationCommandIds.StudioSaveTimelineNode
+                || item.CommandId == AutomationCommandIds.StudioRestoreTimelineNode
+                || item.CommandId == AutomationCommandIds.StudioSwitchWorldline
+                || item.CommandId == AutomationCommandIds.StudioDeleteTimelineNode
+                || item.CommandId == AutomationCommandIds.StudioSaveSequence
+                || item.CommandId == AutomationCommandIds.StudioOpenSequence) : items;
             capabilities = selected.ToDictionary(
                 item => item.CommandId,
                 StringComparer.Ordinal);

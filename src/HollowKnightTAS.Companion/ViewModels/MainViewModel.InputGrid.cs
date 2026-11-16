@@ -89,6 +89,7 @@ namespace HollowKnightTAS.Companion.ViewModels
         }
         public event EventHandler? InputGridRefreshed;
         public event Action<long>? InputGridPositionChanged;
+        internal bool SuppressBulkGridSelection { get; private set; }
         public VirtualInputRows InputRows { get; private set; } = new VirtualInputRows();
         public IReadOnlyList<TasAction> GridActions { get; } = Enum.GetValues<TasAction>()
             .Where(a => a != TasAction.None && a != TasAction.AllGameplay).ToArray();

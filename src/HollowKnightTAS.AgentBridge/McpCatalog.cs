@@ -39,7 +39,7 @@ namespace HollowKnightTAS.AgentBridge
                 {
                     ["readOnlyHint"] = ReadOnly,
                     ["destructiveHint"] = false,
-                    ["idempotentHint"] = true,
+                    ["idempotentHint"] = ReadOnly,
                     ["openWorldHint"] = false
                 }
             };
@@ -52,29 +52,30 @@ namespace HollowKnightTAS.AgentBridge
             new[]
             {
                 Tool(
-                    "hktas_get_state",
-                    "Read a fresh non-visual semantic state snapshot; statusOnly=true reads menu-safe operational status without a gameplay snapshot.",
-                    Schema(Props(("statusOnly", Boolean()))),
+                    "hktas_get_status",
+                    "Read FullRun v2 runtime, gate, and Studio draft/timeline status.",
+                    Schema(),
                     true),
                 Tool(
-                    "hktas_get_combat_state",
-                    "Read the latest normalized non-visual Hero/Boss combat state.",
+                    "hktas_get_capabilities",
+                    "Read the current session automation capability catalog.",
                     Schema(),
                     true),
                 Tool(
                     "hktas_get_world_snapshot",
-                    "Read a bounded immutable full-run v2 world snapshot page; large objects are represented by detail stubs.",
+                    "Read a bounded immutable FullRun v2 world/FSM/info snapshot (view: world, all, colliders, fsmCatalog, fsms, info).",
                     Schema(
                         Props(
                             ("snapshotId", String(96)),
                             ("view", String(16)),
                             ("includeInactive", Boolean()),
                             ("offset", Integer(0)),
-                            ("limit", Integer(1, 128)))),
+                            ("limit", Integer(1, 128)),
+                            ("watches", String(20000)))),
                     true),
                 Tool(
                     "hktas_get_object_details",
-                    "Read immutable full-run v2 details for one object, with bounded text pagination.",
+                    "Read immutable FullRun v2 details for one object, with bounded text pagination.",
                     Schema(
                         Props(
                             ("objectId", String(128)),
@@ -85,60 +86,22 @@ namespace HollowKnightTAS.AgentBridge
                         new[] { "objectId" }),
                     true),
                 Tool(
-                    "hktas_get_timeline",
-                    "Read a bounded non-visual Runtime event timeline.",
-                    Schema(
-                        Props(
-                            ("fromMovieTick", Integer(-1)),
-                            ("afterSequence", Integer(0)),
-                            ("count", Integer(1, 200))),
-                        Array.Empty<string>()),
-                    true),
-                Tool(
-                    "hktas_get_desync",
-                    "Read the latest structured desync evidence.",
-                    Schema(),
-                    true),
-                Tool(
-                    "hktas_get_replay_saves",
-                    "List structured replay-save checkpoints and restore metadata.",
-                    Schema(),
-                    true),
-                Tool(
                     "hktas_get_movie",
-                    "Read a movie or freeze a complete lifecycle export; read its immutable chunks using exportId and exportChunk.",
-                    Schema(Props(("includeLifecycle", Boolean()), ("exportId", String(64)), ("exportChunk", Integer(0)),
-                        ("listBranches", Boolean()), ("branchOffset", Integer(0)))),
+                    "Read Studio's current v2 Movie (syncing latest recorded frames first when paused in Recording mode).",
+                    Schema(
+                        Props(
+                            ("startFrame", Integer(0, MovieProtocolV2.MaximumExpandedFrames)),
+                            ("frameCount", Integer(1, 10000)),
+                            ("includeFullText", Boolean()))),
                     true),
                 Tool(
-                    "hktas_propose_movie_patch",
-                    "Validate and store a candidate movie as an isolated branch.",
-                    Schema(
-                        Props(
-                            ("baseMovieId", String(64)),
-                            ("candidateMovieBase64", String(900000)),
-                            ("reason", String(512)),
-                            ("expectedMilestone", String(256))),
-                        new[]
-                        {
-                            "baseMovieId",
-                            "candidateMovieBase64",
-                            "reason",
-                            "expectedMilestone"
-                        }),
-                    false,
-                    false),
-                Tool(
-                    "hktas_validate_movie_patch",
-                    "Validate a candidate movie without storing or running it.",
-                    Schema(
-                        Props(
-                            ("candidateMovieBase64", String(900000))),
-                        new[] { "candidateMovieBase64" }),
+                    "hktas_get_timeline",
+                    "Read Studio's TimelineTree (nodes, worldline leaves, active path, and Lean S0 scene checkpoints).",
+                    Schema(),
                     true),
                 Tool(
                     "hktas_acquire_control",
-                    "Acquire one short exclusive control lease for explicit scopes.",
+                    "Acquire an exclusive control lease for explicit write scopes.",
                     Schema(
                         Props(
                             ("scopes", StringArray()),
@@ -146,175 +109,160 @@ namespace HollowKnightTAS.AgentBridge
                         new[] { "scopes" }),
                     false),
                 Tool(
+                    "hktas_renew_control",
+                    "Renew the bridge-owned control lease before expiration.",
+                    Schema(
+                        Props(
+                            ("ttlSeconds", Integer(1, 300)))),
+                    false),
+                Tool(
                     "hktas_release_control",
                     "Release the bridge-owned control lease.",
                     Schema(),
                     false),
-                ControlTool(
-                    "hktas_pause",
-                    "Pause at the registered T08 safe boundary."),
-                ControlTool(
-                    "hktas_resume",
-                    "Resume from a T08 pause."),
-                ControlTool("hktas_quit_game",
-                    "Exit at an idle paused boundary after pending saves finish. Save the desired TAS point first."),
-                Tool("hktas_load_game_slot",
-                    "Load an existing game slot through the native menu path in a fresh running title-menu session. Wait for recording origin readiness before input; accepted is not completed.",
-                    Schema(Props(("slot", Integer(1, 4)),
-                        ("expectedRuntimeMode", String(32))),
-                        new[] { "slot", "expectedRuntimeMode" }), false),
-                Tool("hktas_restart_recording_session",
-                    "Exit the current game normally and load an existing slot in one fresh recording process. Save desired TAS points first. Poll status recordingRestart fields using the returned operationId.",
-                    Schema(Props(("slot", Integer(1, 4)), ("expectedRuntimeMode", String(32)),
-                        ("expectedMovieTick", Integer(0))), new[] { "slot", "expectedRuntimeMode" }), false),
-                Tool("hktas_reload_game_slot",
-                    "Reload an existing slot in the same process from a paused completed frame. Poll nativeReloadPhase/nativeReloadFailure; acceptance is not completion. Gameplay input is unavailable during native loading.",
-                    Schema(Props(("slot", Integer(1, 4)), ("expectedRuntimeMode", String(32)),
-                        ("expectedMovieTick", Integer(0))), new[] { "slot", "expectedRuntimeMode", "expectedMovieTick" }), false),
-                Tool("hktas_cancel_recording_restart",
-                    "Cancel a pending recording restart by operationId; a ready target cannot be cancelled.",
-                    Schema(Props(("operationId", String(96))), new[] { "operationId" }), false),
+                Tool(
+                    "hktas_begin_recording",
+                    "Arm FullRun v2 recording at native frame 0 and initialize Studio's input grid and timeline.",
+                    Schema(
+                        Props(
+                            ("mouseEnabled", Boolean()),
+                            ("fps", Number(1, 1000)),
+                            ("expectedNativeFrame", Integer(0)))),
+                    false),
+                Tool(
+                    "hktas_begin_replay",
+                    "Arm FullRun v2 replay at native frame 0 from movieBase64 or Studio's currently loaded v2 Movie.",
+                    Schema(
+                        Props(
+                            ("movieBase64", String(900000)),
+                            ("pauseAtFrame", Integer(-1, MovieProtocolV2.MaximumExpandedFrames)),
+                            ("expectedNativeFrame", Integer(0)))),
+                    false),
                 Tool(
                     "hktas_step",
-                    "Advance a paused simulation by movie ticks.",
+                    "Advance a paused FullRun v2 session by one or more native frames (applying pending Studio future edits first).",
                     Schema(
                         Props(
                             ("count", Integer(1, 10000)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[] { "count", "expectedRuntimeMode" }),
+                            ("expectedNativeFrame", Integer(0)))),
                     false),
                 Tool(
-                    "hktas_step_with_input",
-                    "Set exactly one input tick and advance atomically.",
+                    "hktas_play",
+                    "Resume or start FullRun v2 playback/recording from a paused boundary (applying pending Studio future edits first).",
                     Schema(
                         Props(
-                            ("candidateMovieBase64", String(900000)),
-                            ("expectedSceneEpoch", Integer(0)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[]
-                        {
-                            "candidateMovieBase64",
-                            "expectedSceneEpoch",
-                            "expectedRuntimeMode",
-                            "expectedMovieTick"
-                        }),
+                            ("expectedNativeFrame", Integer(0)))),
                     false),
                 Tool(
-                    "hktas_queue_input_batch",
-                    "Execute one validated input movie of up to 10000000 ticks.",
+                    "hktas_pause",
+                    "Pause a running FullRun v2 session at a safe native frame boundary.",
                     Schema(
                         Props(
-                            ("candidateMovieBase64", String(900000)),
-                            ("expectedSceneEpoch", Integer(0)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[]
-                        {
-                            "candidateMovieBase64",
-                            "expectedSceneEpoch",
-                            "expectedRuntimeMode",
-                            "expectedMovieTick"
-                        }),
+                            ("expectedNativeFrame", Integer(0)))),
                     false),
                 Tool(
-                    "hktas_begin_input_batch",
-                    "Begin a chunked input transaction without changing Runtime state.",
+                    "hktas_stop",
+                    "Stop an active FullRun v2 recording/replay at a paused boundary and load the recorded movie into Studio.",
                     Schema(
                         Props(
-                            ("expectedSceneEpoch", Integer(0)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[]
-                        {
-                            "expectedSceneEpoch",
-                            "expectedRuntimeMode",
-                            "expectedMovieTick"
-                        }),
+                            ("expectedNativeFrame", Integer(0)))),
                     false),
                 Tool(
-                    "hktas_append_input_batch",
-                    "Append one canonical frames-only movie chunk; commit is still side-effect free until explicitly requested.",
+                    "hktas_seek_frame",
+                    "Seek forward or restore/rebuild backward to targetFrame using Studio's exact FrameMenuAsync logic and Lean S0 checkpoints.",
                     Schema(
                         Props(
-                            ("transactionId", String(128)),
-                            ("chunkIndex", Integer(0)),
-                            ("candidateMovieBase64", String(6000000)),
-                            ("expectedSceneEpoch", Integer(0)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[]
-                        {
-                            "transactionId",
-                            "chunkIndex",
-                            "candidateMovieBase64",
-                            "expectedSceneEpoch",
-                            "expectedRuntimeMode",
-                            "expectedMovieTick"
-                        }),
+                            ("targetFrame", Integer(0, MovieProtocolV2.MaximumExpandedFrames)),
+                            ("action", String(16)),
+                            ("expectedNativeFrame", Integer(0))),
+                        new[] { "targetFrame" }),
                     false),
                 Tool(
-                    "hktas_commit_input_batch",
-                    "Canonicalize and atomically schedule a completed chunked input transaction.",
+                    "hktas_quit_game",
+                    "Cleanly exit the protected game session at any paused boundary (including unarmed frame 0).",
                     Schema(
                         Props(
-                            ("transactionId", String(128)),
-                            ("expectedSceneEpoch", Integer(0)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[]
-                        {
-                            "transactionId",
-                            "expectedSceneEpoch",
-                            "expectedRuntimeMode",
-                            "expectedMovieTick"
-                        }),
+                            ("expectedNativeFrame", Integer(0)))),
                     false),
                 Tool(
-                    "hktas_cancel_input_batch",
-                    "Cancel a staged chunked input transaction without changing Runtime state.",
+                    "hktas_edit_inputs",
+                    "Edit Studio's v2 InputGrid (operations: paint, set_runs, insert_frames, delete_frames, append_blank_frames, set_fps, set_rng_seed, undo, redo).",
                     Schema(
                         Props(
-                            ("transactionId", String(128)),
-                            ("expectedSceneEpoch", Integer(0)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[]
-                        {
-                            "transactionId",
-                            "expectedSceneEpoch",
-                            "expectedRuntimeMode",
-                            "expectedMovieTick"
-                        }),
+                            ("operation", String(32)),
+                            ("startFrame", Integer(0, MovieProtocolV2.MaximumExpandedFrames)),
+                            ("endFrame", Integer(0, MovieProtocolV2.MaximumExpandedFrames)),
+                            ("count", Integer(1, MovieProtocolV2.MaximumExpandedFrames)),
+                            ("minimumTotal", Integer(1, MovieProtocolV2.MaximumExpandedFrames)),
+                            ("action", String(64)),
+                            ("held", Boolean()),
+                            ("runs", String(900000)),
+                            ("fps", Number(1, 1000)),
+                            ("rngSeed", String(32))),
+                        new[] { "operation" }),
                     false),
                 Tool(
-                    "hktas_run_until",
-                    "Run until a target movie tick, then pause.",
+                    "hktas_update_movie",
+                    "Push a canonical v2 movie file (inside ShadowRoot) directly to Runtime and Studio at a paused boundary.",
                     Schema(
                         Props(
-                            ("targetMovieTick", Integer(0)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[]
-                        {
-                            "targetMovieTick",
-                            "expectedRuntimeMode"
-                        }),
+                            ("moviePath", String(1024)),
+                            ("expectedNativeFrame", Integer(0))),
+                        new[] { "moviePath" }),
                     false),
                 Tool(
-                    "hktas_start_recording",
-                    "Start typed input recording.",
-                    ControlSchema(),
+                    "hktas_save_timeline_node",
+                    "Save a TimelineTree node at the current paused frame (or specified frame) without moving the game.",
+                    Schema(
+                        Props(
+                            ("frame", Integer(-1, MovieProtocolV2.MaximumExpandedFrames)))),
                     false),
                 Tool(
-                    "hktas_stop_recording",
-                    "Stop recording and return the canonical movie.",
-                    ControlSchema(),
+                    "hktas_restore_timeline_node",
+                    "Restore a TimelineTree node (automatically activating its branch and fast-restoring via nearest Lean S0 scene checkpoint).",
+                    Schema(
+                        Props(
+                            ("nodeId", Integer(0, int.MaxValue)),
+                            ("frame", Integer(0, MovieProtocolV2.MaximumExpandedFrames)),
+                            ("worldlineId", Integer(0, int.MaxValue)),
+                            ("treeId", String(64)))),
+                    false),
+                Tool(
+                    "hktas_switch_worldline",
+                    "Switch Studio's active TimelineTree worldline leaf and checkpoint branch scope.",
+                    Schema(
+                        Props(
+                            ("leafId", Integer(0, int.MaxValue)),
+                            ("treeId", String(64))),
+                        new[] { "leafId" }),
+                    false),
+                Tool(
+                    "hktas_delete_timeline_node",
+                    "Delete a TimelineTree node subtree and prune orphaned Lean S0 scene checkpoints.",
+                    Schema(
+                        Props(
+                            ("nodeId", Integer(0, int.MaxValue))),
+                        new[] { "nodeId" }),
+                    false),
+                Tool(
+                    "hktas_save_sequence",
+                    "Persist the active sequence, initial saves, TimelineTree, and Lean S0 scene checkpoints to a .hktaspack or .hktas file.",
+                    Schema(
+                        Props(
+                            ("path", String(1024))),
+                        new[] { "path" }),
+                    false),
+                Tool(
+                    "hktas_open_sequence",
+                    "Open a .hktaspack or .hktas sequence in Studio, rebinding its TimelineTree and Lean S0 scene checkpoints.",
+                    Schema(
+                        Props(
+                            ("path", String(1024))),
+                        new[] { "path" }),
                     false),
                 Tool(
                     "hktas_start_video_export",
-                    "Start exporting gameplay frames and audio using the bundled encoder (ffmpegPath is an optional override). Full-run v2 can stop capture at the optional inclusive endMovieFrame boundary.",
+                    "Start exporting gameplay frames and audio using the bundled encoder (ffmpegPath is an optional override).",
                     Schema(
                         Props(
                             ("ffmpegPath", String(1024)),
@@ -332,181 +280,11 @@ namespace HollowKnightTAS.AgentBridge
                         }),
                     false),
                 Tool(
-                    "hktas_finish_video_export",
-                    "Finish an active video export identified by operationId.",
-                    Schema(
-                        Props(("operationId", String(96))),
-                        new[] { "operationId" }),
-                    false),
-                Tool(
                     "hktas_cancel_video_export",
                     "Cancel an active video export identified by operationId.",
                     Schema(
                         Props(("operationId", String(96))),
                         new[] { "operationId" }),
-                    false),
-                Tool(
-                    "hktas_start_replay",
-                    "Start replay of the loaded canonical movie.",
-                    ControlSchema(),
-                    false),
-                Tool(
-                    "hktas_stop_replay",
-                    "Stop active replay.",
-                    ControlSchema(),
-                    false),
-                Tool(
-                    "hktas_create_replay_save",
-                    "Create a T09 replay save without touching ordinary slots.",
-                    Schema(
-                        Props(
-                            ("label", String(128)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[] { "label", "expectedRuntimeMode" }),
-                    false),
-                Tool(
-                    "hktas_set_auto_save_policy",
-                    "Configure auto saves by advanced movie ticks; preferences persist on normal game exit. Retention affects automatic saves only, never manual saves.",
-                    Schema(Props(("enabled", Boolean()),
-                            ("intervalMovieTicks", Integer(1, 1000000000)),
-                            ("retentionCount", Integer(1, 1000)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[] { "enabled", "intervalMovieTicks", "retentionCount", "expectedRuntimeMode" }),
-                    false),
-                Tool(
-                    "hktas_restore_replay_save",
-                    "Restore a named T09 replay save through the safe coordinator.",
-                    Schema(
-                        Props(
-                            ("replaySaveId", String(128)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[]
-                        {
-                            "replaySaveId",
-                            "expectedRuntimeMode"
-                        }),
-                    false),
-                Tool(
-                    "hktas_seek_movie_tick",
-                    "Restore the nearest exact-prefix replay checkpoint and deterministically replay its short tail to a target tick.",
-                    Schema(
-                        Props(
-                            ("targetMovieTick", Integer(0)),
-                            ("expectedSceneEpoch", Integer(0)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[]
-                        {
-                            "targetMovieTick",
-                            "expectedSceneEpoch",
-                            "expectedRuntimeMode",
-                            "expectedMovieTick"
-                        }),
-                    false),
-                Tool(
-                    "hktas_approve_replay_save_overwrite",
-                    "Explicitly approve or deny dedicated TAS-slot overwrite for an active restore.",
-                    Schema(
-                        Props(
-                            ("approved", Boolean()),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[]
-                        {
-                            "approved",
-                            "expectedRuntimeMode"
-                        }),
-                    false),
-                Tool(
-                    "hktas_cancel_replay_save_restore",
-                    "Cancel the cold restore identified by operationId before its verified target. The source process may already have exited.",
-                    Schema(Props(("operationId", String(96))), new[] { "operationId" }), false),
-                ControlTool(
-                    "hktas_resume_replay_save_restore",
-                    "Resume only from a replay-save restore's verified paused target."),
-                Tool(
-                    "hktas_apply_movie_branch",
-                    "Explicitly load a previously proposed movie branch.",
-                    Schema(
-                        Props(
-                            ("branchMovieId", String(64)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[]
-                        {
-                            "branchMovieId",
-                            "expectedRuntimeMode"
-                        }),
-                    false),
-                Tool(
-                    "hktas_apply_branch_and_seek",
-                    "Atomically load a content-addressed movie branch, restore its nearest compatible checkpoint, and replay to the target tick.",
-                    Schema(
-                        Props(
-                            ("branchMovieId", String(64)),
-                            ("targetMovieTick", Integer(0)),
-                            ("expectedSceneEpoch", Integer(0)),
-                            ("expectedRuntimeMode", String(32)),
-                            ("expectedMovieTick", Integer(0))),
-                        new[]
-                        {
-                            "branchMovieId",
-                            "targetMovieTick",
-                            "expectedSceneEpoch",
-                            "expectedRuntimeMode",
-                            "expectedMovieTick"
-                        }),
-                    false),
-                Tool(
-                    "hktas_replace_input_range",
-                    "Replace an input-tick range and store the result as an isolated branch.",
-                    Schema(
-                        Props(
-                            ("includeLifecycle", Boolean()),
-                            ("baseMovieId", String(64)),
-                            ("startTick", Integer(0)),
-                            ("deleteCount", Integer(0)),
-                            ("replacementMovieBase64", String(900000))),
-                        new[]
-                        {
-                            "baseMovieId",
-                            "startTick",
-                            "deleteCount",
-                            "replacementMovieBase64"
-                        }),
-                    false,
-                    false),
-                Tool(
-                    "hktas_insert_input_range",
-                    "Insert input ticks and store the result as an isolated branch.",
-                    Schema(
-                        Props(
-                            ("includeLifecycle", Boolean()),
-                            ("baseMovieId", String(64)),
-                            ("startTick", Integer(0)),
-                            ("replacementMovieBase64", String(900000))),
-                        new[]
-                        {
-                            "baseMovieId",
-                            "startTick",
-                            "replacementMovieBase64"
-                        }),
-                    false,
-                    false),
-                Tool(
-                    "hktas_delete_input_range",
-                    "Delete an input-tick range and store the result as an isolated branch.",
-                    Schema(
-                        Props(
-                            ("includeLifecycle", Boolean()),
-                            ("baseMovieId", String(64)),
-                            ("startTick", Integer(0)),
-                            ("count", Integer(1))),
-                        new[] { "baseMovieId", "startTick", "count" }),
-                    false,
                     false)
             };
 
@@ -515,7 +293,7 @@ namespace HollowKnightTAS.AgentBridge
             {
                 Resource(
                     "hktas://session/current/status",
-                    "Runtime status"),
+                    "FullRun v2 runtime, gate, and Studio status"),
                 Resource(
                     "hktas://session/current/manifest",
                     "Environment manifest binding"),
@@ -523,26 +301,14 @@ namespace HollowKnightTAS.AgentBridge
                     "hktas://session/current/capabilities",
                     "Automation capability catalog"),
                 Resource(
-                    "hktas://session/current/state/summary",
-                    "Non-visual semantic state summary"),
-                Resource(
-                    "hktas://session/current/state/combat",
-                    "Normalized non-visual combat state"),
+                    "hktas://session/current/world",
+                    "Non-visual FullRun v2 world info snapshot"),
                 Resource(
                     "hktas://session/current/timeline",
-                    "Bounded event timeline"),
-                Resource(
-                    "hktas://session/current/desync/latest",
-                    "Latest desync evidence"),
-                Resource(
-                    "hktas://session/current/replay-saves",
-                    "Replay-save catalog"),
+                    "Studio TimelineTree and Lean S0 checkpoints"),
                 Resource(
                     "hktas://session/current/movie",
-                    "Current canonical TAS movie"),
-                Resource(
-                    "hktas://session/current/restore-strategy",
-                    "Restore strategy and acceleration status")
+                    "Studio canonical v2 Movie")
             };
 
         public static bool TryGetTool(
@@ -552,26 +318,6 @@ namespace HollowKnightTAS.AgentBridge
             tool = Tools.FirstOrDefault(
                 value => value.Name == name)!;
             return tool != null;
-        }
-
-        private static McpToolDefinition ControlTool(
-            string name,
-            string description)
-        {
-            return Tool(
-                name,
-                description,
-                ControlSchema(),
-                false);
-        }
-
-        private static JsonObject ControlSchema()
-        {
-            return Schema(
-                Props(
-                    ("expectedRuntimeMode", String(32)),
-                    ("expectedMovieTick", Integer(0))),
-                new[] { "expectedRuntimeMode" });
         }
 
         private static McpToolDefinition Tool(
@@ -598,7 +344,7 @@ namespace HollowKnightTAS.AgentBridge
                 ["uri"] = uri,
                 ["name"] = name,
                 ["description"] =
-                    "HollowKnightTAS non-visual automation resource.",
+                    "HollowKnightTAS FullRun v2 non-visual automation resource.",
                 ["mimeType"] = "application/json"
             };
         }

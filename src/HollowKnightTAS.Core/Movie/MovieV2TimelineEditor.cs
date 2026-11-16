@@ -81,6 +81,32 @@ namespace HollowKnightTAS.Core.Movie
             return Commit(movie, runs, baseline, nativeFrame);
         }
 
+        public MovieV2EditResult ReplaceFrames(MovieV2Document movie, long nativeFrame, long replaceCount,
+            IReadOnlyList<NativeFrameRun> replacementRuns)
+        {
+            if (movie == null) throw new ArgumentNullException(nameof(movie));
+            if (replacementRuns == null) throw new ArgumentNullException(nameof(replacementRuns));
+            var baseline = Baseline(movie);
+            if (!baseline.Success) return baseline;
+            var total = Count(movie);
+            if (nativeFrame < 0 || nativeFrame > total)
+                return Failure(baseline, nativeFrame, "Replacement native frame is outside the movie.");
+            if (replaceCount < 0 || replaceCount > total - nativeFrame)
+                return Failure(baseline, nativeFrame, "Replacement range is outside the movie.");
+            if (replacementRuns.Count == 0 && replaceCount == 0)
+                return baseline;
+            var runs = Slice(movie, 0, nativeFrame);
+            foreach (var run in replacementRuns)
+            {
+                if (run == null)
+                    return Failure(baseline, nativeFrame, "Replacement contains a null run.");
+                runs.Add(run);
+            }
+            if (nativeFrame + replaceCount < total)
+                runs.AddRange(Slice(movie, nativeFrame + replaceCount, total - nativeFrame - replaceCount));
+            return Commit(movie, runs, baseline, nativeFrame);
+        }
+
         private MovieV2EditResult Baseline(MovieV2Document movie)
         {
             var report = validator.Validate(movie, MovieV2ValidationContext.CreateDefault());

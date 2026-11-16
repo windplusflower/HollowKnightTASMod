@@ -140,6 +140,108 @@ public sealed class StudioAutomationSyncTests
         Assert.AreEqual(0, h.Updates);
     }
 
+    [TestMethod]
+    public async Task StudioEditInputsGetMovieTimelineSaveNodeAndBeginReplayInitialSavesWork()
+    {
+        using var h = new Harness();
+        var paint = await h.RunCustom(AutomationCommandIds.StudioEditInputs, AutomationScope.ControlInput, new Dictionary<string, string>
+        {
+            ["operation"] = "paint",
+            ["startFrame"] = "3",
+            ["endFrame"] = "5",
+            ["action"] = "Jump",
+            ["held"] = "true"
+        });
+        Assert.IsTrue(paint.Success, paint.Detail);
+
+        var setRuns = await h.RunCustom(AutomationCommandIds.StudioEditInputs, AutomationScope.ControlInput, new Dictionary<string, string>
+        {
+            ["operation"] = "set_runs",
+            ["startFrame"] = "6",
+            ["runs"] = "[{\"frames\":3,\"actions\":[\"Right\",\"Attack\"]}]"
+        });
+        Assert.IsTrue(setRuns.Success, setRuns.Detail);
+
+        var insert = await h.RunCustom(AutomationCommandIds.StudioEditInputs, AutomationScope.ControlInput, new Dictionary<string, string>
+        {
+            ["operation"] = "insert_frames",
+            ["startFrame"] = "9",
+            ["count"] = "2"
+        });
+        Assert.IsTrue(insert.Success, insert.Detail);
+        Assert.AreEqual("12", insert.Data["totalFrames"]);
+
+        var del = await h.RunCustom(AutomationCommandIds.StudioEditInputs, AutomationScope.ControlInput, new Dictionary<string, string>
+        {
+            ["operation"] = "delete_frames",
+            ["startFrame"] = "9",
+            ["count"] = "2"
+        });
+        Assert.IsTrue(del.Success, del.Detail);
+        Assert.AreEqual("10", del.Data["totalFrames"]);
+
+        var movie = await h.RunCustom(AutomationCommandIds.StudioGetMovie, AutomationScope.MovieRead, new Dictionary<string, string>
+        {
+            ["startFrame"] = "0",
+            ["frameCount"] = "10",
+            ["includeFullText"] = "true"
+        });
+        Assert.IsTrue(movie.Success, movie.Detail);
+        Assert.AreEqual("10", movie.Data["totalFrames"]);
+        Assert.IsTrue(h.Vm.InputRows[3].HasAction("Jump"));
+        Assert.IsTrue(h.Vm.InputRows[5].HasAction("Jump"));
+        Assert.IsTrue(h.Vm.InputRows[6].HasAction("Right"));
+        Assert.IsTrue(h.Vm.InputRows[6].HasAction("Attack"));
+        Assert.IsTrue(h.Vm.InputRows[8].HasAction("Right"));
+        Assert.IsTrue(h.Vm.InputRows[8].HasAction("Attack"));
+
+        // Verify BeginFullRunReplay binds SessionInitialSaves before calling ArmReplay even if a stale SequenceInitialSaves was set,
+        // and verify StudioSaveTimelineNode + StudioGetTimeline at frame 0.
+        h.ResetToFrameZeroWithStaleSequenceSaves();
+        var saveNode = await h.RunCustom(AutomationCommandIds.StudioSaveTimelineNode, AutomationScope.ControlReplaySave, new Dictionary<string, string>
+        {
+            ["frame"] = "0"
+        });
+        Assert.IsTrue(saveNode.Success, saveNode.Detail);
+        Assert.IsFalse(string.IsNullOrEmpty(saveNode.Data["nodeId"]));
+
+        var timeline = await h.RunCustom(AutomationCommandIds.StudioGetTimeline, AutomationScope.ObserveStatus);
+        Assert.IsTrue(timeline.Success, timeline.Detail);
+        Assert.IsTrue(int.Parse(timeline.Data["nodeCount"]) >= 2);
+        Assert.IsTrue(timeline.Data["timelineJson"].Contains("Frame 0", StringComparison.Ordinal));
+
+        var beginReplay = await h.RunCustom(AutomationCommandIds.BeginFullRunReplay, AutomationScope.ControlPlayback, new Dictionary<string, string>
+        {
+            ["expectedNativeFrame"] = "0"
+        });
+        Assert.IsTrue(beginReplay.Success, beginReplay.Detail);
+    }
+
+    [TestMethod]
+    public async Task SetRunsBulkFramesAndCompletedGuardWorkCleanly()
+    {
+        using var h = new Harness();
+        var bulk = await h.RunCustom(AutomationCommandIds.StudioEditInputs, AutomationScope.ControlInput, new Dictionary<string, string>
+        {
+            ["operation"] = "set_runs",
+            ["startFrame"] = "4",
+            ["runs"] = "[{\"frames\":60,\"actions\":[\"Right\"]}]"
+        });
+        Assert.IsTrue(bulk.Success, bulk.Detail);
+        Assert.AreEqual(64L, long.Parse(bulk.Data["totalFrames"]));
+        Assert.IsFalse(h.Vm.SuppressBulkGridSelection);
+
+        h.MarkCompletedAt(10);
+        h.Vm.MovieText = h.RuntimeText;
+        h.Vm.RefreshGridCommand.Execute(null);
+        var noFutureStep = await h.RunCustom(AutomationCommandIds.FullRunStep, AutomationScope.ControlStep, new Dictionary<string, string>
+        {
+            ["expectedNativeFrame"] = "10"
+        });
+        Assert.IsFalse(noFutureStep.Success);
+        Assert.AreEqual("PreconditionFailed", noFutureStep.ResultCode);
+    }
+
     private sealed class Harness : IDisposable
     {
         private const BindingFlags Flags = BindingFlags.NonPublic | BindingFlags.Instance;
@@ -187,6 +289,11 @@ public sealed class StudioAutomationSyncTests
         public MovieV2Document Parse(string text) => new MovieV2Codec().Parse(new StringReader(text), "test").Document!;
         public T Field<T>(string name) => (T)typeof(MainViewModel).GetField(name, Flags)!.GetValue(Vm)!;
         public void Set(string name, object value) => typeof(MainViewModel).GetField(name, Flags)!.SetValue(Vm, value);
+        public void MarkCompletedAt(long completedFrame)
+        {
+            frame = completedFrame;
+            view.Write(92, 1); view.Write(76, 4); view.Write(40, completedFrame); ready.Set(); boot.Refresh();
+        }
         public Task<AutomationResultEnvelope> Update(string text)
         {
             var path = Path.Combine(coordinator.ShadowRoot, "candidate.hktas");
@@ -200,10 +307,24 @@ public sealed class StudioAutomationSyncTests
             if (path != null) args["moviePath"] = path;
             var scope = id == AutomationCommandIds.FullRunSnapshot ? AutomationScope.MovieRead
                 : id == AutomationCommandIds.FullRunStep ? AutomationScope.ControlStep : AutomationScope.ControlPlayback;
+            return RunCustom(id, scope, args, id == AutomationCommandIds.FullRunPause ? "Running" : "Paused");
+        }
+        public Task<AutomationResultEnvelope> RunCustom(string id, string scope, Dictionary<string, string>? args = null, string mode = "Paused")
+        {
             var request = Guid.NewGuid().ToString("N");
             LastRequestId = request;
             return broker.StudioFullRunCommand!(new AutomationCommandEnvelope(request, request, "test-ai", "sync-test", new string('a', 64),
-                id, scope, "", id == AutomationCommandIds.FullRunPause ? "Running" : "Paused", null, IpcPayloadCodec.Serialize(args)), Execute);
+                id, scope, "", mode, null, IpcPayloadCodec.Serialize(args ?? new Dictionary<string, string>())), Execute);
+        }
+        public void ResetToFrameZeroWithStaleSequenceSaves()
+        {
+            var stale = new InitialSaveSnapshot(new Dictionary<string, byte[]> { ["user1.dat"] = new byte[] { 1, 2, 3 } });
+            coordinator.SequenceInitialSaves = stale;
+            typeof(FullRunMovieCoordinator).GetField("mode", Flags)!.SetValue(coordinator, "Unarmed");
+            view.Write(40, 0L);
+            ready.Set();
+            boot.Refresh();
+            frame = 0;
         }
         private Task<AutomationResultEnvelope> Execute(AutomationCommandEnvelope command)
         {
@@ -223,6 +344,10 @@ public sealed class StudioAutomationSyncTests
                     StringComparison.OrdinalIgnoreCase), "Staged input must satisfy Runtime's session-root boundary.");
                 Updates++; success = !RejectUpdate;
                 if (success) RuntimeText = File.ReadAllText(command.Arguments["moviePath"]);
+            }
+            if (command.CommandId == AutomationCommandIds.BeginFullRunReplay)
+            {
+                Assert.AreEqual(coordinator.SessionInitialSaves?.Id, coordinator.SequenceInitialSaves?.Id);
             }
             if (command.CommandId == AutomationCommandIds.FullRunStep) frame++;
             if (command.CommandId == AutomationCommandIds.FullRunStatus)

@@ -164,9 +164,16 @@ namespace HollowKnightTAS.Companion
             try
             {
                 InputGrid.SelectedItems.Clear();
-                // Keep large range edits in the range fields instead of materializing millions of selected rows.
-                for (long i = start; i < Math.Min(vm.InputRows.Count, start + Math.Min(count, 2048)); i++)
-                    InputGrid.SelectedItems.Add(vm.InputRows[(int)i]);
+                if (vm.SuppressBulkGridSelection || count > 32)
+                {
+                    if (start < vm.InputRows.Count)
+                        InputGrid.SelectedItem = vm.InputRows[(int)start];
+                }
+                else
+                {
+                    for (long i = start; i < Math.Min(vm.InputRows.Count, start + count); i++)
+                        InputGrid.SelectedItems.Add(vm.InputRows[(int)i]);
+                }
             }
             finally { restoringGridSelection = false; }
             if (restoreScrollOffset is double offset && !vm.IsRestorePresentationFrozen)

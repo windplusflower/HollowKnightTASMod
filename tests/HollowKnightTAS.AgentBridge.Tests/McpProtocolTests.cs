@@ -15,15 +15,17 @@ namespace HollowKnightTAS.AgentBridge.Tests
         [TestMethod]
         public void VideoExportSchemasRequireOperationIdentityAndTypedReplayOption()
         {
-            foreach (var name in new[] { "hktas_finish_video_export", "hktas_cancel_video_export" })
+            Assert.IsTrue(McpCatalog.TryGetTool("hktas_cancel_video_export", out var cancelTool));
+            using (var request = JsonDocument.Parse("{\"operationId\":\"video-test\"}"))
             {
-                Assert.IsTrue(McpCatalog.TryGetTool(name, out var tool));
-                using var request = JsonDocument.Parse("{\"operationId\":\"video-test\"}");
-                Assert.IsTrue(McpStdioServer.ValidateArguments(tool, request.RootElement, out var error), error);
-                using var missing = JsonDocument.Parse("{}");
-                Assert.IsFalse(McpStdioServer.ValidateArguments(tool, missing.RootElement, out _));
-                Assert.IsTrue(tool.RequiresApprovedControl);
+                Assert.IsTrue(McpStdioServer.ValidateArguments(cancelTool, request.RootElement, out var error), error);
             }
+            using (var missing = JsonDocument.Parse("{}"))
+            {
+                Assert.IsFalse(McpStdioServer.ValidateArguments(cancelTool, missing.RootElement, out _));
+            }
+            Assert.IsTrue(cancelTool.RequiresApprovedControl);
+
             Assert.IsTrue(McpCatalog.TryGetTool("hktas_start_video_export", out var start));
             using var valid = JsonDocument.Parse("{\"ffmpegPath\":\"ffmpeg.exe\",\"outputPath\":\"movie.mp4\",\"maximumFrames\":1000,\"replayLoadedMovie\":true,\"expectedRuntimeMode\":\"Paused\"}");
             Assert.IsTrue(McpStdioServer.ValidateArguments(start, valid.RootElement, out var validation), validation);
@@ -65,78 +67,6 @@ namespace HollowKnightTAS.AgentBridge.Tests
         }
 
         [TestMethod]
-        public void ColdRestoreCancellationRequiresOperationIdentityNotLiveRuntimeMode()
-        {
-            Assert.IsTrue(McpCatalog.TryGetTool("hktas_cancel_replay_save_restore", out var tool));
-            using var request = JsonDocument.Parse("{\"operationId\":\"cold-restore-example\"}");
-            Assert.IsTrue(McpStdioServer.ValidateArguments(tool, request.RootElement, out var error), error);
-            using var missing = JsonDocument.Parse("{}");
-            Assert.IsFalse(McpStdioServer.ValidateArguments(tool, missing.RootElement, out _));
-            using var wrongType = JsonDocument.Parse("{\"operationId\":42}");
-            Assert.IsFalse(McpStdioServer.ValidateArguments(tool, wrongType.RootElement, out _));
-            var select = typeof(McpStdioServer).GetMethod("Select",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-            var fields = (System.Collections.Generic.IReadOnlyDictionary<string, string>)select.Invoke(null,
-                new object[] { request.RootElement, new[] { "operationId" } })!;
-            Assert.AreEqual("cold-restore-example", fields["operationId"]);
-            Assert.IsTrue(tool.RequiresApprovedControl);
-        }
-
-        [TestMethod]
-        public void BranchCatalogArgumentsAreTypedAndForwarded()
-        {
-            var schema = McpCatalog.Tools.Single(tool => tool.Name == "hktas_get_movie").InputSchema;
-            Assert.AreEqual("boolean", schema["properties"]!["listBranches"]!["type"]!.GetValue<string>());
-            Assert.AreEqual("integer", schema["properties"]!["branchOffset"]!["type"]!.GetValue<string>());
-            var flatten = typeof(McpStdioServer).GetMethod("FlatArguments",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-            using var request = JsonDocument.Parse("{\"listBranches\":true,\"branchOffset\":50}");
-            var fields = (System.Collections.Generic.IReadOnlyDictionary<string, string>)flatten.Invoke(null,
-                new object[] { request.RootElement })!;
-            Assert.AreEqual("true", fields["listBranches"]);
-            Assert.AreEqual("50", fields["branchOffset"]);
-        }
-
-        [TestMethod]
-        public void MovieChunkArgumentsAreTypedAndForwardedTogether()
-        {
-            var schema = McpCatalog.Tools.Single(tool => tool.Name == "hktas_get_movie").InputSchema;
-            Assert.AreEqual("string", schema["properties"]!["exportId"]!["type"]!.GetValue<string>());
-            Assert.AreEqual("integer", schema["properties"]!["exportChunk"]!["type"]!.GetValue<string>());
-            var flatten = typeof(McpStdioServer).GetMethod("FlatArguments",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-            using var request = JsonDocument.Parse("{\"includeLifecycle\":true,\"exportId\":\"abc\",\"exportChunk\":2}");
-            var fields = (System.Collections.Generic.IReadOnlyDictionary<string, string>)flatten.Invoke(null,
-                new object[] { request.RootElement })!;
-            Assert.AreEqual("true", fields["includeLifecycle"]);
-            Assert.AreEqual("abc", fields["exportId"]);
-            Assert.AreEqual("2", fields["exportChunk"]);
-        }
-
-        [TestMethod]
-        public void LifecycleOptionIsOptionalAndForwardedWithoutDroppingRequiredFields()
-        {
-            foreach (var name in new[] { "hktas_get_movie", "hktas_replace_input_range", "hktas_insert_input_range", "hktas_delete_input_range" })
-            {
-                var schema = McpCatalog.Tools.Single(tool => tool.Name == name).InputSchema;
-                Assert.AreEqual("boolean", schema["properties"]!["includeLifecycle"]!["type"]!.GetValue<string>());
-                Assert.IsFalse(schema["required"]?.AsArray().Any(x => x!.GetValue<string>() == "includeLifecycle") == true);
-            }
-            var select = typeof(McpStdioServer).GetMethod("SelectOptionalLifecycle",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-            using var plain = JsonDocument.Parse("{\"baseMovieId\":\"abc\"}");
-            using var complete = JsonDocument.Parse("{\"baseMovieId\":\"abc\",\"includeLifecycle\":true}");
-            var names = new[] { "baseMovieId", "includeLifecycle" };
-            var without = (System.Collections.Generic.IReadOnlyDictionary<string, string>)select.Invoke(null,
-                new object[] { plain.RootElement, names })!;
-            var with = (System.Collections.Generic.IReadOnlyDictionary<string, string>)select.Invoke(null,
-                new object[] { complete.RootElement, names })!;
-            Assert.AreEqual("abc", without["baseMovieId"]);
-            Assert.IsFalse(without.ContainsKey("includeLifecycle"));
-            Assert.AreEqual("true", with["includeLifecycle"]);
-        }
-
-        [TestMethod]
         public void EveryToolHasClosedObjectSchemaAndUniqueName()
         {
             var names = McpCatalog.Tools
@@ -164,154 +94,108 @@ namespace HollowKnightTAS.AgentBridge.Tests
         }
 
         [TestMethod]
-        public void ResourceCatalogContainsOnlyHktasUris()
+        public void ResourceCatalogContainsFullRunV2AndStudioUris()
         {
-            Assert.IsTrue(McpCatalog.Resources.Count >= 8);
-            foreach (var resource in McpCatalog.Resources)
-            {
-                Assert.IsTrue(
-                    resource["uri"]!.GetValue<string>()
-                        .StartsWith(
-                            "hktas://session/current/",
-                            StringComparison.Ordinal));
-            }
+            CollectionAssert.AreEquivalent(
+                new[]
+                {
+                    "hktas://session/current/status",
+                    "hktas://session/current/manifest",
+                    "hktas://session/current/capabilities",
+                    "hktas://session/current/world",
+                    "hktas://session/current/timeline",
+                    "hktas://session/current/movie"
+                },
+                McpCatalog.Resources.Select(r => r["uri"]!.GetValue<string>()).ToArray());
         }
 
         [TestMethod]
-        public void ProposalIsLocalSideEffectWithoutControlElevation()
+        public void FullRunV2AndStudioToolsArePublishedWithTypedSchemas()
         {
-            Assert.IsTrue(
-                McpCatalog.TryGetTool(
-                    "hktas_propose_movie_patch",
-                    out var proposal));
-            Assert.IsFalse(proposal.ReadOnly);
-            Assert.IsFalse(proposal.RequiresApprovedControl);
-            Assert.IsFalse(
-                proposal.ToJson()["annotations"]![
-                    "readOnlyHint"]!.GetValue<bool>());
-        }
-
-        [TestMethod]
-        public void ReplaySaveLifecycleToolsAreClosedAndTyped()
-        {
-            foreach (var name in new[]
+            foreach (var readTool in new[]
                      {
-                         "hktas_approve_replay_save_overwrite",
-                         "hktas_cancel_replay_save_restore",
-                         "hktas_resume_replay_save_restore"
+                         "hktas_get_status",
+                         "hktas_get_capabilities",
+                         "hktas_get_world_snapshot",
+                         "hktas_get_object_details",
+                         "hktas_get_movie",
+                         "hktas_get_timeline"
                      })
             {
-                Assert.IsTrue(
-                    McpCatalog.TryGetTool(name, out var tool),
-                    name);
-                Assert.IsTrue(tool.RequiresApprovedControl);
-                Assert.IsFalse(tool.ReadOnly);
+                Assert.IsTrue(McpCatalog.TryGetTool(readTool, out var tool), readTool);
+                Assert.IsTrue(tool.ReadOnly, readTool);
+                Assert.IsFalse(tool.RequiresApprovedControl, readTool);
             }
 
-            Assert.IsTrue(
-                McpCatalog.TryGetTool(
-                    "hktas_approve_replay_save_overwrite",
-                    out var approve));
-            var approvedSchema =
-                approve.InputSchema["properties"]!["approved"]!;
-            Assert.AreEqual(
-                "boolean",
-                approvedSchema["type"]!.GetValue<string>());
+            foreach (var writeTool in new[]
+                     {
+                         "hktas_acquire_control",
+                         "hktas_renew_control",
+                         "hktas_release_control",
+                         "hktas_begin_recording",
+                         "hktas_begin_replay",
+                         "hktas_step",
+                         "hktas_play",
+                         "hktas_pause",
+                         "hktas_stop",
+                         "hktas_seek_frame",
+                         "hktas_quit_game",
+                         "hktas_edit_inputs",
+                         "hktas_update_movie",
+                         "hktas_save_timeline_node",
+                         "hktas_restore_timeline_node",
+                         "hktas_switch_worldline",
+                         "hktas_delete_timeline_node",
+                         "hktas_save_sequence",
+                         "hktas_open_sequence",
+                         "hktas_start_video_export",
+                         "hktas_cancel_video_export"
+                     })
+            {
+                Assert.IsTrue(McpCatalog.TryGetTool(writeTool, out var tool), writeTool);
+                Assert.IsFalse(tool.ReadOnly, writeTool);
+                Assert.IsTrue(tool.RequiresApprovedControl, writeTool);
+            }
+
+            Assert.IsTrue(McpCatalog.TryGetTool("hktas_seek_frame", out var seek));
+            using (var validSeek = JsonDocument.Parse("{\"targetFrame\":120,\"action\":\"auto\"}"))
+                Assert.IsTrue(McpStdioServer.ValidateArguments(seek, validSeek.RootElement, out var seekErr), seekErr);
+            AssertRejects(seek, "{\"targetFrame\":-1}");
+            AssertRejects(seek, "{}");
+
+            Assert.IsTrue(McpCatalog.TryGetTool("hktas_edit_inputs", out var edit));
+            using (var validEdit = JsonDocument.Parse("{\"operation\":\"paint\",\"startFrame\":10,\"endFrame\":15,\"action\":\"Jump\",\"held\":true}"))
+                Assert.IsTrue(McpStdioServer.ValidateArguments(edit, validEdit.RootElement, out var editErr), editErr);
+            using (var validRuns = JsonDocument.Parse("{\"operation\":\"set_runs\",\"startFrame\":0,\"runs\":\"[{\\\"frames\\\":5,\\\"actions\\\":[\\\"Right\\\"]}]\"}"))
+                Assert.IsTrue(McpStdioServer.ValidateArguments(edit, validRuns.RootElement, out var runsErr), runsErr);
+            AssertRejects(edit, "{\"startFrame\":0}");
+
+            Assert.IsTrue(McpCatalog.TryGetTool("hktas_step", out var step));
+            using (var validStep = JsonDocument.Parse("{\"count\":10}"))
+                Assert.IsTrue(McpStdioServer.ValidateArguments(step, validStep.RootElement, out var stepErr), stepErr);
+            AssertRejects(step, "{\"count\":0}");
+            AssertRejects(step, "{\"count\":10001}");
+
+            Assert.IsTrue(McpCatalog.TryGetTool("hktas_begin_recording", out var rec));
+            using (var validRec = JsonDocument.Parse("{\"mouseEnabled\":false,\"fps\":50}"))
+                Assert.IsTrue(McpStdioServer.ValidateArguments(rec, validRec.RootElement, out var recErr), recErr);
+            AssertRejects(rec, "{\"fps\":0}");
+
+            Assert.IsTrue(McpCatalog.TryGetTool("hktas_switch_worldline", out var sw));
+            using (var validSwitch = JsonDocument.Parse("{\"leafId\":2}"))
+                Assert.IsTrue(McpStdioServer.ValidateArguments(sw, validSwitch.RootElement, out var swErr), swErr);
+            AssertRejects(sw, "{}");
+
+            // Legacy v1 tools must no longer be exposed.
+            Assert.IsFalse(McpCatalog.TryGetTool("hktas_get_state", out _));
+            Assert.IsFalse(McpCatalog.TryGetTool("hktas_step_with_input", out _));
+            Assert.IsFalse(McpCatalog.TryGetTool("hktas_create_replay_save", out _));
+            Assert.IsFalse(McpCatalog.TryGetTool("hktas_set_hero_pose", out _));
+            Assert.IsFalse(McpCatalog.TryGetTool("hktas_set_player_resources", out _));
         }
 
         [TestMethod]
-        public void FrameAuthoringAndHistoryEditingArePublishedToMcp()
-        {
-            foreach (var name in new[]
-                     {
-                         "hktas_get_combat_state",
-                         "hktas_get_replay_saves",
-                         "hktas_step_with_input",
-                         "hktas_queue_input_batch",
-                         "hktas_begin_input_batch",
-                         "hktas_append_input_batch",
-                         "hktas_commit_input_batch",
-                         "hktas_cancel_input_batch",
-                         "hktas_run_until",
-                         "hktas_start_recording",
-                         "hktas_stop_recording",
-                         "hktas_apply_movie_branch",
-                         "hktas_seek_movie_tick",
-                         "hktas_apply_branch_and_seek",
-                         "hktas_replace_input_range",
-                         "hktas_insert_input_range",
-                         "hktas_delete_input_range"
-                     })
-            {
-                Assert.IsTrue(
-                    McpCatalog.TryGetTool(name, out _),
-                    name);
-            }
-
-            Assert.IsTrue(
-                McpCatalog.TryGetTool(
-                    "hktas_step_with_input",
-                    out var single));
-            Assert.IsTrue(single.RequiresApprovedControl);
-            var required = single.InputSchema["required"]!
-                .AsArray()
-                .Select(value => value!.GetValue<string>())
-                .ToArray();
-            CollectionAssert.Contains(required, "expectedMovieTick");
-            CollectionAssert.Contains(required, "expectedSceneEpoch");
-
-            Assert.IsTrue(
-                McpCatalog.TryGetTool(
-                    "hktas_replace_input_range",
-                    out var replace));
-            Assert.IsFalse(replace.RequiresApprovedControl);
-            Assert.IsFalse(replace.ReadOnly);
-
-            Assert.IsTrue(
-                McpCatalog.TryGetTool(
-                    "hktas_append_input_batch",
-                    out var append));
-            var appendRequired = append.InputSchema["required"]!
-                .AsArray()
-                .Select(value => value!.GetValue<string>())
-                .ToArray();
-            CollectionAssert.Contains(appendRequired, "transactionId");
-            CollectionAssert.Contains(appendRequired, "chunkIndex");
-            CollectionAssert.Contains(
-                appendRequired,
-                "candidateMovieBase64");
-            CollectionAssert.Contains(
-                appendRequired,
-                "expectedMovieTick");
-            CollectionAssert.Contains(
-                appendRequired,
-                "expectedSceneEpoch");
-
-            foreach (var name in new[]
-                     {
-                         "hktas_seek_movie_tick",
-                         "hktas_apply_branch_and_seek"
-                     })
-            {
-                Assert.IsTrue(McpCatalog.TryGetTool(name, out var seek));
-                var seekRequired = seek.InputSchema["required"]!
-                    .AsArray()
-                    .Select(value => value!.GetValue<string>())
-                    .ToArray();
-                CollectionAssert.Contains(
-                    seekRequired,
-                    "targetMovieTick");
-                CollectionAssert.Contains(
-                    seekRequired,
-                    "expectedMovieTick");
-                CollectionAssert.Contains(
-                    seekRequired,
-                    "expectedSceneEpoch");
-            }
-        }
-
-        [TestMethod]
-        public void DeepObservationToolsPublishClosedBoundedSchemas()
+        public void DeepObservationToolsPublishClosedBoundedSchemasWithWatches()
         {
             Assert.IsTrue(McpCatalog.TryGetTool(
                 "hktas_get_world_snapshot", out var world));
@@ -322,6 +206,13 @@ namespace HollowKnightTAS.AgentBridge.Tests
                 + "\"includeInactive\":true,\"offset\":0,\"limit\":128}");
             Assert.IsTrue(McpStdioServer.ValidateArguments(
                 world, validWorld.RootElement, out var worldError), worldError);
+            using var validInfo = JsonDocument.Parse(
+                "{\"view\":\"info\",\"watches\":\"[\\\"PlayerData.health\\\",\\\"HeroController.cState.onGround\\\"]\"}");
+            Assert.IsTrue(McpStdioServer.ValidateArguments(
+                world, validInfo.RootElement, out var infoError), infoError);
+            using var validFsms = JsonDocument.Parse("{\"view\":\"fsms\"}");
+            Assert.IsTrue(McpStdioServer.ValidateArguments(
+                world, validFsms.RootElement, out var fsmsError), fsmsError);
             using var invalidWorld = JsonDocument.Parse("{\"limit\":129}");
             Assert.IsFalse(McpStdioServer.ValidateArguments(
                 world, invalidWorld.RootElement, out _));
@@ -411,21 +302,6 @@ namespace HollowKnightTAS.AgentBridge.Tests
                 "{\"scopes\":[\"control.playback\"],"
                 + "\"shell\":\"powershell\"}");
 
-            Assert.IsTrue(
-                McpCatalog.TryGetTool(
-                    "hktas_propose_movie_patch",
-                    out var propose));
-            AssertRejects(
-                propose,
-                "{\"baseMovieId\":\"none\","
-                + "\"candidateMovieBase64\":\"AA==\","
-                + "\"reason\":"
-                + JsonSerializer.Serialize(new string('r', 513))
-                + ",\"expectedMilestone\":\"checkpoint\"}");
-
-            Assert.IsFalse(McpCatalog.TryGetTool("hktas_set_hero_pose", out _));
-            Assert.IsFalse(McpCatalog.TryGetTool("hktas_set_player_resources", out _));
-
             using var valid = JsonDocument.Parse(
                 "{\"scopes\":[\"control.playback\"],"
                 + "\"ttlSeconds\":30}");
@@ -435,6 +311,27 @@ namespace HollowKnightTAS.AgentBridge.Tests
                     valid.RootElement,
                     out var error),
                 error);
+
+            Assert.IsTrue(
+                McpCatalog.TryGetTool(
+                    "hktas_renew_control",
+                    out var renew));
+            using var validRenewEmpty = JsonDocument.Parse("{}");
+            Assert.IsTrue(
+                McpStdioServer.ValidateArguments(
+                    renew,
+                    validRenewEmpty.RootElement,
+                    out var renewEmptyErr),
+                renewEmptyErr);
+            using var validRenewTtl = JsonDocument.Parse("{\"ttlSeconds\":120}");
+            Assert.IsTrue(
+                McpStdioServer.ValidateArguments(
+                    renew,
+                    validRenewTtl.RootElement,
+                    out var renewTtlErr),
+                renewTtlErr);
+            AssertRejects(renew, "{\"ttlSeconds\":301}");
+            AssertRejects(renew, "{\"ttlSeconds\":0}");
         }
 
         [TestMethod]

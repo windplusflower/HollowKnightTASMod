@@ -62,6 +62,9 @@ namespace HollowKnightTAS.Companion.Services
             // Keep the game drawable under the still image; never minimize it or skip render work.
             targetExtendedStyle = GetWindowLongPtr(target, -20);
             SetWindowLongPtr(target, -20, new IntPtr(targetExtendedStyle.ToInt64() | 0x08000000L));
+            audioTimer.Stop();
+            audioTimer.Tick -= MuteAudio;
+            audio?.Dispose();
             audio = new ProcessAudioMute(process.Id);
             audio.MuteNewSessions();
             audioTimer.Tick += MuteAudio;

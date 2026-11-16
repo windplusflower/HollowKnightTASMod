@@ -51,6 +51,16 @@ namespace HollowKnightTAS.Core.Automation
         public const string FullRunPause = "fullRunPause";
         public const string FullRunStop = "fullRunStop";
         public const string FullRunMovie = "fullRunMovie";
+        public const string StudioEditInputs = "studioEditInputs";
+        public const string StudioGetMovie = "studioGetMovie";
+        public const string StudioFrameAction = "studioFrameAction";
+        public const string StudioGetTimeline = "studioGetTimeline";
+        public const string StudioSaveTimelineNode = "studioSaveTimelineNode";
+        public const string StudioRestoreTimelineNode = "studioRestoreTimelineNode";
+        public const string StudioSwitchWorldline = "studioSwitchWorldline";
+        public const string StudioDeleteTimelineNode = "studioDeleteTimelineNode";
+        public const string StudioSaveSequence = "studioSaveSequence";
+        public const string StudioOpenSequence = "studioOpenSequence";
         public const string StartReplay = "startReplay";
         public const string StopReplay = "stopReplay";
         public const string CreateReplaySave = "createReplaySave";
@@ -125,6 +135,16 @@ namespace HollowKnightTAS.Core.Automation
                     FullRunPause,
                     FullRunStop,
                     FullRunMovie,
+                    StudioEditInputs,
+                    StudioGetMovie,
+                    StudioFrameAction,
+                    StudioGetTimeline,
+                    StudioSaveTimelineNode,
+                    StudioRestoreTimelineNode,
+                    StudioSwitchWorldline,
+                    StudioDeleteTimelineNode,
+                    StudioSaveSequence,
+                    StudioOpenSequence,
                     StartReplay,
                     StopReplay,
                     CreateReplaySave,

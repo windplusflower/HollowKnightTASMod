@@ -204,19 +204,33 @@ namespace HollowKnightTAS.Companion.Services
                     "Runtime session is not connected.");
             }
 
+            var payload = IpcPayloadCodec.Serialize(fields);
             await writeLock.WaitAsync(cancellationToken);
             try
             {
-                var sequence = checked(++outgoingSequence);
+                cancellationToken.ThrowIfCancellationRequested();
+                active = pipe;
+                if (!IsConnected || active == null)
+                {
+                    throw new InvalidOperationException(
+                        "Runtime session is not connected.");
+                }
+
+                var sequence = checked(outgoingSequence + 1);
+                var envelope = new IpcEnvelope(
+                    NegotiatedProtocol,
+                    registration.SessionId,
+                    sequence,
+                    messageType,
+                    payload);
+                // Once we enter the critical section and assign a sequence number, bind the frame
+                // write to the connection lifetime token so caller timeouts never leave a half-written
+                // frame or an unconsumed sequence gap on the named pipe.
                 await IpcCodec.WriteFrameAsync(
                     active,
-                    new IpcEnvelope(
-                        NegotiatedProtocol,
-                        registration.SessionId,
-                        sequence,
-                        messageType,
-                        IpcPayloadCodec.Serialize(fields)),
-                    cancellationToken);
+                    envelope,
+                    cancellation.Token);
+                outgoingSequence = sequence;
             }
             finally
             {

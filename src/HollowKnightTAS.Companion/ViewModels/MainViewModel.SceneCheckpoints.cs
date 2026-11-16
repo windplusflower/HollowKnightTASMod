@@ -20,7 +20,7 @@ namespace HollowKnightTAS.Companion.ViewModels
 
         private void EnsureAutoSceneCheckpointCapture(RuntimeSessionClient session)
         {
-            if (IsRestorePresentationFrozen || gridApplying || sequenceSaving
+            if (IsRestorePresentationFrozen || sequenceSaving
                 || fullRunMovies?.IsPending != true
                 || (fullRunMovies.Mode != "Recording" && fullRunMovies.Mode != "Replay")
                 || activeDraftTree == null || activeDraftTree.Length != 32
@@ -52,7 +52,6 @@ namespace HollowKnightTAS.Companion.ViewModels
                 && fullRunMovies?.IsPending == true
                 && (fullRunMovies.Mode == "Recording" || fullRunMovies.Mode == "Replay")
                 && !IsRestorePresentationFrozen
-                && !gridApplying
                 && !sequenceSaving)
             {
                 try
@@ -121,13 +120,19 @@ namespace HollowKnightTAS.Companion.ViewModels
             if (tree == null || tree.Id.Length != 32 || frame < 0 || string.IsNullOrWhiteSpace(movie) || SceneCheckpoints == null) return;
             var oldBranch = FormatBranchId(oldTip ?? 0);
             var newBranch = newTip.HasValue ? FormatBranchId(newTip.Value) : oldBranch;
+            var branchIds = new HashSet<string>(StringComparer.Ordinal) { oldBranch, newBranch };
+            var leafId = newTip ?? oldTip ?? 0;
+            if (tree.Nodes.Any(n => n.Id == leafId))
+            {
+                foreach (var ancestor in tree.PathTo(leafId))
+                    branchIds.Add(FormatBranchId(ancestor.Id));
+            }
             IReadOnlyList<SceneCheckpointHeader> headers;
             try { headers = SceneCheckpoints.CatalogTree(tree.Id); }
             catch { return; }
             foreach (var h in headers)
             {
-                if (h.ResumeMovieFrame <= frame
-                    && (h.Scope.BranchId == oldBranch || h.Scope.BranchId == newBranch))
+                if (h.ResumeMovieFrame <= frame && branchIds.Contains(h.Scope.BranchId))
                 {
                     tree.RecordCheckpoint(h.CheckpointId, h.ResumeMovieFrame, h.TransitionId, movie);
                 }

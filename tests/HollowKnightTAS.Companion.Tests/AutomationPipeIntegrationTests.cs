@@ -581,7 +581,7 @@ namespace HollowKnightTAS.Companion.Tests
                 await bridge.StandardInput.WriteLineAsync(
                     "{\"jsonrpc\":\"2.0\",\"id\":3,"
                     + "\"method\":\"resources/read\",\"params\":{\"uri\":"
-                    + "\"hktas://session/current/state/summary\"}}");
+                    + "\"hktas://session/current/capabilities\"}}");
                 await bridge.StandardInput.WriteLineAsync(
                     "{\"jsonrpc\":\"2.0\",\"id\":4,"
                     + "\"method\":\"resources/read\",\"params\":{\"uri\":"
@@ -590,12 +590,11 @@ namespace HollowKnightTAS.Companion.Tests
                     "{\"jsonrpc\":\"2.0\",\"id\":5,"
                     + "\"method\":\"tools/call\",\"params\":{\"name\":"
                     + "\"hktas_pause\",\"arguments\":{"
-                    + "\"expectedRuntimeMode\":\"Running\","
                     + "\"shell\":\"powershell\"}}}");
                 await bridge.StandardInput.WriteLineAsync(
                     "{\"jsonrpc\":\"2.0\",\"id\":6,"
                     + "\"method\":\"tools/call\",\"params\":{\"name\":"
-                    + "\"hktas_get_state\",\"arguments\":{}}}");
+                    + "\"hktas_get_capabilities\",\"arguments\":{}}}");
                 bridge.StandardInput.Close();
                 var stdout =
                     await bridge.StandardOutput.ReadToEndAsync();
@@ -652,15 +651,12 @@ namespace HollowKnightTAS.Companion.Tests
                             .GetProperty("result")
                             .GetProperty("isError")
                             .GetBoolean());
-                    Assert.AreEqual(
-                        42,
+                    Assert.IsTrue(
                         documents[5].RootElement
                             .GetProperty("result")
                             .GetProperty("structuredContent")
-                            .GetProperty("semanticValues")
-                            .GetProperty("fixture.value")
-                            .GetProperty("value")
-                            .GetInt32());
+                            .GetProperty("success")
+                            .GetBoolean());
                 }
                 finally
                 {
@@ -825,6 +821,35 @@ namespace HollowKnightTAS.Companion.Tests
             }
 
             var mcpMovie = CreateInputMovie("attack");
+            await using (var fourth = new AutomationClient())
+            {
+                await fourth.ConnectAsync(
+                    new AutomationConnectOptions
+                    {
+                        ClientId = "sdk-fourth",
+                        BootstrapPath = broker.BootstrapPath
+                    },
+                    cancellation.Token);
+                var acquired = await fourth.ExecuteAsync(
+                    fourth.CreateCommand(
+                        AutomationCommandIds.AcquireControl,
+                        AutomationScope.ControlInput,
+                        new Dictionary<string, string>(
+                            StringComparer.Ordinal)
+                        {
+                            ["scopes"] = AutomationScope.ControlInput
+                        }),
+                    cancellation.Token);
+                Assert.IsTrue(acquired.Success, acquired.Detail);
+                var fourthResult = await fourth.StepWithInputAsync(
+                    mcpMovie,
+                    0,
+                    acquired.Data["leaseId"],
+                    42,
+                    cancellation.Token);
+                Assert.IsTrue(fourthResult.Success, fourthResult.Detail);
+            }
+
             var bridgeAssembly =
                 typeof(HollowKnightTAS.AgentBridge.McpStdioServer)
                     .Assembly.Location;
@@ -854,12 +879,8 @@ namespace HollowKnightTAS.Companion.Tests
                 await bridge.StandardInput.WriteLineAsync(
                     "{\"jsonrpc\":\"2.0\",\"id\":3,"
                     + "\"method\":\"tools/call\",\"params\":{"
-                    + "\"name\":\"hktas_step_with_input\","
-                    + "\"arguments\":{\"candidateMovieBase64\":\""
-                    + Convert.ToBase64String(mcpMovie)
-                    + "\",\"expectedSceneEpoch\":0,"
-                    + "\"expectedRuntimeMode\":\"Paused\","
-                    + "\"expectedMovieTick\":42}}}");
+                    + "\"name\":\"hktas_get_capabilities\","
+                    + "\"arguments\":{}}}");
                 bridge.StandardInput.Close();
                 var stdout =
                     await bridge.StandardOutput.ReadToEndAsync();

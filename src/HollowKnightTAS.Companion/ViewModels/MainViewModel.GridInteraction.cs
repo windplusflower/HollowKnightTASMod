@@ -15,6 +15,9 @@ namespace HollowKnightTAS.Companion.ViewModels
         private long earliestGridEdit = long.MaxValue;
         public long[] SelectedGridFrames { get; set; } = Array.Empty<long>();
         public bool TrySetGridRngSeed(long frame, string text)
+            => TrySetGridRngSeed(frame, text, withinGridOperation: false);
+
+        internal bool TrySetGridRngSeed(long frame, string text, bool withinGridOperation)
         {
             try
             {
@@ -30,7 +33,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                 if (new MovieV2Codec().WriteCanonical(candidate) == MovieText) return true;
                 GridStart = frame.ToString(CultureInfo.InvariantCulture);
                 GridCount = "1";
-                EditGridDocument(candidate);
+                EditGridDocument(candidate, withinGridOperation);
                 return true;
             }
             catch (Exception ex) { GridStatus = ex.Message; return false; }
@@ -81,9 +84,9 @@ namespace HollowKnightTAS.Companion.ViewModels
         {
             return MovieFrameRate.Parse(text);
         }
-        private void EditGridDocument(MovieV2Document movie)
+        private void EditGridDocument(MovieV2Document movie, bool withinGridOperation = false)
         {
-            if (gridApplying) throw new InvalidOperationException("正在应用序列，请稍候。");
+            if (gridApplying && !withinGridOperation) throw new InvalidOperationException("正在应用序列，请稍候。");
             gridHasUserEdits = true;
             earliestGridEdit = Math.Min(earliestGridEdit, GridCount == "非连续选区"
                 ? SelectedGridFrames.Min() : GridIndex());
@@ -96,15 +99,18 @@ namespace HollowKnightTAS.Companion.ViewModels
             RefreshInputGrid("草稿已修改；未来帧下次播放／逐帧自动同步，过去帧需重放。Ctrl+Z 撤销。");
         }
         public void PaintGrid(long start, long end, string action, bool held)
+            => PaintGridCore(start, end, action, held, withinGridOperation: false);
+
+        internal void PaintGridCore(long start, long end, string action, bool held, bool withinGridOperation)
         {
             try
             {
-                if (gridApplying) throw new InvalidOperationException("正在应用草稿，请稍候。");
+                if (gridApplying && !withinGridOperation) throw new InvalidOperationException("正在应用草稿，请稍候。");
                 var first = Math.Min(start, end); var count = Math.Abs(end - start) + 1;
                 GridStart = first.ToString(CultureInfo.InvariantCulture); GridCount = count.ToString(CultureInfo.InvariantCulture);
                 var source = GridAny();
                 if (source.V2Document != null)
-                    EditGridDocument(MovieV2RangeEditor.Paint(source.V2Document, first, count, action, held));
+                    EditGridDocument(MovieV2RangeEditor.Paint(source.V2Document, first, count, action, held), withinGridOperation);
                 else if (Enum.TryParse<TasAction>(action, out var parsed))
                 {
                     var runs = MovieInputSlice.Extract(source.V1Document!, first, count).Commands.OfType<FrameRunCommand>();
@@ -201,7 +207,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                     System.IO.Directory.CreateDirectory(directory);
                     var path = System.IO.Path.Combine(directory, "live-" + Guid.NewGuid().ToString("N") + ".hktas");
                     await System.IO.File.WriteAllTextAsync(path, text, new System.Text.UTF8Encoding(false));
-                    var result = await automationBroker.ExecuteHumanAsync(
+                    var result = await ExecuteStudioOrHumanAsync(
                         HollowKnightTAS.Core.Automation.AutomationCommandIds.FullRunUpdateMovie,
                         HollowKnightTAS.Core.Automation.AutomationScope.ControlPlayback,
                         new System.Collections.Generic.Dictionary<string, string>

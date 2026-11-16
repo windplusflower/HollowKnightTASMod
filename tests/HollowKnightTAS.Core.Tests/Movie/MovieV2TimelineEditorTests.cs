@@ -61,6 +61,35 @@ namespace HollowKnightTAS.Core.Tests.Movie
             Assert.AreSame(movie, badMouse.Movie);
         }
 
+        [TestMethod]
+        public void ReplaceFrames_ReplacesRangeAndExtendsLengthInSinglePass()
+        {
+            var movie = Movie();
+            var editor = new MovieV2TimelineEditor();
+            var menu = MenuSample();
+            var result = editor.ReplaceFrames(movie, 2, 3, new[]
+            {
+                new NativeFrameRun(5, new[] { menu }, Span())
+            });
+            Assert.IsTrue(result.Success);
+            Assert.AreEqual(8L, Count(result.Movie));
+            Assert.AreEqual(0, Frame(result.Movie, 1).Count);
+            Assert.AreEqual(GameInputChannel.PreMenu, Frame(result.Movie, 2)[0].Channel);
+            Assert.AreEqual(GameInputChannel.PreMenu, Frame(result.Movie, 6)[0].Channel);
+            Assert.AreEqual(GameInputChannel.Hero, Frame(result.Movie, 7)[0].Channel);
+
+            var extended = editor.ReplaceFrames(movie, 4, 2, new[]
+            {
+                new NativeFrameRun(4, Array.Empty<GameInputSample>(), Span()),
+                new NativeFrameRun(2, new[] { menu }, Span())
+            });
+            Assert.IsTrue(extended.Success);
+            Assert.AreEqual(10L, Count(extended.Movie));
+            Assert.AreEqual(GameInputChannel.PreMenu, Frame(extended.Movie, 3)[0].Channel);
+            Assert.AreEqual(0, Frame(extended.Movie, 4).Count);
+            Assert.AreEqual(GameInputChannel.PreMenu, Frame(extended.Movie, 9)[0].Channel);
+        }
+
         private static MovieV2Document Movie()
         {
             var header = new MovieV2Header("game", "api", "mod", "profile",

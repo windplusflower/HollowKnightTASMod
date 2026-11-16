@@ -160,11 +160,22 @@ namespace HollowKnightTAS.Companion.Automation
                 };
                 if (command.CommandId == AutomationCommandIds.GetWorldSnapshot)
                 {
-                    fields["snapshotId"] = ArgumentOrDefault(command, "snapshotId", string.Empty);
-                    fields["view"] = ArgumentOrDefault(command, "view", "world");
-                    fields["includeInactive"] = ArgumentOrDefault(command, "includeInactive", "false");
-                    fields["offset"] = ArgumentOrDefault(command, "offset", "0");
-                    fields["limit"] = ArgumentOrDefault(command, "limit", "64");
+                    var view = ArgumentOrDefault(command, "view", "world");
+                    fields["view"] = view;
+                    if (view == "fsms" || view == "info")
+                    {
+                        if (command.Arguments.TryGetValue("watches", out var watches))
+                            fields["watches"] = watches;
+                    }
+                    else
+                    {
+                        fields["snapshotId"] = ArgumentOrDefault(command, "snapshotId", string.Empty);
+                        fields["includeInactive"] = ArgumentOrDefault(command, "includeInactive", "false");
+                        fields["offset"] = ArgumentOrDefault(command, "offset", "0");
+                        fields["limit"] = ArgumentOrDefault(command, "limit", "64");
+                        if (command.Arguments.TryGetValue("watches", out var watches))
+                            fields["watches"] = watches;
+                    }
                     return await ForwardAsync(runtime, command,
                         IpcMessageTypes.GetWorldSnapshot, fields,
                         IpcMessageTypes.WorldSnapshot, cancellationToken);
@@ -266,8 +277,11 @@ namespace HollowKnightTAS.Companion.Automation
             }
             if (command.CommandId == AutomationCommandIds.BeginFullRunReplay)
             {
+                if (!command.Arguments.TryGetValue("movieBase64", out var movieBase64)
+                    || string.IsNullOrEmpty(movieBase64))
+                    return Result(command, false, "InvalidMovie", "movieBase64 is required.");
                 byte[] bytes;
-                try { bytes = Convert.FromBase64String(command.Arguments["movieBase64"]); }
+                try { bytes = Convert.FromBase64String(movieBase64); }
                 catch (FormatException)
                 {
                     return Result(command, false, "InvalidMovie", "movieBase64 is invalid.");

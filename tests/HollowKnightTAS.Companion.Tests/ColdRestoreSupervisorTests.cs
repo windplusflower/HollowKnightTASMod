@@ -65,11 +65,6 @@ namespace HollowKnightTAS.Companion.Tests
 
         [TestMethod]
         [Timeout(15000)]
-        public async Task McpCancelForwardsOperationIdAfterSourceExitAndStatusTracksResult()
-            => await RunColdOperation(false, false, false, true, false, false, mcpCancel: true);
-
-        [TestMethod]
-        [Timeout(15000)]
         public async Task CancelDuringQuiesceExitsSourceWithoutUnfreezingOrLaunching()
             => await RunColdOperation(false, false, false, false, false, false, cancelAtQuiesce: true);
 
