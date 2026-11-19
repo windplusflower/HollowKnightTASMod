@@ -185,6 +185,24 @@ namespace HollowKnightTAS.Runtime.FullRun
             foreach (var source in instance.states.Keys.Where(source => source == null
                 || !source.gameObject.activeInHierarchy).ToArray()) instance.states.Remove(source);
         }
+
+        internal static void ResetForInProcessRestore()
+        {
+            if (instance == null) return;
+            foreach (var source in instance.states.Keys.ToArray())
+            {
+                if (source == null) continue;
+                if (source.gameObject.activeInHierarchy)
+                {
+                    source.Stop();
+                    if (instance.Pooled(source))
+                    {
+                        ObjectPool.Recycle(source.gameObject);
+                    }
+                }
+            }
+            instance.states.Clear();
+        }
         public void Dispose()
         {
             for (var index = hooks.Count - 1; index >= 0; index--) hooks[index].Dispose();

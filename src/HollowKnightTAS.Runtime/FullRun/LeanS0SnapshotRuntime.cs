@@ -80,6 +80,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static readonly FieldInfo AudioCurrentAtmosCueField = typeof(AudioManager).GetField("currentAtmosCue", AnyInstance)
             ?? throw new MissingFieldException("AudioManager.currentAtmosCue");
 
+        private static readonly FieldInfo CameraLockAreaField = typeof(CameraController).GetField("currentLockArea", AnyInstance)
+            ?? throw new MissingFieldException("CameraController.currentLockArea");
+        private static readonly FieldInfo[] CameraControllerScalarFields = CameraScalars(typeof(CameraController));
+        private static readonly FieldInfo[] CameraTargetScalarFields = CameraScalars(typeof(CameraTarget));
+
+        private static FieldInfo[] CameraScalars(Type type) => CheckpointScalarFields.Declared(type).Where(f =>
+            (f.FieldType.IsPrimitive && f.FieldType != typeof(IntPtr) && f.FieldType != typeof(UIntPtr))
+            || f.FieldType.IsEnum || f.FieldType == typeof(string)
+            || f.FieldType == typeof(Vector2) || f.FieldType == typeof(Vector3)).ToArray();
+
         private static readonly FieldInfo HcExitedSuperDashing = HeroField("exitedSuperDashing");
         private static readonly FieldInfo HcExitedQuake = HeroField("exitedQuake");
         private static readonly FieldInfo HcEnterWithoutInput = HeroField("enterWithoutInput");
@@ -129,7 +139,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 EntryGateName = entryGate,
                 RngSeed = ctx.RngSeed,
                 RngSha256 = ctx.RngSha256,
-                CapturedAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+                CapturedAtUtc = "deterministic-s0",
                 C1_PlayerDataJson = JsonUtility.ToJson(pd),
                 C2_SceneDataJson = JsonUtility.ToJson(sd),
                 C3_BossSequence = CaptureBossSequence(),
@@ -142,7 +152,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 C10_Input = CaptureInputContainer(ctx.Input, ctx.Mouse),
                 C11_Time = CaptureTimeState(gm),
                 C12_ControlPlane = CaptureControlPlane(ctx),
-                D3_MusicCue = CaptureAudioCues(gm)
+                D3_MusicCue = CaptureAudioCues(gm),
+                D4_HeroHitCrack = CaptureHeroHitCrack(hero),
+                D6_ObjectPoolWarmup = LeanS0EnvironmentParity.CaptureObjectPoolWarmup(hero),
+                D7_HeroInactiveLifecycles = LeanS0EnvironmentParity.CaptureHeroInactiveLifecycles(hero),
+                C13_Camera = CaptureCameraState()
             };
 
             LeanS0PacketCodec.Validate(packet);
@@ -176,7 +190,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             MovieV2Document targetMovie,
             Action<byte[], long> importRandom,
             Action<byte[], long> importObserver,
-            out CanonicalInputEpoch restoredOrigin)
+            out CanonicalInputEpoch restoredOrigin,
+            bool inProcessRestore = false)
         {
             if (packet == null) throw new ArgumentNullException(nameof(packet));
             LeanS0PacketCodec.Validate(packet);
@@ -219,6 +234,18 @@ namespace HollowKnightTAS.Runtime.FullRun
 
             // D3 Audio cues (best-effort informational sync, excluded from K3 verification)
             ApplyAudioCues(gm, packet.D3_MusicCue);
+
+            // D4 Hero Hit Crack native MonoBehaviour Awake/Start lifecycle parity
+            ApplyHeroHitCrack(hero, packet.D4_HeroHitCrack);
+
+            // D6 Persistent ObjectPool prefab warmup parity (e.g., Nail Terrain Hit Effect AudioSourcePitchRandomizer.Awake)
+            LeanS0EnvironmentParity.ApplyObjectPoolWarmup(hero, packet.D6_ObjectPoolWarmup, inProcessRestore);
+
+            // D7 Inactive HeroController child randomizer native lifecycle parity
+            LeanS0EnvironmentParity.ApplyHeroInactiveLifecycles(hero, packet.D7_HeroInactiveLifecycles);
+
+            // C13 Persistent GameCameras / CameraController / CameraTarget parity
+            ApplyCameraState(packet.C13_Camera);
         }
 
         private static LeanS0BossSequenceState CaptureBossSequence()
@@ -421,13 +448,38 @@ namespace HollowKnightTAS.Runtime.FullRun
             PlayMakerFSM? slideOut = FindHudFsm("Hud Canvas", "Slide Out");
             PlayMakerFSM? lowHealthFx = FindHudFsm("Hud Canvas/Health", "Low Health FX");
             FsmFloat? waitTime = lowHealthFx?.FsmVariables?.FindFsmFloat("Wait Time");
+            var healthDisplayStates = new string[11];
+            for (int i = 0; i < 11; i++)
+            {
+                PlayMakerFSM? hd = FindHudFsm($"Hud Canvas/Health/Health {i + 1}", "health_display");
+                healthDisplayStates[i] = hd?.ActiveStateName ?? string.Empty;
+            }
             return new LeanS0PlayMakerGlobalsState
             {
                 IsHudOut = hudOut != null && hudOut.Value,
                 LowHealthFxWaitTime = waitTime != null ? waitTime.Value : 0f,
                 LowHealthFxActiveState = lowHealthFx?.ActiveStateName ?? string.Empty,
-                SlideOutActiveState = slideOut?.ActiveStateName ?? string.Empty
+                SlideOutActiveState = slideOut?.ActiveStateName ?? string.Empty,
+                HealthDisplayActiveStates = healthDisplayStates,
+                HudCanvasLocalPosition = CaptureHudLocalPos("Hud Canvas"),
+                HealthRootLocalPosition = CaptureHudLocalPos("Hud Canvas/Health"),
+                SoulOrbLocalPosition = CaptureHudLocalPos("Hud Canvas/Soul Orb")
             };
+        }
+
+        private static float[] CaptureHudLocalPos(string relativePath)
+        {
+            Transform? t = GameCameras.instance?.hudCamera?.transform?.Find(relativePath);
+            if (t == null) return Array.Empty<float>();
+            Vector3 p = t.localPosition;
+            return new[] { p.x, p.y, p.z };
+        }
+
+        private static void ApplyHudLocalPos(string relativePath, float[]? pos)
+        {
+            if (pos == null || pos.Length != 3) return;
+            Transform? t = GameCameras.instance?.hudCamera?.transform?.Find(relativePath);
+            if (t != null) t.localPosition = new Vector3(pos[0], pos[1], pos[2]);
         }
 
         private static void ApplyPlayMakerGlobals(LeanS0PlayMakerGlobalsState state)
@@ -438,27 +490,145 @@ namespace HollowKnightTAS.Runtime.FullRun
                 hudOut.Value = state.IsHudOut;
             }
 
-            PlayMakerFSM? slideOut = FindHudFsm("Hud Canvas", "Slide Out");
-            if (slideOut != null
-                && !string.IsNullOrEmpty(state.SlideOutActiveState)
-                && slideOut.ActiveStateName != state.SlideOutActiveState)
+            // Clear any pre-existing Low Health iTweens before restoring HUD resting positions.
+            Transform? healthTransform = GameCameras.instance?.hudCamera?.transform?.Find("Hud Canvas/Health");
+            if (healthTransform != null)
             {
-                slideOut.SetState(state.SlideOutActiveState);
+                LeanS0Gate.StopAndRemoveITweens(healthTransform.gameObject, restorePositionAnchor: true);
             }
 
-            PlayMakerFSM? lowHealthFx = FindHudFsm("Hud Canvas/Health", "Low Health FX");
-            if (lowHealthFx != null)
+            ApplyHudLocalPos("Hud Canvas", state.HudCanvasLocalPosition);
+            ApplyHudLocalPos("Hud Canvas/Health", state.HealthRootLocalPosition);
+            ApplyHudLocalPos("Hud Canvas/Soul Orb", state.SoulOrbLocalPosition);
+
+            UnityEngine.Random.State savedRng = UnityEngine.Random.state;
+            try
             {
-                if (!string.IsNullOrEmpty(state.LowHealthFxActiveState)
-                    && lowHealthFx.ActiveStateName != state.LowHealthFxActiveState)
+                PlayMakerFSM? slideOut = FindHudFsm("Hud Canvas", "Slide Out");
+                if (slideOut != null
+                    && !string.IsNullOrEmpty(state.SlideOutActiveState)
+                    && slideOut.ActiveStateName != state.SlideOutActiveState)
                 {
-                    lowHealthFx.SetState(state.LowHealthFxActiveState);
+                    slideOut.SetState(state.SlideOutActiveState);
                 }
 
-                FsmFloat? waitTime = lowHealthFx.FsmVariables?.FindFsmFloat("Wait Time");
-                if (waitTime != null)
+                PlayMakerFSM? lowHealthFx = FindHudFsm("Hud Canvas/Health", "Low Health FX");
+                if (lowHealthFx != null)
                 {
-                    waitTime.Value = state.LowHealthFxWaitTime;
+                    if (!string.IsNullOrEmpty(state.LowHealthFxActiveState)
+                        && lowHealthFx.ActiveStateName != state.LowHealthFxActiveState)
+                    {
+                        lowHealthFx.SetState(state.LowHealthFxActiveState);
+                    }
+
+                    FsmFloat? waitTime = lowHealthFx.FsmVariables?.FindFsmFloat("Wait Time");
+                    if (waitTime != null)
+                    {
+                        waitTime.Value = state.LowHealthFxWaitTime;
+                    }
+                }
+
+                if (state.HealthDisplayActiveStates != null)
+                {
+                    for (int i = 0; i < state.HealthDisplayActiveStates.Length && i < 11; i++)
+                    {
+                        string targetState = state.HealthDisplayActiveStates[i];
+                        if (string.IsNullOrEmpty(targetState))
+                        {
+                            continue;
+                        }
+
+                        PlayMakerFSM? hd = FindHudFsm($"Hud Canvas/Health/Health {i + 1}", "health_display");
+                        if (hd != null && hd.Fsm != null && hd.Fsm.Initialized
+                            && hd.ActiveStateName != targetState
+                            && hd.Fsm.GetState(targetState) != null)
+                        {
+                            hd.SetState(targetState);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                UnityEngine.Random.state = savedRng;
+            }
+        }
+
+        private static Transform[] CollectCameraTransformChain(GameCameras cameras, CameraController controller, CameraTarget target)
+        {
+            var chain = new List<Transform>();
+            foreach (Transform leaf in new[] { controller.transform, target.transform })
+            {
+                var branch = new List<Transform>();
+                for (Transform? cur = leaf; cur != null; cur = cur.parent)
+                {
+                    branch.Add(cur);
+                    if (cur == cameras.transform || branch.Count >= 8) break;
+                }
+                branch.Reverse();
+                foreach (Transform t in branch)
+                {
+                    if (!chain.Contains(t)) chain.Add(t);
+                }
+            }
+            return chain.ToArray();
+        }
+
+        private static LeanS0CameraState? CaptureCameraState()
+        {
+            GameCameras? cameras = GameCameras.instance;
+            CameraController? controller = cameras?.cameraController;
+            CameraTarget? target = cameras?.cameraTarget;
+            if (cameras == null || controller == null || target == null) return null;
+
+            Transform[] chain = CollectCameraTransformChain(cameras, controller, target);
+            return new LeanS0CameraState
+            {
+                Controller = CheckpointScalarFields.Capture(controller, CameraControllerScalarFields),
+                Target = CheckpointScalarFields.Capture(target, CameraTargetScalarFields),
+                Transforms = chain.Select(t => new LeanS0CameraTransformPose
+                {
+                    Name = t.name,
+                    LocalPosition = new[] { t.localPosition.x, t.localPosition.y, t.localPosition.z },
+                    LocalRotation = new[] { t.localRotation.x, t.localRotation.y, t.localRotation.z, t.localRotation.w },
+                    LocalScale = new[] { t.localScale.x, t.localScale.y, t.localScale.z }
+                }).ToArray()
+            };
+        }
+
+        private static void ApplyCameraState(LeanS0CameraState? state)
+        {
+            if (state == null) return;
+            GameCameras? cameras = GameCameras.instance;
+            CameraController? controller = cameras?.cameraController;
+            CameraTarget? target = cameras?.cameraTarget;
+            if (cameras == null || controller == null || target == null) return;
+
+            controller.lockZoneList?.Clear();
+            CameraLockAreaField.SetValue(controller, null);
+
+            if (state.Controller != null && state.Controller.Count > 0)
+            {
+                CheckpointScalarFields.PrepareApply(controller, CameraControllerScalarFields, state.Controller)();
+            }
+            if (state.Target != null && state.Target.Count > 0)
+            {
+                CheckpointScalarFields.PrepareApply(target, CameraTargetScalarFields, state.Target)();
+            }
+
+            if (state.Transforms != null)
+            {
+                Transform[] chain = CollectCameraTransformChain(cameras, controller, target);
+                for (int i = 0; i < state.Transforms.Length && i < chain.Length; i++)
+                {
+                    LeanS0CameraTransformPose pose = state.Transforms[i];
+                    if (pose == null || chain[i].name != pose.Name) continue;
+                    if (pose.LocalPosition.Length == 3)
+                        chain[i].localPosition = new Vector3(pose.LocalPosition[0], pose.LocalPosition[1], pose.LocalPosition[2]);
+                    if (pose.LocalRotation.Length == 4)
+                        chain[i].localRotation = new Quaternion(pose.LocalRotation[0], pose.LocalRotation[1], pose.LocalRotation[2], pose.LocalRotation[3]);
+                    if (pose.LocalScale.Length == 3)
+                        chain[i].localScale = new Vector3(pose.LocalScale[0], pose.LocalScale[1], pose.LocalScale[2]);
                 }
             }
         }
@@ -1175,6 +1345,49 @@ namespace HollowKnightTAS.Runtime.FullRun
                 AtmosCue? cue = Resources.FindObjectsOfTypeAll<AtmosCue>().FirstOrDefault(c => c != null && c.name == state.AtmosCueName);
                 if (cue != null) AudioCurrentAtmosCueField.SetValue(am, cue);
             }
+        }
+
+        private static LeanS0HeroHitCrackState? CaptureHeroHitCrack(HeroController hero)
+        {
+            GameObject? go = hero.damageEffectFSM?.FsmVariables.FindFsmGameObject("Hit Crack")?.Value;
+            if (go == null || go.activeSelf || go.activeInHierarchy)
+            {
+                return null;
+            }
+            CheckpointHeroHitCrackState captured = CheckpointHeroHitCrackState.Capture(hero);
+            return new LeanS0HeroHitCrackState
+            {
+                RotationFields = new Dictionary<string, string>(captured.RotationFields, StringComparer.Ordinal),
+                DeactivationFields = new Dictionary<string, string>(captured.DeactivationFields, StringComparer.Ordinal),
+                Lifecycle = (byte[])captured.Lifecycle.Clone(),
+                DeactivationLifecycle = (byte[])captured.DeactivationLifecycle.Clone(),
+                RotationEnabled = captured.RotationEnabled,
+                DeactivationEnabled = captured.DeactivationEnabled,
+                LocalPosition = FromVec3(captured.LocalPosition),
+                LocalRotation = FromQuat(captured.LocalRotation),
+                LocalScale = FromVec3(captured.LocalScale)
+            };
+        }
+
+        private static void ApplyHeroHitCrack(HeroController hero, LeanS0HeroHitCrackState? state)
+        {
+            if (state == null)
+            {
+                return;
+            }
+            var raw = new CheckpointHeroHitCrackState
+            {
+                RotationFields = new Dictionary<string, string>(state.RotationFields, StringComparer.Ordinal),
+                DeactivationFields = new Dictionary<string, string>(state.DeactivationFields, StringComparer.Ordinal),
+                Lifecycle = (byte[])state.Lifecycle.Clone(),
+                DeactivationLifecycle = (byte[])state.DeactivationLifecycle.Clone(),
+                RotationEnabled = state.RotationEnabled,
+                DeactivationEnabled = state.DeactivationEnabled,
+                LocalPosition = ToVec3(state.LocalPosition),
+                LocalRotation = ToQuat(state.LocalRotation),
+                LocalScale = ToVec3(state.LocalScale)
+            };
+            raw.PrepareApply(hero)();
         }
 
         private static float[] FromVec2(Vector2 v) => new[] { v.x, v.y };

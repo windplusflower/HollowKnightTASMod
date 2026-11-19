@@ -70,7 +70,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                         MovieProtocolV2.SelectedNativeProfileId);
                     var client = CreateSceneCheckpointClient(session);
                     var lease = await client.ArmAsync(scope, binding, SceneCheckpointTrigger.AutoOnLoadBoundary, token);
-                    var packet = await client.ReceiveAsync(lease, TimeSpan.FromMinutes(3), token);
+                    var packet = await client.ReceiveAsync(lease, TimeSpan.FromMinutes(3), token, isPaused: () => startupBoot?.IsWaiting == true);
                     RegisterCapturedCheckpointOnTimeline(treeId, packet);
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)

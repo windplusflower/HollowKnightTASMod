@@ -259,6 +259,7 @@ namespace HollowKnightTAS.Companion
                         if (startupBoot.FullRunFaultCode == 0 && !restorePresentation.IsActive)
                             await restorePresentation.BeginAsync(process);
                         timing.Mark("source-cover-ready");
+                        var killedProcessId = process.Id;
                         startupGame = null;
                         try
                         {
@@ -266,6 +267,7 @@ namespace HollowKnightTAS.Companion
                             await process.WaitForExitAsync();
                         }
                         finally { process.Dispose(); }
+                        sessions.RemoveSessionsForProcess(killedProcessId);
                         timing.Mark("source-exited");
                         fullRunMovies.VerifyOriginalSavesUnchanged();
                         startupBoot.Dispose();

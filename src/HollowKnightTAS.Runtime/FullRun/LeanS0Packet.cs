@@ -34,6 +34,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         public LeanS0TimeState C11_Time { get; set; } = new LeanS0TimeState();
         public LeanS0ControlPlaneState C12_ControlPlane { get; set; } = new LeanS0ControlPlaneState();
         public LeanS0AudioCueState D3_MusicCue { get; set; } = new LeanS0AudioCueState();
+        public LeanS0HeroHitCrackState? D4_HeroHitCrack { get; set; }
+        public LeanS0HudTweenState[]? D5_HudTweens { get; set; }
+        public LeanS0ObjectPoolWarmupState? D6_ObjectPoolWarmup { get; set; }
+        public LeanS0HeroInactiveComponentState[]? D7_HeroInactiveLifecycles { get; set; }
+        public LeanS0CameraState? C13_Camera { get; set; }
     }
 
     public sealed class LeanS0TypedValue
@@ -86,6 +91,25 @@ namespace HollowKnightTAS.Runtime.FullRun
         public float LowHealthFxWaitTime { get; set; }
         public string LowHealthFxActiveState { get; set; } = string.Empty;
         public string SlideOutActiveState { get; set; } = string.Empty;
+        public string[] HealthDisplayActiveStates { get; set; } = Array.Empty<string>();
+        public float[] HudCanvasLocalPosition { get; set; } = Array.Empty<float>();
+        public float[] HealthRootLocalPosition { get; set; } = Array.Empty<float>();
+        public float[] SoulOrbLocalPosition { get; set; } = Array.Empty<float>();
+    }
+
+    public sealed class LeanS0CameraTransformPose
+    {
+        public string Name { get; set; } = string.Empty;
+        public float[] LocalPosition { get; set; } = new float[3];
+        public float[] LocalRotation { get; set; } = new[] { 0f, 0f, 0f, 1f };
+        public float[] LocalScale { get; set; } = new[] { 1f, 1f, 1f };
+    }
+
+    public sealed class LeanS0CameraState
+    {
+        public Dictionary<string, string> Controller { get; set; } = new Dictionary<string, string>(StringComparer.Ordinal);
+        public Dictionary<string, string> Target { get; set; } = new Dictionary<string, string>(StringComparer.Ordinal);
+        public LeanS0CameraTransformPose[] Transforms { get; set; } = Array.Empty<LeanS0CameraTransformPose>();
     }
 
     public sealed class LeanS0TransitionInfo
@@ -285,6 +309,62 @@ namespace HollowKnightTAS.Runtime.FullRun
         public string AtmosCueName { get; set; } = string.Empty;
     }
 
+    public sealed class LeanS0HeroHitCrackState
+    {
+        public Dictionary<string, string> RotationFields { get; set; } = new Dictionary<string, string>(StringComparer.Ordinal);
+        public Dictionary<string, string> DeactivationFields { get; set; } = new Dictionary<string, string>(StringComparer.Ordinal);
+        public byte[] Lifecycle { get; set; } = Array.Empty<byte>();
+        public byte[] DeactivationLifecycle { get; set; } = Array.Empty<byte>();
+        public bool RotationEnabled { get; set; }
+        public bool DeactivationEnabled { get; set; }
+        public float[] LocalPosition { get; set; } = new float[3];
+        public float[] LocalRotation { get; set; } = new float[4];
+        public float[] LocalScale { get; set; } = new float[3];
+    }
+
+    public sealed class LeanS0HudTweenState
+    {
+        public string RelativePath { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Method { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public int MatchIndex { get; set; }
+        public bool Enabled { get; set; }
+        public Dictionary<string, string> Fields { get; set; } = new Dictionary<string, string>(StringComparer.Ordinal);
+        public float LastRealTimeOffset { get; set; }
+        public float[][] Vectors { get; set; } = Array.Empty<float[]>();
+        public float[] LocalPosition { get; set; } = new float[3];
+        public float[] LocalRotation { get; set; } = new float[4];
+        public float[] LocalScale { get; set; } = new float[3];
+        public byte[] Lifecycle { get; set; } = Array.Empty<byte>();
+    }
+
+    public sealed class LeanS0PooledPrefabState
+    {
+        public string PrefabKey { get; set; } = string.Empty;
+        public int TotalCount { get; set; }
+        public bool[] AwakenedSlots { get; set; } = Array.Empty<bool>();
+    }
+
+    public sealed class LeanS0ObjectPoolWarmupState
+    {
+        public LeanS0PooledPrefabState[] Entries { get; set; } = Array.Empty<LeanS0PooledPrefabState>();
+    }
+
+    public sealed class LeanS0HeroInactiveComponentState
+    {
+        public string RelativePath { get; set; } = string.Empty;
+        public string TypeFullName { get; set; } = string.Empty;
+        public int MatchIndex { get; set; }
+        public bool Enabled { get; set; }
+        public byte[] Lifecycle { get; set; } = Array.Empty<byte>();
+        public Dictionary<string, string> Fields { get; set; } = new Dictionary<string, string>(StringComparer.Ordinal);
+        public float[] LocalRotation { get; set; } = new float[4];
+        public float[] LocalScale { get; set; } = new float[3];
+        public bool HasAudioPitch { get; set; }
+        public float AudioPitch { get; set; }
+    }
+
     public static class LeanS0PacketCodec
     {
         public const string SchemaVersion = "lean-s0-packet-v1";
@@ -477,6 +557,58 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || gc.BounceVelocity?.Length != 2 || gc.BounceLastPos?.Length != 2)
                 {
                     throw new InvalidDataException("LeanS0 Grimmchild vector array dimensions are invalid.");
+                }
+            }
+            if (packet.D4_HeroHitCrack != null)
+            {
+                LeanS0HeroHitCrackState hc = packet.D4_HeroHitCrack;
+                if (hc.RotationFields == null || hc.DeactivationFields == null
+                    || hc.Lifecycle?.Length != 2 || hc.DeactivationLifecycle?.Length != 2
+                    || hc.LocalPosition?.Length != 3 || hc.LocalRotation?.Length != 4 || hc.LocalScale?.Length != 3)
+                {
+                    throw new InvalidDataException("LeanS0 D4_HeroHitCrack dimensions are invalid.");
+                }
+            }
+            if (packet.D5_HudTweens != null)
+            {
+                foreach (LeanS0HudTweenState tween in packet.D5_HudTweens)
+                {
+                    if (tween == null || tween.Fields == null || tween.Vectors == null
+                        || tween.Lifecycle?.Length != 2 || tween.MatchIndex < 0
+                        || tween.LocalPosition?.Length != 3 || tween.LocalRotation?.Length != 4 || tween.LocalScale?.Length != 3
+                        || tween.Vectors.Any(v => v == null || v.Length != 3))
+                    {
+                        throw new InvalidDataException("LeanS0 D5_HudTweens dimensions are invalid.");
+                    }
+                }
+            }
+            if (packet.D6_ObjectPoolWarmup != null)
+            {
+                if (packet.D6_ObjectPoolWarmup.Entries == null)
+                {
+                    throw new InvalidDataException("LeanS0 D6_ObjectPoolWarmup entries cannot be null.");
+                }
+                foreach (LeanS0PooledPrefabState entry in packet.D6_ObjectPoolWarmup.Entries)
+                {
+                    if (entry == null || string.IsNullOrEmpty(entry.PrefabKey)
+                        || entry.TotalCount < 0 || entry.AwakenedSlots == null
+                        || entry.AwakenedSlots.Length > entry.TotalCount)
+                    {
+                        throw new InvalidDataException("LeanS0 D6_ObjectPoolWarmup entry is invalid.");
+                    }
+                }
+            }
+            if (packet.D7_HeroInactiveLifecycles != null)
+            {
+                foreach (LeanS0HeroInactiveComponentState comp in packet.D7_HeroInactiveLifecycles)
+                {
+                    if (comp == null || string.IsNullOrEmpty(comp.TypeFullName)
+                        || comp.Fields == null || comp.MatchIndex < 0
+                        || comp.Lifecycle?.Length != 2
+                        || comp.LocalRotation?.Length != 4 || comp.LocalScale?.Length != 3)
+                    {
+                        throw new InvalidDataException("LeanS0 D7_HeroInactiveLifecycles entry is invalid.");
+                    }
                 }
             }
             if (packet.C12_ControlPlane.MovieFrame < 0 || packet.C12_ControlPlane.NativeFrame < 0

@@ -520,8 +520,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
                 var activeScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
                 var sceneHandle = activeScene.handle;
-                SyncLeanS0RandomSeedHandleIfNeeded(sceneHandle, activeScene.name);
-                if (!LeanS0Mode.Enabled && !leanS0RandomSeededForTargetScene && ready && sceneHandle != randomSeedSceneHandle)
+                if (ShouldRequestExternalRandomSeedHandshake(sceneHandle, activeScene.name, ready))
                 {
                     if (randomSeedRequest == null || randomSeedAcknowledged == null)
                     {

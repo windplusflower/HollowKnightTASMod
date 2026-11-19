@@ -63,4 +63,57 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
             hash *= FnvPrime;
         }
     }
+
+    /// <summary>
+    /// Coordinates target-scene RNG seed handle synchronization between S0 boundary seeding
+    /// and legacy <c>RandomSeedHandshake</c> so loading/bootstrap scenes never consume the flag prematurely.
+    /// </summary>
+    public static class LeanS0RandomSeedSync
+    {
+        /// <summary>
+        /// Updates the tracked scene handle once the target scene is ready and returns whether
+        /// the external <c>RandomSeedHandshake</c> should be requested on this frame.
+        /// </summary>
+        public static bool ShouldRequestExternalHandshake(
+            bool leanS0ModeEnabled,
+            bool ready,
+            int sceneHandle,
+            string sceneName,
+            string seededTargetSceneName,
+            ref int randomSeedSceneHandle,
+            ref string randomSeedSceneName,
+            ref bool randomSeedHandshakePending,
+            ref bool leanS0RandomSeededForTargetScene)
+        {
+            if (leanS0RandomSeededForTargetScene)
+            {
+                bool arrivedAtTarget = !string.IsNullOrEmpty(seededTargetSceneName)
+                    && string.Equals(sceneName, seededTargetSceneName, StringComparison.Ordinal)
+                    && sceneHandle != randomSeedSceneHandle;
+                if (arrivedAtTarget)
+                {
+                    randomSeedSceneHandle = sceneHandle;
+                    randomSeedSceneName = sceneName;
+                    randomSeedHandshakePending = false;
+                    leanS0RandomSeededForTargetScene = false;
+                }
+                else if (ready)
+                {
+                    if (string.IsNullOrEmpty(seededTargetSceneName) && sceneHandle != randomSeedSceneHandle)
+                    {
+                        randomSeedSceneHandle = sceneHandle;
+                        randomSeedSceneName = sceneName;
+                        randomSeedHandshakePending = false;
+                    }
+
+                    leanS0RandomSeededForTargetScene = false;
+                }
+            }
+
+            return !leanS0ModeEnabled
+                && !leanS0RandomSeededForTargetScene
+                && ready
+                && sceneHandle != randomSeedSceneHandle;
+        }
+    }
 }

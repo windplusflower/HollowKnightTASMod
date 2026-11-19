@@ -21,7 +21,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         private delegate IEnumerator OriginalBegin(SceneLoad self);
         private delegate IEnumerator OriginalTransition(GameManager self, GameManager.SceneLoadInfo info);
         private delegate bool OriginalUnload(string name);
+        private static readonly FieldInfo SceneLoadRunnerField = typeof(SceneLoad).GetField("runner", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException("SceneLoad.runner");
+        private static readonly MethodInfo SceneLoadBeginRoutineMethod = typeof(SceneLoad).GetMethod("BeginRoutine", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException("SceneLoad.BeginRoutine");
         private readonly Hook beginHook;
+        private readonly Hook loadBeginHook;
         private readonly Hook unloadHook;
         private readonly Hook transitionHook;
         private readonly Hook lightingHook;
@@ -30,6 +35,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private SceneLoad? transition;
         private GameManager.SceneLoadInfo? checkpointLoadInfo;
         private IEnumerator? serialBeginRoutine;
+        private Coroutine? serialBeginCoroutine;
         private Scene source;
         private string sourceName = "";
         private Scene staging;
@@ -83,11 +89,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 "serial-scenes-" + System.Diagnostics.Process.GetCurrentProcess().Id + ".jsonl");
             var begin = typeof(SceneLoad).GetMethod("BeginRoutine", BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new MissingMethodException("SceneLoad.BeginRoutine");
+            var loadBegin = typeof(SceneLoad).GetMethod("Begin", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                ?? throw new MissingMethodException("SceneLoad.Begin");
             var unload = typeof(USceneManager).GetMethod("UnloadScene", new[] { typeof(string) })
                 ?? throw new MissingMethodException("SceneManager.UnloadScene(string)");
             var start = typeof(GameManager).GetMethod("BeginSceneTransitionRoutine", BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new MissingMethodException("GameManager.BeginSceneTransitionRoutine");
             beginHook = new Hook(begin, (Func<OriginalBegin, SceneLoad, IEnumerator>)Begin);
+            loadBeginHook = new Hook(loadBegin, (Action<Action<SceneLoad>, SceneLoad>)BeginLoad);
             unloadHook = new Hook(unload, (Func<OriginalUnload, string, bool>)Unload);
             transitionHook = new Hook(start, (Func<OriginalTransition, GameManager, GameManager.SceneLoadInfo, IEnumerator>)Start);
             var sceneStart = typeof(global::SceneManager).GetMethod("Start", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -122,6 +131,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 visualization = info.Visualization.ToString(), firstLevel = info.IsFirstLevelForPlayer }) + "\n");
             if (checkpointTransitionRoutine != null) throw Fail("Scene transition continuation reentered.");
             return TrackCheckpointTransition(original(manager, info));
+        }
+
+        private void BeginLoad(Action<SceneLoad> original, SceneLoad load)
+        {
+            var runner = SceneLoadRunnerField.GetValue(load) as MonoBehaviour
+                ?? throw new InvalidOperationException("SceneLoad.runner is null.");
+            var routine = (IEnumerator)SceneLoadBeginRoutineMethod.Invoke(load, null)!;
+            serialBeginCoroutine = runner.StartCoroutine(routine);
         }
 
         private IEnumerator Begin(OriginalBegin original, SceneLoad load)
@@ -208,6 +225,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 checkpointTransitionFinished = false;
                 checkpointBossBindings = null;
                 serialBeginRoutine = null;
+                serialBeginCoroutine = null;
             }
         }
 
@@ -248,7 +266,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             return original(name);
         }
 
-        internal static void MarkLeanS0BoundaryObserved()
+        internal static void MarkLeanS0BoundaryObserved(bool reschedule = false)
         {
             var self = instance ?? throw new InvalidOperationException("Serial scene probe instance is absent.");
             if (!self.awaitingBoundary)
@@ -256,6 +274,31 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("Serial scene probe is not awaiting a boundary.");
             }
             self.observedBoundary = true;
+            if (reschedule && self.serialBeginCoroutine != null && self.serialBeginRoutine != null && self.transition != null)
+            {
+                var runner = SceneLoadRunnerField.GetValue(self.transition) as MonoBehaviour;
+                if (runner != null)
+                {
+                    runner.StopCoroutine(self.serialBeginCoroutine);
+                    self.serialBeginCoroutine = runner.StartCoroutine(RescheduleAfterClockRewind(self.serialBeginRoutine));
+                }
+            }
+        }
+
+        private static IEnumerator RescheduleAfterClockRewind(IEnumerator inner)
+        {
+            yield return null;
+            try
+            {
+                while (inner.MoveNext())
+                {
+                    yield return inner.Current;
+                }
+            }
+            finally
+            {
+                (inner as IDisposable)?.Dispose();
+            }
         }
 
         internal static void SetLeanS0Ordinal(int boundaryOrdinal)
@@ -691,6 +734,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             USceneManager.sceneLoaded -= TargetLoaded;
             lightingHook.Dispose();
             transitionHook.Dispose();
+            loadBeginHook.Dispose();
             beginHook.Dispose();
             unloadHook.Dispose();
         }

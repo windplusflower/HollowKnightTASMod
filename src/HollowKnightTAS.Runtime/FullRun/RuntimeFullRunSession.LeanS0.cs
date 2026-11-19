@@ -9,6 +9,7 @@ using System.Text;
 using GlobalEnums;
 using HollowKnightTAS.Core.Cryptography;
 using HollowKnightTAS.Core.Movie;
+using HollowKnightTAS.Core.SceneCheckpoints;
 using HollowKnightTAS.Runtime.Rng;
 using Newtonsoft.Json;
 
@@ -19,10 +20,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         private const int LeanS0ChunkBytes = 262144;
 
         private bool leanS0RandomSeededForTargetScene;
+        private string leanS0SeededTargetSceneName = string.Empty;
         private LeanS0GateReceipt? lastLeanS0GateReceipt;
         private bool leanS0SourceParked;
         private bool leanS0TargetArmed;
         private bool leanS0TargetParked;
+        private bool leanS0TargetInProcess;
         private string leanS0ExpectedTargetScene = string.Empty;
         private long leanS0ParkedNativeFrame = -1;
         private int leanS0ParkedOrdinal;
@@ -117,6 +120,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 applyUnityRuntime: true,
                 rngDigestReader: ReadCurrentRngSha256Safe);
             leanS0RandomSeededForTargetScene = true;
+            leanS0SeededTargetSceneName = targetScene;
 
             Modding.Logger.Log(
                 $"[HKTAS] LeanS0Gate applied at S0: ordinal={ordinal};source={sourceScene};target={targetScene};gate={entryGateName};seed={lastLeanS0GateReceipt.Seed};rng={lastLeanS0GateReceipt.RngSha256}");
@@ -143,20 +147,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || (leanS0TargetParked && mode == "LeanS0TargetPaused");
         }
 
-        private void SyncLeanS0RandomSeedHandleIfNeeded(int sceneHandle, string sceneName)
+        private bool ShouldRequestExternalRandomSeedHandshake(int sceneHandle, string sceneName, bool ready)
         {
-            if (!leanS0RandomSeededForTargetScene)
-            {
-                return;
-            }
-
-            if (sceneHandle != randomSeedSceneHandle)
-            {
-                randomSeedSceneHandle = sceneHandle;
-                randomSeedSceneName = sceneName;
-                randomSeedHandshakePending = false;
-                leanS0RandomSeededForTargetScene = false;
-            }
+            return LeanS0RandomSeedSync.ShouldRequestExternalHandshake(
+                LeanS0Mode.Enabled,
+                ready,
+                sceneHandle,
+                sceneName,
+                leanS0SeededTargetSceneName,
+                ref randomSeedSceneHandle,
+                ref randomSeedSceneName,
+                ref randomSeedHandshakePending,
+                ref leanS0RandomSeededForTargetScene);
         }
 
         private string ReadCurrentRngSha256Safe()
@@ -317,6 +319,23 @@ namespace HollowKnightTAS.Runtime.FullRun
                     return true;
                 }
 
+                if (leanS0TargetInProcess)
+                {
+                    var inProcPacket = leanS0TargetPacket ?? throw new InvalidOperationException("LeanS0 target packet is absent.");
+                    GameManager inProcManager = GameManager.instance ?? throw new InvalidOperationException("GameManager is null.");
+                    job.Phase = "AwaitingTargetS0";
+                    leanS0TargetArmed = true;
+                    leanS0ExpectedTargetScene = inProcPacket.TargetSceneName;
+
+                    GameManager.SceneLoadInfo inProcLoadInfo = LeanS0SnapshotRuntime.ToGameSceneLoadInfo(inProcPacket.C6_TransitionInfo);
+                    inProcLoadInfo.WaitForSceneTransitionCameraFade = false;
+                    inProcLoadInfo.PreventCameraFadeOut = true;
+                    Modding.Logger.Log(
+                        $"[HKTAS] LeanS0 in-process target starting transition to {inProcLoadInfo.SceneName} (gate={inProcLoadInfo.EntryGateName}, vis={inProcLoadInfo.Visualization})");
+                    inProcManager.BeginSceneTransition(inProcLoadInfo);
+                    return true;
+                }
+
                 GameManager? manager = GameManager.instance;
                 HeroController? hero = HeroController.SilentInstance;
                 if (manager == null || manager.IsInSceneTransition || firstLevelActivationPending || hero == null
@@ -439,7 +458,16 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private void BeginLeanS0TargetSaveLoad(LeanS0Packet packet, long frame, int slot)
         {
-            if (checkpointSaves != null)
+            GameManager? currentGm = GameManager.instance;
+            HeroController? currentHero = HeroController.SilentInstance;
+            bool canDirectTransition = currentGm != null
+                && currentGm.gameState == GameState.PLAYING
+                && !currentGm.IsInSceneTransition
+                && !firstLevelActivationPending
+                && currentHero != null
+                && currentHero.gameObject.activeInHierarchy;
+
+            if (!canDirectTransition && checkpointSaves != null)
             {
                 string slotPath = checkpointSaves.GetSlotPath(slot, ".dat");
                 if (!File.Exists(slotPath))
@@ -448,6 +476,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         $"LeanS0 target save slot {slot} has no initial save on disk (new-game path); falling back to cold replay.");
                 }
             }
+            leanS0TargetInProcess = canDirectTransition;
             leanS0TargetPacket = packet;
             leanS0TargetResumeNativeFrame = -1;
             leanS0TargetJob = new LeanS0TargetJob(frame);
@@ -456,12 +485,26 @@ namespace HollowKnightTAS.Runtime.FullRun
             frameInputEnabled = false;
             input.SetFrameInputEnabled(false);
             mouse.SetFrameInputEnabled(false);
-            AttachLeanS0TargetHooks();
-            (GameManager.instance ?? throw new InvalidOperationException("GameManager is null.")).LoadGameFromUI(slot);
+            if (canDirectTransition)
+            {
+                LoadingAudioLifetimePolicy.ResetForInProcessRestore();
+                UnityEngine.Time.timeScale = 1f;
+            }
+            else
+            {
+                AttachLeanS0TargetHooks();
+                (currentGm ?? throw new InvalidOperationException("GameManager is null.")).LoadGameFromUI(slot);
+            }
         }
 
         private LeanS0GateReceipt ApplyLeanS0PacketAtTargetS0(LeanS0Packet packet, long currentNativeFrame)
         {
+            if (leanS0TargetInProcess)
+            {
+                LoadingAudioLifetimePolicy.ResetForInProcessRestore();
+                LeanS0EnvironmentParity.RecycleActivePooledObjectsForInProcessRestore();
+            }
+
             LeanS0SnapshotRuntime.ApplyAtTargetS0(
                 packet,
                 currentNativeFrame,
@@ -471,7 +514,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 replayMovie ?? throw new InvalidOperationException("Target replayMovie is null."),
                 (bytes, cursor) => CheckpointClockMethod("ImportCheckpointRandomState").Invoke(null, new object[] { bytes, cursor }),
                 (bytes, cursor) => CheckpointClockMethod("ImportCheckpointClockObserver").Invoke(null, new object[] { bytes, cursor }),
-                out CanonicalInputEpoch restoredOrigin);
+                out CanonicalInputEpoch restoredOrigin,
+                inProcessRestore: leanS0TargetInProcess);
+
+            if (leanS0TargetInProcess)
+            {
+                LeanS0EnvironmentParity.ResetInControlPersistentTicks(InControl.InputManager.CurrentTick);
+            }
 
             // Execute the identical S0Gate after restoring state so target & source share the exact same S0 invariant.
             LeanS0GateReceipt targetReceipt = LeanS0Gate.Execute(
@@ -499,8 +548,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             titleReadySeen = c12.TitleReadySeen;
             firstLevelActivationPending = c12.FirstLevelActivationPending;
             randomSeedSceneName = c12.RandomSeedScene;
-            randomSeedSceneHandle = -1;
+            randomSeedSceneHandle = UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;
             leanS0RandomSeededForTargetScene = true;
+            leanS0SeededTargetSceneName = packet.TargetSceneName ?? string.Empty;
             lastGameUpdateNativeFrame = c12.LastGameUpdateNativeFrame;
             gameUpdateDeltaSeconds = c12.GameUpdateDeltaSeconds;
             gameUpdateTimeSeconds = c12.GameUpdateTimeSeconds;
@@ -508,6 +558,16 @@ namespace HollowKnightTAS.Runtime.FullRun
             movieInputNativeOrigin = c12.MovieInputNativeOrigin;
             movieInputControlOrigin = restoredOrigin;
             frameInputEnabled = false;
+            returningToMainMenu = false;
+            randomSeedHandshakePending = false;
+            bossSceneEntered = false;
+            bossDeathObserved = false;
+            bossesDeadObserved = false;
+            bossSceneCompleteObserved = false;
+            bossDeathFrame = -1;
+            bossSceneEntryMovieFrame = -1;
+            UnbindBoss();
+            leanS0TargetInProcess = false;
             lastLeanS0GateReceipt = targetReceipt;
             leanS0ParkedOrdinal = packet.BoundaryOrdinal;
             leanS0TargetParked = false;

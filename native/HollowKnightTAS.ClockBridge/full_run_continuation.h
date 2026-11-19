@@ -126,7 +126,7 @@ static LONG hktas_import_continuation(
 __declspec(dllexport) LONG __cdecl HktasClockBridge_ImportContinuation(
     const BYTE *input, uint32_t length, uint64_t expected_completed)
 {
-    if (!hktas_resident_boundary_released() || !hktas_continuation_context() || g_continuation_imported) return 0;
+    if (!hktas_resident_boundary_released() || !hktas_continuation_context()) return 0;
     LONG result = hktas_import_continuation(input, length, expected_completed);
     if (result == 1) g_continuation_imported = TRUE;
     return result;

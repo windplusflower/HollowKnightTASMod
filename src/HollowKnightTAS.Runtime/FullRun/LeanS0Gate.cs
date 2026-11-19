@@ -27,6 +27,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public bool NormalizedNailCharging { get; set; }
         public bool NormalizedDreamNailQueueTimer { get; set; }
         public bool NormalizedSoulOrbFsm { get; set; }
+        public bool NormalizedLowHealthFsm { get; set; }
         public bool NormalizedCameraShakeFsm { get; set; }
     }
 
@@ -35,6 +36,54 @@ namespace HollowKnightTAS.Runtime.FullRun
     /// </summary>
     internal static class LeanS0Gate
     {
+        private static readonly FieldInfo? TweenVectorsField = typeof(iTween).GetField(
+            "vector3s",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? ShakeNextUpdateTimeField = typeof(HutongGames.PlayMaker.Actions.ShakePositionV2).GetField(
+            "nextUpdateTime",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? ShakeTimerField = typeof(HutongGames.PlayMaker.Actions.ShakePositionV2).GetField(
+            "timer",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? ShakeTargetField = typeof(HutongGames.PlayMaker.Actions.ShakePositionV2).GetField(
+            "target",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? ShakeStartingPosField = typeof(HutongGames.PlayMaker.Actions.ShakePositionV2).GetField(
+            "startingWorldPosition",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? FsmPreviousActiveStateField = typeof(Fsm).GetField(
+            "previousActiveState",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? FsmLastTransitionField = typeof(Fsm).GetField(
+            "<LastTransition>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? FsmStateActiveField = typeof(FsmState).GetField(
+            "active",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? FsmStateFinishedField = typeof(FsmState).GetField(
+            "finished",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? FsmStateFinishedActionsField = typeof(FsmState).GetField(
+            "_finishedActions",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? FsmStateActiveActionField = typeof(FsmState).GetField(
+            "activeAction",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? FsmStateActiveActionIndexField = typeof(FsmState).GetField(
+            "activeActionIndex",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
         private static readonly FieldInfo? OnTakenDamageBackingField = typeof(HeroController).GetField(
             "OnTakenDamage",
             BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
@@ -292,6 +341,53 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 receipt.NormalizedSoulOrbFsm = true;
             }
+
+            NormalizeLowHealthHudTweens(cameras, receipt);
+        }
+
+        private static void NormalizeLowHealthHudTweens(GameCameras? cameras, LeanS0GateReceipt receipt)
+        {
+            Transform? hudRoot = cameras != null && cameras.hudCamera != null ? cameras.hudCamera.transform : null;
+            Transform? healthRoot = hudRoot != null ? hudRoot.Find("Hud Canvas/Health") : null;
+            if (healthRoot == null)
+            {
+                return;
+            }
+
+            UnityEngine.Random.State savedRng = UnityEngine.Random.state;
+            try
+            {
+                bool normalizedHealth = StopAndRemoveITweens(healthRoot.gameObject, restorePositionAnchor: true);
+
+                PlayMakerFSM? lowHealthFx = null;
+                foreach (PlayMakerFSM fsm in healthRoot.GetComponents<PlayMakerFSM>())
+                {
+                    if (fsm != null && string.Equals(fsm.FsmName, "Low Health FX", StringComparison.Ordinal))
+                    {
+                        lowHealthFx = fsm;
+                        break;
+                    }
+                }
+
+                if (lowHealthFx != null
+                    && lowHealthFx.Fsm != null
+                    && lowHealthFx.Fsm.Initialized
+                    && string.Equals(lowHealthFx.ActiveStateName, "Low Health", StringComparison.Ordinal)
+                    && lowHealthFx.Fsm.GetState("Low Health") != null)
+                {
+                    lowHealthFx.SetState("Low Health");
+                    normalizedHealth = true;
+                }
+
+                if (normalizedHealth)
+                {
+                    receipt.NormalizedLowHealthFsm = true;
+                }
+            }
+            finally
+            {
+                UnityEngine.Random.state = savedRng;
+            }
         }
 
         internal static void NormalizeCameraShakeFsm(LeanS0GateReceipt receipt)
@@ -331,23 +427,147 @@ namespace HollowKnightTAS.Runtime.FullRun
                 }
             }
 
+            if (StopAndRemoveITweens(cameraShake.gameObject, restorePositionAnchor: false))
+            {
+                normalized = true;
+            }
+
+            if (cameraShake.FsmStates != null)
+            {
+                foreach (FsmState state in cameraShake.FsmStates)
+                {
+                    if (state == null) continue;
+                    state.ResetLoopCount();
+                    state.ActiveActions?.Clear();
+                    if (FsmStateFinishedActionsField?.GetValue(state) is System.Collections.IList finishedList)
+                    {
+                        finishedList.Clear();
+                    }
+                    FsmStateActiveField?.SetValue(state, false);
+                    FsmStateFinishedField?.SetValue(state, false);
+                    FsmStateActiveActionField?.SetValue(state, null);
+                    FsmStateActiveActionIndexField?.SetValue(state, 0);
+                    if (state.Actions == null) continue;
+                    foreach (FsmStateAction action in state.Actions)
+                    {
+                        if (action == null) continue;
+                        if (action.Active || action.Finished || action.Entered)
+                        {
+                            action.Active = false;
+                            action.Finished = false;
+                            action.Entered = false;
+                            normalized = true;
+                        }
+                        if (action is HutongGames.PlayMaker.Actions.ShakePositionV2)
+                        {
+                            if (ShakeNextUpdateTimeField != null && (float)ShakeNextUpdateTimeField.GetValue(action)! != 0f)
+                            {
+                                ShakeNextUpdateTimeField.SetValue(action, 0f);
+                                normalized = true;
+                            }
+                            if (ShakeTimerField != null && (float)ShakeTimerField.GetValue(action)! != 0f)
+                            {
+                                ShakeTimerField.SetValue(action, 0f);
+                                normalized = true;
+                            }
+                            if (ShakeTargetField != null && ShakeTargetField.GetValue(action) != null)
+                            {
+                                ShakeTargetField.SetValue(action, null);
+                                normalized = true;
+                            }
+                            if (ShakeStartingPosField != null && (Vector3)ShakeStartingPosField.GetValue(action)! != Vector3.zero)
+                            {
+                                ShakeStartingPosField.SetValue(action, Vector3.zero);
+                                normalized = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            FsmFloat? priorityVar = cameraShake.FsmVariables?.FindFsmFloat("Priority");
+            if (priorityVar != null && priorityVar.Value != 0f)
+            {
+                priorityVar.Value = 0f;
+                normalized = true;
+            }
+            FsmFloat? bigShakeTimeVar = cameraShake.FsmVariables?.FindFsmFloat("Big Shake Time");
+            if (bigShakeTimeVar != null && bigShakeTimeVar.Value != 0f)
+            {
+                bigShakeTimeVar.Value = 0f;
+                normalized = true;
+            }
+
             if (cameraShake.transform.localPosition != Vector3.zero)
             {
                 cameraShake.transform.localPosition = Vector3.zero;
                 normalized = true;
             }
 
-            if (!string.Equals(cameraShake.ActiveStateName, "Normal", StringComparison.Ordinal)
-                && cameraShake.Fsm.GetState("Normal") != null)
+            if (cameraShake.Fsm.GetState("Normal") != null)
             {
-                cameraShake.SetState("Normal");
+                if (!string.Equals(cameraShake.ActiveStateName, "Normal", StringComparison.Ordinal)
+                    || FsmPreviousActiveStateField?.GetValue(cameraShake.Fsm) != null)
+                {
+                    cameraShake.SetState("Normal");
+                    normalized = true;
+                }
+            }
+            if (FsmPreviousActiveStateField?.GetValue(cameraShake.Fsm) != null)
+            {
+                FsmPreviousActiveStateField.SetValue(cameraShake.Fsm, null);
                 normalized = true;
             }
+            FsmLastTransitionField?.SetValue(cameraShake.Fsm, null);
 
             if (normalized)
             {
                 receipt.NormalizedCameraShakeFsm = true;
             }
+        }
+
+        internal static bool StopAndRemoveITweens(GameObject targetRoot, bool restorePositionAnchor)
+        {
+            if (targetRoot == null)
+            {
+                return false;
+            }
+
+            bool removedAny = false;
+            iTween[] tweens = targetRoot.GetComponentsInChildren<iTween>(true);
+            foreach (iTween tween in tweens)
+            {
+                if (tween == null)
+                {
+                    continue;
+                }
+
+                if (restorePositionAnchor
+                    && string.Equals(tween.type, "shake", StringComparison.Ordinal)
+                    && string.Equals(tween.method, "position", StringComparison.Ordinal)
+                    && TweenVectorsField?.GetValue(tween) is Vector3[] vecs
+                    && vecs.Length > 0)
+                {
+                    tween.transform.position = vecs[0];
+                }
+
+                GameObject tweenGo = tween.gameObject;
+                for (int i = iTween.tweens.Count - 1; i >= 0; i--)
+                {
+                    if (iTween.tweens[i] is Hashtable args && (args["target"] == null || ReferenceEquals(args["target"], tweenGo)
+                        || (args["target"] is UnityEngine.Object obj && obj == null)))
+                    {
+                        iTween.tweens.RemoveAt(i);
+                    }
+                }
+
+                tween.StopAllCoroutines();
+                tween.enabled = false;
+                UnityEngine.Object.DestroyImmediate(tween);
+                removedAny = true;
+            }
+
+            return removedAny;
         }
 
         private static bool ClearFsmEventList(FieldInfo? field, Fsm fsm)

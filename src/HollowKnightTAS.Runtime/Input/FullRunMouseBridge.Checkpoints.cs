@@ -41,9 +41,9 @@ namespace HollowKnightTAS.Runtime.Input
         }
         internal void ImportCheckpoint(CheckpointMouseState state)
         {
-            if (!installed || disposed || !replaying || checkpointMouseImported || input!.IsNativeFrameActive
+            if (!installed || disposed || !replaying || input!.IsNativeFrameActive
                 || state.Enabled != Enabled || state.Width != viewportWidth || state.Height != viewportHeight)
-                throw new InvalidOperationException("Mouse continuation target differs or is outside a fresh paused replay.");
+                throw new InvalidOperationException("Mouse continuation target differs or is outside a paused replay.");
             if (((state.PreviousInControlButtons | state.PreviousHkButtons) & ~511u) != 0
                 || state.Modules.Select(m => m.Identity).Distinct().Count() != state.Modules.Length)
                 throw new InvalidDataException("Invalid mouse continuation layout.");

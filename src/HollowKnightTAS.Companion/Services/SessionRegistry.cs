@@ -152,6 +152,30 @@ namespace HollowKnightTAS.Companion.Services
             return true;
         }
 
+        public int RemoveSessionsForProcess(int processId)
+        {
+            var removed = new List<RuntimeSessionClient>();
+            lock (sync)
+            {
+                if (disposed) return 0;
+                foreach (var pair in clients.Where(p => p.Value.GameProcessId == processId || !p.Value.IsConnected).ToArray())
+                {
+                    clients.Remove(pair.Key);
+                    removed.Add(pair.Value);
+                }
+            }
+
+            foreach (var client in removed)
+            {
+                client.EnvelopeReceived -= OnEnvelopeReceived;
+                client.ConnectionChanged -= OnConnectionChanged;
+                client.Dispose();
+            }
+
+            if (removed.Count > 0) SessionsChanged?.Invoke(this, EventArgs.Empty);
+            return removed.Count;
+        }
+
         public void Dispose()
         {
             RuntimeSessionClient[] values;

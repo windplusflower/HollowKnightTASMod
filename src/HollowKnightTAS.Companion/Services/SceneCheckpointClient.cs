@@ -32,7 +32,7 @@ namespace HollowKnightTAS.Companion.Services
             try { Expect(await Call(fields, token), "Pending"); return lease; }
             catch { store.Cancel(lease); await Cleanup("cancel", "captureId", lease.CaptureId); throw; }
         }
-        public async Task<SceneCheckpointPacket> ReceiveAsync(SceneCheckpointLease lease, TimeSpan timeout, CancellationToken token)
+        public async Task<SceneCheckpointPacket> ReceiveAsync(SceneCheckpointLease lease, TimeSpan timeout, CancellationToken token, Func<bool>? isPaused = null)
         {
             if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromMinutes(4)) throw new ArgumentOutOfRangeException(nameof(timeout));
             using var bounded = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -40,8 +40,15 @@ namespace HollowKnightTAS.Companion.Services
             try
             {
                 IReadOnlyDictionary<string, string> response;
+                var polledWhilePaused = false;
                 while (true)
                 {
+                    if (isPaused?.Invoke() == true && polledWhilePaused)
+                    {
+                        await Task.Delay(100, bounded.Token);
+                        continue;
+                    }
+                    polledWhilePaused = isPaused?.Invoke() == true;
                     _ = store.Catalog(lease.Scope); // A -> B -> A does not revive the old asynchronous capture.
                     response = await Call(new Dictionary<string, string> { ["phase"] = "status", ["captureId"] = lease.CaptureId }, bounded.Token);
                     if (response["status"] == "Captured") break;
@@ -97,19 +104,21 @@ namespace HollowKnightTAS.Companion.Services
             catch { await Cleanup("import-cancel", "checkpointId", checkpointId); throw; }
         }
         // Restoring an engine scene consumes no Movie history until resume.
-        public Task StartRestoreAsync(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding, CancellationToken token)
-            => StartRestorePrototypeAsync(checkpointId, scope, binding, token);
+        public Task StartRestoreAsync(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding, CancellationToken token, string? moviePath = null)
+            => StartRestorePrototypeAsync(checkpointId, scope, binding, token, moviePath);
         public Task ApplyRestoreAsync(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding, CancellationToken token, long? targetMovieFrame = null)
             => ApplyRestorePrototypeAsync(checkpointId, scope, binding, token, targetMovieFrame);
         public Task CancelRestoreAsync(string checkpointId, CancellationToken token)
             => CancelRestorePrototypeAsync(checkpointId, token);
 
-        public async Task StartRestorePrototypeAsync(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding, CancellationToken token)
+        public async Task StartRestorePrototypeAsync(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding, CancellationToken token, string? moviePath = null)
         {
             _ = store.Get(checkpointId, scope, binding);
             try
             {
-                var result = await Call(new Dictionary<string, string> { ["phase"] = "restore-start", ["checkpointId"] = checkpointId }, token);
+                var fields = new Dictionary<string, string> { ["phase"] = "restore-start", ["checkpointId"] = checkpointId };
+                if (!string.IsNullOrEmpty(moviePath)) fields["moviePath"] = moviePath;
+                var result = await Call(fields, token);
                 Expect(result, "LoadingInitialSave"); ValidateRestoreReply(result, checkpointId);
                 _ = store.Get(checkpointId, scope, binding);
             }

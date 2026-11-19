@@ -65,8 +65,8 @@ namespace HollowKnightTAS.Runtime.Input
         }
         internal void ImportCheckpoint(CheckpointInputState state, MovieV2Document nextMovie)
         {
-            if (disposed || !replaying || !hooked || nativeFrameActive || checkpointInputImported || fault.Length != 0)
-                throw new InvalidOperationException("Input continuation requires a fresh paused replay adapter.");
+            if (disposed || !replaying || !hooked || nativeFrameActive || fault.Length != 0)
+                throw new InvalidOperationException("Input continuation requires a paused replay adapter.");
             if (state.MovieFrame < 0 || state.MovieFrame >= nextMovie.Runs.Sum(r => r.RepeatCount)
                 || state.Sets.Select(s => Tuple.Create(s.Channel, s.RegistrationOrdinal)).Distinct().Count() != state.Sets.Length
                 || state.Sets.Where(s => s.BindingActive).Select(s => s.Channel).Distinct().Count() != state.Sets.Count(s => s.BindingActive)

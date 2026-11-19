@@ -85,5 +85,80 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             remaining();
             Assert.AreEqual(1, liveCalls);
         }
+
+        [TestMethod]
+        public void RandomSeedSync_PreservesS0SeedAcrossBootstrapAndLoadingUntilTargetSceneReady()
+        {
+            // Target S0 restore starts with bootstrap handle 101 (e.g. GG_Workshop) and leanS0RandomSeededForTargetScene=true
+            // while loading (!ready).
+            int trackedHandle = 101;
+            string trackedName = "GG_Vengefly";
+            bool handshakePending = false;
+            bool s0Seeded = true;
+
+            // Bootstrap loading frames (!ready) must NOT consume s0Seeded or lock trackedHandle to GG_Workshop.
+            Assert.IsFalse(LeanS0RandomSeedSync.ShouldRequestExternalHandshake(
+                leanS0ModeEnabled: false, ready: false, sceneHandle: 101, sceneName: "GG_Workshop",
+                seededTargetSceneName: "GG_Gruz_Mother",
+                ref trackedHandle, ref trackedName, ref handshakePending, ref s0Seeded));
+            Assert.IsTrue(s0Seeded);
+            Assert.AreEqual(101, trackedHandle);
+
+            // Target scene becomes active while hero is still loading (!ready): consumes s0Seeded and syncs target handle 202.
+            Assert.IsFalse(LeanS0RandomSeedSync.ShouldRequestExternalHandshake(
+                leanS0ModeEnabled: false, ready: false, sceneHandle: 202, sceneName: "GG_Gruz_Mother",
+                seededTargetSceneName: "GG_Gruz_Mother",
+                ref trackedHandle, ref trackedName, ref handshakePending, ref s0Seeded));
+            Assert.IsFalse(s0Seeded);
+            Assert.AreEqual(202, trackedHandle);
+            Assert.AreEqual("GG_Gruz_Mother", trackedName);
+
+            // Subsequent ready frames in GG_Gruz_Mother must NOT request RandomSeedHandshake.
+            Assert.IsFalse(LeanS0RandomSeedSync.ShouldRequestExternalHandshake(
+                leanS0ModeEnabled: false, ready: true, sceneHandle: 202, sceneName: "GG_Gruz_Mother",
+                seededTargetSceneName: "GG_Gruz_Mother",
+                ref trackedHandle, ref trackedName, ref handshakePending, ref s0Seeded));
+        }
+
+        [TestMethod]
+        public void RandomSeedSync_ConsumesCutsceneS0SeedSoNextNonSeededLevelStillRequestsHandshake()
+        {
+            // Menu_Title (10) -> Opening_Sequence (20, never ready) -> Tutorial_01 (30, skips S0Gate because IsFirstLevelForPlayer).
+            int trackedHandle = 10;
+            string trackedName = "Menu_Title";
+            bool handshakePending = false;
+            bool s0Seeded = true;
+
+            Assert.IsFalse(LeanS0RandomSeedSync.ShouldRequestExternalHandshake(
+                leanS0ModeEnabled: false, ready: false, sceneHandle: 20, sceneName: "Opening_Sequence",
+                seededTargetSceneName: "Opening_Sequence",
+                ref trackedHandle, ref trackedName, ref handshakePending, ref s0Seeded));
+            Assert.IsFalse(s0Seeded);
+            Assert.AreEqual(20, trackedHandle);
+
+            Assert.IsTrue(LeanS0RandomSeedSync.ShouldRequestExternalHandshake(
+                leanS0ModeEnabled: false, ready: true, sceneHandle: 30, sceneName: "Tutorial_01",
+                seededTargetSceneName: "Opening_Sequence",
+                ref trackedHandle, ref trackedName, ref handshakePending, ref s0Seeded));
+        }
+
+        [TestMethod]
+        public void RandomSeedSync_StillRequestsHandshakeAtTitleStartupWithoutS0Seed()
+        {
+            int trackedHandle = -1;
+            string trackedName = string.Empty;
+            bool handshakePending = false;
+            bool s0Seeded = false;
+
+            Assert.IsFalse(LeanS0RandomSeedSync.ShouldRequestExternalHandshake(
+                leanS0ModeEnabled: false, ready: false, sceneHandle: 10, sceneName: "Menu_Title",
+                seededTargetSceneName: string.Empty,
+                ref trackedHandle, ref trackedName, ref handshakePending, ref s0Seeded));
+
+            Assert.IsTrue(LeanS0RandomSeedSync.ShouldRequestExternalHandshake(
+                leanS0ModeEnabled: false, ready: true, sceneHandle: 10, sceneName: "Menu_Title",
+                seededTargetSceneName: string.Empty,
+                ref trackedHandle, ref trackedName, ref handshakePending, ref s0Seeded));
+        }
     }
 }

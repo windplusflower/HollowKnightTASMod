@@ -94,13 +94,52 @@ namespace HollowKnightTAS.Runtime.FullRun
                         {
                             case "restore-start":
                             {
-                                Require("checkpointId");
+                                bool hasMoviePath = fields.ContainsKey("moviePath");
+                                if (hasMoviePath) Require("checkpointId", "moviePath");
+                                else Require("checkpointId");
                                 string checkpointId = Get("checkpointId");
                                 var packet = stagedLeanS0Packet;
                                 if (stagedCheckpoint == null || stagedCheckpoint.Header.CheckpointId != checkpointId || packet == null)
                                     throw new InvalidOperationException("Target LeanS0 checkpoint must be staged before restore-start.");
-                                if (mode != "Replay" || !inputReady || movieFrame != 0 || !clock.IsPaused || clock.IsFinished || input.ConsumedSamples != 0)
-                                    throw new InvalidOperationException("Checkpoint restore requires a fresh paused Movie 0 process in Replay mode.");
+                                if ((mode != "Replay" && mode != "Recording") || !inputReady || !clock.IsPaused || clock.IsFinished)
+                                    throw new InvalidOperationException("Checkpoint restore requires a paused Replay or Recording process.");
+                                if (hasMoviePath)
+                                {
+                                    var root = Path.GetFullPath(Path.Combine(sessionDirectory, "..", "..")) + Path.DirectorySeparatorChar;
+                                    var moviePath = Path.GetFullPath(Get("moviePath"));
+                                    if (!moviePath.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+                                        || !File.Exists(moviePath)
+                                        || new FileInfo(moviePath).Length > MovieProtocolV2.MaximumSourceUtf8Bytes)
+                                        throw new InvalidDataException("Checkpoint restore moviePath must be inside the protected session.");
+                                    MovieV2Document candidate;
+                                    using (var reader = File.OpenText(moviePath))
+                                        candidate = new MovieV2Codec().Parse(reader, moviePath).Document
+                                            ?? throw new InvalidDataException("Invalid checkpoint restore Movie.");
+                                    var validation = new MovieV2Validator().Validate(candidate, MovieV2ValidationContext.CreateDefault());
+                                    if (!validation.Success)
+                                        throw new InvalidDataException("Invalid checkpoint restore Movie.");
+                                    if (candidate.Header.NativeProfileId != NativeExecutionProfile.SelectedProfileId)
+                                        throw new InvalidDataException("Checkpoint restore Movie execution environment mismatch.");
+                                    long candidateLength = CountFrames(candidate);
+                                    if (candidateLength < stagedCheckpoint.Header.ResumeMovieFrame)
+                                        throw new InvalidDataException("Checkpoint restore Movie is shorter than the checkpoint resume frame.");
+                                    if (mode == "Recording")
+                                        input.Sampled -= OnSampled;
+                                    input.SwitchToReplayForInProcessRestore(candidate);
+                                    mouse.UseReplayInputs();
+                                    replayMovie = candidate;
+                                    editableReplay = true;
+                                    replayLength = candidateLength;
+                                    mode = "Replay";
+                                }
+                                else
+                                {
+                                    if (mode != "Replay" || (movieFrame == 0 && input.ConsumedSamples != 0))
+                                        throw new InvalidOperationException("Checkpoint restore requires a Replay process at a valid boundary.");
+                                }
+                                ClearCheckpointCapture();
+                                restoreDrawing.Dispose();
+                                pauseAtMovieFrame = -1;
                                 int slot = ExtractSaveSlotFromPlayerDataJson(packet.C1_PlayerDataJson);
                                 checkpointRestoreActiveId = checkpointId;
                                 checkpointRestoreApplied = false;
@@ -122,6 +161,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 if (mode != "LeanS0TargetPaused" || !clock.IsPaused || clock.IsFinished)
                                     throw new InvalidOperationException("Target process must be parked at target S0 before restore-apply.");
                                 var packet = leanS0TargetPacket;
+                                bool wasInProcess = leanS0TargetInProcess;
                                 ApplyLeanS0PacketAtTargetS0(packet, frame);
                                 long targetMovie = hasTarget ? long.Parse(Get("targetMovieFrame"), NumberStyles.None, CultureInfo.InvariantCulture) : movieFrame;
                                 if (targetMovie > movieFrame)
@@ -139,7 +179,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 }
                                 leanS0TargetPacket = null;
                                 checkpointRestoreApplied = true;
-                                LoadingSerialSceneProbe.MarkLeanS0BoundaryObserved();
+                                LoadingSerialSceneProbe.MarkLeanS0BoundaryObserved(reschedule: wasInProcess);
                                 mode = "Replay";
                                 restoreReply["status"] = "RebuildingCToK";
                                 restoreReply["checkpointId"] = checkpointId;
@@ -161,6 +201,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                                     leanS0TargetPacket = null;
                                     leanS0TargetArmed = false;
                                     leanS0TargetParked = false;
+                                    leanS0TargetInProcess = false;
                                     leanS0TargetResumeNativeFrame = -1;
                                     leanS0TargetJob = null;
                                     checkpointRestoreActiveId = "";
@@ -227,7 +268,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                         Require(header.ToFields().Keys.ToArray());
                         if (!header.RestoreQualified || header.Schema != SceneCheckpointHeader.LeanS0SchemaVersion)
                             throw new InvalidDataException("Only qualified Lean S0 scene checkpoints can be staged for restore.");
-                        if (checkpointImport != null || stagedCheckpoint != null) throw new InvalidOperationException("A checkpoint import is already present.");
+                        if (checkpointImport != null) throw new InvalidOperationException("A checkpoint import is already present.");
+                        if (stagedCheckpoint != null)
+                        {
+                            if (mode == "LeanS0TargetLoading" || mode == "LeanS0TargetPaused")
+                                throw new InvalidOperationException("A checkpoint import is already active.");
+                            stagedCheckpoint = null;
+                            stagedLeanS0Packet = null;
+                            leanS0TargetPacket = null;
+                            leanS0TargetJob = null;
+                            checkpointRestoreActiveId = "";
+                            checkpointRestoreApplied = false;
+                            checkpointRestoreCancelled = false;
+                        }
                         if (header.Binding.EnvironmentSha256 != environmentSha256 || header.Binding.NativeProfileId != NativeExecutionProfile.SelectedProfileId
                             || header.Binding.InitialSavesSha256 != checkpointInitialSavesSha256)
                             throw new InvalidDataException("Checkpoint target execution environment mismatch.");

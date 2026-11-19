@@ -50,12 +50,13 @@ namespace HollowKnightTAS.ClockPayload
         public static void ImportCheckpointRandomState(byte[] bytes, long expectedNativeFrame)
         {
             RequireCheckpointRandomBoundary();
-            if (checkpointRandomImported || expectedNativeFrame < 0 || HktasClockBridge_GetFullRunMode() != 0
+            if (expectedNativeFrame < 0 || HktasClockBridge_GetFullRunMode() != 0
                 || HktasClockBridge_GetCompletedPlayerLoops() != (ulong)expectedNativeFrame)
-                throw new InvalidOperationException("Random continuation import requires a fresh paused restore transaction.");
+                throw new InvalidOperationException("Random continuation import requires a paused restore transaction.");
             var state = CheckpointRandomState.Decode(bytes);
             ApplyPortableRandomState(state);
             checkpointRandomImported = true;
+            checkpointClockObserverImported = false;
         }
         private static void ApplyPortableRandomState(CheckpointRandomState state)
         {

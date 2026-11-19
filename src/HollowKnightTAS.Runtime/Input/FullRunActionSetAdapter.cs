@@ -164,6 +164,14 @@ namespace HollowKnightTAS.Runtime.Input
             PrepareSamples(run.Samples);
         }
 
+        public void SwitchToReplayForInProcessRestore(MovieV2Document movie)
+        {
+            if (disposed) throw new ObjectDisposedException(nameof(FullRunActionSetAdapter));
+            SetReplayMovie(movie);
+            authoredSampleCounts.Clear();
+            sampleIndex = 0;
+        }
+
         private void SetReplayMovie(MovieV2Document movie)
         {
             this.movie = movie ?? throw new ArgumentNullException(nameof(movie));
