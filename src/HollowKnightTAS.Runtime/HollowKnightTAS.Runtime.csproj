@@ -12,12 +12,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="FullRun\CanonicalCarryFieldRegistry.json" />
-    <EmbeddedResource Include="FullRun\CanonicalCarryEventFieldRegistry.json" />
-    <EmbeddedResource Include="FullRun\CanonicalCarryInputFieldRegistry.json" />
-    <EmbeddedResource Include="FullRun\CanonicalCarryLoadingFieldRegistry.json" />
-    <EmbeddedResource Include="FullRun\CanonicalCarryGeoFieldRegistry.json" />
-    <EmbeddedResource Include="FullRun\CanonicalInputProfileFieldRegistry.json" />
+    <EmbeddedResource Include="FullRun\Canonical\CanonicalCarryFieldRegistry.json"
+                      LogicalName="HollowKnightTAS.Runtime.FullRun.CanonicalCarryFieldRegistry.json" />
+    <EmbeddedResource Include="FullRun\Canonical\CanonicalCarryEventFieldRegistry.json"
+                      LogicalName="HollowKnightTAS.Runtime.FullRun.CanonicalCarryEventFieldRegistry.json" />
+    <EmbeddedResource Include="FullRun\Canonical\CanonicalCarryInputFieldRegistry.json"
+                      LogicalName="HollowKnightTAS.Runtime.FullRun.CanonicalCarryInputFieldRegistry.json" />
+    <EmbeddedResource Include="FullRun\Canonical\CanonicalCarryLoadingFieldRegistry.json"
+                      LogicalName="HollowKnightTAS.Runtime.FullRun.CanonicalCarryLoadingFieldRegistry.json" />
+    <EmbeddedResource Include="FullRun\Canonical\CanonicalCarryGeoFieldRegistry.json"
+                      LogicalName="HollowKnightTAS.Runtime.FullRun.CanonicalCarryGeoFieldRegistry.json" />
+    <EmbeddedResource Include="FullRun\Canonical\CanonicalInputProfileFieldRegistry.json"
+                      LogicalName="HollowKnightTAS.Runtime.FullRun.CanonicalInputProfileFieldRegistry.json" />
     <ProjectReference Include="..\HollowKnightTAS.Core\HollowKnightTAS.Core.csproj">
       <Private>true</Private>
     </ProjectReference>

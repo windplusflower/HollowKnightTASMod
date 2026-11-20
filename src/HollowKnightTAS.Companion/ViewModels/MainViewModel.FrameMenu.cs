@@ -24,11 +24,33 @@ namespace HollowKnightTAS.Companion.ViewModels
             public Dictionary<string, string> OriginalHashes { get; set; } = new();
         }
 
+        internal const long ForwardSeekCheckpointMinFrameSavings = 150;
+
+        private long EffectiveNavigationFrame()
+            => draftRequiresRestart ? 0
+                : currentFullRunMovieFrame >= 0 ? currentFullRunMovieFrame
+                : startupBoot?.NativeCompletedFrames == 0 ? 0
+                : -1;
+
         public bool CanNavigateFrame(long frame, bool forward)
-            => !gridApplying && fullRunMovies?.IsPending == true
-                && currentFullRunMovieFrame >= 0 && frame >= 0 && frame <= gridTotalFrames
-                && (forward ? frame > currentFullRunMovieFrame && fullRunMovies.Mode != "Completed"
-                    : frame < currentFullRunMovieFrame);
+        {
+            if (gridApplying || fullRunMovies?.IsPending != true || frame < 0 || frame > gridTotalFrames)
+                return false;
+            var current = EffectiveNavigationFrame();
+            if (current < 0)
+                return false;
+            if (!forward)
+                return frame < current;
+            if (frame <= current)
+                return false;
+            if (draftRequiresRestart)
+                return restartProtectedGame != null;
+            if (fullRunMovies.Mode == "Unarmed" || fullRunMovies.Mode == "Stopped")
+                return false;
+            if (fullRunMovies.Mode == "Completed")
+                return restartProtectedGame != null;
+            return true;
+        }
 
         private string? lastRestoredCheckpointId;
         private long lastRestoredCheckpointFrame = -1;
@@ -46,7 +68,8 @@ namespace HollowKnightTAS.Companion.ViewModels
         {
             if (fullRunMovies?.IsPending != true)
                 throw new InvalidOperationException("帧存档与定位需要从 Studio 启动全流程会话。");
-            if (action == "load" || action == "rebuild" || (action == "seek" && fullRunMovies.Mode == "Completed"))
+            if (action == "load" || action == "rebuild"
+                || (action == "seek" && (draftRequiresRestart || fullRunMovies.Mode == "Completed")))
                 await fullRunMovies.PauseForDocumentChangeAsync(CancellationToken.None);
             else if (startupBoot?.IsWaiting != true)
                 await fullRunMovies.PauseAsync(CancellationToken.None);
@@ -66,12 +89,21 @@ namespace HollowKnightTAS.Companion.ViewModels
             {
                 if (frame < 0 || frame > gridTotalFrames)
                     throw new InvalidOperationException("目标帧超出序列。");
-                var snapshot = await ReadReadyFrameSnapshotAsync();
-                if (action == "seek" ? frame <= snapshot.Frame : frame >= snapshot.Frame)
-                    throw new InvalidOperationException(action == "seek"
-                        ? "播放到帧只能选择当前帧之后的未来帧。" : "恢复到帧只能选择当前帧之前的过去帧。");
-                if (action == "seek" && !draftRequiresRestart) await PlayForwardToFrameAsync(frame);
-                else await RestartDraftAtAsync(frame);
+                if (action == "seek" && draftRequiresRestart)
+                {
+                    if (frame <= 0)
+                        throw new InvalidOperationException("播放到帧只能选择当前帧之后的未来帧。");
+                    await RestartDraftAtAsync(frame);
+                }
+                else
+                {
+                    var snapshot = await ReadReadyFrameSnapshotAsync();
+                    if (action == "seek" ? frame <= snapshot.Frame : frame >= snapshot.Frame)
+                        throw new InvalidOperationException(action == "seek"
+                            ? "播放到帧只能选择当前帧之后的未来帧。" : "恢复到帧只能选择当前帧之前的过去帧。");
+                    if (action == "seek") await PlayForwardToFrameAsync(frame, snapshot);
+                    else await RestartDraftAtAsync(frame);
+                }
             }
             else if (action == "save")
             {
@@ -131,7 +163,85 @@ namespace HollowKnightTAS.Companion.ViewModels
             }
         }
 
-        private async Task PlayForwardToFrameAsync(long frame)
+        internal HollowKnightTAS.Core.SceneCheckpoints.SceneCheckpointHeader? FindForwardSeekSceneCheckpoint(
+            long currentFrame,
+            long targetFrame,
+            MovieV2Document? candidateMovie)
+        {
+            if (candidateMovie == null
+                || activeDraftTree == null
+                || activeDraftTree.Length != 32
+                || targetFrame <= currentFrame)
+                return null;
+            var checkpoint = FindBestSceneCheckpoint(activeDraftTree, targetFrame, candidateMovie);
+            if (checkpoint == null)
+                return null;
+            if (checkpoint.ResumeMovieFrame <= currentFrame)
+                return null;
+            if (checkpoint.ResumeMovieFrame - currentFrame < ForwardSeekCheckpointMinFrameSavings)
+                return null;
+            return checkpoint;
+        }
+
+        private bool TryBuildForwardSeekCandidate(
+            FrameSave snapshot,
+            MovieV2Document draft,
+            out MovieV2Document candidate,
+            out bool modifiedFromDraft)
+        {
+            candidate = draft;
+            modifiedFromDraft = false;
+            var original = movieEditor.ValidateAny(snapshot.Movie).V2Document;
+            if (original == null) return false;
+            var total = InputGridEditor.Count(draft);
+            if (total < snapshot.Frame) return false;
+
+            if (gridHasUserEdits)
+            {
+                if (earliestGridEdit >= snapshot.Frame && total > snapshot.Frame)
+                {
+                    var runs = MovieV2Prefix.Take(original, snapshot.Frame).Runs
+                        .Concat(SliceV2(draft, snapshot.Frame, total - snapshot.Frame).Runs)
+                        .ToArray();
+                    candidate = new MovieV2Document(draft.SourceName,
+                        CustomKeyInput.WithUsedKeys(original.Header, draft.Header.CustomKeys, runs), runs);
+                    modifiedFromDraft = true;
+                }
+            }
+            else if (fullRunMovies?.Mode == "Recording")
+            {
+                var runs = original.Runs
+                    .Concat(total > snapshot.Frame
+                        ? SliceV2(draft, snapshot.Frame, total - snapshot.Frame).Runs
+                        : Array.Empty<NativeFrameRun>())
+                    .ToArray();
+                candidate = new MovieV2Document(draft.SourceName,
+                    CustomKeyInput.WithUsedKeys(original.Header, draft.Header.CustomKeys, runs), runs);
+                modifiedFromDraft = true;
+            }
+            else if (draft.Header.EnvironmentSha256 == "none")
+            {
+                candidate = new MovieV2Document(draft.SourceName,
+                    original.Header.WithCustomKeys(draft.Header.CustomKeys), draft.Runs);
+                modifiedFromDraft = true;
+            }
+
+            return MovieV2Prefix.Matches(original, candidate, snapshot.Frame);
+        }
+
+        private async Task WaitForLiveSessionReadyForInProcessRestoreAsync()
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(2);
+            while (DateTime.UtcNow < deadline)
+            {
+                var live = SelectedSession?.Client;
+                if (live is not { IsConnected: true } || readySessions.Contains(live.SessionId))
+                    return;
+                await Task.Delay(25);
+            }
+        }
+
+        private async Task PlayForwardToFrameAsync(long frame, FrameSave? currentSnapshot = null)
         {
             if (startupBoot!.NativeCompletedFrames == 0)
             {
@@ -147,16 +257,37 @@ namespace HollowKnightTAS.Companion.ViewModels
                     GridStatus = $"已从当前进度播放到第 {frame} 帧并暂停。";
                     return;
                 }
+                currentSnapshot = initialized;
             }
             if (fullRunMovies!.Mode == "Completed")
             {
-                var current = await ReadReadyFrameSnapshotAsync();
+                var current = currentSnapshot ?? await ReadReadyFrameSnapshotAsync();
                 var original = movieEditor.ValidateAny(current.Movie).V2Document!;
                 var draft = GridAny().V2Document!;
                 if (!MovieV2Prefix.Matches(original, draft, current.Frame))
                     throw new InvalidOperationException("已修改过去的帧，请先点击回放到当前帧。");
                 await RestartDraftAtAsync(frame);
                 return;
+            }
+            if (restartProtectedGame != null)
+            {
+                var snapshot = currentSnapshot ?? await ReadReadyFrameSnapshotAsync();
+                var draft = GridAny().V2Document;
+                if (draft != null
+                    && snapshot.Frame < frame
+                    && TryBuildForwardSeekCandidate(snapshot, draft, out var candidate, out var modifiedFromDraft))
+                {
+                    var forwardCheckpoint = FindForwardSeekSceneCheckpoint(snapshot.Frame, frame, candidate);
+                    if (forwardCheckpoint != null)
+                    {
+                        await WaitForLiveSessionReadyForInProcessRestoreAsync();
+                        var sourceMovie = modifiedFromDraft
+                            ? new MovieV2Codec().WriteCanonical(candidate)
+                            : null;
+                        await RestartDraftAtAsync(frame, sourceMovie: sourceMovie);
+                        return;
+                    }
+                }
             }
             await ApplyPendingInputsAsync(withinGridOperation: true);
             var result = await ExecuteStudioOrHumanAsync(AutomationCommandIds.FullRunSeek,
@@ -179,8 +310,8 @@ namespace HollowKnightTAS.Companion.ViewModels
                 if (DateTime.UtcNow >= deadline) throw new TimeoutException("播放到指定帧超时。");
                 await Task.Delay(100);
             }
-            var snapshot = await ReadReadyFrameSnapshotAsync();
-            if (snapshot.Frame != frame) throw new InvalidOperationException($"播放停在 {snapshot.Frame}，未到达目标 {frame}。");
+            var finalSnapshot = await ReadReadyFrameSnapshotAsync();
+            if (finalSnapshot.Frame != frame) throw new InvalidOperationException($"播放停在 {finalSnapshot.Frame}，未到达目标 {frame}。");
             currentFullRunMovieFrame = frame;
             TrackGridFrame(frame, true);
             GridStatus = $"已从当前进度播放到第 {frame} 帧并暂停。";
@@ -311,10 +442,13 @@ namespace HollowKnightTAS.Companion.ViewModels
                 {
                     throw;
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
+                    System.Diagnostics.Trace.WriteLine("In-process checkpoint restore failed: " + ex.Message);
                     timing?.Mark("inprocess-checkpoint-restore-fallback");
                     restoredViaCheckpoint = false;
+                    if (IsNonRetryableCheckpointFailure(ex))
+                        availableCheckpoint = null;
                 }
             }
 
@@ -325,8 +459,10 @@ namespace HollowKnightTAS.Companion.ViewModels
                 timing?.Mark("restart-ready");
                 cancellationToken.ThrowIfCancellationRequested();
 
+                var coldReplayAlreadyBootedAtFrameZero = false;
                 if (availableCheckpoint != null)
                 {
+                    var restoreStarted = false;
                     try
                     {
                         timing?.Mark("checkpoint-restore-start");
@@ -354,60 +490,118 @@ namespace HollowKnightTAS.Companion.ViewModels
                             await Task.Delay(50, cancellationToken);
                         }
 
-                        await ExecuteCheckpointRestoreSequenceAsync(
-                            bootClient,
-                            availableCheckpoint,
-                            frame,
-                            moviePath: null,
-                            markLiveReplay: false,
-                            timing,
-                            cancellationToken);
-                        restoredViaCheckpoint = true;
-                        timing?.Mark("checkpoint-restore-completed");
-                    }
-                    catch (Exception)
-                    {
-                        // 恢复异常安全回退红线：安全回退到从第 0 帧完整冷重播！
-                        timing?.Mark("checkpoint-restore-failed-fallback");
-                        restoredViaCheckpoint = false;
-                        startupBoot?.Refresh();
-                        if (startupBoot != null && !startupBoot.IsWaiting && fullRunMovies != null && !fullRunMovies.IsTerminal)
+                        RememberRuntimeEnvironmentManifestSha256(bootClient.EnvironmentManifestSha256);
+                        if (!IsCheckpointBindingCompatible(availableCheckpoint, candidate, bootClient.EnvironmentManifestSha256))
                         {
-                            try { await fullRunMovies.PauseForDocumentChangeAsync(CancellationToken.None); }
-                            catch { }
-                            startupBoot.Refresh();
+                            System.Diagnostics.Trace.WriteLine(
+                                $"Checkpoint {availableCheckpoint.CheckpointId} binding mismatch for environment {bootClient.EnvironmentManifestSha256}; continuing cold replay on current process.");
+                            timing?.Mark("checkpoint-environment-mismatch-continue-cold");
+                            availableCheckpoint = null;
+                            coldReplayAlreadyBootedAtFrameZero = true;
                         }
-                        await restartProtectedGame();
+                        else
+                        {
+                            await ExecuteCheckpointRestoreSequenceAsync(
+                                bootClient,
+                                availableCheckpoint,
+                                frame,
+                                moviePath: null,
+                                markLiveReplay: false,
+                                timing,
+                                cancellationToken,
+                                onRestoreStarted: () => restoreStarted = true);
+                            restoredViaCheckpoint = true;
+                            timing?.Mark("checkpoint-restore-completed");
+                        }
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Trace.WriteLine("Checkpoint restore failed: " + ex.Message);
+                        if (!restoreStarted || IsPreFlightCleanStartRejection(ex))
+                        {
+                            timing?.Mark("checkpoint-stage-failed-continue-cold");
+                            restoredViaCheckpoint = false;
+                            availableCheckpoint = null;
+                            coldReplayAlreadyBootedAtFrameZero = true;
+                        }
+                        else
+                        {
+                            // 恢复异常安全回退红线：安全回退到从第 0 帧完整冷重播！
+                            timing?.Mark("checkpoint-restore-failed-fallback");
+                            restoredViaCheckpoint = false;
+                            startupBoot?.Refresh();
+                            if (startupBoot != null && !startupBoot.IsWaiting && fullRunMovies != null && !fullRunMovies.IsTerminal)
+                            {
+                                try { await fullRunMovies.PauseForDocumentChangeAsync(CancellationToken.None); }
+                                catch { }
+                                startupBoot.Refresh();
+                            }
+                            await restartProtectedGame();
+                        }
                     }
                 }
-            }
 
-            if (!restoredViaCheckpoint)
-            {
-                fullRunMovies!.ArmReplay(candidate, frame == 0 && !pauseWhenInputReadyZero ? -1 : frame);
-                timing?.Mark("replay-armed");
-                restoreReplayStarted = true;
-                currentFullRunMovieFrame = 0;
-                RefreshInputGrid();
-                if (frame > 0)
+                if (!restoredViaCheckpoint)
                 {
-                    var started = await fullRunMovies.RunAsync(0, cancellationToken);
-                    if (started.Mode == "Fault") throw new InvalidOperationException(started.Error);
-                    var deadline = DateTime.UtcNow.AddMinutes(10);
-                    var progressObserved = false;
-                    while (true)
+                    if (coldReplayAlreadyBootedAtFrameZero)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        startupBoot!.Refresh();
-                        if (!progressObserved && currentFullRunMovieFrame > 0)
+                        timing?.Mark("replay-armed");
+                        restoreReplayStarted = true;
+                        currentFullRunMovieFrame = 0;
+                        RefreshInputGrid();
+                        if (frame > 0)
                         {
-                            timing?.Mark("first-movie-progress-observed");
-                            progressObserved = true;
+                            allowAutoCheckpointCaptureDuringColdReplay = true;
+                            try
+                            {
+                                if (SelectedSession?.Client is { IsConnected: true } coldClient)
+                                    EnsureAutoSceneCheckpointCapture(coldClient);
+                                startupBoot!.Refresh();
+                                var seekResult = await ExecuteStudioOrHumanAsync(
+                                    AutomationCommandIds.FullRunSeek,
+                                    AutomationScope.ControlPlayback,
+                                    new Dictionary<string, string>
+                                    {
+                                        ["targetFrame"] = frame.ToString(CultureInfo.InvariantCulture),
+                                        ["expectedNativeFrame"] = startupBoot.NativeCompletedFrames.ToString(CultureInfo.InvariantCulture)
+                                    },
+                                    "Paused", null, cancellationToken);
+                                RequireAutomationSuccess(seekResult);
+                                var started = await fullRunMovies!.RunAsync(startupBoot.NativeCompletedFrames, cancellationToken);
+                                if (started.Mode == "Fault") throw new InvalidOperationException(started.Error);
+                                await WaitForColdReplayBoundaryAsync(timing, cancellationToken);
+                            }
+                            finally
+                            {
+                                allowAutoCheckpointCaptureDuringColdReplay = false;
+                            }
                         }
-                        if (startupBoot.FullRunFaultCode != 0) throw new InvalidOperationException("重放遇到原生错误：" + startupBoot.FullRunFaultCode);
-                        if (startupBoot.IsWaiting) break;
-                        if (DateTime.UtcNow >= deadline) throw new TimeoutException("重放等待超时，可手动暂停检查状态。");
-                        await Task.Delay(100, cancellationToken);
+                    }
+                    else
+                    {
+                        fullRunMovies!.ArmReplay(candidate, frame == 0 && !pauseWhenInputReadyZero ? -1 : frame);
+                        timing?.Mark("replay-armed");
+                        restoreReplayStarted = true;
+                        currentFullRunMovieFrame = 0;
+                        RefreshInputGrid();
+                        if (frame > 0)
+                        {
+                            allowAutoCheckpointCaptureDuringColdReplay = true;
+                            try
+                            {
+                                var started = await fullRunMovies.RunAsync(0, cancellationToken);
+                                if (started.Mode == "Fault") throw new InvalidOperationException(started.Error);
+                                await WaitForColdReplayBoundaryAsync(timing, cancellationToken);
+                            }
+                            finally
+                            {
+                                allowAutoCheckpointCaptureDuringColdReplay = false;
+                            }
+                        }
                     }
                 }
             }
@@ -430,6 +624,42 @@ namespace HollowKnightTAS.Companion.ViewModels
                 : $"已停在第 {frame} 帧边界。";
         }
 
+        internal static bool IsNonRetryableCheckpointFailure(Exception ex)
+            => ex is InvalidDataException
+                || IsPreFlightCleanStartRejection(ex)
+                || ex.Message.Contains("new-game", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsPreFlightCleanStartRejection(Exception ex)
+            => ex.Message.Contains("requires an in-game process", StringComparison.OrdinalIgnoreCase)
+                || ex.Message.Contains("has no initial save on disk", StringComparison.OrdinalIgnoreCase)
+                || ex.Message.Contains("outside valid save slots", StringComparison.OrdinalIgnoreCase)
+                || ex.Message.Contains("environment mismatch", StringComparison.OrdinalIgnoreCase);
+
+        private async Task WaitForColdReplayBoundaryAsync(ReplayPerformanceTrace? timing, CancellationToken cancellationToken)
+        {
+            var deadline = DateTime.UtcNow.AddMinutes(10);
+            var progressObserved = false;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                startupBoot!.Refresh();
+                if (SelectedSession?.Client is { IsConnected: true } coldClient && readySessions.Contains(coldClient.SessionId))
+                {
+                    RememberRuntimeEnvironmentManifestSha256(coldClient.EnvironmentManifestSha256);
+                    EnsureAutoSceneCheckpointCapture(coldClient);
+                }
+                if (!progressObserved && currentFullRunMovieFrame > 0)
+                {
+                    timing?.Mark("first-movie-progress-observed");
+                    progressObserved = true;
+                }
+                if (startupBoot.FullRunFaultCode != 0) throw new InvalidOperationException("重放遇到原生错误：" + startupBoot.FullRunFaultCode);
+                if (startupBoot.IsWaiting) break;
+                if (DateTime.UtcNow >= deadline) throw new TimeoutException("重放等待超时，可手动暂停检查状态。");
+                await Task.Delay(100, cancellationToken);
+            }
+        }
+
         private async Task ExecuteCheckpointRestoreSequenceAsync(
             RuntimeSessionClient session,
             HollowKnightTAS.Core.SceneCheckpoints.SceneCheckpointHeader checkpoint,
@@ -437,7 +667,8 @@ namespace HollowKnightTAS.Companion.ViewModels
             string? moviePath,
             bool markLiveReplay,
             ReplayPerformanceTrace? timing,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Action? onRestoreStarted = null)
         {
             var checkpointClient = CreateSceneCheckpointClient(session);
             var scope = SceneCheckpoints!.ActivateBranch(checkpoint.Scope.TreeId, checkpoint.Scope.BranchId);
@@ -445,6 +676,7 @@ namespace HollowKnightTAS.Companion.ViewModels
             var checkpointId = checkpoint.CheckpointId;
 
             await checkpointClient.StageAsync(checkpointId, scope, binding, cancellationToken);
+            onRestoreStarted?.Invoke();
             await checkpointClient.StartRestoreAsync(checkpointId, scope, binding, cancellationToken, moviePath);
 
             // 放行原生时钟推进目标存档加载（或进程内直接切换场景），直到目标到达对应 S0 边界并重新暂停。

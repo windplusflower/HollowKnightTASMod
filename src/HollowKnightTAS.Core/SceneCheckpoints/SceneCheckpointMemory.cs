@@ -97,11 +97,12 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
                         throw new InvalidDataException("Stale or mismatched checkpoint capture.");
                     lease.State = "Captured";
                     var duplicate = packets.Values.FirstOrDefault(p => SameBranch(p.Header.Scope, lease.Scope)
-                        && p.Header.TransitionId == packet.Header.TransitionId && p.Header.CaptureNativeFrame == packet.Header.CaptureNativeFrame);
+                        && p.Header.Binding.Equals(packet.Header.Binding)
+                        && p.Header.TransitionId == packet.Header.TransitionId
+                        && p.Header.CaptureNativeFrame == packet.Header.CaptureNativeFrame);
                     if (duplicate != null)
                     {
-                        if (!duplicate.Header.Binding.Equals(packet.Header.Binding)
-                            || duplicate.Header.PayloadSha256 != packet.Header.PayloadSha256
+                        if (duplicate.Header.PayloadSha256 != packet.Header.PayloadSha256
                             || duplicate.Header.ResumeMovieFrame != packet.Header.ResumeMovieFrame)
                             throw new InvalidDataException("The same checkpoint boundary produced different data.");
                         lease.State = "Published"; pending = null; return duplicate;
@@ -177,6 +178,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
                     p.Header.Scope.StudioSessionId == StudioSessionId
                     && p.Header.Scope.TreeId == reBound.Header.Scope.TreeId
                     && p.Header.Scope.BranchId == reBound.Header.Scope.BranchId
+                    && p.Header.Binding.Equals(reBound.Header.Binding)
                     && p.Header.TransitionId == reBound.Header.TransitionId
                     && p.Header.CaptureNativeFrame == reBound.Header.CaptureNativeFrame
                     && p.Header.PayloadSha256 == reBound.Header.PayloadSha256);

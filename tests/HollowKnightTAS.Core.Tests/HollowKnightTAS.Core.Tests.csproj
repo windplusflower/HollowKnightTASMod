@@ -8,86 +8,86 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengeContext.cs" Link="FullRun/CanonicalBossChallengeContext.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/Canonical/CanonicalBossChallengeContext.cs" Link="FullRun/CanonicalBossChallengeContext.cs" />
 
-    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengeCallback.cs" Link="FullRun/CanonicalBossChallengeCallback.cs" />
-    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengeCarry.cs" Link="FullRun/CanonicalBossChallengeCarry.cs" />
-    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengeAssets.cs" Link="FullRun/CanonicalBossChallengeAssets.cs" />
-    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalBossChallengePolicy.cs" Link="FullRun/CanonicalBossChallengePolicy.cs" />
-    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalHudPresentationDirectory.cs" Link="FullRun/CanonicalHudPresentationDirectory.cs" />
-    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/LoadingContactUserDataBindings.cs" Link="FullRun/LoadingContactUserDataBindings.cs" />
-    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalListEmptyArrayBindings.cs" Link="FullRun/CanonicalListEmptyArrayBindings.cs" />
-    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/LoadingSharedGraphEvidence.cs" Link="FullRun/LoadingSharedGraphEvidence.cs" />
-    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalGeoSourceQueueContract.cs" Link="FullRun/CanonicalGeoSourceQueueContract.cs" />
-    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalSealedSource.cs" Link="FullRun/CanonicalSealedSource.cs" />
-    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/CanonicalEngineFileSha256.cs" Link="FullRun/CanonicalEngineFileSha256.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CinematicPlaybackClock.cs" Link="FullRun\CinematicPlaybackClock.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/Canonical/CanonicalBossChallengeCallback.cs" Link="FullRun/CanonicalBossChallengeCallback.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/Canonical/CanonicalBossChallengeCarry.cs" Link="FullRun/CanonicalBossChallengeCarry.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/Canonical/CanonicalBossChallengeAssets.cs" Link="FullRun/CanonicalBossChallengeAssets.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/Canonical/CanonicalBossChallengePolicy.cs" Link="FullRun/CanonicalBossChallengePolicy.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/Canonical/CanonicalHudPresentationDirectory.cs" Link="FullRun/CanonicalHudPresentationDirectory.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/Loading/LoadingContactUserDataBindings.cs" Link="FullRun/LoadingContactUserDataBindings.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/Canonical/CanonicalListEmptyArrayBindings.cs" Link="FullRun/CanonicalListEmptyArrayBindings.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/Loading/LoadingSharedGraphEvidence.cs" Link="FullRun/LoadingSharedGraphEvidence.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/Canonical/CanonicalGeoSourceQueueContract.cs" Link="FullRun/CanonicalGeoSourceQueueContract.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/Canonical/CanonicalSealedSource.cs" Link="FullRun/CanonicalSealedSource.cs" />
+    <Compile Include="../../src/HollowKnightTAS.Runtime/FullRun/Canonical/CanonicalEngineFileSha256.cs" Link="FullRun/CanonicalEngineFileSha256.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Session\CinematicPlaybackClock.cs" Link="FullRun\CinematicPlaybackClock.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\Manifest\VerificationPreflight.cs" Link="Manifest\VerificationPreflight.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\FrameObservationQueue.cs" Link="FullRun\FrameObservationQueue.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\FullRunVideoExportRange.cs" Link="FullRun\FullRunVideoExportRange.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\WorldObservationCache.cs" Link="FullRun\WorldObservationCache.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Session\FrameObservationQueue.cs" Link="FullRun\FrameObservationQueue.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Session\FullRunVideoExportRange.cs" Link="FullRun\FullRunVideoExportRange.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Session\WorldObservationCache.cs" Link="FullRun\WorldObservationCache.cs" />
     <Reference Include="Newtonsoft.Json"><HintPath>$(HKManagedDir)\Newtonsoft.Json.dll</HintPath></Reference>
     <Reference Include="MonoMod.RuntimeDetour"><HintPath>$(HKManagedDir)\MonoMod.RuntimeDetour.dll</HintPath></Reference>
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CheckpointDataCodec.cs" Link="FullRun\CheckpointDataCodec.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryGraphCodec.cs" Link="FullRun\CanonicalCarryGraphCodec.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalEaseCallback.cs" Link="FullRun\CanonicalEaseCallback.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalActualDRoute.cs" Link="FullRun\CanonicalActualDRoute.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Checkpoints\CheckpointDataCodec.cs" Link="FullRun\CheckpointDataCodec.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalCarryGraphCodec.cs" Link="FullRun\CanonicalCarryGraphCodec.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalEaseCallback.cs" Link="FullRun\CanonicalEaseCallback.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalActualDRoute.cs" Link="FullRun\CanonicalActualDRoute.cs" />
 
 
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalPreparedWritePlan.cs" Link="FullRun\CanonicalPreparedWritePlan.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalPhaseOneTrace.cs" Link="FullRun\CanonicalPhaseOneTrace.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalPolygonCapacity.cs" Link="FullRun\CanonicalPolygonCapacity.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalPreparedWritePlan.cs" Link="FullRun\CanonicalPreparedWritePlan.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalPhaseOneTrace.cs" Link="FullRun\CanonicalPhaseOneTrace.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalPolygonCapacity.cs" Link="FullRun\CanonicalPolygonCapacity.cs" />
 
 
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalStableTypeComparer.cs" Link="FullRun\CanonicalStableTypeComparer.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalStableTypeComparer.cs" Link="FullRun\CanonicalStableTypeComparer.cs" />
 
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSceneLoadCallbacks.cs" Link="FullRun\CanonicalSceneLoadCallbacks.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryGraphWire.cs" Link="FullRun\CanonicalCarryGraphWire.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalActualDWire.cs" Link="FullRun\CanonicalActualDWire.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalSceneLoadCallbacks.cs" Link="FullRun\CanonicalSceneLoadCallbacks.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalCarryGraphWire.cs" Link="FullRun\CanonicalCarryGraphWire.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalActualDWire.cs" Link="FullRun\CanonicalActualDWire.cs" />
 
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalEventGraphContract.cs" Link="FullRun\CanonicalEventGraphContract.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalEventGraphContract.cs" Link="FullRun\CanonicalEventGraphContract.cs" />
 
 
 
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalInputLeaseBindings.cs" Link="FullRun\CanonicalInputLeaseBindings.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalInputAdapterState.cs" Link="FullRun\CanonicalInputAdapterState.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalInputManagerScalars.cs" Link="FullRun\CanonicalInputManagerScalars.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalInputCallbackContract.cs" Link="FullRun\CanonicalInputCallbackContract.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CheckpointSceneLoadState.cs" Link="FullRun\CheckpointSceneLoadState.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSceneLoadCarry.cs" Link="FullRun\CanonicalSceneLoadCarry.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSchedulerCarry.cs" Link="FullRun\CanonicalSchedulerCarry.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSchedulerRestorePlan.cs" Link="FullRun\CanonicalSchedulerRestorePlan.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalInputLeaseBindings.cs" Link="FullRun\CanonicalInputLeaseBindings.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalInputAdapterState.cs" Link="FullRun\CanonicalInputAdapterState.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalInputManagerScalars.cs" Link="FullRun\CanonicalInputManagerScalars.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalInputCallbackContract.cs" Link="FullRun\CanonicalInputCallbackContract.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Checkpoints\CheckpointSceneLoadState.cs" Link="FullRun\CheckpointSceneLoadState.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalSceneLoadCarry.cs" Link="FullRun\CanonicalSceneLoadCarry.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalSchedulerCarry.cs" Link="FullRun\CanonicalSchedulerCarry.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalSchedulerRestorePlan.cs" Link="FullRun\CanonicalSchedulerRestorePlan.cs" />
 
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSchedulerMemoryTransaction.cs" Link="FullRun\CanonicalSchedulerMemoryTransaction.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalSchedulerMemoryTransaction.cs" Link="FullRun\CanonicalSchedulerMemoryTransaction.cs" />
 
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalClockCarry.cs" Link="FullRun\CanonicalClockCarry.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalSceneMappingCarry.cs" Link="FullRun\CanonicalSceneMappingCarry.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalMouseCarry.cs" Link="FullRun\CanonicalMouseCarry.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalDeviceManagerCarry.cs" Link="FullRun\CanonicalDeviceManagerCarry.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalFrozenValuePacket.cs" Link="FullRun\CanonicalFrozenValuePacket.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalClockCarry.cs" Link="FullRun\CanonicalClockCarry.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalSceneMappingCarry.cs" Link="FullRun\CanonicalSceneMappingCarry.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalMouseCarry.cs" Link="FullRun\CanonicalMouseCarry.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalDeviceManagerCarry.cs" Link="FullRun\CanonicalDeviceManagerCarry.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalFrozenValuePacket.cs" Link="FullRun\CanonicalFrozenValuePacket.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\Input\CheckpointMouseState.cs" Link="FullRun\CheckpointMouseState.cs" />
-    <EmbeddedResource Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryLoadingFieldRegistry.json" LogicalName="canonical-scene-loading-fields.json" />
-    <EmbeddedResource Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryFieldRegistry.json" LogicalName="canonical-main-fields.json" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCoverageCatalog.cs" Link="FullRun\CanonicalCoverageCatalog.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalRegisteredS0Contract.cs" Link="FullRun\CanonicalRegisteredS0Contract.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalS0Observation.cs" Link="FullRun\CanonicalS0Observation.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalS0FieldOwnership.cs" Link="FullRun\CanonicalS0FieldOwnership.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalFsmTimeCarry.cs" Link="FullRun\CanonicalFsmTimeCarry.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalParkedBoundaryGuard.cs" Link="FullRun\CanonicalParkedBoundaryGuard.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalBoundaryMutationScope.cs" Link="FullRun\CanonicalBoundaryMutationScope.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalInputEpoch.cs" Link="FullRun\CanonicalInputEpoch.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalCarryReflectionBindings.cs" Link="FullRun\CanonicalCarryReflectionBindings.cs" />
+    <EmbeddedResource Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalCarryLoadingFieldRegistry.json" LogicalName="canonical-scene-loading-fields.json" />
+    <EmbeddedResource Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalCarryFieldRegistry.json" LogicalName="canonical-main-fields.json" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalCoverageCatalog.cs" Link="FullRun\CanonicalCoverageCatalog.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalRegisteredS0Contract.cs" Link="FullRun\CanonicalRegisteredS0Contract.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalS0Observation.cs" Link="FullRun\CanonicalS0Observation.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalS0FieldOwnership.cs" Link="FullRun\CanonicalS0FieldOwnership.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalFsmTimeCarry.cs" Link="FullRun\CanonicalFsmTimeCarry.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalParkedBoundaryGuard.cs" Link="FullRun\CanonicalParkedBoundaryGuard.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalBoundaryMutationScope.cs" Link="FullRun\CanonicalBoundaryMutationScope.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalInputEpoch.cs" Link="FullRun\CanonicalInputEpoch.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalCarryReflectionBindings.cs" Link="FullRun\CanonicalCarryReflectionBindings.cs" />
 
 
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalAssetOriginRegistry.cs" Link="FullRun\CanonicalAssetOriginRegistry.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CanonicalFieldWriteTransaction.cs" Link="FullRun\CanonicalFieldWriteTransaction.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\BoundaryDigestSnapshot.cs" Link="FullRun\BoundaryDigestSnapshot.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\BoundaryAssetArrayRegistry.cs" Link="FullRun\BoundaryAssetArrayRegistry.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\BoundaryDigestComparison.cs" Link="FullRun\BoundaryDigestComparison.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\CheckpointScalarFields.cs" Link="FullRun\CheckpointScalarFields.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0Mode.cs" Link="FullRun\LeanS0Mode.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0Gate.cs" Link="FullRun\LeanS0Gate.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0Packet.cs" Link="FullRun\LeanS0Packet.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalAssetOriginRegistry.cs" Link="FullRun\CanonicalAssetOriginRegistry.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Canonical\CanonicalFieldWriteTransaction.cs" Link="FullRun\CanonicalFieldWriteTransaction.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\BoundaryDigestSnapshot.cs" Link="FullRun\BoundaryDigestSnapshot.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\BoundaryAssetArrayRegistry.cs" Link="FullRun\BoundaryAssetArrayRegistry.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\BoundaryDigestComparison.cs" Link="FullRun\BoundaryDigestComparison.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Checkpoints\CheckpointScalarFields.cs" Link="FullRun\CheckpointScalarFields.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0\LeanS0Mode.cs" Link="FullRun\LeanS0Mode.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0\LeanS0Gate.cs" Link="FullRun\LeanS0Gate.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0\LeanS0Packet.cs" Link="FullRun\LeanS0Packet.cs" />
     <Reference Include="Assembly-CSharp"><HintPath>$(HKManagedDir)\Assembly-CSharp.dll</HintPath></Reference>
     <Reference Include="UnityEngine"><HintPath>$(HKManagedDir)\UnityEngine.dll</HintPath></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(HKManagedDir)\UnityEngine.CoreModule.dll</HintPath></Reference>
@@ -97,31 +97,31 @@
     <Reference Include="UnityEngine.Physics2DModule"><HintPath>$(HKManagedDir)\UnityEngine.Physics2DModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine.UI"><HintPath>$(HKManagedDir)\UnityEngine.UI.dll</HintPath></Reference>
     <Reference Include="PlayMaker"><HintPath>$(HKManagedDir)\PlayMaker.dll</HintPath></Reference>
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\FullRunFrameJournal.cs"
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Session\FullRunFrameJournal.cs"
              Link="FullRun\FullRunFrameJournal.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingFieldDigest.cs"
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\LoadingFieldDigest.cs"
              Link="FullRun\LoadingFieldDigest.cs" />
 
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingFieldReader.cs"
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\LoadingFieldReader.cs"
              Link="FullRun\LoadingFieldReader.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingObservationTypeIdentity.cs"
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\LoadingObservationTypeIdentity.cs"
              Link="FullRun\LoadingObservationTypeIdentity.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingInventoryRootEncoding.cs"
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\LoadingInventoryRootEncoding.cs"
              Link="FullRun\LoadingInventoryRootEncoding.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingPackedArrayDigest.cs"
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\LoadingPackedArrayDigest.cs"
              Link="FullRun\LoadingPackedArrayDigest.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingTextureDataBounds.cs" Link="FullRun\LoadingTextureDataBounds.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingRigidbodyValueBits.cs"
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\LoadingTextureDataBounds.cs" Link="FullRun\LoadingTextureDataBounds.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\LoadingRigidbodyValueBits.cs"
              Link="FullRun\LoadingRigidbodyValueBits.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingSceneRootIdentity.cs"
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\LoadingSceneRootIdentity.cs"
              Link="FullRun\LoadingSceneRootIdentity.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingOracleSamplingWindows.cs"
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\LoadingOracleSamplingWindows.cs"
              Link="FullRun\LoadingOracleSamplingWindows.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingRuntimeReferencePolicy.cs"
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\LoadingRuntimeReferencePolicy.cs"
              Link="FullRun\LoadingRuntimeReferencePolicy.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingListEpochIdentity.cs"
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\LoadingListEpochIdentity.cs"
              Link="FullRun\LoadingListEpochIdentity.cs" />
-    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LoadingUnityAssetIdentity.cs"
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\Loading\LoadingUnityAssetIdentity.cs"
              Link="FullRun\LoadingUnityAssetIdentity.cs" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageReference Include="MSTest.TestAdapter" Version="4.3.2">

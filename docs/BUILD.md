@@ -13,8 +13,8 @@
 | `src` | Runtime、Core、Companion、CLI、AgentBridge、自动化 SDK 和构建工具 |
 | `native` | 原生帧控制、启动门闩和存档写入保护 |
 | `tests` | 单元测试、协议测试和 WPF 界面检查 |
-| `fixtures` / `schemas` | 可复用测试输入和数据约束 |
-| `scripts` | 构建、打包和验证脚本 |
+| `fixtures` | 可复用测试输入与夹具 |
+| `scripts` | 构建、打包、验证脚本与测试夹具宿主（`verify/`、`harnesses/`、`t24/`） |
 | `packaging` | 配套包构建输入及生成目录 |
 
 在仓库根目录复制本地配置模板，并修改两个路径：
@@ -129,7 +129,7 @@ Studio、ClockInjector、NativeHost、CLI 和 AgentBridge 共享 `Companion/win-
 
 ClockInjector 的原生组件和六文件启动身份保留在 `ClockStartup`，托管 DLL、deps 和 runtimeconfig 同时保留在共享运行时目录；最终 EXE 重绑定后更新启动清单哈希，再签名整个配套包。`-ClockBundleRoot` 只接受当前启动器源码生成的自包含包；旧包需用当前 `Build-T24ClockPrototype.ps1` 重新构建。
 
-`python scripts/Test-SharedBundle.py <Mod目录> <证据目录>` 在空 PATH、无效 DOTNET_ROOT 和独立工作目录下检查程序启动及实际加载的运行时。运行前关闭游戏和 Studio。有效 CLI/MCP 会话、录制、冷回放及音视频导出由 `StudioScenarioHarness --fractional-fps --package-smoke` 实机检查。
+`python scripts/verify/Test-SharedBundle.py <Mod目录> <证据目录>` 在空 PATH、无效 DOTNET_ROOT 和独立工作目录下检查程序启动及实际加载的运行时。运行前关闭游戏和 Studio。有效 CLI/MCP 会话、录制、冷回放及音视频导出由 `scripts/harnesses/StudioScenarioHarness`（`--fractional-fps --package-smoke`）实机检查。
 
 加 `--clock-only` 可单独验证 ClockInjector 从包内加载运行时并读取正确的原生组件；不启动 Studio、不连接或启动游戏，可在游戏运行期间执行。
 

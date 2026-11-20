@@ -15,12 +15,62 @@ namespace HollowKnightTAS.Companion.ViewModels
         private CancellationTokenSource? autoCheckpointCts;
         private Task? autoCheckpointTask;
         private RuntimeSessionClient? autoCheckpointSession;
+        private string? lastKnownEnvironmentManifestSha256;
+        private volatile bool allowAutoCheckpointCaptureDuringColdReplay;
 
         private string GetActiveCheckpointBranchId() => FormatBranchId(activeDraftTip ?? selectedWorldline?.Id ?? 0);
 
+        internal void RememberRuntimeEnvironmentManifestSha256(string? manifestSha256)
+        {
+            if (!string.IsNullOrWhiteSpace(manifestSha256) && manifestSha256.Length == 64)
+                lastKnownEnvironmentManifestSha256 = manifestSha256;
+        }
+
+        internal string? GetCurrentRuntimeEnvironmentSha256()
+        {
+            var live = SelectedSession?.Client;
+            if (live is { IsConnected: true } && !string.IsNullOrWhiteSpace(live.EnvironmentManifestSha256))
+            {
+                RememberRuntimeEnvironmentManifestSha256(live.EnvironmentManifestSha256);
+                return live.EnvironmentManifestSha256;
+            }
+            return lastKnownEnvironmentManifestSha256;
+        }
+
+        internal bool IsCheckpointBindingCompatible(
+            SceneCheckpointHeader header,
+            MovieV2Document candidateMovie,
+            string? requiredEnvironmentSha256 = null)
+        {
+            if (header == null || candidateMovie == null) return false;
+            if (header.Binding.NativeProfileId != candidateMovie.Header.NativeProfileId)
+                return false;
+            if (fullRunMovies?.IsPending == true
+                && header.Binding.NativeProfileId != MovieProtocolV2.SelectedNativeProfileId)
+                return false;
+
+            var expectedSavesHashes = sequenceInitialSaves?.Hashes
+                ?? (fullRunMovies?.IsPending == true ? fullRunMovies.OriginalHashes : null);
+            if (expectedSavesHashes != null)
+            {
+                var expectedSavesSha = SceneCheckpointBinding.HashInitialSaves(expectedSavesHashes);
+                if (header.Binding.InitialSavesSha256 != expectedSavesSha)
+                    return false;
+            }
+
+            var envSha = !string.IsNullOrWhiteSpace(requiredEnvironmentSha256)
+                ? requiredEnvironmentSha256
+                : GetCurrentRuntimeEnvironmentSha256();
+            if (!string.IsNullOrWhiteSpace(envSha) && header.Binding.EnvironmentSha256 != envSha)
+                return false;
+
+            return true;
+        }
+
         private void EnsureAutoSceneCheckpointCapture(RuntimeSessionClient session)
         {
-            if (IsRestorePresentationFrozen || sequenceSaving
+            if ((IsRestorePresentationFrozen && !allowAutoCheckpointCaptureDuringColdReplay)
+                || sequenceSaving
                 || fullRunMovies?.IsPending != true
                 || (fullRunMovies.Mode != "Recording" && fullRunMovies.Mode != "Replay")
                 || activeDraftTree == null || activeDraftTree.Length != 32
@@ -51,7 +101,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                 && session.IsConnected
                 && fullRunMovies?.IsPending == true
                 && (fullRunMovies.Mode == "Recording" || fullRunMovies.Mode == "Replay")
-                && !IsRestorePresentationFrozen
+                && (!IsRestorePresentationFrozen || allowAutoCheckpointCaptureDuringColdReplay)
                 && !sequenceSaving)
             {
                 try
@@ -108,11 +158,24 @@ namespace HollowKnightTAS.Companion.ViewModels
             catch { return; }
             if (doc.Runs.Sum(r => r.RepeatCount) < packet.Header.ResumeMovieFrame) return;
 
+            List<string>? supersededIds = null;
             worldlines.Update(library =>
             {
                 var tree = library.Trees.FirstOrDefault(t => t.Id == treeId);
-                tree?.RecordCheckpoint(packet.Header.CheckpointId, packet.Header.ResumeMovieFrame, packet.Header.TransitionId, text);
+                if (tree == null) return;
+                var beforeIds = tree.Checkpoints.Select(c => c.CheckpointId).ToHashSet(StringComparer.Ordinal);
+                tree.RecordCheckpoint(packet.Header.CheckpointId, packet.Header.ResumeMovieFrame, packet.Header.TransitionId, text);
+                var afterIds = tree.Checkpoints.Select(c => c.CheckpointId).ToHashSet(StringComparer.Ordinal);
+                supersededIds = beforeIds.Where(id => id != packet.Header.CheckpointId && !afterIds.Contains(id)).ToList();
             });
+            if (supersededIds != null)
+            {
+                foreach (var oldId in supersededIds)
+                {
+                    try { SceneCheckpoints?.RemoveCheckpoint(oldId); }
+                    catch { }
+                }
+            }
         }
 
         private void SyncTreeCheckpoints(TimelineTree tree, long frame, string movie, int? oldTip, int? newTip)
@@ -142,12 +205,14 @@ namespace HollowKnightTAS.Companion.ViewModels
         internal SceneCheckpointHeader? FindBestSceneCheckpoint(string? treeId, long targetFrame, MovieV2Document candidateMovie)
         {
             if (treeId == null || treeId.Length != 32 || targetFrame <= 0 || SceneCheckpoints == null) return null;
-            var headers = SceneCheckpoints.CatalogTree(treeId);
-            if (headers.Count == 0) return null;
+            var compatibleHeaders = SceneCheckpoints.CatalogTree(treeId)
+                .Where(h => IsCheckpointBindingCompatible(h, candidateMovie))
+                .ToArray();
+            if (compatibleHeaders.Length == 0) return null;
             var tree = worldlines?.Library.Trees.FirstOrDefault(t => t.Id == treeId);
             return tree != null
-                ? tree.FindNearestCheckpoint(targetFrame, candidateMovie, headers, GetActiveCheckpointBranchId())
-                : headers.Where(h => h.RestoreQualified && h.ResumeMovieFrame <= targetFrame)
+                ? tree.FindNearestCheckpoint(targetFrame, candidateMovie, compatibleHeaders, GetActiveCheckpointBranchId())
+                : compatibleHeaders.Where(h => h.RestoreQualified && h.ResumeMovieFrame <= targetFrame)
                     .OrderByDescending(h => h.ResumeMovieFrame)
                     .FirstOrDefault();
         }

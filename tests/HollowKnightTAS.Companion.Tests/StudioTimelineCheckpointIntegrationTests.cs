@@ -232,6 +232,256 @@ public sealed class StudioTimelineCheckpointIntegrationTests
         }
     }
 
+    [TestMethod]
+    public void ForwardSeekSceneCheckpoint_SelectsNearestQualifiedCheckpointAheadOfCurrentFrame()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hktas-fwd-seek-cp-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var baseDoc = CreateMovie(1000);
+            var baseText = WriteCanonical(baseDoc);
+            var baseline = new Dictionary<string, string> { ["user1.dat"] = new string('1', 64) };
+
+            using var fixture = new StudioFixture(root);
+            fixture.Vm.InitializeWorldlines();
+            var store = GetField<StudioTimelineStore>(fixture.Vm, "worldlines");
+
+            string treeId = string.Empty;
+            int branchId = 0;
+            store.Update(lib =>
+            {
+                var tree = lib.Trees[0];
+                tree.InitialSavesId = new string('b', 64);
+                tree.OriginalHashes = new Dictionary<string, string>(baseline);
+                tree.Nodes[0].Movie = baseText;
+                var tip = tree.UpdateTip(1000, baseText, baseline, null);
+                treeId = lib.ActiveTreeId = tree.Id;
+                branchId = tip.Id;
+            });
+
+            var branchHex = MainViewModel.FormatBranchId(branchId);
+            var scope = fixture.Vm.SceneCheckpoints.ActivateBranch(treeId, branchHex);
+            var binding = new SceneCheckpointBinding(
+                new string('a', 64),
+                SceneCheckpointBinding.HashInitialSaves(baseline),
+                NativeExecutionProfile.CanonicalBoundaryProfileId);
+
+            var cp100Id = Id();
+            var cp300Id = Id();
+            var cp800Id = Id();
+            var packets = new[]
+            {
+                CreateLeanS0Packet(fixture.Vm.SceneCheckpoints.StudioSessionId, treeId, branchHex, scope.Generation, cp100Id, 1, 100, binding),
+                CreateLeanS0Packet(fixture.Vm.SceneCheckpoints.StudioSessionId, treeId, branchHex, scope.Generation, cp300Id, 2, 300, binding),
+                CreateLeanS0Packet(fixture.Vm.SceneCheckpoints.StudioSessionId, treeId, branchHex, scope.Generation, cp800Id, 3, 800, binding)
+            };
+
+            SetField(fixture.Vm, "activeDraftTree", treeId);
+            SetField(fixture.Vm, "activeDraftTip", branchId);
+            SetField(fixture.Vm, "movieText", baseText);
+
+            foreach (var packet in packets)
+            {
+                fixture.Vm.SceneCheckpoints.ImportPacket(packet);
+                fixture.Vm.RegisterCapturedCheckpointOnTimeline(treeId, packet);
+            }
+
+            // 1. From frame 50 to 950 -> selects K=800 (750 frames skipped >= 150).
+            var hit800 = fixture.Vm.FindForwardSeekSceneCheckpoint(50, 950, baseDoc);
+            Assert.IsNotNull(hit800);
+            Assert.AreEqual(cp800Id, hit800.CheckpointId);
+
+            // 2. From frame 50 to 450 -> selects K=300 (250 frames skipped >= 150).
+            var hit300 = fixture.Vm.FindForwardSeekSceneCheckpoint(50, 450, baseDoc);
+            Assert.IsNotNull(hit300);
+            Assert.AreEqual(cp300Id, hit300.CheckpointId);
+
+            // 3. From frame 200 to 450 -> K=300 only skips 100 frames (< 150 threshold) -> null (step forward directly).
+            Assert.IsNull(fixture.Vm.FindForwardSeekSceneCheckpoint(200, 450, baseDoc));
+
+            // 4. From frame 350 to 450 -> nearest K=300 is behind current frame -> null (never jump backward).
+            Assert.IsNull(fixture.Vm.FindForwardSeekSceneCheckpoint(350, 450, baseDoc));
+
+            // 5. Editing future input at F250 invalidates K=300 and K=800; K=100 skips only 50 frames -> null.
+            var editedBefore300 = MovieV2RangeEditor.Paint(baseDoc, 250, 3, "Jump", true);
+            Assert.IsNull(fixture.Vm.FindForwardSeekSceneCheckpoint(50, 950, editedBefore300));
+
+            // 6. Editing future input at F850 (after K=800) preserves K=800 prefix -> selects K=800.
+            var editedAfter800 = MovieV2RangeEditor.Paint(baseDoc, 850, 3, "Jump", true);
+            var hitAfterEdit = fixture.Vm.FindForwardSeekSceneCheckpoint(50, 950, editedAfter800);
+            Assert.IsNotNull(hitAfterEdit);
+            Assert.AreEqual(cp800Id, hitAfterEdit.CheckpointId);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                foreach (var f in Directory.GetFiles(root, "*", SearchOption.AllDirectories))
+                    File.SetAttributes(f, FileAttributes.Normal);
+                Directory.Delete(root, true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public void FindBestSceneCheckpoint_FiltersOutMismatchedEnvironmentAndInitialSaves()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hktas-cp-filter-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var baseDoc = CreateMovie(1000);
+            var baseText = WriteCanonical(baseDoc);
+            var snapshot = new InitialSaveSnapshot(new Dictionary<string, byte[]> { ["user1.dat"] = new byte[] { 10, 20, 30 } });
+            var otherSnapshot = new InitialSaveSnapshot(new Dictionary<string, byte[]> { ["user1.dat"] = new byte[] { 40, 50, 60 } });
+            var envNew = new string('1', 64);
+            var envOld = new string('2', 64);
+            var envAnother = new string('3', 64);
+
+            using var fixture = new StudioFixture(root);
+            SetField(fixture.Vm, "sequenceInitialSaves", snapshot);
+            fixture.Vm.InitializeWorldlines();
+            var store = GetField<StudioTimelineStore>(fixture.Vm, "worldlines");
+
+            string treeId = string.Empty;
+            int branchId = 0;
+            store.Update(lib =>
+            {
+                var tree = lib.Trees[0];
+                tree.InitialSavesId = snapshot.Id;
+                tree.OriginalHashes = new Dictionary<string, string>(snapshot.Hashes);
+                tree.Nodes[0].Movie = baseText;
+                var tip = tree.UpdateTip(1000, baseText, snapshot.Hashes, null);
+                treeId = lib.ActiveTreeId = tree.Id;
+                branchId = tip.Id;
+            });
+
+            var branchHex = MainViewModel.FormatBranchId(branchId);
+            var scope = fixture.Vm.SceneCheckpoints.ActivateBranch(treeId, branchHex);
+
+            var cp300Id = Id();
+            var cp800Id = Id();
+            var cp900Id = Id();
+
+            var pkt300 = CreateLeanS0Packet(
+                fixture.Vm.SceneCheckpoints.StudioSessionId, treeId, branchHex, scope.Generation, cp300Id, 1, 300,
+                new SceneCheckpointBinding(envNew, SceneCheckpointBinding.HashInitialSaves(snapshot.Hashes), NativeExecutionProfile.CanonicalBoundaryProfileId));
+            var pkt800 = CreateLeanS0Packet(
+                fixture.Vm.SceneCheckpoints.StudioSessionId, treeId, branchHex, scope.Generation, cp800Id, 2, 800,
+                new SceneCheckpointBinding(envOld, SceneCheckpointBinding.HashInitialSaves(snapshot.Hashes), NativeExecutionProfile.CanonicalBoundaryProfileId));
+            var pkt900 = CreateLeanS0Packet(
+                fixture.Vm.SceneCheckpoints.StudioSessionId, treeId, branchHex, scope.Generation, cp900Id, 3, 900,
+                new SceneCheckpointBinding(envNew, SceneCheckpointBinding.HashInitialSaves(otherSnapshot.Hashes), NativeExecutionProfile.CanonicalBoundaryProfileId));
+
+            SetField(fixture.Vm, "activeDraftTree", treeId);
+            SetField(fixture.Vm, "activeDraftTip", branchId);
+            SetField(fixture.Vm, "movieText", baseText);
+
+            foreach (var packet in new[] { pkt300, pkt800, pkt900 })
+            {
+                fixture.Vm.SceneCheckpoints.ImportPacket(packet);
+                fixture.Vm.RegisterCapturedCheckpointOnTimeline(treeId, packet);
+            }
+
+            // Without known runtime environment: excludes K=900 (initial-save mismatch) and selects K=800.
+            var withoutKnownEnv = fixture.Vm.FindBestSceneCheckpoint(treeId, 950, baseDoc);
+            Assert.IsNotNull(withoutKnownEnv);
+            Assert.AreEqual(cp800Id, withoutKnownEnv.CheckpointId);
+
+            // With runtime environment set to envNew: excludes stale envOld (K=800) and selects K=300.
+            fixture.Vm.RememberRuntimeEnvironmentManifestSha256(envNew);
+            var withEnvNew = fixture.Vm.FindBestSceneCheckpoint(treeId, 950, baseDoc);
+            Assert.IsNotNull(withEnvNew);
+            Assert.AreEqual(cp300Id, withEnvNew.CheckpointId);
+
+            // With runtime environment set to envAnother: no compatible checkpoint remains.
+            fixture.Vm.RememberRuntimeEnvironmentManifestSha256(envAnother);
+            Assert.IsNull(fixture.Vm.FindBestSceneCheckpoint(treeId, 950, baseDoc));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                foreach (var f in Directory.GetFiles(root, "*", SearchOption.AllDirectories))
+                    File.SetAttributes(f, FileAttributes.Normal);
+                Directory.Delete(root, true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public void RegisterCapturedCheckpointOnTimeline_RemovesSupersededStaleCheckpointPacket()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hktas-cp-supersede-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var baseDoc = CreateMovie(500);
+            var baseText = WriteCanonical(baseDoc);
+            var baseline = new Dictionary<string, string> { ["user1.dat"] = new string('1', 64) };
+            var envOld = new string('a', 64);
+            var envNew = new string('b', 64);
+
+            using var fixture = new StudioFixture(root);
+            fixture.Vm.InitializeWorldlines();
+            var store = GetField<StudioTimelineStore>(fixture.Vm, "worldlines");
+
+            string treeId = string.Empty;
+            int branchId = 0;
+            store.Update(lib =>
+            {
+                var tree = lib.Trees[0];
+                tree.InitialSavesId = new string('c', 64);
+                tree.OriginalHashes = new Dictionary<string, string>(baseline);
+                tree.Nodes[0].Movie = baseText;
+                var tip = tree.UpdateTip(500, baseText, baseline, null);
+                treeId = lib.ActiveTreeId = tree.Id;
+                branchId = tip.Id;
+            });
+
+            var branchHex = MainViewModel.FormatBranchId(branchId);
+            var scope = fixture.Vm.SceneCheckpoints.ActivateBranch(treeId, branchHex);
+            var savesSha = SceneCheckpointBinding.HashInitialSaves(baseline);
+
+            var cpOldId = Id();
+            var cpNewId = Id();
+            var oldPacket = CreateLeanS0Packet(
+                fixture.Vm.SceneCheckpoints.StudioSessionId, treeId, branchHex, scope.Generation, cpOldId, 2, 300,
+                new SceneCheckpointBinding(envOld, savesSha, NativeExecutionProfile.CanonicalBoundaryProfileId));
+            var newPacket = CreateLeanS0Packet(
+                fixture.Vm.SceneCheckpoints.StudioSessionId, treeId, branchHex, scope.Generation, cpNewId, 2, 300,
+                new SceneCheckpointBinding(envNew, savesSha, NativeExecutionProfile.CanonicalBoundaryProfileId));
+
+            SetField(fixture.Vm, "activeDraftTree", treeId);
+            SetField(fixture.Vm, "activeDraftTip", branchId);
+            SetField(fixture.Vm, "movieText", baseText);
+
+            fixture.Vm.SceneCheckpoints.ImportPacket(oldPacket);
+            fixture.Vm.RegisterCapturedCheckpointOnTimeline(treeId, oldPacket);
+
+            fixture.Vm.SceneCheckpoints.ImportPacket(newPacket);
+            fixture.Vm.RegisterCapturedCheckpointOnTimeline(treeId, newPacket);
+
+            var tree = store.Library.Trees.Single(t => t.Id == treeId);
+            Assert.AreEqual(1, tree.Checkpoints.Count);
+            Assert.AreEqual(cpNewId, tree.Checkpoints[0].CheckpointId);
+
+            var remainingPackets = fixture.Vm.SceneCheckpoints.GetTreePackets(treeId);
+            Assert.AreEqual(1, remainingPackets.Count);
+            Assert.AreEqual(cpNewId, remainingPackets[0].Header.CheckpointId);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                foreach (var f in Directory.GetFiles(root, "*", SearchOption.AllDirectories))
+                    File.SetAttributes(f, FileAttributes.Normal);
+                Directory.Delete(root, true);
+            }
+        }
+    }
+
     private sealed class StudioFixture : IDisposable
     {
         private readonly SessionRegistry sessions = new("timeline-cp-test");

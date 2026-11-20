@@ -13,8 +13,8 @@ Install the .NET 8 SDK, .NET Framework 4.7.2 targeting assemblies, PowerShell 7.
 | `src` | Runtime, Core, Companion, CLI, AgentBridge, automation SDK and build tools |
 | `native` | Native frame control, startup gate and save-write protection |
 | `tests` | Unit, protocol and WPF interface tests |
-| `fixtures` / `schemas` | Reusable test inputs and data constraints |
-| `scripts` | Build, packaging and validation scripts |
+| `fixtures` | Reusable test inputs and fixtures |
+| `scripts` | Build, packaging, verification scripts and harnesses (`verify/`, `harnesses/`, `t24/`) |
 | `packaging` | Companion build inputs and generated directories |
 
 From the repository root, copy the local configuration template and set both paths:
@@ -129,6 +129,6 @@ Studio, ClockInjector, NativeHost, CLI and AgentBridge share the bundled .NET ru
 
 ClockInjector retains its native components and six-file startup identity in `ClockStartup`; its managed DLL, deps and runtimeconfig also reside beside the shared runtime. The build refreshes the startup manifest hashes after rebinding the EXE, then signs the complete bundle. `-ClockBundleRoot` accepts only self-contained clock bundles built from the current injector source; rebuild older bundles with the current `Build-T24ClockPrototype.ps1`.
 
-`python scripts/Test-SharedBundle.py <mod-root> <evidence-directory>` checks local runtime loading with an empty PATH, invalid DOTNET_ROOT and a separate working directory. Close the game and Studio before the full check. Add `--clock-only` to check only ClockInjector's local runtime and native component lookup without starting Studio or accessing any game session; this check can run while the game is active.
+`python scripts/verify/Test-SharedBundle.py <mod-root> <evidence-directory>` checks local runtime loading with an empty PATH, invalid DOTNET_ROOT and a separate working directory. Close the game and Studio before the full check (`scripts/harnesses/StudioScenarioHarness` covers live game sessions and exports). Add `--clock-only` to check only ClockInjector's local runtime and native component lookup without starting Studio or accessing any game session; this check can run while the game is active.
 
 [Installation and player guide](USER-MANUAL.en.md) · [AI control guide](AI-CONTROL.en.md)

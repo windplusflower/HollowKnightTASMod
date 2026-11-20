@@ -1964,11 +1964,14 @@ namespace HollowKnightTAS.Companion.ViewModels
             }
 
             var selected = SelectedSession?.Client;
-            if (selected?.IsConnected == true
-                && warmedSessions.Add(selected.SessionId))
+            if (selected?.IsConnected == true)
             {
-                UpdateConnectionStatus();
-                _ = WarmSessionAsync(selected);
+                RememberRuntimeEnvironmentManifestSha256(selected.EnvironmentManifestSha256);
+                if (warmedSessions.Add(selected.SessionId))
+                {
+                    UpdateConnectionStatus();
+                    _ = WarmSessionAsync(selected);
+                }
             }
         }
 
@@ -1986,6 +1989,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                         CancellationToken.None);
                     Dispatch(() =>
                     {
+                        RememberRuntimeEnvironmentManifestSha256(session.EnvironmentManifestSha256);
                         readySessions.Add(session.SessionId);
                         UpdateConnectionStatus();
                         EnsureAutoSceneCheckpointCapture(session);

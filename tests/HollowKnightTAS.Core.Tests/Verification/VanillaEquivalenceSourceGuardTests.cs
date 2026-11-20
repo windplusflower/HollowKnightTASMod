@@ -4168,6 +4168,10 @@ namespace HollowKnightTAS.Core.Tests.Verification
         {
             var root = FindRepositoryRoot();
             var path = Path.Combine(root, "scripts", fileName);
+            if (!File.Exists(path))
+            {
+                path = Path.Combine(root, "scripts", "t24", fileName);
+            }
             Assert.IsTrue(File.Exists(path), "Script not found: " + path);
             return File.ReadAllText(path);
         }

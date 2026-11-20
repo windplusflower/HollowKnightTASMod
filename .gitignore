@@ -2,6 +2,7 @@ LocalBuildProperties.props
 .vs/
 .idea/
 .vscode/
+.claude/
 bin/
 obj/
 TestResults/
@@ -14,32 +15,9 @@ packaging/publish/
 __pycache__/
 *.py[cod]
 
-# Local development notes, task history and evidence (keep on disk).
+# Local workspace status & agent entry files (keep on disk).
 /AGENTS.md
 /CURRENT.md
-/README.history.md
-/mydocs/
-/memory/
-/docs/*
-!/docs/USER-MANUAL.md
-!/docs/AI-CONTROL.md
-!/docs/BUILD.md
-!/docs/USER-MANUAL.en.md
-!/docs/AI-CONTROL.en.md
-!/docs/BUILD.en.md
-!/docs/HELPER-MOD-COMPATIBILITY.md
-!/docs/lean-s0/
-!/docs/lean-s0/*
-/packaging/*.md
-/scripts/*/README.md
-
-# Machine-specific recordings and one-off delivery scripts.
-/fixtures/t16/
-/fixtures/t17/
-/fixtures/full-run/envious-marmu-*
-# fixtures/movie/generated contains required, fixed playback test inputs.
-/scripts/Package-TasDelivery.ps1
-/scripts/Package-VideoDelivery.ps1
 
 # Temporary files and generated distributions.
 *.tmp

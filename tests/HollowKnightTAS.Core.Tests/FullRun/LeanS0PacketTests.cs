@@ -21,6 +21,7 @@ namespace HollowKnightTAS.Core.Tests.FullRun
                 RngSeed = 123456789,
                 RngSha256 = new string('a', 64),
                 CapturedAtUtc = "2026-11-14T07:00:00Z",
+                GameManagerProfileId = 3,
                 C1_PlayerDataJson = "{\"health\":9,\"geo\":420}",
                 C2_SceneDataJson = "{\"persistentBoolItems\":[]}",
                 C3_BossSequence = new LeanS0BossSequenceState
@@ -166,6 +167,7 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             Assert.AreEqual("GG_Lost_Kin", decoded.TargetSceneName);
             Assert.AreEqual("door_dreamEnter", decoded.EntryGateName);
             Assert.AreEqual(123456789, decoded.RngSeed);
+            Assert.AreEqual(3, decoded.GameManagerProfileId);
             Assert.AreEqual(original.C1_PlayerDataJson, decoded.C1_PlayerDataJson);
             Assert.AreEqual(original.C3_BossSequence.SequenceName, decoded.C3_BossSequence.SequenceName);
             Assert.IsTrue(decoded.C3_BossSequence.HasPendingSequenceSetup);
@@ -211,6 +213,17 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             encoded[encoded.Length - 1] ^= 0x5A;
 
             Assert.ThrowsExactly<InvalidDataException>(() => LeanS0PacketCodec.Decode(encoded));
+        }
+
+        [TestMethod]
+        public void DeserializeJson_DefaultsMissingGameManagerProfileIdToZero()
+        {
+            LeanS0Packet original = CreateSamplePacket();
+            string json = LeanS0PacketCodec.SerializeJson(original)
+                .Replace("\"GameManagerProfileId\":3,", string.Empty, StringComparison.Ordinal);
+
+            LeanS0Packet decoded = LeanS0PacketCodec.DeserializeJson(json);
+            Assert.AreEqual(0, decoded.GameManagerProfileId);
         }
     }
 }

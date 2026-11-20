@@ -185,5 +185,62 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
             Assert.ThrowsExactly<InvalidDataException>(() =>
                 SceneCheckpointPacket.EncodeSections(incompleteSections, SceneCheckpointHeader.LeanS0SchemaVersion));
         }
+
+        [TestMethod]
+        public void DifferentEnvironmentBindingAtSameBoundaryPublishesAndImportsWithoutConflict()
+        {
+            using var store = new SceneCheckpointStore();
+            var treeId = Id();
+            var branchId = Id();
+            var scope = store.ActivateBranch(treeId, branchId);
+            var envOld = new SceneCheckpointBinding(new string('1', 64), new string('b', 64), "test-profile");
+            var envNew = new SceneCheckpointBinding(new string('2', 64), new string('b', 64), "test-profile");
+
+            var payload = SceneCheckpointPacket.EncodeSections(
+                new Dictionary<string, byte[]>
+                {
+                    ["leanS0"] = new byte[] { 1, 2, 3, 4 },
+                    ["executionFiles"] = new byte[] { 5, 6 }
+                },
+                SceneCheckpointHeader.LeanS0SchemaVersion);
+            var payloadSha = Sha256Utility.ComputeHex(payload);
+
+            var oldHeader = SceneCheckpointHeader.CreateLeanS0(
+                Id(), scope, envOld, SceneCheckpointTrigger.AutoOnLoadBoundary,
+                1, 1421, 1500, 1421, 1520, payload.Length, payloadSha);
+            var importedOld = store.ImportPacket(new SceneCheckpointPacket(oldHeader, payload));
+
+            var importSamePayloadNewEnvHeader = SceneCheckpointHeader.CreateLeanS0(
+                Id(), scope, envNew, SceneCheckpointTrigger.AutoOnLoadBoundary,
+                1, 1421, 1500, 1421, 1520, payload.Length, payloadSha);
+            var importedNew = store.ImportPacket(new SceneCheckpointPacket(importSamePayloadNewEnvHeader, payload));
+            Assert.AreNotEqual(importedOld.Header.CheckpointId, importedNew.Header.CheckpointId);
+            Assert.AreEqual(2, store.GetTreePackets(treeId).Count);
+
+            var envNewest = new SceneCheckpointBinding(new string('3', 64), new string('b', 64), "test-profile");
+            var lease = store.BeginCapture(scope, envNewest, SceneCheckpointTrigger.AutoOnLoadBoundary);
+            var newPayload = SceneCheckpointPacket.EncodeSections(
+                new Dictionary<string, byte[]>
+                {
+                    ["leanS0"] = new byte[] { 9, 8, 7, 6 },
+                    ["executionFiles"] = new byte[] { 5, 6 }
+                },
+                SceneCheckpointHeader.LeanS0SchemaVersion);
+            var newestHeader = SceneCheckpointHeader.CreateLeanS0(
+                lease.CaptureId, scope, envNewest, SceneCheckpointTrigger.AutoOnLoadBoundary,
+                1, 1421, 1500, 1421, 1520, newPayload.Length, Sha256Utility.ComputeHex(newPayload));
+            var published = store.Publish(lease, new SceneCheckpointPacket(newestHeader, newPayload));
+            Assert.AreEqual(lease.CaptureId, published.Header.CheckpointId);
+            Assert.AreEqual(3, store.GetTreePackets(treeId).Count);
+
+            // Same binding with different payload at the same boundary must still fail as non-deterministic.
+            var conflictLease = store.BeginCapture(scope, envNewest, SceneCheckpointTrigger.AutoOnLoadBoundary);
+            var conflictHeader = SceneCheckpointHeader.CreateLeanS0(
+                conflictLease.CaptureId, scope, envNewest, SceneCheckpointTrigger.AutoOnLoadBoundary,
+                1, 1421, 1500, 1421, 1520, payload.Length, payloadSha);
+            Assert.ThrowsExactly<InvalidDataException>(() =>
+                store.Publish(conflictLease, new SceneCheckpointPacket(conflictHeader, payload)));
+            Assert.AreEqual("Rejected", conflictLease.State);
+        }
     }
 }
