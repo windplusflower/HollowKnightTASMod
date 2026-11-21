@@ -149,11 +149,17 @@ namespace HollowKnightTAS.Core.Tests.Movie
                 {
                     var runtime = new MovieV2RuntimeCapabilities(runtimeProfile, MovieProtocolV2.ActionSchemaId,
                         true, true, true, 800, 450, new string('a', 64), "game", "api", "mod");
-                    var allowed = recordingProfile == runtimeProfile ||
-                        (!NativeExecutionProfile.IsExperimentalProfile(recordingProfile)
-                         && !NativeExecutionProfile.IsExperimentalProfile(runtimeProfile));
-                    Assert.AreEqual(allowed,
-                        new MovieV2Compatibility().Evaluate(header, runtime).Allowed);
+                    var report = new MovieV2Compatibility().Evaluate(header, runtime);
+                    Assert.IsTrue(report.Allowed);
+                    if (recordingProfile != runtimeProfile)
+                    {
+                        Assert.IsTrue(report.Warnings.Count > 0);
+                        Assert.IsTrue(report.Warnings.Any(w => w.Message.Contains("Execution rules differ")));
+                    }
+                    else
+                    {
+                        Assert.AreEqual(0, report.Warnings.Count);
+                    }
                 }
             }
         }

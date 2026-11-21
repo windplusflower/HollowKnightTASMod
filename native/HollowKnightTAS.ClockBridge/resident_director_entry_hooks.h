@@ -78,8 +78,14 @@ static BOOL hktas_de_destination(BYTE *site,BYTE *target,int32_t *result)
 static BOOL hktas_de_verify_table(BYTE *base,BYTE *relays,const void *const *wrappers,BOOL installed,const hktas_de_entry *entries,unsigned count)
 {
     if(!base || (installed && !relays) || !wrappers) return FALSE;
+    const IMAGE_DOS_HEADER *dos=(const IMAGE_DOS_HEADER*)base;
+    if(dos->e_magic!=IMAGE_DOS_SIGNATURE || dos->e_lfanew<64 || dos->e_lfanew>4096) return FALSE;
+    const IMAGE_NT_HEADERS64 *nt=(const IMAGE_NT_HEADERS64*)(base+dos->e_lfanew);
+    if(nt->Signature!=IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC) return FALSE;
+    DWORD image_size=nt->OptionalHeader.SizeOfImage;
     for(unsigned i=0;i<count;++i) {
         const hktas_de_entry *e=&entries[i];
+        if(e->rva>image_size || e->length>image_size-e->rva) return FALSE;
         BYTE *site=base+e->rva;
         DWORD64 module=0;PRUNTIME_FUNCTION frame=RtlLookupFunctionEntry((DWORD64)(uintptr_t)e->original,&module,NULL);
         if(!frame || module+frame->BeginAddress!=(DWORD64)(uintptr_t)e->original || frame->EndAddress-frame->BeginAddress!=e->prefix+11

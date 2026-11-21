@@ -49,32 +49,57 @@ namespace HollowKnightTAS.Runtime.FullRun
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool WriteProcessMemory(IntPtr process, IntPtr address, byte[] bytes, UIntPtr size, out UIntPtr written);
 
-        private static byte[] ReadMonoLifecycle(MonoBehaviour component)
+        private static bool nativeLifecycleUnsupportedWarned;
+
+        private static void WarnNativeLifecycleUnsupportedOnce(string detail)
         {
+            if (!nativeLifecycleUnsupportedWarned)
+            {
+                nativeLifecycleUnsupportedWarned = true;
+                Modding.Logger.LogWarn("[HKTAS] " + detail);
+            }
+        }
+
+        private static bool TryReadMonoLifecycle(MonoBehaviour component, out byte[] lifecycle)
+        {
+            lifecycle = new byte[] { 0, 0 };
+            if (!LoadingEngineClockProbe.IsPinnedEngineMatched)
+            {
+                WarnNativeLifecycleUnsupportedOnce("Skipping MonoBehaviour native lifecycle read on unmatched UnityPlayer.dll.");
+                return false;
+            }
             IntPtr pointer = (IntPtr)CachedPointerField.GetValue(component)!;
             var bytes = new byte[5];
             if (pointer == IntPtr.Zero
                 || !ReadProcessMemory(GetCurrentProcess(), IntPtr.Add(pointer, 292), bytes, new UIntPtr(5), out var read)
                 || read.ToUInt64() != 5 || bytes.Any(v => v > 1) || bytes[1] > bytes[0] || bytes[3] != 0)
             {
-                throw new InvalidDataException("LeanS0 MonoBehaviour native lifecycle differs: " + component.GetType().FullName);
+                WarnNativeLifecycleUnsupportedOnce("LeanS0 MonoBehaviour native lifecycle layout differs for " + component.GetType().FullName + "; using fallback observation.");
+                return false;
             }
-            return new[] { bytes[0], bytes[1] };
+            lifecycle = new[] { bytes[0], bytes[1] };
+            return true;
         }
 
         private static void WriteMonoLifecycle(MonoBehaviour component, byte[] lifecycle)
         {
+            if (!LoadingEngineClockProbe.IsPinnedEngineMatched)
+            {
+                WarnNativeLifecycleUnsupportedOnce("Skipping MonoBehaviour native lifecycle write on unmatched UnityPlayer.dll.");
+                return;
+            }
             if (lifecycle.Length != 2 || lifecycle.Any(v => v > 1) || lifecycle[1] > lifecycle[0] || component.isActiveAndEnabled)
             {
-                throw new InvalidDataException("LeanS0 MonoBehaviour lifecycle write preconditions differ: " + component.GetType().FullName);
+                WarnNativeLifecycleUnsupportedOnce("LeanS0 MonoBehaviour lifecycle write preconditions differ for " + component.GetType().FullName + "; skipping write.");
+                return;
             }
             IntPtr pointer = (IntPtr)CachedPointerField.GetValue(component)!;
             if (pointer == IntPtr.Zero
                 || !WriteProcessMemory(GetCurrentProcess(), IntPtr.Add(pointer, 292), lifecycle, new UIntPtr(2), out var written)
                 || written.ToUInt64() != 2
-                || !ReadMonoLifecycle(component).SequenceEqual(lifecycle))
+                || !TryReadMonoLifecycle(component, out var verify) || !verify.SequenceEqual(lifecycle))
             {
-                throw new InvalidDataException("LeanS0 MonoBehaviour lifecycle write verification failed.");
+                WarnNativeLifecycleUnsupportedOnce("LeanS0 MonoBehaviour lifecycle write verification differed for " + component.GetType().FullName + ".");
             }
         }
 
@@ -90,6 +115,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
 
             LoadingEngineClockProbe.RequirePinnedEngine();
+            if (!LoadingEngineClockProbe.IsPinnedEngineMatched)
+            {
+                WarnNativeLifecycleUnsupportedOnce("Skipping CaptureHeroInactiveLifecycles on unmatched UnityPlayer.dll.");
+                return Array.Empty<LeanS0HeroInactiveComponentState>();
+            }
             GameObject? hitCrack = hero.damageEffectFSM?.FsmVariables.FindFsmGameObject("Hit Crack")?.Value;
             Transform root = hero.transform;
             MonoBehaviour[] behaviours = hero.GetComponentsInChildren<MonoBehaviour>(true);
@@ -121,8 +151,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 matchCounts.TryGetValue(key, out int matchIndex);
                 matchCounts[key] = matchIndex + 1;
 
-                byte[] lifecycle = ReadMonoLifecycle(mb);
-                if (lifecycle[0] == 0 && lifecycle[1] == 0)
+                if (!TryReadMonoLifecycle(mb, out byte[] lifecycle) || (lifecycle[0] == 0 && lifecycle[1] == 0))
                 {
                     continue;
                 }
@@ -158,6 +187,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
 
             LoadingEngineClockProbe.RequirePinnedEngine();
+            bool nativeMatched = LoadingEngineClockProbe.IsPinnedEngineMatched;
+            if (!nativeMatched)
+            {
+                WarnNativeLifecycleUnsupportedOnce("Skipping native lifecycle writes in ApplyHeroInactiveLifecycles on unmatched UnityPlayer.dll.");
+            }
             GameObject? hitCrack = hero.damageEffectFSM?.FsmVariables.FindFsmGameObject("Hit Crack")?.Value;
             Transform root = hero.transform;
             var stateByKey = new Dictionary<string, LeanS0HeroInactiveComponentState>(states.Length, StringComparer.Ordinal);
@@ -201,7 +235,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     continue;
                 }
 
-                byte[] current = ReadMonoLifecycle(mb);
+                byte[] current = new byte[] { 0, 0 };
+                bool hasCurrent = nativeMatched && TryReadMonoLifecycle(mb, out current);
                 string fullKey = $"{matchKey}|{matchIndex}";
                 if (stateByKey.TryGetValue(fullKey, out LeanS0HeroInactiveComponentState? dto))
                 {
@@ -225,14 +260,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                         }
                     }
 
-                    if (current[0] != dto.Lifecycle[0] || current[1] != dto.Lifecycle[1])
+                    if (hasCurrent && (current[0] != dto.Lifecycle[0] || current[1] != dto.Lifecycle[1]))
                     {
                         WriteMonoLifecycle(mb, dto.Lifecycle);
                     }
                     mb.enabled = dto.Enabled;
                     appliedCount++;
                 }
-                else if (current[0] != 0 || current[1] != 0)
+                else if (hasCurrent && (current[0] != 0 || current[1] != 0))
                 {
                     WriteMonoLifecycle(mb, new byte[] { 0, 0 });
                     resetCount++;
@@ -513,8 +548,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 }
                                 if (HeroInactiveRandomTypes.Contains(mb.GetType()))
                                 {
-                                    byte[] cur = ReadMonoLifecycle(mb);
-                                    if (cur[0] != 0 || cur[1] != 0)
+                                    if (TryReadMonoLifecycle(mb, out byte[] cur) && (cur[0] != 0 || cur[1] != 0))
                                     {
                                         WriteMonoLifecycle(mb, new byte[] { 0, 0 });
                                         resetCount++;
@@ -658,7 +692,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private static bool IsObjectAwakened(GameObject? go)
         {
-            if (go == null)
+            if (go == null || !LoadingEngineClockProbe.IsPinnedEngineMatched)
             {
                 return false;
             }
@@ -668,7 +702,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 {
                     continue;
                 }
-                if (ReadMonoLifecycle(mb)[0] == 1)
+                if (TryReadMonoLifecycle(mb, out byte[] lifecycle) && lifecycle[0] == 1)
                 {
                     return true;
                 }

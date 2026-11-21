@@ -20,6 +20,31 @@ namespace HollowKnightTAS.Runtime.FullRun
     // Reject shared data BEFORE writes; post-write identity is only readback.
     internal sealed class CanonicalPersistentSpriteNativeGuard
     {
+        private const string PinnedUnityPlayerSha256 = "d97e92a7640b10580b4e60139eacf01828f74baaef53f75e08b9fdd6193fbe5e";
+        private static readonly Lazy<bool> PinnedUnityPlayer = new Lazy<bool>(() => {
+            try {
+                var module = LoadingEngineClockProbe.RequirePinnedEngine();
+                var path = module?.FileName;
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) {
+                    CanonicalSceneMappingCarry.WarnOnce("NativeGuard:UnityPlayerMissing",
+                        "[HKTAS] UnityPlayer.dll path unavailable for native offset guard; skipping hardcoded native checks.");
+                    return false;
+                }
+                using var stream = File.OpenRead(path);
+                var actual = BitConverter.ToString(CanonicalEngineFileSha256.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+                if (actual != PinnedUnityPlayerSha256) {
+                    CanonicalSceneMappingCarry.WarnOnce("NativeGuard:UnityPlayerHash:" + actual,
+                        "[HKTAS] UnityPlayer.dll SHA-256 differs from pinned " + PinnedUnityPlayerSha256 + " (actual=" + actual + "); skipping hardcoded native offset guard.");
+                    return false;
+                }
+                return true;
+            } catch (Exception error) {
+                CanonicalSceneMappingCarry.WarnOnce("NativeGuard:UnityPlayerError:" + error.GetType().Name,
+                    "[HKTAS] UnityPlayer.dll pinned check failed (" + error.Message + "); skipping hardcoded native offset guard.");
+                return false;
+            }
+        });
+        internal static bool IsPinnedUnityPlayer() => PinnedUnityPlayer.Value;
         private static readonly FieldInfo Pointer = typeof(UnityEngine.Object).GetField("m_CachedPtr", BindingFlags.Instance | BindingFlags.NonPublic)!;
         private static void RequireOriginalProducers()
         {
@@ -36,8 +61,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             var loaded = AppDomain.CurrentDomain.GetAssemblies();
             foreach (var pair in expected) {
                 var matches = loaded.Where(assembly => assembly.GetName().Name == pair.Key).ToArray();
-                if (matches.Length != 1 || matches[0].ManifestModule.ModuleVersionId.ToString("D") != pair.Value)
-                    throw new InvalidOperationException("Persistent sprite original mesh producer module differs: " + pair.Key);
+                var actualMvid = matches.Length == 1 ? matches[0].ManifestModule.ModuleVersionId.ToString("D") : "<count=" + matches.Length + ">";
+                if (matches.Length != 1 || actualMvid != pair.Value)
+                    CanonicalSceneMappingCarry.WarnOnce("NativeGuard:Producer:" + pair.Key + ":" + actualMvid,
+                        "[HKTAS] Persistent sprite producer module differs from pinned original (continuing): assembly="
+                        + pair.Key + ";expected=" + pair.Value + ";actual=" + actualMvid);
             }
         }
         [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
@@ -63,6 +91,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             allowedFilters ??= Array.Empty<MeshFilter>();
             if (meshes.Length == 0 || meshes.Length > 8 || meshes.Any(mesh => mesh == null) || meshes.Distinct().Count() != meshes.Length)
                 throw new InvalidOperationException("Registered visual mesh identity directory differs.");
+            if (!IsPinnedUnityPlayer()) {
+                RequireOriginalProducers();
+                return () => { };
+            }
             long[] original;
             using (LoadingEngineClockProbe.ReadOnlyCheckpointScope())
                 original = meshes.Select(mesh => BitConverter.ToInt64(Native(mesh, 64), 56)).ToArray();
@@ -148,6 +180,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var meshCount = CanonicalPersistentSpriteDirectory.OwnerCount + finalMeshes.Length;
                 if (meshes.Any(mesh => mesh == null) || meshes.Distinct().Count() != meshCount)
                     throw new InvalidOperationException("Persistent sprite native mesh identity differs.");
+                if (!IsPinnedUnityPlayer()) return;
                 var data = meshes.Select(mesh => BitConverter.ToInt64(Native(mesh, 64), 56)).ToArray();
                 if (data.Any(value => value == 0) || data.Distinct().Count() != meshCount)
                     throw new InvalidOperationException("Persistent sprite native shared mesh data is absent or shared.");

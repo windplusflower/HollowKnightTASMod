@@ -3723,8 +3723,16 @@ namespace HollowKnightTAS.Core.Tests.Verification
                 "HktasClockBridge_AdvanceDeterministicFrameClock");
             StringAssert.Contains(
                 payload,
-                "HktasClockBridge_GetAbi() != 10u");
-            StringAssert.Contains(payload, "if (bridgeStatus != 2)");
+                "HktasClockBridge_GetAbi()");
+            StringAssert.Contains(
+                payload,
+                "if (abi != 10u && !bridgeAbiWarningLogged)");
+            StringAssert.Contains(
+                payload,
+                "if (bridgeStatus != 2 && !bridgeStatusWarningLogged)");
+            StringAssert.Contains(
+                payload,
+                "UnityEngine.Debug.LogWarning");
             StringAssert.Contains(payload, "if (result == -1)");
             StringAssert.Contains(payload, "result != 1 && result != 2");
             StringAssert.Contains(

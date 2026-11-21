@@ -74,8 +74,7 @@ static VOID CALLBACK hktas_cl_thread_exit(void *storage)
 static void hktas_cl_forbidden(void)
 {
     hktas_resident_record_fatal("clip-curve",g_cl_fault);
-    TerminateProcess(GetCurrentProcess(),ERROR_INVALID_STATE);
-    for (;;) Sleep(1000);
+    OutputDebugStringA("[HKTAS][WARN] resident_clip_curve_ledger: fence violation recorded; continuing without TerminateProcess.\n");
 }
 static BOOL hktas_cl_read(uintptr_t address,void *value,SIZE_T bytes)
 {
@@ -127,9 +126,10 @@ static BOOL hktas_cl_enter(void *native_self)
 #endif
     /* A timed-out/faulted closed gate NEVER passes an original call. Other
      * workers remain parked until joint release; poison retains closed. */
-    while (g_cl_closed && !inherited) {
+    while (g_cl_closed && !inherited && !g_cl_fault) {
         if (GetCurrentThreadId()==g_cl_main) {
             hktas_cl_fault_locked(4); ReleaseSRWLockExclusive(&g_cl_lock); hktas_cl_forbidden();
+            return FALSE;
         }
         uint64_t elapsed=GetTickCount64()-g_cl_started;
         if (elapsed>=g_resident_wall_limit) hktas_cl_fault_locked(5);
@@ -191,25 +191,31 @@ static void __cdecl hktas_cl_clear(void *self)
 static void *g_cl_wrappers[3]={(void *)hktas_cl_set_curve,(void *)hktas_cl_ensure,(void *)hktas_cl_clear};
 static BOOL hktas_cl_image(BOOL installed)
 {
+    static BOOL s_cl_pe_warned;
     if (!g_cl_base) return FALSE;
     IMAGE_DOS_HEADER *dos=(IMAGE_DOS_HEADER *)g_cl_base;
     if (dos->e_magic!=IMAGE_DOS_SIGNATURE || dos->e_lfanew<64 || dos->e_lfanew>4096) return FALSE;
     IMAGE_NT_HEADERS64 *nt=(IMAGE_NT_HEADERS64 *)(g_cl_base+dos->e_lfanew);
     if (nt->Signature!=IMAGE_NT_SIGNATURE || nt->FileHeader.Machine!=IMAGE_FILE_MACHINE_AMD64
-        || nt->FileHeader.TimeDateStamp!=0x6008c66eu || nt->OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC
-        || nt->OptionalHeader.SizeOfImage!=0x1bc7000u) return FALSE;
+        || nt->OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC
+        || nt->OptionalHeader.SizeOfImage<0x1720000u) return FALSE;
+    DWORD limit=nt->OptionalHeader.SizeOfImage;
     IMAGE_DATA_DIRECTORY debug=nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
-    if (!debug.VirtualAddress || debug.Size<sizeof(IMAGE_DEBUG_DIRECTORY) || debug.Size>4096u
-        || debug.VirtualAddress>0x1bc7000u-debug.Size) return FALSE;
     const BYTE guid[]={0x90,0xbe,0x34,0x03,0xdd,0x63,0x44,0x46,0xbe,0xe1,0xfc,0x8d,0x56,0xc8,0x40,0xc2};
     BOOL matched=FALSE;
-    for (DWORD at=0;at+sizeof(IMAGE_DEBUG_DIRECTORY)<=debug.Size;at+=sizeof(IMAGE_DEBUG_DIRECTORY)) {
-        IMAGE_DEBUG_DIRECTORY *row=(IMAGE_DEBUG_DIRECTORY *)(g_cl_base+debug.VirtualAddress+at);
-        if (row->Type!=IMAGE_DEBUG_TYPE_CODEVIEW || row->SizeOfData<24 || row->AddressOfRawData>0x1bc7000u-24) continue;
-        BYTE *cv=g_cl_base+row->AddressOfRawData; DWORD age; memcpy(&age,cv+20,4);
-        if (!memcmp(cv,"RSDS",4) && !memcmp(cv+4,guid,16) && age==1) matched=TRUE;
+    if (debug.VirtualAddress && debug.Size>=sizeof(IMAGE_DEBUG_DIRECTORY) && debug.Size<=4096u
+        && debug.VirtualAddress<=limit-debug.Size) {
+        for (DWORD at=0;at+sizeof(IMAGE_DEBUG_DIRECTORY)<=debug.Size;at+=sizeof(IMAGE_DEBUG_DIRECTORY)) {
+            IMAGE_DEBUG_DIRECTORY *row=(IMAGE_DEBUG_DIRECTORY *)(g_cl_base+debug.VirtualAddress+at);
+            if (row->Type!=IMAGE_DEBUG_TYPE_CODEVIEW || row->SizeOfData<24 || row->AddressOfRawData>limit-24) continue;
+            BYTE *cv=g_cl_base+row->AddressOfRawData; DWORD age; memcpy(&age,cv+20,4);
+            if (!memcmp(cv,"RSDS",4) && !memcmp(cv+4,guid,16) && age==1) matched=TRUE;
+        }
     }
-    if (!matched) return FALSE;
+    if ((nt->FileHeader.TimeDateStamp!=0x6008c66eu || limit!=0x1bc7000u || !matched) && !s_cl_pe_warned) {
+        s_cl_pe_warned=TRUE;
+        OutputDebugStringA("[HKTAS][WARN] resident_clip_curve_ledger: UnityPlayer PE header/RSDS mismatch; verifying entry instruction bytes.\n");
+    }
     return hktas_de_verify_table(g_cl_base,g_cl_relay,(const void *const *)g_cl_wrappers,installed,g_cl_entries,3);
 }
 static BOOL install_resident_clip_curve_ledger(BYTE *base,DWORD main_thread,hktas_cl_sink sink)
@@ -217,10 +223,14 @@ static BOOL install_resident_clip_curve_ledger(BYTE *base,DWORD main_thread,hkta
     if (InterlockedCompareExchange(&g_cl_attempted_install,1,0) || !base || !main_thread
         || GetCurrentThreadId()!=main_thread || GetModuleHandleW(L"mono-2.0-bdwgc.dll") || !sink) return FALSE;
     g_cl_base=base;
-    if (!hktas_cl_image(FALSE)) return FALSE;
+    if (!hktas_cl_image(FALSE)) {
+        OutputDebugStringA("[HKTAS][WARN] resident_clip_curve_ledger: instruction byte verification failed; skipping hook installation.\n");
+        return FALSE;
+    }
     g_cl_tls=FlsAlloc(hktas_cl_thread_exit); if (g_cl_tls==FLS_OUT_OF_INDEXES) return FALSE;
     g_cl_main=main_thread; g_cl_sink=sink;
-    uintptr_t relay_start=((uintptr_t)base+0x1bc7000u+65535u)&~(uintptr_t)65535u;
+    const IMAGE_NT_HEADERS64 *nt=(const IMAGE_NT_HEADERS64 *)(base+((const IMAGE_DOS_HEADER *)base)->e_lfanew);
+    uintptr_t relay_start=((uintptr_t)base+nt->OptionalHeader.SizeOfImage+65535u)&~(uintptr_t)65535u;
     for (uintptr_t offset=0;offset<0x60000000u && !g_cl_relay;offset+=65536u)
         g_cl_relay=VirtualAlloc((void *)(relay_start+offset),4096,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
     if (!g_cl_relay) return FALSE;

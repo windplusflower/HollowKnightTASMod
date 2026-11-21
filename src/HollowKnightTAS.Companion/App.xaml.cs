@@ -101,11 +101,13 @@ namespace HollowKnightTAS.Companion
                 if (recovery.IncompleteTransactionIds.Count != 0
                     || recovery.CorruptOperationIds.Count != 0)
                 {
-                    Console.Error.WriteLine(
+                    var message =
                         "ColdRestoreRecoveryAttention:transactions="
                         + recovery.IncompleteTransactionIds.Count
                         + ";corrupt="
-                        + recovery.CorruptOperationIds.Count);
+                        + recovery.CorruptOperationIds.Count;
+                    System.Diagnostics.Trace.TraceWarning(message);
+                    Console.Error.WriteLine(message);
                 }
 
                 coldRestoreSupervisor = new ColdRestoreSupervisor(

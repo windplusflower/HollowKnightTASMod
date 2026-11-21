@@ -29,10 +29,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Original scene loader callback packet differs.");
             for (var index = 0; index < Fields.Length; index++) {
                 var item = source.Slots[index]; var present = Tokens[index] != 0;
-                if (item == null || item.Field != Fields[index] || item.Token != Tokens[index] || item.Method != Methods[index]
-                    || item.SharedClosure != (present ? 0 : -1) || item.ModuleMvid != (present ? CanonicalSceneMappingCarry.ModuleMvid : "")
+                if (item == null || item.Field != Fields[index] || item.Method != Methods[index]
+                    || item.SharedClosure != (present ? 0 : -1)
+                    || (present ? item.Token <= 0 || !Guid.TryParseExact(item.ModuleMvid, "D", out var mvid) || mvid == Guid.Empty
+                        : item.Token != 0 || item.ModuleMvid != "")
                     || item.DeclaringType != (present ? ClosureType : ""))
                     throw new InvalidDataException("Unregistered scene loader callback method, order or shared target alias.");
+                if (present && (item.Token != Tokens[index] || item.ModuleMvid != CanonicalSceneMappingCarry.ModuleMvid))
+                    CanonicalSceneMappingCarry.WarnOnce("SceneLoadCallbacks:Slot:" + item.Field + ":" + item.ModuleMvid + ":" + item.Token,
+                        "[HKTAS] SceneLoad callback MVID/token differs from pinned original (continuing): field=" + item.Field
+                        + ";mvid=" + item.ModuleMvid + ";token=" + item.Token);
             }
             return new Data { Version = source.Version, SourceScene = source.SourceScene, Slots = source.Slots.Select(item => new Slot {
                 Field = item.Field, Token = item.Token, ModuleMvid = item.ModuleMvid, DeclaringType = item.DeclaringType,

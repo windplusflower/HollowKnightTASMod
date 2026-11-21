@@ -58,9 +58,7 @@ static BOOL prepare_boot_frame(void)
         }
     }
     if (!prepare_early_mod_wall_clock()) {
-        hktas_v2_fault(62);
-        g_boot_loop_active = FALSE;
-        return FALSE;
+        OutputDebugStringA("[HKTAS][WARN] startup_frame_hook: prepare_early_mod_wall_clock failed; continuing without early mod wall clock.\n");
     }
     if (g_v2_gate_enabled)
     {
@@ -80,8 +78,7 @@ static BOOL prepare_boot_frame(void)
     }
     /* Start the bootstrap deadline only after the user releases frame zero. */
     if (!prepare_loading_startup_clock_probe()) {
-        hktas_v2_fault(61);
-        hktas_v2_wait_fault();
+        OutputDebugStringA("[HKTAS][WARN] startup_frame_hook: prepare_loading_startup_clock_probe failed; disabling probe and continuing.\n");
     }
     advance_boot_frame_clock();
     return TRUE;
@@ -144,37 +141,68 @@ static BOOL install_boot_frame_hook(void)
     if (GetEnvironmentVariableW(L"HKTAS_BOOT_FRAME_GATE", enabled, 4) == 0) return TRUE;
     if (wcscmp(enabled, L"1") != 0 || !g_boot_ready) return FALSE;
     BYTE *base = (BYTE *)GetModuleHandleW(L"UnityPlayer.dll");
-    if (!base) return FALSE;
+    if (!base) {
+        OutputDebugStringA("[HKTAS][WARN] startup_frame_hook: UnityPlayer.dll not found; skipping boot frame hook.\n");
+        return FALSE;
+    }
     IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 64 || dos->e_lfanew > 4096) {
+        OutputDebugStringA("[HKTAS][WARN] startup_frame_hook: invalid DOS header; skipping boot frame hook.\n");
+        return FALSE;
+    }
     IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
+        || nt->OptionalHeader.SizeOfImage < 0x760000u) {
+        OutputDebugStringA("[HKTAS][WARN] startup_frame_hook: invalid PE64 header or image too small; skipping boot frame hook.\n");
+        return FALSE;
+    }
+    DWORD image_size = nt->OptionalHeader.SizeOfImage;
     IMAGE_DATA_DIRECTORY debug = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
     const BYTE expected_guid[16] = {0x90,0xbe,0x34,0x03,0xdd,0x63,0x44,0x46,0xbe,0xe1,0xfc,0x8d,0x56,0xc8,0x40,0xc2};
     BOOL matched = FALSE;
-    for (DWORD i = 0; i < debug.Size / sizeof(IMAGE_DEBUG_DIRECTORY); ++i) {
-        IMAGE_DEBUG_DIRECTORY *entry = (IMAGE_DEBUG_DIRECTORY *)(base + debug.VirtualAddress) + i;
-        if (entry->Type != IMAGE_DEBUG_TYPE_CODEVIEW || entry->SizeOfData < 24) continue;
-        BYTE *cv = base + entry->AddressOfRawData;
-        if (memcmp(cv, "RSDS", 4) == 0 && memcmp(cv + 4, expected_guid, 16) == 0
-            && *(DWORD *)(cv + 20) == 1) matched = TRUE;
+    if (debug.VirtualAddress && debug.Size >= sizeof(IMAGE_DEBUG_DIRECTORY)
+        && debug.VirtualAddress <= image_size && debug.Size <= image_size - debug.VirtualAddress) {
+        for (DWORD i = 0; i < debug.Size / sizeof(IMAGE_DEBUG_DIRECTORY); ++i) {
+            IMAGE_DEBUG_DIRECTORY *entry = (IMAGE_DEBUG_DIRECTORY *)(base + debug.VirtualAddress) + i;
+            if (entry->Type != IMAGE_DEBUG_TYPE_CODEVIEW || entry->SizeOfData < 24
+                || entry->AddressOfRawData > image_size - 24u) continue;
+            BYTE *cv = base + entry->AddressOfRawData;
+            if (memcmp(cv, "RSDS", 4) == 0 && memcmp(cv + 4, expected_guid, 16) == 0
+                && *(DWORD *)(cv + 20) == 1) matched = TRUE;
+        }
     }
-    if (!matched) return FALSE;
-    if (!install_contact_impulse_probe(base)) return FALSE;
+    if (!matched) {
+        OutputDebugStringA("[HKTAS][WARN] startup_frame_hook: UnityPlayer RSDS PDB GUID mismatch; continuing with instruction byte checks.\n");
+    }
+    if (!install_contact_impulse_probe(base)) {
+        OutputDebugStringA("[HKTAS][WARN] startup_frame_hook: install_contact_impulse_probe skipped.\n");
+    }
     BYTE *site = base + 0x5231e5;
     const BYTE expected_call[5] = {0xe8,0xd6,0x92,0x23,0x00};
-    if (memcmp(site, expected_call, sizeof(expected_call)) != 0) return FALSE;
+    if (memcmp(site, expected_call, sizeof(expected_call)) != 0) {
+        OutputDebugStringA("[HKTAS][WARN] startup_frame_hook: PlayerLoop call bytes mismatch at RVA 0x5231e5; skipping boot frame hook.\n");
+        return FALSE;
+    }
     /* Matching PDB: the initial MainMessageLoop time update and the trailing
      * PerformMainLoop time update both prepare the following PlayerLoop. */
     BYTE *time_sites[2] = {base + 0x5217c3, base + 0x5232f9};
     const BYTE expected_time_calls[2][5] = {
         {0xe8,0xa8,0x70,0x23,0x00}, {0xe8,0x72,0x55,0x23,0x00}
     };
-    for (int i = 0; i < 2; ++i)
-        if (memcmp(time_sites[i], expected_time_calls[i], 5) != 0) return FALSE;
+    for (int i = 0; i < 2; ++i) {
+        if (memcmp(time_sites[i], expected_time_calls[i], 5) != 0) {
+            OutputDebugStringA("[HKTAS][WARN] startup_frame_hook: TimeUpdate call bytes mismatch; skipping boot frame hook.\n");
+            return FALSE;
+        }
+    }
     /* Matching PDB: TitleBarTimerUpdateCallback tail-jumps to PerformMainLoop.
      * Validate both patch sites before modifying either one. */
     BYTE *timer_site = base + 0x5253d1;
     const BYTE expected_timer_jump[5] = {0xe9,0x5a,0xdc,0xff,0xff};
-    if (memcmp(timer_site, expected_timer_jump, sizeof(expected_timer_jump)) != 0) return FALSE;
+    if (memcmp(timer_site, expected_timer_jump, sizeof(expected_timer_jump)) != 0) {
+        OutputDebugStringA("[HKTAS][WARN] startup_frame_hook: TitleBarTimer jump bytes mismatch at RVA 0x5253d1; skipping boot frame hook.\n");
+        return FALSE;
+    }
     GetEnvironmentVariableW(L"HKTAS_BOOT_GATE_TOKEN", token, 40);
     wsprintfW(name, L"Local\\HKTAS.Boot.%s.Step", token);
     g_boot_step = OpenEventW(SYNCHRONIZE, FALSE, name);

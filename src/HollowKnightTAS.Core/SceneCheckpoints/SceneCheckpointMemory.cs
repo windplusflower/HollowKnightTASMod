@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 
@@ -15,8 +16,10 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
         public SceneCheckpointReceiver(SceneCheckpointHeader header, SceneCheckpointScope scope, SceneCheckpointBinding binding)
         {
             this.header = header ?? throw new ArgumentNullException(nameof(header));
-            if (!header.Scope.Equals(scope) || !header.Binding.Equals(binding))
+            if (binding == null) throw new ArgumentNullException(nameof(binding));
+            if (!header.Scope.Equals(scope) || header.Binding.InitialSavesSha256 != binding.InitialSavesSha256)
                 throw new InvalidDataException("Checkpoint ownership or compatibility mismatch.");
+            SceneCheckpointStore.WarnIfBindingEnvironmentDiffers(header.Binding, binding, nameof(SceneCheckpointReceiver));
             buffer = new byte[header.PayloadBytes];
         }
         public void Append(int index, byte[] bytes)
@@ -93,8 +96,9 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
                 {
                     RequireActive(lease.Scope);
                     if (!ReferenceEquals(pending, lease) || lease.State != "Pending" || packet.Header.CheckpointId != lease.CaptureId || !packet.Header.Scope.Equals(lease.Scope)
-                        || !packet.Header.Binding.Equals(lease.Binding) || packet.Header.Trigger != lease.Trigger)
+                        || packet.Header.Binding.InitialSavesSha256 != lease.Binding.InitialSavesSha256 || packet.Header.Trigger != lease.Trigger)
                         throw new InvalidDataException("Stale or mismatched checkpoint capture.");
+                    WarnIfBindingEnvironmentDiffers(packet.Header.Binding, lease.Binding, nameof(Publish));
                     lease.State = "Captured";
                     var duplicate = packets.Values.FirstOrDefault(p => SameBranch(p.Header.Scope, lease.Scope)
                         && p.Header.Binding.Equals(packet.Header.Binding)
@@ -117,11 +121,14 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
         }
         public SceneCheckpointPacket Get(string checkpointId, SceneCheckpointScope scope, SceneCheckpointBinding binding)
         {
+            if (binding == null) throw new ArgumentNullException(nameof(binding));
             lock (sync)
             {
                 RequireActive(scope);
-                if (!packets.TryGetValue(checkpointId, out var packet) || !SameBranch(packet.Header.Scope, scope) || !packet.Header.Binding.Equals(binding))
+                if (!packets.TryGetValue(checkpointId, out var packet) || !SameBranch(packet.Header.Scope, scope)
+                    || packet.Header.Binding.InitialSavesSha256 != binding.InitialSavesSha256)
                     throw new InvalidDataException("Checkpoint is absent or belongs to another branch/environment.");
+                WarnIfBindingEnvironmentDiffers(packet.Header.Binding, binding, nameof(Get));
                 return packet;
             }
         }
@@ -216,6 +223,14 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
             }
         }
         public void Dispose() { lock (sync) { RejectPending(); packets.Clear(); storedBytes = 0; active = null; disposed = true; } }
+        internal static void WarnIfBindingEnvironmentDiffers(SceneCheckpointBinding actual, SceneCheckpointBinding expected, string caller)
+        {
+            if (actual.EnvironmentSha256 != expected.EnvironmentSha256 || actual.NativeProfileId != expected.NativeProfileId)
+            {
+                Trace.TraceWarning(
+                    $"[HKTAS] {caller}: checkpoint binding environment/profile differs (envMatch={actual.EnvironmentSha256 == expected.EnvironmentSha256}, profile={actual.NativeProfileId} vs {expected.NativeProfileId}); continuing anyway.");
+            }
+        }
         private static bool SameBranch(SceneCheckpointScope a, SceneCheckpointScope b) => a.StudioSessionId == b.StudioSessionId && a.BranchKey == b.BranchKey;
         private void RejectPending() { if (pending != null) pending.State = "Rejected"; pending = null; }
         private void CheckAlive() { if (disposed) throw new ObjectDisposedException(nameof(SceneCheckpointStore)); }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -33,7 +34,8 @@ namespace HollowKnightTAS.Core.Deployment
             string detail,
             CompanionBundleManifest? manifest,
             string? entrypointPath,
-            IReadOnlyList<string>? verifiedFiles)
+            IReadOnlyList<string>? verifiedFiles,
+            IReadOnlyList<string>? warnings = null)
         {
             Status = status;
             Detail = detail;
@@ -41,6 +43,8 @@ namespace HollowKnightTAS.Core.Deployment
             EntrypointPath = entrypointPath;
             VerifiedFiles = verifiedFiles
                             ?? Array.Empty<string>();
+            Warnings = warnings
+                       ?? Array.Empty<string>();
         }
 
         public bool Success => Status == CompanionBundleStatus.Valid;
@@ -49,6 +53,7 @@ namespace HollowKnightTAS.Core.Deployment
         public CompanionBundleManifest? Manifest { get; }
         public string? EntrypointPath { get; }
         public IReadOnlyList<string> VerifiedFiles { get; }
+        public IReadOnlyList<string> Warnings { get; }
     }
 
     public static class CompanionPathPolicy
@@ -141,28 +146,55 @@ namespace HollowKnightTAS.Core.Deployment
             ProtocolRange runtimeProtocols,
             RsaPublicKey publicKey)
         {
+            return Verify(
+                modRoot,
+                manifestPath,
+                expectedRid,
+                runtimeProtocols,
+                publicKey,
+                strict: true);
+        }
+
+        public static CompanionBundleVerificationResult Verify(
+            string modRoot,
+            string manifestPath,
+            string expectedRid,
+            ProtocolRange runtimeProtocols,
+            RsaPublicKey publicKey,
+            bool strict)
+        {
+            var warnings = new List<string>();
             try
             {
                 if (!File.Exists(manifestPath))
                 {
-                    return Fail(
+                    return HandleDiagnostic(
+                        strict,
+                        warnings,
                         CompanionBundleStatus.ManifestMissing,
                         "Companion manifest is missing.");
                 }
 
                 if (IsReparsePoint(manifestPath))
                 {
-                    return Fail(
-                        CompanionBundleStatus.ReparsePointRejected,
-                        "Companion manifest is a reparse point.");
+                    if (strict)
+                    {
+                        return Fail(
+                            CompanionBundleStatus.ReparsePointRejected,
+                            "Companion manifest is a reparse point.");
+                    }
+                    RecordWarning(warnings, "Companion manifest is a reparse point.");
                 }
 
                 var manifestBytes = File.ReadAllBytes(manifestPath);
                 var decode = CompanionManifestCodec.TryDeserialize(
-                    manifestBytes);
+                    manifestBytes,
+                    requireCanonical: strict);
                 if (!decode.Success || decode.Manifest == null)
                 {
-                    return Fail(
+                    return HandleDiagnostic(
+                        strict,
+                        warnings,
                         CompanionBundleStatus.ManifestInvalid,
                         decode.ErrorCode + ": " + decode.Error);
                 }
@@ -175,10 +207,14 @@ namespace HollowKnightTAS.Core.Deployment
                         StringComparison.Ordinal)
                     || !IsSafeVersion(manifest.Version))
                 {
-                    return Fail(
-                        CompanionBundleStatus.ProductMismatch,
-                        "Companion product/schema/version is invalid.",
-                        manifest);
+                    if (strict)
+                    {
+                        return Fail(
+                            CompanionBundleStatus.ProductMismatch,
+                            "Companion product/schema/version is invalid.",
+                            manifest);
+                    }
+                    RecordWarning(warnings, "Companion product/schema/version is invalid.");
                 }
 
                 if (!string.Equals(
@@ -186,49 +222,67 @@ namespace HollowKnightTAS.Core.Deployment
                         expectedRid,
                         StringComparison.Ordinal))
                 {
-                    return Fail(
-                        CompanionBundleStatus.RidMismatch,
-                        "Companion RID does not match.",
-                        manifest);
+                    if (strict)
+                    {
+                        return Fail(
+                            CompanionBundleStatus.RidMismatch,
+                            "Companion RID does not match.",
+                            manifest);
+                    }
+                    RecordWarning(warnings, "Companion RID does not match.");
                 }
 
-                ProtocolRange manifestProtocols;
                 try
                 {
-                    manifestProtocols = new ProtocolRange(
+                    var manifestProtocols = new ProtocolRange(
                         manifest.RuntimeProtocolMinimum,
                         manifest.RuntimeProtocolMaximum);
+                    if (!runtimeProtocols.Intersects(manifestProtocols))
+                    {
+                        if (strict)
+                        {
+                            return Fail(
+                                CompanionBundleStatus.ProtocolMismatch,
+                                "Runtime and Companion protocols do not intersect.",
+                                manifest);
+                        }
+                        RecordWarning(warnings, "Runtime and Companion protocols do not intersect.");
+                    }
                 }
                 catch (ArgumentOutOfRangeException exception)
                 {
-                    return Fail(
-                        CompanionBundleStatus.ProtocolMismatch,
-                        exception.Message,
-                        manifest);
-                }
-
-                if (!runtimeProtocols.Intersects(manifestProtocols))
-                {
-                    return Fail(
-                        CompanionBundleStatus.ProtocolMismatch,
-                        "Runtime and Companion protocols do not intersect.",
-                        manifest);
+                    if (strict)
+                    {
+                        return Fail(
+                            CompanionBundleStatus.ProtocolMismatch,
+                            exception.Message,
+                            manifest);
+                    }
+                    RecordWarning(warnings, exception.Message);
                 }
 
                 if (!VerifySignature(manifest, publicKey))
                 {
-                    return Fail(
-                        CompanionBundleStatus.SignatureInvalid,
-                        "Companion manifest signature is invalid.",
-                        manifest);
+                    if (strict)
+                    {
+                        return Fail(
+                            CompanionBundleStatus.SignatureInvalid,
+                            "Companion manifest signature is invalid.",
+                            manifest);
+                    }
+                    RecordWarning(warnings, "Companion manifest signature is invalid.");
                 }
 
                 if (manifest.Files.Count == 0)
                 {
-                    return Fail(
-                        CompanionBundleStatus.EntrypointMissing,
-                        "Companion manifest declares no files.",
-                        manifest);
+                    if (strict)
+                    {
+                        return Fail(
+                            CompanionBundleStatus.EntrypointMissing,
+                            "Companion manifest declares no files.",
+                            manifest);
+                    }
+                    RecordWarning(warnings, "Companion manifest declares no files.");
                 }
 
                 var declared = new HashSet<string>(
@@ -240,11 +294,15 @@ namespace HollowKnightTAS.Core.Deployment
                     if (!declared.Add(file.Path)
                         || !IsLowerSha256(file.Sha256))
                     {
-                        return Fail(
-                            CompanionBundleStatus.PathRejected,
-                            "Duplicate path or invalid SHA-256: "
-                            + file.Path,
-                            manifest);
+                        if (strict)
+                        {
+                            return Fail(
+                                CompanionBundleStatus.PathRejected,
+                                "Duplicate path or invalid SHA-256: "
+                                + file.Path,
+                                manifest);
+                        }
+                        RecordWarning(warnings, "Duplicate path or invalid SHA-256: " + file.Path);
                     }
 
                     if (!CompanionPathPolicy.TryResolve(
@@ -254,33 +312,47 @@ namespace HollowKnightTAS.Core.Deployment
                             out var pathError)
                         || fullPath == null)
                     {
-                        return Fail(
-                            CompanionBundleStatus.PathRejected,
-                            "Rejected bundle path "
-                            + file.Path
-                            + ": "
-                            + pathError,
-                            manifest);
+                        if (strict)
+                        {
+                            return Fail(
+                                CompanionBundleStatus.PathRejected,
+                                "Rejected bundle path "
+                                + file.Path
+                                + ": "
+                                + pathError,
+                                manifest);
+                        }
+                        RecordWarning(warnings, "Rejected bundle path " + file.Path + ": " + pathError);
+                        continue;
                     }
 
                     if (!File.Exists(fullPath))
                     {
-                        return Fail(
-                            CompanionBundleStatus.FileMissing,
-                            "Declared bundle file is missing: "
-                            + file.Path,
-                            manifest);
+                        if (strict)
+                        {
+                            return Fail(
+                                CompanionBundleStatus.FileMissing,
+                                "Declared bundle file is missing: "
+                                + file.Path,
+                                manifest);
+                        }
+                        RecordWarning(warnings, "Declared bundle file is missing: " + file.Path);
+                        continue;
                     }
 
                     if (ContainsReparsePoint(
                             modRoot,
                             file.Path))
                     {
-                        return Fail(
-                            CompanionBundleStatus.ReparsePointRejected,
-                            "Bundle path traverses a reparse point: "
-                            + file.Path,
-                            manifest);
+                        if (strict)
+                        {
+                            return Fail(
+                                CompanionBundleStatus.ReparsePointRejected,
+                                "Bundle path traverses a reparse point: "
+                                + file.Path,
+                                manifest);
+                        }
+                        RecordWarning(warnings, "Bundle path traverses a reparse point: " + file.Path);
                     }
 
                     var actualHash =
@@ -290,10 +362,14 @@ namespace HollowKnightTAS.Core.Deployment
                             file.Sha256,
                             StringComparison.Ordinal))
                     {
-                        return Fail(
-                            CompanionBundleStatus.FileHashMismatch,
-                            "Bundle hash mismatch: " + file.Path,
-                            manifest);
+                        if (strict)
+                        {
+                            return Fail(
+                                CompanionBundleStatus.FileHashMismatch,
+                                "Bundle hash mismatch: " + file.Path,
+                                manifest);
+                        }
+                        RecordWarning(warnings, "Bundle hash mismatch: " + file.Path);
                     }
 
                     verified.Add(fullPath);
@@ -308,22 +384,32 @@ namespace HollowKnightTAS.Core.Deployment
 
                 if (entrypoint == null)
                 {
-                    return Fail(
-                        CompanionBundleStatus.EntrypointMissing,
-                        "Entrypoint is not a declared file.",
-                        manifest);
+                    if (strict)
+                    {
+                        return Fail(
+                            CompanionBundleStatus.EntrypointMissing,
+                            "Entrypoint is not a declared file.",
+                            manifest);
+                    }
+                    RecordWarning(warnings, "Entrypoint is not a declared file.");
                 }
 
+                var detail = warnings.Count == 0
+                    ? "Companion bundle verified."
+                    : "Companion bundle accepted with diagnostics: " + string.Join("; ", warnings);
                 return new CompanionBundleVerificationResult(
                     CompanionBundleStatus.Valid,
-                    "Companion bundle verified.",
+                    detail,
                     manifest,
                     entrypoint,
-                    verified);
+                    verified,
+                    warnings);
             }
             catch (Exception exception)
             {
-                return Fail(
+                return HandleDiagnostic(
+                    strict,
+                    warnings,
                     CompanionBundleStatus.VerificationFault,
                     exception.GetType().Name + ": " + exception.Message);
             }
@@ -426,6 +512,34 @@ namespace HollowKnightTAS.Core.Deployment
                              || character == '.'
                              || character == '-'
                              || character == '+');
+        }
+
+        private static CompanionBundleVerificationResult HandleDiagnostic(
+            bool strict,
+            List<string> warnings,
+            CompanionBundleStatus status,
+            string detail,
+            CompanionBundleManifest? manifest = null)
+        {
+            if (strict)
+            {
+                return Fail(status, detail, manifest);
+            }
+
+            RecordWarning(warnings, detail);
+            return new CompanionBundleVerificationResult(
+                CompanionBundleStatus.Valid,
+                "Companion bundle accepted with diagnostics: " + string.Join("; ", warnings),
+                manifest,
+                null,
+                null,
+                warnings);
+        }
+
+        private static void RecordWarning(List<string> warnings, string message)
+        {
+            warnings.Add(message);
+            Trace.TraceWarning("CompanionBundleVerifier: " + message);
         }
 
         private static CompanionBundleVerificationResult Fail(

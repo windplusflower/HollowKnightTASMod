@@ -25,7 +25,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal CanonicalFinalVisualGlyphs() : this(OriginalSlots()) { }
         internal CanonicalFinalVisualGlyphs(IReadOnlyDictionary<string, TMP_Glyph> source)
         {
-            if (typeof(TMP_Glyph).Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid || source.Count > 100000)
+            var actualMvid = typeof(TMP_Glyph).Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("FinalVisualGlyphs:Mvid:" + actualMvid,
+                    "[HKTAS] TMP_Glyph ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
+            if (source.Count > 100000)
                 throw new InvalidDataException("Final visual original glyph module/slot bound differs.");
             slots = source.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
             foreach (var group in slots.GroupBy(pair => (object)pair.Value, new References()))

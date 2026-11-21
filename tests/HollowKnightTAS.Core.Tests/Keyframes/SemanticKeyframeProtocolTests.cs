@@ -131,15 +131,38 @@ namespace HollowKnightTAS.Core.Tests.Keyframes
                     KeyframeSupportTier.RoomEntry,
                     300,
                     KeyframeTestFactory.Hash("different-game"),
-                    fixture.Descriptor.ManifestSha256,
+                    KeyframeTestFactory.Hash("different-manifest"),
                     fixture.Descriptor.BaselineObjectSha256,
+                    new[] { fixture.Descriptor.JournalHeadSha256 },
+                    KeyframeTestFactory.Hash("different-adapter-manifest"),
+                    fixture.Manifest,
+                    true));
+            Assert.AreEqual(
+                KeyframeCompatibilityStatus.Compatible,
+                mismatch.Status);
+            Assert.IsTrue(mismatch.IsCompatible);
+            Assert.AreEqual(
+                "compatible",
+                mismatch.ReasonCode);
+
+            var baselineMismatch = KeyframeCompatibility.Evaluate(
+                fixture.Descriptor,
+                new KeyframeCompatibilityContext(
+                    KeyframeSupportTier.RoomEntry,
+                    300,
+                    fixture.Descriptor.GameBuildSha256,
+                    fixture.Descriptor.ManifestSha256,
+                    KeyframeTestFactory.Hash("different-baseline"),
                     new[] { fixture.Descriptor.JournalHeadSha256 },
                     fixture.Descriptor.AdapterManifestSha256,
                     fixture.Manifest,
                     false));
             Assert.AreEqual(
-                "game-build-mismatch",
-                mismatch.ReasonCode);
+                KeyframeCompatibilityStatus.Incompatible,
+                baselineMismatch.Status);
+            Assert.AreEqual(
+                "baseline-mismatch",
+                baselineMismatch.ReasonCode);
 
             var journalMismatch = KeyframeCompatibility.Evaluate(
                 fixture.Descriptor,

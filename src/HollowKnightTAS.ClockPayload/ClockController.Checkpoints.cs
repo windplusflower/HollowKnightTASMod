@@ -13,11 +13,18 @@ namespace HollowKnightTAS.ClockPayload
         [DllImport("HollowKnightTAS.ClockBridge.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern ulong HktasClockBridge_GetCompletedPlayerLoops();
         [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+        private static bool checkpointProfileWarned;
+
         private static void RequireCheckpointRandomBoundary()
         {
-            if ((!NativeExecutionProfile.SupportsSceneCheckpoints(NativeExecutionProfile.SelectedProfileId)
-                    && Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") != "1")
-                || !fullRunRenderIsolationEnabled || fullRunRenderEntered
+            if (!NativeExecutionProfile.SupportsSceneCheckpoints(NativeExecutionProfile.SelectedProfileId)
+                && Environment.GetEnvironmentVariable("HKTAS_SCENE_CHECKPOINT_EXPERIMENT") != "1"
+                && !checkpointProfileWarned)
+            {
+                checkpointProfileWarned = true;
+                UnityEngine.Debug.LogWarning("[HKTAS] Checkpoint random boundary invoked with profile '" + NativeExecutionProfile.SelectedProfileId + "'; continuing.");
+            }
+            if (!fullRunRenderIsolationEnabled || fullRunRenderEntered
                 || GetCurrentThreadId() != (uint)StartupHookThreadId)
                 throw new InvalidOperationException("Random continuation requires the controlled engine boundary.");
         }
@@ -41,7 +48,12 @@ namespace HollowKnightTAS.ClockPayload
         public static void ImportCheckpointParticleRandomState(uint[] source, long expectedNativeFrame)
         {
             RequireCheckpointRandomBoundary();
-            if (!checkpointRandomImported || !NativeExecutionProfile.UsesCanonicalBoundary(NativeExecutionProfile.SelectedProfileId)
+            if (!NativeExecutionProfile.UsesCanonicalBoundary(NativeExecutionProfile.SelectedProfileId) && !checkpointProfileWarned)
+            {
+                checkpointProfileWarned = true;
+                UnityEngine.Debug.LogWarning("[HKTAS] ImportCheckpointParticleRandomState invoked with profile '" + NativeExecutionProfile.SelectedProfileId + "'; continuing.");
+            }
+            if (!checkpointRandomImported
                 || expectedNativeFrame < 0 || HktasClockBridge_GetFullRunMode() != 0
                 || HktasClockBridge_GetCompletedPlayerLoops() != (ulong)expectedNativeFrame)
                 throw new InvalidOperationException("Particle continuation requires the imported original paused canonical D boundary.");

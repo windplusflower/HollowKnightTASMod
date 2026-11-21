@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -43,11 +44,6 @@ namespace HollowKnightTAS.Companion.ViewModels
             string? requiredEnvironmentSha256 = null)
         {
             if (header == null || candidateMovie == null) return false;
-            if (header.Binding.NativeProfileId != candidateMovie.Header.NativeProfileId)
-                return false;
-            if (fullRunMovies?.IsPending == true
-                && header.Binding.NativeProfileId != MovieProtocolV2.SelectedNativeProfileId)
-                return false;
 
             var expectedSavesHashes = sequenceInitialSaves?.Hashes
                 ?? (fullRunMovies?.IsPending == true ? fullRunMovies.OriginalHashes : null);
@@ -58,11 +54,26 @@ namespace HollowKnightTAS.Companion.ViewModels
                     return false;
             }
 
+            if (header.Binding.NativeProfileId != candidateMovie.Header.NativeProfileId)
+            {
+                Trace.TraceWarning(
+                    $"MainViewModel: checkpoint {header.CheckpointId} NativeProfileId differs from candidate Movie ({header.Binding.NativeProfileId} != {candidateMovie.Header.NativeProfileId}); allowing compatibility.");
+            }
+            if (fullRunMovies?.IsPending == true
+                && header.Binding.NativeProfileId != MovieProtocolV2.SelectedNativeProfileId)
+            {
+                Trace.TraceWarning(
+                    $"MainViewModel: checkpoint {header.CheckpointId} NativeProfileId differs from selected profile ({header.Binding.NativeProfileId} != {MovieProtocolV2.SelectedNativeProfileId}); allowing compatibility.");
+            }
+
             var envSha = !string.IsNullOrWhiteSpace(requiredEnvironmentSha256)
                 ? requiredEnvironmentSha256
                 : GetCurrentRuntimeEnvironmentSha256();
             if (!string.IsNullOrWhiteSpace(envSha) && header.Binding.EnvironmentSha256 != envSha)
-                return false;
+            {
+                Trace.TraceWarning(
+                    $"MainViewModel: checkpoint {header.CheckpointId} EnvironmentSha256 differs from current runtime ({header.Binding.EnvironmentSha256} != {envSha}); allowing compatibility.");
+            }
 
             return true;
         }

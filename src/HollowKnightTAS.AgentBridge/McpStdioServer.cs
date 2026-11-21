@@ -254,18 +254,42 @@ namespace HollowKnightTAS.AgentBridge
                 || !request.TryGetProperty(
                     "params",
                     out var parameters)
-                || parameters.ValueKind != JsonValueKind.Object
-                || !parameters.TryGetProperty(
-                    "protocolVersion",
-                    out var protocol)
-                || protocol.ValueKind != JsonValueKind.String
-                || protocol.GetString() != McpProtocolVersion)
+                || parameters.ValueKind != JsonValueKind.Object)
             {
                 await WriteErrorAsync(
                     id,
                     -32602,
-                    "Only MCP protocol 2025-11-25 is supported.");
+                    "Invalid initialize parameters or already initialized.");
                 return;
+            }
+
+            string? clientProtocolVersion = null;
+            if (parameters.TryGetProperty(
+                    "protocolVersion",
+                    out var protocol)
+                && protocol.ValueKind == JsonValueKind.String)
+            {
+                clientProtocolVersion = protocol.GetString();
+            }
+
+            if (string.IsNullOrWhiteSpace(clientProtocolVersion))
+            {
+                Console.Error.WriteLine(
+                    "McpWarning:Client did not provide a valid protocolVersion; using server protocol "
+                    + McpProtocolVersion
+                    + ".");
+            }
+            else if (!string.Equals(
+                         clientProtocolVersion,
+                         McpProtocolVersion,
+                         StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine(
+                    "McpWarning:Client protocolVersion '"
+                    + clientProtocolVersion
+                    + "' differs from server '"
+                    + McpProtocolVersion
+                    + "'; continuing handshake.");
             }
 
             handshake = await automation.ConnectAsync(

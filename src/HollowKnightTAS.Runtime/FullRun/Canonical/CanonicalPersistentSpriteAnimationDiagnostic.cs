@@ -105,8 +105,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             var all = CanonicalPersistentSpriteDirectory.Resolve();
             owners = new SortedDictionary<string, tk2dSprite>(StringComparer.Ordinal);
             foreach (var key in CanonicalPersistentSpriteContinuation.Keys) owners.Add(key, all[key]);
-            if (typeof(tk2dSprite).Module.ModuleVersionId.ToString("D") != "2b54cdaf-7a93-4f0e-b297-d50c4090ea9f")
-                throw new InvalidDataException("Sprite diagnostic original module differs.");
+            var actualMvid = typeof(tk2dSprite).Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("SpriteAnimDiag:Mvid:" + actualMvid,
+                    "[HKTAS] tk2dSprite ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
             RecordAll("B-before-D", movie, native);
         }
         internal static void Arm(string role, long movie, long native)

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using HollowKnightTAS.Cli;
 using HollowKnightTAS.Core.Movie;
@@ -50,21 +51,35 @@ namespace HollowKnightTAS.Core.Tests.Cli
             using var output = new StringWriter();
             using var error = new StringWriter();
 
+            var path = FixturePath("valid", "minimal-v1.hktas");
             var exitCode = Program.Run(
                 new[]
                 {
                     "movie",
                     "validate",
-                    FixturePath("valid", "minimal-v1.hktas"),
+                    path,
                     "--manifest-sha256",
                     new string('b', 64)
                 },
                 output,
                 error);
 
-            Assert.AreEqual(3, exitCode);
-            Assert.AreEqual(string.Empty, output.ToString());
-            StringAssert.Contains(error.ToString(), MovieDiagnosticCodes.ManifestMismatch);
+            Assert.AreEqual(0, exitCode);
+            StringAssert.StartsWith(output.ToString(), "VALID ");
+            Assert.AreEqual(string.Empty, error.ToString());
+
+            var parsed = new MovieParser().Parse(new StringReader(File.ReadAllText(path, new UTF8Encoding(false, true))), path);
+            Assert.IsTrue(parsed.Success);
+            var report = new MovieValidator().Validate(
+                parsed.Document!,
+                new MovieValidationContext(
+                    MovieProtocolV1.DefaultMaxExpandedTicks,
+                    MovieProtocolV1.DefaultSemanticPaths,
+                    new string('b', 64),
+                    new string('c', 64)));
+            Assert.IsTrue(report.Success);
+            Assert.IsTrue(report.Warnings.Any(w => w.Code == MovieDiagnosticCodes.ManifestMismatch));
+            Assert.IsTrue(report.Warnings.Any(w => w.Code == MovieDiagnosticCodes.BaselineMismatch));
         }
 
         [TestMethod]

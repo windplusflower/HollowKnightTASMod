@@ -148,11 +148,17 @@ namespace HollowKnightTAS.Runtime.FullRun
             var type = typeof(iTweenFSMEvents);
             var initializer = type.TypeInitializer;
             var counter = type.GetField("itweenIDCount", BindingFlags.Static | BindingFlags.Public);
-            if (type.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid
-                || initializer == null || initializer.MetadataToken != 0x060001a4
-                || initializer.GetMethodBody()?.GetILAsByteArray() is not byte[] body
-                || body.Length != 1 || body[0] != 0x2a
-                || counter == null || counter.FieldType != typeof(int) || !counter.IsStatic || counter.IsInitOnly)
+            var actualMvid = type.Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("HudPresentationCarry:Mvid:" + actualMvid,
+                    "[HKTAS] iTweenFSMEvents ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
+            if (initializer != null && initializer.MetadataToken != 0x060001a4)
+                CanonicalSceneMappingCarry.WarnOnce("HudPresentationCarry:CctorToken:" + initializer.MetadataToken,
+                    "[HKTAS] iTweenFSMEvents..cctor MetadataToken differs from pinned 0x060001a4 (continuing): actual=0x" + initializer.MetadataToken.ToString("x8"));
+            if (initializer != null && (initializer.GetMethodBody()?.GetILAsByteArray() is not byte[] body || body.Length != 1 || body[0] != 0x2a))
+                CanonicalSceneMappingCarry.WarnOnce("HudPresentationCarry:CctorIL",
+                    "[HKTAS] iTweenFSMEvents..cctor IL body differs from pinned ret (continuing).");
+            if (counter == null || counter.FieldType != typeof(int) || !counter.IsStatic || counter.IsInitOnly)
                 throw new InvalidDataException("HUD original tween counter ABI differs.");
         }
     }

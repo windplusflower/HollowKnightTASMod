@@ -28,19 +28,35 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (callback.GetType() != CallbackType || callback.GetInvocationList().Length != 1 || !ReferenceEquals(callback.Target, owner))
                 throw new InvalidDataException("Ease callback closed action or invocation differs.");
-            var method = Method(callback.Method.MetadataToken);
+            var method = ResolveMethod(callback.Method.MetadataToken, callback.Method.Name);
             if (!Equals(callback.Method, method)) throw new InvalidDataException("Ease callback method identity differs.");
-            return Module + "/" + method.MetadataToken.ToString("x8");
+            var actualMvid = OwnerType!.Module.ModuleVersionId.ToString("D");
+            if (actualMvid == Module && Array.IndexOf(Tokens, method.MetadataToken) >= 0)
+                return Module + "/" + method.MetadataToken.ToString("x8");
+            return actualMvid + "/" + method.Name;
         }
-        private static MethodInfo Method(int token)
+        private static MethodInfo ResolveMethod(int token, string? name = null)
         {
+            if (OwnerType == null || OwnerType.Assembly.GetName().Name != "Assembly-CSharp")
+                throw new InvalidDataException("Ease callback module or method is unregistered.");
+            var actualMvid = OwnerType.Module.ModuleVersionId.ToString("D");
+            if (actualMvid != Module)
+                CanonicalSceneMappingCarry.WarnOnce("EaseCallback:Mvid:" + actualMvid,
+                    "[HKTAS] EaseFsmAction ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
             var index = Array.IndexOf(Tokens, token);
-            if (index < 0 || OwnerType == null || OwnerType.Assembly.GetName().Name != "Assembly-CSharp" || OwnerType.Module.ModuleVersionId.ToString("D") != Module)
+            if (index < 0 && !string.IsNullOrEmpty(name))
+                index = Array.IndexOf(Names, name);
+            if (index < 0)
                 throw new InvalidDataException("Ease callback module or method is unregistered.");
             var method = OwnerType.GetMethod(Names[index], BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
                 null, new[] { typeof(float), typeof(float), typeof(float) }, null);
-            if (method == null || method.MetadataToken != token || method.DeclaringType != OwnerType || method.IsStatic
-                || method.IsGenericMethod || method.ReturnType != typeof(float)) throw new InvalidDataException("Ease callback method layout differs.");
+            if (method == null || method.DeclaringType != OwnerType || method.IsStatic
+                || method.IsGenericMethod || method.ReturnType != typeof(float))
+                throw new InvalidDataException("Ease callback method layout differs.");
+            if (method.MetadataToken != Tokens[index])
+                CanonicalSceneMappingCarry.WarnOnce("EaseCallback:Token:" + Names[index] + ":" + method.MetadataToken,
+                    "[HKTAS] EaseFsmAction." + Names[index] + " MetadataToken differs from pinned 0x" + Tokens[index].ToString("x8")
+                    + " (continuing): actual=0x" + method.MetadataToken.ToString("x8"));
             return method;
         }
         internal static Delegate Bind(string identity, object owner)
@@ -48,15 +64,26 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (OwnerType == null || CallbackType == null || !OwnerType.IsInstanceOfType(owner))
                 throw new InvalidDataException("Ease callback target or identity differs.");
             var callback = Delegate.CreateDelegate(CallbackType, owner, ValidateIdentity(identity));
-            if (Describe(callback, owner) != identity) throw new InvalidDataException("Ease callback binding changed.");
+            var described = Describe(callback, owner);
+            if (described != identity && ValidateIdentity(described) != callback.Method)
+                throw new InvalidDataException("Ease callback binding changed.");
             return callback;
         }
         internal static MethodInfo ValidateIdentity(string identity)
         {
-            if (identity == null || identity.Length != 45 || !identity.StartsWith(Module + "/", StringComparison.Ordinal)
-                || !int.TryParse(identity.Substring(37), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var token))
+            if (identity == null) throw new InvalidDataException("Ease callback identity differs.");
+            var slash = identity.IndexOf('/');
+            if (slash != 36 || !Guid.TryParseExact(identity.Substring(0, slash), "D", out var identityMvid) || identityMvid == Guid.Empty)
                 throw new InvalidDataException("Ease callback identity differs.");
-            return Method(token);
+            var suffix = identity.Substring(slash + 1);
+            if (identity.Substring(0, slash) != Module)
+                CanonicalSceneMappingCarry.WarnOnce("EaseCallback:IdentityMvid:" + identity.Substring(0, slash),
+                    "[HKTAS] Ease callback identity MVID differs from pinned original (continuing): " + identity.Substring(0, slash));
+            if (suffix.Length == 8 && int.TryParse(suffix, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var token))
+                return ResolveMethod(token);
+            if (Array.IndexOf(Names, suffix) >= 0)
+                return ResolveMethod(-1, suffix);
+            throw new InvalidDataException("Ease callback identity differs.");
         }
     }
 }

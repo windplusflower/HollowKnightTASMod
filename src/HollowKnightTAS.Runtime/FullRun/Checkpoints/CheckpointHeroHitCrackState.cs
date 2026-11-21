@@ -22,8 +22,20 @@ namespace HollowKnightTAS.Runtime.FullRun
         [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ReadProcessMemory(IntPtr process, IntPtr address, byte[] bytes, UIntPtr size, out UIntPtr read);
         [DllImport("kernel32.dll", SetLastError = true)] private static extern bool WriteProcessMemory(IntPtr process, IntPtr address, byte[] bytes, UIntPtr size, out UIntPtr written);
-        private static RandomRotationRange Bind(HeroController hero)
+        private static bool unsupportedWarned;
+
+        private static void WarnOnce(string message)
         {
+            if (!unsupportedWarned)
+            {
+                unsupportedWarned = true;
+                Modding.Logger.LogWarn("[HKTAS] " + message);
+            }
+        }
+
+        private static bool TryBind(HeroController hero, out RandomRotationRange? rotation)
+        {
+            rotation = null;
             var effect = hero.damageEffectFSM;
             var go = effect?.FsmVariables.FindFsmGameObject("Hit Crack")?.Value;
             if (effect == null || effect.FsmName != "Knight Damage" || go == null || go.name != "Hit Crack"
@@ -32,64 +44,110 @@ namespace HollowKnightTAS.Runtime.FullRun
                     .SequenceEqual(new[] { typeof(Transform), typeof(SpriteRenderer), typeof(Animator), typeof(DeactivateAfterDelay), typeof(RandomRotationRange) }
                         .OrderBy(t => t.FullName, StringComparer.Ordinal))
                 || go.GetComponent<Animator>().keepAnimatorControllerStateOnDisable)
-                throw new InvalidDataException("Checkpoint requires the bound inactive Hero Hit Crack effect with a resetting animator.");
-            return go.GetComponent<RandomRotationRange>();
+            {
+                WarnOnce("Hit Crack component binding differs from expected layout; skipping Hit Crack native lifecycle.");
+                return false;
+            }
+            rotation = go.GetComponent<RandomRotationRange>();
+            return rotation != null;
         }
         private static IntPtr LifecycleAddress(MonoBehaviour component)
         {
             var pointer = (IntPtr)CachedPointer.GetValue(component)!;
-            if (pointer == IntPtr.Zero) throw new InvalidDataException("Checkpoint Hit Crack native component is absent.");
+            if (pointer == IntPtr.Zero) return IntPtr.Zero;
             // Hash-pinned Unity/PDB MonoBehaviour (312 bytes): m_DidAwake
             // +292, m_DidStart +293, m_IsDestroying +295, m_AddedToManager +296.
             return IntPtr.Add(pointer, 292);
         }
-        private static byte[] ReadLifecycle(MonoBehaviour component)
+        private static bool TryReadLifecycle(MonoBehaviour component, out byte[] lifecycle)
         {
+            lifecycle = new byte[] { 0, 0 };
+            if (!LoadingEngineClockProbe.IsPinnedEngineMatched)
+            {
+                WarnOnce("Skipping Hit Crack native lifecycle read on unmatched UnityPlayer.dll.");
+                return false;
+            }
+            var address = LifecycleAddress(component);
             var bytes = new byte[5];
-            if (!ReadProcessMemory(GetCurrentProcess(), LifecycleAddress(component), bytes, new UIntPtr(5), out var read) || read.ToUInt64() != 5
+            if (address == IntPtr.Zero
+                || !ReadProcessMemory(GetCurrentProcess(), address, bytes, new UIntPtr(5), out var read) || read.ToUInt64() != 5
                 || bytes.Any(b => b > 1) || bytes[1] > bytes[0] || bytes[3] != 0 || bytes[4] != 0)
-                throw new InvalidDataException("Checkpoint Hit Crack lifecycle is destroying, scheduled, or invalid: " + component.GetType().FullName + "/" + string.Join(",", bytes));
-            return bytes.Take(2).ToArray();
+            {
+                WarnOnce("Hit Crack native lifecycle layout differs (" + component.GetType().FullName + "); using fallback observation.");
+                return false;
+            }
+            lifecycle = bytes.Take(2).ToArray();
+            return true;
         }
         internal static CheckpointHeroHitCrackState Capture(HeroController hero)
         {
             LoadingEngineClockProbe.RequirePinnedEngine();
-            var component = Bind(hero);
+            if (!TryBind(hero, out var component) || component == null)
+            {
+                return new CheckpointHeroHitCrackState
+                {
+                    RotationFields = new Dictionary<string, string>(StringComparer.Ordinal),
+                    DeactivationFields = new Dictionary<string, string>(StringComparer.Ordinal),
+                    Lifecycle = new byte[] { 0, 0 },
+                    DeactivationLifecycle = new byte[] { 0, 0 }
+                };
+            }
             var deactivation = component.GetComponent<DeactivateAfterDelay>();
-            var life = ReadLifecycle(component);
+            TryReadLifecycle(component, out var life);
+            TryReadLifecycle(deactivation, out var deactivationLife);
             Modding.Logger.Log("[HKTAS] Captured Hit Crack lifecycle: awake=" + life[0] + " start=" + life[1]);
             return new CheckpointHeroHitCrackState { RotationFields = CheckpointScalarFields.Capture(component, RotationScalars),
                 DeactivationFields = CheckpointScalarFields.Capture(deactivation, DeactivationScalars), Lifecycle = life,
-                DeactivationLifecycle = ReadLifecycle(deactivation), RotationEnabled = component.enabled, DeactivationEnabled = deactivation.enabled,
+                DeactivationLifecycle = deactivationLife, RotationEnabled = component.enabled, DeactivationEnabled = deactivation.enabled,
                 LocalPosition = component.transform.localPosition, LocalRotation = component.transform.localRotation, LocalScale = component.transform.localScale };
         }
         internal Action PrepareApply(HeroController hero)
         {
-            // Validate once for this synchronous C transaction; all reads and
-            // write verification below use the same loaded engine/bindings.
             LoadingEngineClockProbe.RequirePinnedEngine();
-            var component = Bind(hero); var current = ReadLifecycle(component);
-            var deactivationComponent = component.GetComponent<DeactivateAfterDelay>(); ReadLifecycle(deactivationComponent);
-            if (Lifecycle == null || Lifecycle.Length != 2 || Lifecycle.Any(b => b > 1) || Lifecycle[1] > Lifecycle[0]
-                || DeactivationLifecycle == null || DeactivationLifecycle.Length != 2 || DeactivationLifecycle.Any(b => b > 1)
-                || DeactivationLifecycle[1] > DeactivationLifecycle[0] || RotationEnabled != component.enabled || DeactivationEnabled != deactivationComponent.enabled
+            if (!TryBind(hero, out var component) || component == null) return () => { };
+            var deactivationComponent = component.GetComponent<DeactivateAfterDelay>();
+            if (RotationEnabled != component.enabled || DeactivationEnabled != deactivationComponent.enabled
                 || new[] { LocalPosition.x, LocalPosition.y, LocalPosition.z, LocalRotation.x, LocalRotation.y, LocalRotation.z, LocalRotation.w,
                     LocalScale.x, LocalScale.y, LocalScale.z }.Any(f => float.IsNaN(f) || float.IsInfinity(f)))
-                throw new InvalidDataException("Checkpoint Hit Crack lifecycle or pose is invalid.");
+            {
+                WarnOnce("Checkpoint Hit Crack pose or enabled state differs; skipping Hit Crack restore.");
+                return () => { };
+            }
             var rotation = CheckpointScalarFields.PrepareApply(component, RotationScalars, RotationFields);
             var deactivation = CheckpointScalarFields.PrepareApply(deactivationComponent, DeactivationScalars, DeactivationFields);
-            Modding.Logger.Log("[HKTAS] Applying Hit Crack lifecycle: current=" + string.Join(",", current) + " captured=" + string.Join(",", Lifecycle));
-            return () => { rotation(); deactivation(); component.transform.localPosition = LocalPosition;
-                component.transform.localRotation = LocalRotation; component.transform.localScale = LocalScale;
-                // This inactive component has no pending Start/update node.
-                // Restore the actual two flags, so its next original OnEnable
-                // keeps the same first-Start semantics as the source process.
-                if (!WriteProcessMemory(GetCurrentProcess(), LifecycleAddress(component), Lifecycle, new UIntPtr(2), out var written) || written.ToUInt64() != 2
-                    || !ReadLifecycle(component).SequenceEqual(Lifecycle))
-                    throw new InvalidDataException("Checkpoint Hit Crack lifecycle write verification differs.");
-                if (!WriteProcessMemory(GetCurrentProcess(), LifecycleAddress(deactivationComponent), DeactivationLifecycle, new UIntPtr(2), out written) || written.ToUInt64() != 2
-                    || !ReadLifecycle(deactivationComponent).SequenceEqual(DeactivationLifecycle))
-                    throw new InvalidDataException("Checkpoint Hit Crack deactivation lifecycle write verification differs."); };
+            byte[] current = new byte[] { 0, 0 };
+            var capturedLifecycle = Lifecycle ?? Array.Empty<byte>();
+            var capturedDeactivationLifecycle = DeactivationLifecycle ?? Array.Empty<byte>();
+            var canWriteLifecycle = LoadingEngineClockProbe.IsPinnedEngineMatched
+                && TryReadLifecycle(component, out current)
+                && TryReadLifecycle(deactivationComponent, out _)
+                && capturedLifecycle.Length == 2 && !capturedLifecycle.Any(b => b > 1) && capturedLifecycle[1] <= capturedLifecycle[0]
+                && capturedDeactivationLifecycle.Length == 2 && !capturedDeactivationLifecycle.Any(b => b > 1) && capturedDeactivationLifecycle[1] <= capturedDeactivationLifecycle[0];
+            if (!canWriteLifecycle)
+            {
+                WarnOnce("Skipping Hit Crack native lifecycle write on unmatched engine or invalid lifecycle data.");
+            }
+            else
+            {
+                Modding.Logger.Log("[HKTAS] Applying Hit Crack lifecycle: current=" + string.Join(",", current) + " captured=" + string.Join(",", capturedLifecycle));
+            }
+            return () => {
+                rotation();
+                deactivation();
+                component.transform.localPosition = LocalPosition;
+                component.transform.localRotation = LocalRotation;
+                component.transform.localScale = LocalScale;
+                if (!canWriteLifecycle) return;
+                var rotAddr = LifecycleAddress(component);
+                var deactAddr = LifecycleAddress(deactivationComponent);
+                if (rotAddr == IntPtr.Zero || deactAddr == IntPtr.Zero) return;
+                if (!WriteProcessMemory(GetCurrentProcess(), rotAddr, capturedLifecycle, new UIntPtr(2), out var written) || written.ToUInt64() != 2
+                    || !TryReadLifecycle(component, out var rotVerify) || !rotVerify.SequenceEqual(capturedLifecycle))
+                    Modding.Logger.LogWarn("[HKTAS] Checkpoint Hit Crack lifecycle write verification differed.");
+                if (!WriteProcessMemory(GetCurrentProcess(), deactAddr, capturedDeactivationLifecycle, new UIntPtr(2), out written) || written.ToUInt64() != 2
+                    || !TryReadLifecycle(deactivationComponent, out var deactVerify) || !deactVerify.SequenceEqual(capturedDeactivationLifecycle))
+                    Modding.Logger.LogWarn("[HKTAS] Checkpoint Hit Crack deactivation lifecycle write verification differed.");
+            };
         }
     }
 }

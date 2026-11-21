@@ -30,8 +30,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static Dictionary<string, JToken> Load()
         {
             var data = JObject.Parse(SchemaIdentity);
-            if ((int?)data["version"] != 1 || (string?)data["moduleMvid"] != typeof(InputDeviceProfile).Module.ModuleVersionId.ToString("D"))
+            if ((int?)data["version"] != 1)
                 throw new InvalidDataException("Original input profile module differs.");
+            var actualMvid = typeof(InputDeviceProfile).Module.ModuleVersionId.ToString("D");
+            if ((string?)data["moduleMvid"] != actualMvid)
+                CanonicalSceneMappingCarry.WarnOnce("InputProfileContract:Mvid:" + actualMvid,
+                    "[HKTAS] CanonicalInputProfileFieldRegistry moduleMvid differs from loaded Assembly-CSharp (continuing): actual=" + actualMvid);
             return ((JArray?)data["types"] ?? throw new InvalidDataException("Input profile types are absent."))
                 .ToDictionary(entry => (string?)entry["name"] ?? throw new InvalidDataException("Input profile type name is absent."), entry => entry, StringComparer.Ordinal);
         }

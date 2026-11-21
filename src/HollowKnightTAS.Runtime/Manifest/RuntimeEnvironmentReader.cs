@@ -13,17 +13,38 @@ namespace HollowKnightTAS.Runtime.Manifest
 {
     public static class RuntimeEnvironmentReader
     {
+        private static bool externalModsWarned;
+
         public static IReadOnlyDictionary<string, string> CaptureLoadedMods()
         {
+            var allModNames = ModHooks.GetAllMods(onlyEnabled: false, allowLoadError: true)
+                .Select(mod => mod.GetName())
+                .ToArray();
             HollowKnightTAS.Core.SceneCheckpoints.SceneCheckpointEnvironmentPolicy.ValidateMods(
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId,
-                ModHooks.GetAllMods(onlyEnabled: false, allowLoadError: true).Select(mod => mod.GetName()));
+                allModNames);
+            var externalMods = allModNames
+                .Where(name => !string.IsNullOrWhiteSpace(name) && !string.Equals(name, "HollowKnightTAS", StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            if (externalMods.Length != 0 && !externalModsWarned)
+            {
+                externalModsWarned = true;
+                Modding.Logger.LogWarn("[HKTAS] External mods detected alongside HollowKnightTAS; allowing execution: "
+                    + string.Join(", ", externalMods));
+            }
+
             var loadedMods = new SortedDictionary<string, string>(StringComparer.Ordinal);
             foreach (var mod in ModHooks.GetAllMods(
                          onlyEnabled: true,
                          allowLoadError: false))
             {
                 var name = mod.GetName();
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
                 string version;
                 try
                 {

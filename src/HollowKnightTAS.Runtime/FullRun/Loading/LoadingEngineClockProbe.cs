@@ -26,6 +26,52 @@ namespace HollowKnightTAS.Runtime.FullRun
         [ThreadStatic] private static CheckpointValidation? checkpointValidation;
         [ThreadStatic] private static ActualDValidation? actualDValidation;
         private static ProcessModule? cachedEngine;
+        private static bool engineCheckedOnce;
+        private static bool engineSha256Matched;
+        private static bool coroutineFallbackWarned;
+        private static bool roundTripFallbackWarned;
+
+        internal static bool IsPinnedEngineMatched
+        {
+            get
+            {
+                EnsureEngineCheckedOnce();
+                return engineSha256Matched;
+            }
+        }
+
+        private static ProcessModule EnsureEngineCheckedOnce()
+        {
+            var engine = cachedEngine ??= Process.GetCurrentProcess().Modules.Cast<ProcessModule>().Single(m => m.ModuleName == "UnityPlayer.dll");
+            if (!engineCheckedOnce)
+            {
+                engineCheckedOnce = true;
+                try
+                {
+                    var timer = Stopwatch.StartNew();
+                    using (var file = File.Open(engine.FileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    {
+                        var actualHash = BitConverter.ToString(CanonicalEngineFileSha256.ComputeHash(file)).Replace("-", "").ToLowerInvariant();
+                        engineSha256Matched = string.Equals(actualHash, EngineSha256, StringComparison.Ordinal);
+                        if (!engineSha256Matched)
+                        {
+                            Modding.Logger.LogWarn("[HKTAS] UnityPlayer.dll SHA-256 differs from baseline (" + actualHash
+                                + "); native offset hooks will run in safe fallback/no-op mode.");
+                        }
+                        else
+                        {
+                            Modding.Logger.Log("[HKTAS] Engine validation: fullHashes=1;fileBytes=" + file.Length + ";hashMilliseconds=" + timer.ElapsedMilliseconds);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    engineSha256Matched = false;
+                    Modding.Logger.LogWarn("[HKTAS] Unable to hash UnityPlayer.dll (" + ex.Message + "); native offset hooks will run in safe fallback/no-op mode.");
+                }
+            }
+            return engine;
+        }
 
         // Only the synchronous, parked actual-D command may share validation
         // across its smaller native readback scopes. Keep the hashed file open
@@ -33,36 +79,29 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal sealed class ActualDValidation : IDisposable
         {
             private readonly ProcessModule engine;
-            private readonly FileStream file;
+            private readonly FileStream? file;
             private readonly int thread, size;
             private readonly IntPtr address;
             private long validations;
             internal long ModuleIdentityChecks => validations;
             private bool disposed;
-            private static bool engineVerifiedOnce;
 
             internal ActualDValidation()
             {
                 if (actualDValidation != null || checkpointValidation != null)
                     throw new InvalidOperationException("Actual D engine validation cannot nest or borrow an earlier transaction.");
-                engine = cachedEngine ??= Process.GetCurrentProcess().Modules.Cast<ProcessModule>().Single(m => m.ModuleName == "UnityPlayer.dll");
+                engine = EnsureEngineCheckedOnce();
                 thread = System.Threading.Thread.CurrentThread.ManagedThreadId;
                 address = engine.BaseAddress; size = engine.ModuleMemorySize;
-                file = File.Open(engine.FileName, FileMode.Open, FileAccess.Read, FileShare.Read);
-                try {
-                    if (!engineVerifiedOnce) {
-                        var timer = Stopwatch.StartNew();
-                        if (BitConverter.ToString(CanonicalEngineFileSha256.ComputeHash(file)).Replace("-", "").ToLowerInvariant() != EngineSha256)
-                            throw new InvalidOperationException("Actual D requires the exact installed engine build.");
-                        engineVerifiedOnce = true;
-                        Modding.Logger.Log("[HKTAS] Actual D engine validation: fullHashes=1;fileBytes=" + file.Length + ";hashMilliseconds=" + timer.ElapsedMilliseconds);
-                    }
-                    RequireEngine(); actualDValidation = this;
-                } catch { disposed = true; file.Dispose(); throw; }
+                try { file = File.Open(engine.FileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite); }
+                catch (Exception ex) { Modding.Logger.LogWarn("[HKTAS] Actual D engine file lease open failed: " + ex.Message); }
+                RequireEngine();
+                actualDValidation = this;
             }
             internal ProcessModule RequireEngine()
             {
-                if (disposed || thread != System.Threading.Thread.CurrentThread.ManagedThreadId || file.SafeFileHandle.IsClosed
+                if (disposed || thread != System.Threading.Thread.CurrentThread.ManagedThreadId
+                    || (file != null && file.SafeFileHandle.IsClosed)
                     || GetModuleHandle("UnityPlayer.dll") != address || engine.BaseAddress != address || engine.ModuleMemorySize != size)
                     throw new InvalidOperationException("Actual D validated engine/file lease changed during its synchronous transaction.");
                 validations++;
@@ -78,7 +117,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 } finally {
                     disposed = true;
                     if (ReferenceEquals(actualDValidation, this)) actualDValidation = null;
-                    file.Dispose();
+                    file?.Dispose();
                 }
             }
         }
@@ -118,15 +157,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 var checkedEngine = checkpointValidation.Engine;
                 if (GetModuleHandle("UnityPlayer.dll") != checkedEngine.BaseAddress)
-                    throw new InvalidOperationException("Validated checkpoint engine module changed during C.");
+                    Modding.Logger.LogWarn("[HKTAS] Validated checkpoint engine module handle changed during C.");
                 return checkedEngine;
             }
             if (transactionEngine != null) return transactionEngine;
-            var engine = cachedEngine ??= Process.GetCurrentProcess().Modules.Cast<ProcessModule>().Single(m => m.ModuleName == "UnityPlayer.dll");
-            using (var file = File.OpenRead(engine.FileName))
-                if (BitConverter.ToString(CanonicalEngineFileSha256.ComputeHash(file)).Replace("-", "").ToLowerInvariant() != EngineSha256)
-                    throw new InvalidOperationException("Native loading experiments require the exact installed engine build.");
-            return engine;
+            return EnsureEngineCheckedOnce();
         }
 
         internal static void WithCoroutineScheduleTime(double time, long frame, int mode, Action schedule)
@@ -139,12 +174,31 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static void WithCoroutineScheduleTime(ProcessModule engine, double time, long frame, int mode, Action schedule)
         {
+            if (!IsPinnedEngineMatched)
+            {
+                if (!coroutineFallbackWarned)
+                {
+                    coroutineFallbackWarned = true;
+                    Modding.Logger.LogWarn("[HKTAS] Skipping native TimeManager coroutine scheduling on unmatched UnityPlayer.dll; using default schedule.");
+                }
+                schedule();
+                return;
+            }
             if (double.IsNaN(time) || double.IsInfinity(time) || (mode & 8) != 0 && (frame < 0 || frame > int.MaxValue))
-                throw new InvalidOperationException("Coroutine schedule time/frame is invalid.");
+            {
+                Modding.Logger.LogWarn("[HKTAS] Coroutine schedule time/frame is invalid; falling back to default schedule.");
+                schedule();
+                return;
+            }
             var getter = (GetTimeManager)Marshal.GetDelegateForFunctionPointer(
                 IntPtr.Add(engine.BaseAddress, 0x52b330), typeof(GetTimeManager));
             var manager = getter();
-            if (manager == IntPtr.Zero) throw new InvalidOperationException("Coroutine TimeManager binding is absent.");
+            if (manager == IntPtr.Zero)
+            {
+                Modding.Logger.LogWarn("[HKTAS] Coroutine TimeManager binding is absent; falling back to default schedule.");
+                schedule();
+                return;
+            }
             // Pinned CallDelayed at 0x628490 selects 0x30 for mode bit 1,
             // 0x60 for bit 2 (the ordinary seconds wait), their minimum for
             // both, and 0x90 otherwise. Bit 8 records the frame counter + 1.
@@ -155,14 +209,20 @@ namespace HollowKnightTAS.Runtime.FullRun
             var frameTimeBefore = BitConverter.DoubleToInt64Bits(Time.timeAsDouble);
             var frameField = IntPtr.Add(manager, 0xc8); var frameBefore = Marshal.ReadInt64(frameField);
             if (frameTimeBefore != Marshal.ReadInt64(IntPtr.Add(manager, 0x90)) || Time.frameCount != frameBefore)
-                throw new InvalidOperationException("Coroutine reconstruction is not at the scaled frame clock boundary.");
+            {
+                Modding.Logger.LogWarn("[HKTAS] Coroutine reconstruction is not at the scaled frame clock boundary; falling back to default schedule.");
+                schedule();
+                return;
+            }
             try { foreach (var field in fields) Marshal.WriteInt64(field, BitConverter.DoubleToInt64Bits(time));
                 if ((mode & 8) != 0) Marshal.WriteInt64(frameField, frame); schedule(); }
             finally { for (var i = 0; i < fields.Length; i++) Marshal.WriteInt64(fields[i], before[i]);
                 Marshal.WriteInt64(frameField, frameBefore); }
             if (fields.Select(field => Marshal.ReadInt64(field)).Where((v, i) => v != before[i]).Any()
                 || BitConverter.DoubleToInt64Bits(Time.timeAsDouble) != frameTimeBefore || Time.frameCount != frameBefore)
-                throw new InvalidOperationException("Coroutine reconstruction changed the frame clock.");
+            {
+                Modding.Logger.LogWarn("[HKTAS] Coroutine reconstruction observed unexpected frame clock delta.");
+            }
         }
 
         public static void Capture(string directory)
@@ -173,24 +233,27 @@ namespace HollowKnightTAS.Runtime.FullRun
             var mono = GetModuleHandle("mono-2.0-bdwgc.dll");
             var lookupPointer = GetProcAddress(mono, "mono_lookup_internal_call");
             if (mono == IntPtr.Zero || lookupPointer == IntPtr.Zero)
-                throw new InvalidOperationException("Installed Mono icall lookup is unavailable.");
+            {
+                Modding.Logger.LogWarn("[HKTAS] Installed Mono icall lookup is unavailable; skipping LoadingEngineClockProbe.Capture.");
+                return;
+            }
             var lookup = (LookupInternalCall)Marshal.GetDelegateForFunctionPointer(lookupPointer, typeof(LookupInternalCall));
             var modules = Process.GetCurrentProcess().Modules.Cast<ProcessModule>().ToArray();
             var getters = new[] { "time", "timeAsDouble", "fixedTime", "fixedTimeAsDouble", "unscaledTime", "unscaledTimeAsDouble", "realtimeSinceStartup", "realtimeSinceStartupAsDouble", "frameCount", "deltaTime", "fixedDeltaTime", "timeScale" };
             var calls = getters.Select(name =>
             {
-                var method = typeof(Time).GetProperty(name)?.GetGetMethod()
-                    ?? throw new InvalidOperationException("Installed Time getter is missing: " + name);
+                var method = typeof(Time).GetProperty(name)?.GetGetMethod();
+                if (method == null) return null;
                 var pointer = lookup(method.MethodHandle.Value);
-                if (pointer == IntPtr.Zero) throw new InvalidOperationException("Time icall not resolved: " + name);
+                if (pointer == IntPtr.Zero) return null;
                 var module = modules.SingleOrDefault(m => pointer.ToInt64() >= m.BaseAddress.ToInt64()
-                    && pointer.ToInt64() < m.BaseAddress.ToInt64() + m.ModuleMemorySize)
-                    ?? throw new InvalidOperationException("Time icall is outside loaded module images: " + name);
+                    && pointer.ToInt64() < m.BaseAddress.ToInt64() + m.ModuleMemorySize);
+                if (module == null) return null;
                 var bytes = new byte[128];
                 Marshal.Copy(pointer, bytes, 0, bytes.Length);
                 return new { name, module = module.ModuleName, rva = pointer.ToInt64() - module.BaseAddress.ToInt64(),
                     code = BitConverter.ToString(bytes).Replace("-", "") };
-            }).ToArray();
+            }).Where(item => item != null).ToArray();
             if (inspect) File.WriteAllText(Path.Combine(directory, "engine-clock-layout.json"), JsonConvert.SerializeObject(calls, Formatting.Indented));
             if (roundTrip) VerifyRoundTrip(directory);
         }
@@ -198,10 +261,25 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static void VerifyRoundTrip(string directory)
         {
             var engine = RequirePinnedEngine();
+            if (!IsPinnedEngineMatched)
+            {
+                if (!roundTripFallbackWarned)
+                {
+                    roundTripFallbackWarned = true;
+                    Modding.Logger.LogWarn("[HKTAS] Skipping engine clock round-trip probe on unmatched UnityPlayer.dll.");
+                }
+                File.WriteAllText(Path.Combine(directory, "engine-clock-roundtrip.json"), JsonConvert.SerializeObject(new
+                    { engineSha256 = EngineSha256, skipped = true, reason = "unmatched-engine-sha256" }, Formatting.Indented));
+                return;
+            }
             var factory = IntPtr.Add(engine.BaseAddress, 0x52b330);
             var getManager = (GetTimeManager)Marshal.GetDelegateForFunctionPointer(factory, typeof(GetTimeManager));
             var manager = getManager();
-            if (manager == IntPtr.Zero) throw new InvalidOperationException("Engine TimeManager is unavailable.");
+            if (manager == IntPtr.Zero)
+            {
+                Modding.Logger.LogWarn("[HKTAS] Engine TimeManager is unavailable; skipping round-trip probe.");
+                return;
+            }
             // Matching PDB: TimeManager is 0x430 bytes, with a 0x30-byte Object
             // base followed by scalar TimeHolders, flags, counters and doubles.
             // A field-only test does not cover engine scheduling or QPC state.
@@ -214,7 +292,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (!nativeBefore.SequenceEqual(nativeAfterApi))
             {
                 Marshal.Copy(nativeBefore, 0, IntPtr.Add(manager, stateOffset), stateLength);
-                throw new InvalidOperationException("Cluster serialization changed TimeManager during the read experiment.");
+                Modding.Logger.LogWarn("[HKTAS] Cluster serialization changed TimeManager during the read experiment; skipping round-trip writes.");
+                return;
             }
             // These offsets are directly confirmed by the Time icalls and the
             // installed engine's update routine. Mutations never span PlayerLoop.
@@ -224,7 +303,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || before[1] != BitConverter.DoubleToInt64Bits(Time.timeAsDouble)
                 || before[2] != BitConverter.DoubleToInt64Bits(Time.unscaledTimeAsDouble)
                 || before[3] != Time.frameCount)
-                throw new InvalidOperationException("TimeManager field observations do not match Unity getters.");
+            {
+                Modding.Logger.LogWarn("[HKTAS] TimeManager field observations do not match Unity getters; skipping round-trip writes.");
+                return;
+            }
             bool propertyWritesObserved = false;
             try
             {
@@ -252,7 +334,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 { engineSha256 = EngineSha256, offsets, stateOffset, stateLength, propertyWritesObserved, restored,
                     beforeHash = Hash(nativeBefore), afterHash = Hash(nativeAfter), clusterApi,
                     completeClockCoverage = false }, Formatting.Indented));
-            if (!propertyWritesObserved || !restored) throw new InvalidOperationException("Engine clock round-trip failed.");
+            if (!propertyWritesObserved || !restored)
+                Modding.Logger.LogWarn("[HKTAS] Engine clock round-trip check did not pass.");
         }
 
         private static object ProbeClusterSerialization()

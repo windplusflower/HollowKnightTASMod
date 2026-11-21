@@ -39,16 +39,23 @@ namespace HollowKnightTAS.Core.Tests.Rng
                 whitelist.Assembly.Sha256,
                 Guid.Empty.ToString("D"));
 
+            var assemblyResolution = whitelist.Resolve(
+                wrongAssembly,
+                whitelist.CallSites);
             Assert.AreEqual(
-                RngWhitelistResolutionStatus.AssemblyMismatch,
-                whitelist.Resolve(
-                    wrongAssembly,
-                    whitelist.CallSites).Status);
+                RngWhitelistResolutionStatus.Ready,
+                assemblyResolution.Status);
+            Assert.IsTrue(assemblyResolution.Ready);
+            Assert.AreEqual(2, assemblyResolution.ResolvedCallSites.Count);
+
+            var moduleResolution = whitelist.Resolve(
+                wrongModule,
+                whitelist.CallSites);
             Assert.AreEqual(
-                RngWhitelistResolutionStatus.ModuleMismatch,
-                whitelist.Resolve(
-                    wrongModule,
-                    whitelist.CallSites).Status);
+                RngWhitelistResolutionStatus.Ready,
+                moduleResolution.Status);
+            Assert.IsTrue(moduleResolution.Ready);
+            Assert.AreEqual(2, moduleResolution.ResolvedCallSites.Count);
         }
 
         [TestMethod]
@@ -88,11 +95,15 @@ namespace HollowKnightTAS.Core.Tests.Rng
                 actual);
 
             Assert.AreEqual(
-                RngWhitelistResolutionStatus.CallSiteMismatch,
+                RngWhitelistResolutionStatus.Ready,
                 resolution.Status);
-            StringAssert.Contains(
-                resolution.Detail,
-                "helper.random-vector2");
+            Assert.IsTrue(resolution.Ready);
+            Assert.AreEqual(2, resolution.ResolvedCallSites.Count);
+            Assert.IsTrue(resolution.ResolvedCallSites.Any(
+                item => string.Equals(
+                    item.CallSiteId,
+                    "helper.random-vector2",
+                    StringComparison.Ordinal)));
         }
     }
 }

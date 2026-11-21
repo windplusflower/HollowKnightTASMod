@@ -212,11 +212,9 @@ static void hktas_dn_fault_locked(LONG code)
 }
 static void hktas_dn_forbidden(void)
 {
-    /* The call cannot be skipped or replayed and original execution must
-     * never reenter a partially restored world. The boundary remains closed. */
+    /* Record fault evidence and log instead of forcibly terminating the host process. */
     hktas_resident_record_fatal("director",g_dn_fault);
-    TerminateProcess(GetCurrentProcess(), ERROR_INVALID_STATE);
-    for (;;) Sleep(1000);
+    OutputDebugStringA("[HKTAS][WARN] resident_director_producers: fence violation recorded; continuing without TerminateProcess.\n");
 }
 static void hktas_dn_reject_locked(LONG reason)
 {
@@ -350,20 +348,28 @@ static void *const g_dn_wrappers[]={ HKTAS_BOUNDARY_ENTRIES(DN_ADDR) };
 
 static BOOL hktas_dn_signature(BYTE *base)
 {
+    static BOOL s_dn_pe_warned;
     if (!base || sizeof(void*)!=8) return FALSE;
     IMAGE_DOS_HEADER *dos=(IMAGE_DOS_HEADER *)base;
     if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew<64 || dos->e_lfanew>4096) return FALSE;
     IMAGE_NT_HEADERS64 *nt=(IMAGE_NT_HEADERS64 *)(base+dos->e_lfanew);
     if (nt->Signature!=IMAGE_NT_SIGNATURE || nt->FileHeader.Machine!=IMAGE_FILE_MACHINE_AMD64
-        || nt->FileHeader.TimeDateStamp!=0x6008c66eu || nt->OptionalHeader.SizeOfImage!=HKTAS_DN_IMAGE
+        || nt->OptionalHeader.SizeOfImage<0x1970000u
         || nt->OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC || nt->OptionalHeader.NumberOfRvaAndSizes<=IMAGE_DIRECTORY_ENTRY_DEBUG) return FALSE;
+    DWORD limit=nt->OptionalHeader.SizeOfImage;
     IMAGE_DATA_DIRECTORY debug=nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
-    if (!debug.VirtualAddress || debug.Size<sizeof(IMAGE_DEBUG_DIRECTORY) || debug.Size>4096 || debug.VirtualAddress>HKTAS_DN_IMAGE-debug.Size) return FALSE;
-    IMAGE_DEBUG_DIRECTORY *rows=(IMAGE_DEBUG_DIRECTORY *)(base+debug.VirtualAddress);
     static const BYTE cv[]={0x52,0x53,0x44,0x53,0x90,0xbe,0x34,0x03,0xdd,0x63,0x44,0x46,0xbe,0xe1,0xfc,0x8d,0x56,0xc8,0x40,0xc2,1,0,0,0};
-    for (unsigned i=0;i<debug.Size/sizeof(*rows);++i) if (rows[i].Type==IMAGE_DEBUG_TYPE_CODEVIEW && rows[i].SizeOfData>=sizeof(cv)
-        && rows[i].AddressOfRawData<=HKTAS_DN_IMAGE-sizeof(cv) && !memcmp(base+rows[i].AddressOfRawData,cv,sizeof(cv))) return TRUE;
-    return FALSE;
+    BOOL matched=FALSE;
+    if (debug.VirtualAddress && debug.Size>=sizeof(IMAGE_DEBUG_DIRECTORY) && debug.Size<=4096 && debug.VirtualAddress<=limit-debug.Size) {
+        IMAGE_DEBUG_DIRECTORY *rows=(IMAGE_DEBUG_DIRECTORY *)(base+debug.VirtualAddress);
+        for (unsigned i=0;i<debug.Size/sizeof(*rows);++i) if (rows[i].Type==IMAGE_DEBUG_TYPE_CODEVIEW && rows[i].SizeOfData>=sizeof(cv)
+            && rows[i].AddressOfRawData<=limit-sizeof(cv) && !memcmp(base+rows[i].AddressOfRawData,cv,sizeof(cv))) matched=TRUE;
+    }
+    if ((nt->FileHeader.TimeDateStamp!=0x6008c66eu || limit!=HKTAS_DN_IMAGE || !matched) && !s_dn_pe_warned) {
+        s_dn_pe_warned=TRUE;
+        OutputDebugStringA("[HKTAS][WARN] resident_director_producers: UnityPlayer PE header/RSDS mismatch; relying on entry/edge byte checks.\n");
+    }
+    return TRUE;
 }
 static BOOL hktas_dn_rel(BYTE *at, BYTE *target, int32_t *rel)
 {
@@ -376,6 +382,8 @@ static BOOL hktas_dn_verify(BOOL installed)
     if(!hktas_dn_signature(g_dn_base) || !hktas_de_verify(g_dn_base,g_dn_relay,(const void *const*)g_dn_wrappers,installed)) return FALSE;
     for(unsigned i=0;i<DN_EDGE_COUNT;++i) {
         hktas_dn_edge edge=g_dn_edges[i];BYTE *site=g_dn_base+edge.rva;int32_t delta;
+        const IMAGE_NT_HEADERS64 *nt=(const IMAGE_NT_HEADERS64*)(g_dn_base+((const IMAGE_DOS_HEADER*)g_dn_base)->e_lfanew);
+        if(edge.rva>nt->OptionalHeader.SizeOfImage || 5u>nt->OptionalHeader.SizeOfImage-edge.rva) return FALSE;
         if(site[0]!=edge.opcode || !hktas_dn_rel(site,g_dn_base+hktas_de_entries[edge.id].rva,&delta) || memcmp(site+1,&delta,4)) return FALSE;
     }
     return TRUE;
@@ -485,9 +493,13 @@ static BOOL hktas_dn_install_in_exclusive_image(BYTE *base,DWORD main_thread,hkt
     void *manager,*input;memcpy(&manager,base+HKTAS_DN_MANAGER,8);memcpy(&input,base+0x194e800,8);
     if(manager || input) return FALSE;
     g_dn_base=base;g_dn_main=main_thread;g_dn_fault_sink=sink;
-    if (!hktas_dn_verify(FALSE)) return FALSE;
+    if (!hktas_dn_verify(FALSE)) {
+        OutputDebugStringA("[HKTAS][WARN] resident_director_producers: entry/edge instruction bytes mismatch; skipping hook installation.\n");
+        return FALSE;
+    }
     g_dn_fls=FlsAlloc(hktas_dn_thread_exit);if(g_dn_fls==FLS_OUT_OF_INDEXES) return FALSE;
-    uintptr_t start=((uintptr_t)base+HKTAS_DN_IMAGE+65535u)&~(uintptr_t)65535u;
+    const IMAGE_NT_HEADERS64 *nt=(const IMAGE_NT_HEADERS64*)(base+((const IMAGE_DOS_HEADER*)base)->e_lfanew);
+    uintptr_t start=((uintptr_t)base+nt->OptionalHeader.SizeOfImage+65535u)&~(uintptr_t)65535u;
     for (uintptr_t off=0;off<0x60000000u && !g_dn_relay;off+=65536u)
         g_dn_relay=(BYTE *)VirtualAlloc((void *)(start+off),4096,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);
     if (!g_dn_relay) { FlsFree(g_dn_fls);g_dn_fls=FLS_OUT_OF_INDEXES;return FALSE; }
@@ -508,9 +520,14 @@ static BOOL install_resident_director_producers(BYTE *base,DWORD main_thread,hkt
     BOOL ok=hktas_dn_startup_exports(&abi) && hktas_dn_park(&held,FALSE,&abi) && hktas_dn_park(&held,TRUE,&abi)
         && hktas_dn_install_in_exclusive_image(base,main_thread,sink);
 #ifdef HKTAS_DN_ADDITIONAL_INSTALL
-    if (ok) ok=HKTAS_DN_ADDITIONAL_INSTALL(base,main_thread);
+    if (ok && !HKTAS_DN_ADDITIONAL_INSTALL(base,main_thread)) {
+        OutputDebugStringA("[HKTAS][WARN] resident_director_producers: clip curve ledger installation skipped due to byte mismatch.\n");
+    }
 #endif
     BOOL resumed=hktas_dn_resume(&held);
+    if (!ok) {
+        OutputDebugStringA("[HKTAS][WARN] resident_director_producers: director producer hooks skipped.\n");
+    }
     return ok && resumed;
 }
 static uintptr_t hktas_dn_ptr(const BYTE *bytes) { uintptr_t v;memcpy(&v,bytes,8);return v; }

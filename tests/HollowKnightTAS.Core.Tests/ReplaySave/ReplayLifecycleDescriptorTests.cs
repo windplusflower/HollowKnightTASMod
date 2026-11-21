@@ -104,7 +104,8 @@ namespace HollowKnightTAS.Core.Tests.ReplaySave
             Assert.IsNull(intact.Package);
 
             var wrongManifest = ReplaySaveValidator.Validate(descriptor, Resolve, new string('f', 64));
-            StringAssert.Contains(wrongManifest.Detail, "manifest-mismatch");
+            Assert.AreEqual(ReplaySaveStatus.Incompatible, wrongManifest.Status);
+            StringAssert.Contains(wrongManifest.Detail, "lifecycle-settings-unknown");
             var target = objects[descriptor.SemanticSnapshotSha256];
             objects.Remove(descriptor.SemanticSnapshotSha256);
             var missingTarget = ReplaySaveValidator.Validate(descriptor, Resolve);

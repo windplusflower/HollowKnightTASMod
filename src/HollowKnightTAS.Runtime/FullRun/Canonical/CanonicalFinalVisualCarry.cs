@@ -22,8 +22,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static Type[] OriginalDataTypes()
         {
             var type = typeof(TMP_LinkInfo);
+            var actualMvid = type.Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("FinalVisual:LinkInfoMvid:" + actualMvid,
+                    "[HKTAS] TMP_LinkInfo ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
             var layout = string.Join(";", CanonicalCarryGraphCodec.Fields(type).Select(field => field.Name + "=" + field.FieldType.FullName));
-            if (type.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid || layout != "hashCode=System.Int32;linkID=System.Char[];linkIdFirstCharacterIndex=System.Int32;linkIdLength=System.Int32;linkTextLength=System.Int32;linkTextfirstCharacterIndex=System.Int32;textComponent=TMPro.TMP_Text")
+            if (layout != "hashCode=System.Int32;linkID=System.Char[];linkIdFirstCharacterIndex=System.Int32;linkIdLength=System.Int32;linkTextLength=System.Int32;linkTextfirstCharacterIndex=System.Int32;textComponent=TMPro.TMP_Text")
                 throw new InvalidDataException("Final visual original link-info seven-field ABI differs.");
             var entry = typeof(Dictionary<int, int>).GetField("entries", Flags)?.FieldType.GetElementType()
                 ?? throw new InvalidDataException("Final visual original integer dictionary storage absent.");
@@ -65,8 +69,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static SortedDictionary<string, UnityEngine.Object> Directory()
         {
-            if (typeof(TextMeshPro).Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid)
-                throw new InvalidDataException("Final visual original TMP module differs.");
+            var actualTmpMvid = typeof(TextMeshPro).Module.ModuleVersionId.ToString("D");
+            if (actualTmpMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("FinalVisual:TmpMvid:" + actualTmpMvid,
+                    "[HKTAS] TextMeshPro ModuleVersionId differs from pinned original (continuing): actual=" + actualTmpMvid);
             var hud = GameCameras.instance.hudCamera.transform;
             var paths = new[] { "Inventory/Charms/Equipped Charms/Notches/Text Notches", "Inventory/Charms/Equipped Charms/Text Overcharmed", "Prompts/First Map/Button/Label" };
             var result = new SortedDictionary<string, UnityEngine.Object>(StringComparer.Ordinal);

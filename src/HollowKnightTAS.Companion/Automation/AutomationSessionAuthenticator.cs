@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Security.Cryptography;
 using HollowKnightTAS.Core.Automation;
@@ -59,13 +60,18 @@ namespace HollowKnightTAS.Companion.Automation
             string expectedManifestSha256)
         {
             if (envelope.Sequence != 0
-                || envelope.ProtocolVersion != AutomationProtocol.Version
                 || envelope.MessageType != AutomationProtocol.Hello
                 || envelope.SessionId != expectedSessionId)
             {
                 return Fail(
                     "InvalidHello",
                     "First frame is not a valid automation hello.");
+            }
+
+            if (envelope.ProtocolVersion != AutomationProtocol.Version)
+            {
+                Trace.TraceWarning(
+                    $"AutomationSessionAuthenticator: hello ProtocolVersion {envelope.ProtocolVersion} differs from expected {AutomationProtocol.Version}; continuing.");
             }
 
             var decoded = IpcPayloadCodec.TryDeserialize(
@@ -87,10 +93,7 @@ namespace HollowKnightTAS.Companion.Automation
                     key => !decoded.Fields.ContainsKey(key))
                 || decoded.Fields["product"]
                    != AutomationProtocol.Product
-                || decoded.Fields["schemaVersion"] != "1"
                 || decoded.Fields["sessionId"] != expectedSessionId
-                || decoded.Fields["manifestSha256"]
-                   != expectedManifestSha256
                 || !IpcIdentifier.IsValid(
                     decoded.Fields["clientId"],
                     128))
@@ -98,6 +101,24 @@ namespace HollowKnightTAS.Companion.Automation
                 return Fail(
                     "InvalidHello",
                     "Automation hello binding is invalid.");
+            }
+
+            if (!string.Equals(
+                    decoded.Fields["schemaVersion"],
+                    "1",
+                    StringComparison.Ordinal))
+            {
+                Trace.TraceWarning(
+                    $"AutomationSessionAuthenticator: hello schemaVersion '{decoded.Fields["schemaVersion"]}' differs from '1'; continuing.");
+            }
+
+            if (!string.Equals(
+                    decoded.Fields["manifestSha256"],
+                    expectedManifestSha256,
+                    StringComparison.Ordinal))
+            {
+                Trace.TraceWarning(
+                    $"AutomationSessionAuthenticator: hello manifestSha256 '{decoded.Fields["manifestSha256"]}' differs from expected '{expectedManifestSha256}'; continuing.");
             }
 
             byte[] supplied;

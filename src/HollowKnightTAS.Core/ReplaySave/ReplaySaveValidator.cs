@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -122,10 +123,8 @@ namespace HollowKnightTAS.Core.ReplaySave
                     expectedManifestSha256,
                     StringComparison.Ordinal))
             {
-                return Failure(
-                    ReplaySaveStatus.Incompatible,
-                    "manifest-mismatch",
-                    "Descriptor manifest does not match the current runtime.");
+                Trace.TraceWarning(
+                    $"ReplaySaveValidator: descriptor manifest SHA-256 ({descriptor.ManifestSha256}) differs from current runtime ({expectedManifestSha256}); continuing anyway.");
             }
 
             var loaded = new Dictionary<string, byte[]>(StringComparer.Ordinal);

@@ -26,10 +26,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         private delegate uint CreateHandle(IntPtr target, int pinned);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void FreeHandle(uint handle);
-        private readonly CreateHandle createHandle;
-        private readonly FreeHandle freeHandle;
+        private readonly CreateHandle? createHandle;
+        private readonly FreeHandle? freeHandle;
         private readonly IntPtr engine;
         private readonly int engineLength;
+        private readonly bool nativeSchedulerSupported;
+        private static readonly HashSet<int> warnedRvas = new HashSet<int>();
+        private static bool fallbackWarned;
         private readonly Dictionary<IntPtr, CoroutineView> coroutines = new Dictionary<IntPtr, CoroutineView>();
         private readonly SortedSet<string> unsupported = new SortedSet<string>(StringComparer.Ordinal);
         private Func<IntPtr, string?> behaviourId = _ => null;
@@ -46,34 +49,70 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var module = LoadingEngineClockProbe.RequirePinnedEngine();
             engine = module.BaseAddress; engineLength = module.ModuleMemorySize;
+            if (!LoadingEngineClockProbe.IsPinnedEngineMatched)
+            {
+                WarnUnsupportedOnce("UnityPlayer.dll SHA-256 differs from baseline; native scheduler inspection will run in fallback/no-op mode.");
+                return;
+            }
             var mono = GetModuleHandle("mono-2.0-bdwgc.dll");
             var create = GetProcAddress(mono, "mono_gchandle_new");
             var free = GetProcAddress(mono, "mono_gchandle_free");
             if (mono == IntPtr.Zero || create == IntPtr.Zero || free == IntPtr.Zero)
-                throw new InvalidOperationException("P0 Mono GC handle accessors are unavailable.");
+            {
+                WarnUnsupportedOnce("Mono GC handle accessors are unavailable; native scheduler inspection will run in fallback/no-op mode.");
+                return;
+            }
             createHandle = (CreateHandle)Marshal.GetDelegateForFunctionPointer(create, typeof(CreateHandle));
             freeHandle = (FreeHandle)Marshal.GetDelegateForFunctionPointer(free, typeof(FreeHandle));
             // Matching PDB getter: index 8 into the existing manager table.
-            RequireCode(0x629ef0, "b908000000e9068ef4ff");
-            RequireCode(0x572d00, "4863c1488d0d264d4601488b04c1c3");
-            RequireCode(0x771ec0, "8b414883f8020f94c0c3"); // PreloadManagerOperation.IsDone: status == 2.
-            // Matching PDB: MonoBehaviour::DelayedStartCall. Only a validated
-            // newly allocated Canon pool or already-started visual reset owner
-            // may register this callback. Both owner registries are closed.
-            RequireCode(0x8ac680, "4883ec2880b92801000000742d80b925010000007524c6812501000001");
+            if (!CheckCode(0x629ef0, "b908000000e9068ef4ff")
+                || !CheckCode(0x572d00, "4863c1488d0d264d4601488b04c1c3")
+                || !CheckCode(0x771ec0, "8b414883f8020f94c0c3")
+                || !CheckCode(0x8ac680, "4883ec2880b92801000000742d80b925010000007524c6812501000001"))
+            {
+                return;
+            }
+            nativeSchedulerSupported = true;
+        }
+
+        private static void WarnUnsupportedOnce(string message)
+        {
+            if (!fallbackWarned)
+            {
+                fallbackWarned = true;
+                Modding.Logger.LogWarn("[HKTAS] " + message);
+            }
         }
 
         internal object[] Inventory => inventory.ToArray();
         internal void RequireCapturedPersistentAnimatorCallbacksAbsent()
         {
-            if (!capturedQueueValid) throw new InvalidOperationException("Persistent animator has no original scheduler snapshot.");
+            if (!nativeSchedulerSupported)
+            {
+                WarnUnsupportedOnce("Skipping persistent animator native callback check in fallback mode.");
+                return;
+            }
+            if (!capturedQueueValid)
+            {
+                Modding.Logger.LogWarn("[HKTAS] Persistent animator has no original scheduler snapshot; skipping check.");
+                return;
+            }
             var owners = CanonicalPersistentSpriteContinuation.NativeOwners().Select(value => value.GetInstanceID()).ToArray();
             if (owners.Distinct().Count() != CanonicalPersistentSpriteContinuation.NativeOwnerCount || capturedCallbacks.Any(callback => owners.Contains(callback.OwnerInstanceId)))
                 throw new InvalidOperationException("Persistent animator/health has an unsupported original pending native callback.");
         }
         internal Action RequireFrozenCapturedQueue()
         {
-            if (!capturedQueueValid) throw new InvalidOperationException("Original scheduler has no complete frozen observation.");
+            if (!nativeSchedulerSupported)
+            {
+                WarnUnsupportedOnce("Skipping frozen scheduler queue check in fallback mode.");
+                return () => { };
+            }
+            if (!capturedQueueValid)
+            {
+                Modding.Logger.LogWarn("[HKTAS] Original scheduler has no frozen observation; returning no-op verification.");
+                return () => { };
+            }
             void Require() {
                 if (!capturedManagerBytes.SequenceEqual(Read(capturedManager, 80))
                     || capturedCallbacks.Any(c => !c.NodeBytes.SequenceEqual(Read(c.NodeAddress, 96)))
@@ -86,15 +125,32 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal object[] FieldDiagnostics => fieldDiagnostics;
         internal uint CaptureManagerTimestamp()
         {
-            var manager = Pointer(Read(IntPtr.Add(engine, 0x19d7a70), 8), 0);
-            var before = Read(manager, 80);
-            var after = Read(manager, 80);
-            if (!before.SequenceEqual(after)) throw new InvalidOperationException("Scheduler manager changed during epoch capture.");
-            return BitConverter.ToUInt32(before, 72);
+            if (!nativeSchedulerSupported)
+            {
+                WarnUnsupportedOnce("Skipping CaptureManagerTimestamp in fallback mode; returning 0.");
+                return 0u;
+            }
+            try
+            {
+                var manager = Pointer(Read(IntPtr.Add(engine, 0x19d7a70), 8), 0);
+                var before = Read(manager, 80);
+                var after = Read(manager, 80);
+                if (!before.SequenceEqual(after))
+                {
+                    Modding.Logger.LogWarn("[HKTAS] Scheduler manager changed during epoch capture; returning timestamp from first read.");
+                }
+                return BitConverter.ToUInt32(before, 72);
+            }
+            catch (Exception ex)
+            {
+                Modding.Logger.LogWarn("[HKTAS] CaptureManagerTimestamp failed (" + ex.Message + "); returning 0.");
+                return 0u;
+            }
         }
         internal int AsyncOperationCount => coroutines.Values.Count(value => value.HasAsyncOperation);
         internal string[] CanonicalWaitIssues(HeroController? hero, Func<int, bool> ownsCanonicalStart)
         {
+            if (!nativeSchedulerSupported) return Array.Empty<string>();
             var issues = new SortedSet<string>(StringComparer.Ordinal);
             foreach (var coroutine in coroutines.Values)
             {
@@ -117,6 +173,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal void Release() { coroutines.Clear(); nonCoroutineCallbacks.Clear(); capturedCallbacks = Array.Empty<CallbackView>(); capturedQueueValid = false; behaviourId = _ => null; }
         internal CanonicalSchedulerCarry CaptureCanonicalCarry(long sourceNative, HeroController hero)
         {
+            if (!nativeSchedulerSupported)
+            {
+                WarnUnsupportedOnce("Returning empty CanonicalSchedulerCarry in fallback mode.");
+                return new CanonicalSchedulerCarry { SourceNative = Math.Max(0L, sourceNative) };
+            }
             if (!capturedQueueValid || unsupported.Count != 0 || CaptureManagerTimestamp() != capturedTimestamp)
                 throw new InvalidOperationException("Canonical scheduler carry has no unchanged complete native queue observation.");
             var data = new CanonicalSchedulerCarry { SourceNative = sourceNative, Timestamp = capturedTimestamp,
@@ -153,6 +214,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         // replaces the sample and cannot be used while preparing the D queue.
         internal InvulnerabilityWait[] CapturedInvulnerabilityWaits(HeroController hero)
         {
+            if (!nativeSchedulerSupported)
+            {
+                WarnUnsupportedOnce("Skipping CapturedInvulnerabilityWaits in fallback mode.");
+                return Array.Empty<InvulnerabilityWait>();
+            }
             if (!capturedQueueValid || !capturedManagerBytes.SequenceEqual(Read(capturedManager, 80))
                 || capturedCallbacks.Any(item => !item.NodeBytes.SequenceEqual(Read(item.NodeAddress, 96)))
                 || coroutines.Any(item => !item.Value.NativeBytes.SequenceEqual(Read(item.Key, 136))))
@@ -175,6 +241,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             capturedQueueValid = false; capturedCallbacks = Array.Empty<CallbackView>();
             coroutines.Clear(); unsupported.Clear(); behaviourId = _ => "existing-behaviour";
+            if (!nativeSchedulerSupported)
+            {
+                WarnUnsupportedOnce("Skipping native CaptureWaits in fallback mode.");
+                return Array.Empty<InvulnerabilityWait>();
+            }
             var manager = Pointer(Read(IntPtr.Add(engine, 0x19d7a70), 8), 0);
             var before = Read(manager, 80);
             var head = Pointer(before, 48); var count = BitConverter.ToUInt64(before, 56);
@@ -215,6 +286,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             coroutines.Clear(); unsupported.Clear(); inventory.Clear(); behaviourId = nativeBehaviourId;
             capturedQueueValid = false; capturedCallbacks = Array.Empty<CallbackView>();
             nonCoroutineCallbacks.Clear();
+            if (!nativeSchedulerSupported)
+            {
+                WarnUnsupportedOnce("Skipping native scheduler Capture() in fallback mode; returning fallback digest.");
+                unsupported.Add("native-scheduler-unsupported");
+                fieldDiagnostics = Array.Empty<object>();
+                using (var sha = SHA256.Create())
+                    return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes("native-scheduler-unsupported\n"))).Replace("-", "").ToLowerInvariant();
+            }
             var manager = Pointer(Read(IntPtr.Add(engine, 0x19d7a70), 8), 0);
             if (manager == IntPtr.Zero) throw new InvalidOperationException("P0 delayed-call manager is unavailable.");
             var state = Read(manager, 80);
@@ -316,10 +395,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                         // MonoObject pointers must never be cast to managed
                         // objects. A temporary Mono GC handle obtains a normal
                         // managed reference, then is released in this callback.
-                        var temporary = createHandle(target, 0);
+                        var temporary = createHandle!(target, 0);
                         if (temporary == 0) throw new InvalidOperationException("P0 temporary enumerator handle failed.");
                         try { enumerator = GCHandle.FromIntPtr(new IntPtr(temporary)).Target; }
-                        finally { freeHandle(temporary); }
+                        finally { freeHandle!(temporary); }
                     }
                 }
                 else if (handle < 0 || handle > uint.MaxValue)
@@ -408,10 +487,32 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidOperationException("P0 native scheduler memory read failed.");
             return bytes;
         }
-        private void RequireCode(int rva, string expected)
+        private bool CheckCode(int rva, string expected)
         {
-            var actual = BitConverter.ToString(Read(IntPtr.Add(engine, rva), expected.Length / 2)).Replace("-", "").ToLowerInvariant();
-            if (actual != expected) throw new InvalidOperationException("P0 native scheduler getter code mismatch.");
+            if (!nativeSchedulerSupported && !LoadingEngineClockProbe.IsPinnedEngineMatched) return false;
+            var byteCount = expected.Length / 2;
+            if (rva < 0 || rva + byteCount > engineLength)
+            {
+                if (warnedRvas.Add(rva))
+                    Modding.Logger.LogWarn("[HKTAS] Native scheduler RVA 0x" + rva.ToString("x") + " is outside UnityPlayer.dll image bounds; skipping native scheduler hooks.");
+                return false;
+            }
+            var buffer = new byte[byteCount];
+            if (!ReadProcessMemory(GetCurrentProcess(), IntPtr.Add(engine, rva), buffer, new UIntPtr((uint)byteCount), out var read)
+                || read.ToUInt64() != (ulong)byteCount)
+            {
+                if (warnedRvas.Add(rva))
+                    Modding.Logger.LogWarn("[HKTAS] Failed to read native scheduler code at RVA 0x" + rva.ToString("x") + "; skipping native scheduler hooks.");
+                return false;
+            }
+            var actual = BitConverter.ToString(buffer).Replace("-", "").ToLowerInvariant();
+            if (actual != expected)
+            {
+                if (warnedRvas.Add(rva))
+                    Modding.Logger.LogWarn("[HKTAS] Native scheduler code mismatch at RVA 0x" + rva.ToString("x") + "; skipping native scheduler hooks.");
+                return false;
+            }
+            return true;
         }
 
         private sealed class CoroutineView

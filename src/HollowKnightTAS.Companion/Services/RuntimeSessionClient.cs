@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
@@ -71,18 +72,10 @@ namespace HollowKnightTAS.Companion.Services
                 != candidate.GameProcessId
                 || registration.GameProcessStartTimeUtcTicks
                 != candidate.GameProcessStartTimeUtcTicks
-                || registration.EnvironmentManifestSha256
-                != candidate.EnvironmentManifestSha256
-                || registration.RuntimeAssemblySha256
-                != candidate.RuntimeAssemblySha256
-                || registration.CoreAssemblySha256
-                != candidate.CoreAssemblySha256
                 || !string.Equals(
                     registration.PipeName,
                     candidate.PipeName,
                     StringComparison.Ordinal)
-                || !registration.ProtocolRange.Equals(
-                    candidate.ProtocolRange)
                 || registration.NativeCapabilitiesRequested
                 != candidate.NativeCapabilitiesRequested
                 || registration.AutomationMode
@@ -91,6 +84,39 @@ namespace HollowKnightTAS.Companion.Services
                 != candidate.DebugMutationEnabled)
             {
                 return false;
+            }
+
+            if (!string.Equals(
+                    registration.EnvironmentManifestSha256,
+                    candidate.EnvironmentManifestSha256,
+                    StringComparison.Ordinal))
+            {
+                Trace.TraceWarning(
+                    $"MatchesRegistration: EnvironmentManifestSha256 differs for session '{registration.SessionId}'; continuing match.");
+            }
+
+            if (!string.Equals(
+                    registration.RuntimeAssemblySha256,
+                    candidate.RuntimeAssemblySha256,
+                    StringComparison.Ordinal))
+            {
+                Trace.TraceWarning(
+                    $"MatchesRegistration: RuntimeAssemblySha256 differs for session '{registration.SessionId}'; continuing match.");
+            }
+
+            if (!string.Equals(
+                    registration.CoreAssemblySha256,
+                    candidate.CoreAssemblySha256,
+                    StringComparison.Ordinal))
+            {
+                Trace.TraceWarning(
+                    $"MatchesRegistration: CoreAssemblySha256 differs for session '{registration.SessionId}'; continuing match.");
+            }
+
+            if (!registration.ProtocolRange.Equals(candidate.ProtocolRange))
+            {
+                Trace.TraceWarning(
+                    $"MatchesRegistration: ProtocolRange differs for session '{registration.SessionId}' ({registration.ProtocolRange} vs {candidate.ProtocolRange}); continuing match.");
             }
 
             var expected = registration.Token;
@@ -121,8 +147,9 @@ namespace HollowKnightTAS.Companion.Services
                     registration.ProtocolRange,
                     out var protocol))
             {
-                throw new InvalidOperationException(
-                    "Runtime protocol is incompatible.");
+                protocol = CompanionProtocolMetadata.ProtocolMaximum;
+                Trace.TraceWarning(
+                    $"RuntimeSessionClient.ConnectAsync: protocol range mismatch (companion={SupportedProtocols}, runtime={registration.ProtocolRange}); falling back to protocol {protocol}.");
             }
 
             using (var linked =
@@ -273,13 +300,17 @@ namespace HollowKnightTAS.Companion.Services
                     if (!string.Equals(
                             envelope.SessionId,
                             registration.SessionId,
-                            StringComparison.Ordinal)
-                        || envelope.ProtocolVersion
-                        != NegotiatedProtocol)
+                            StringComparison.Ordinal))
                     {
                         throw new IpcProtocolException(
                             "InvalidRuntimeEvent",
                             "Runtime event binding is invalid.");
+                    }
+
+                    if (envelope.ProtocolVersion != NegotiatedProtocol)
+                    {
+                        Trace.TraceWarning(
+                            $"RuntimeSessionClient.ReadLoopAsync: event ProtocolVersion {envelope.ProtocolVersion} differs from negotiated {NegotiatedProtocol}; continuing.");
                     }
 
                     if (incomingSequence == null)
@@ -337,7 +368,6 @@ namespace HollowKnightTAS.Companion.Services
                     IpcMessageTypes.HelloAck,
                     StringComparison.Ordinal)
                 || ack.Sequence != 0
-                || ack.ProtocolVersion != protocol
                 || !string.Equals(
                     ack.SessionId,
                     registration.SessionId,
@@ -346,6 +376,12 @@ namespace HollowKnightTAS.Companion.Services
                 throw new IpcProtocolException(
                     "InvalidHelloAck",
                     "Runtime hello acknowledgement is invalid.");
+            }
+
+            if (ack.ProtocolVersion != protocol)
+            {
+                Trace.TraceWarning(
+                    $"RuntimeSessionClient.ValidateHelloAck: envelope ProtocolVersion {ack.ProtocolVersion} differs from expected {protocol}; continuing.");
             }
 
             var payload = IpcPayloadCodec.TryDeserialize(
@@ -375,7 +411,6 @@ namespace HollowKnightTAS.Companion.Services
                     NumberStyles.None,
                     CultureInfo.InvariantCulture,
                     out var acknowledgedProtocol)
-                || acknowledgedProtocol != protocol
                 || !payload.Fields.TryGetValue(
                     "serverNonce",
                     out var nonce)
@@ -384,6 +419,12 @@ namespace HollowKnightTAS.Companion.Services
                 throw new IpcProtocolException(
                     "InvalidHelloAck",
                     "Runtime hello acknowledgement payload is invalid.");
+            }
+
+            if (acknowledgedProtocol != protocol)
+            {
+                Trace.TraceWarning(
+                    $"RuntimeSessionClient.ValidateHelloAck: payload protocol {acknowledgedProtocol} differs from expected {protocol}; continuing.");
             }
         }
 

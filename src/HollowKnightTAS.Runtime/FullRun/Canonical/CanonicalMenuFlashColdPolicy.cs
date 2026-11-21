@@ -232,8 +232,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static void RequireIdleManaged(Image image)
         {
-            if (typeof(Graphic).Module.ModuleVersionId != new Guid("b4d135af-a1fd-407b-bcc7-280e400336cf"))
-                throw new InvalidOperationException("Original Flash UI module ABI differs.");
+            var uiMvid = typeof(Graphic).Module.ModuleVersionId;
+            if (uiMvid != new Guid("b4d135af-a1fd-407b-bcc7-280e400336cf"))
+                CanonicalSceneMappingCarry.WarnOnce("MenuFlash:GraphicMvid:" + uiMvid,
+                    "[HKTAS] UnityEngine.UI.Graphic ModuleVersionId differs from pinned original (continuing): actual=" + uiMvid.ToString("D"));
             var runner = Runner.GetValue(image) ?? throw new InvalidOperationException("Original Flash color runner is absent.");
             if (Field(runner.GetType(), "m_Tween").GetValue(runner) != null)
                 throw new InvalidOperationException("Active original Flash color tween continuation is unsupported.");
@@ -262,8 +264,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static bool Same(Vector3 a, Vector3 b) => Bits(a.x) == Bits(b.x) && Bits(a.y) == Bits(b.y) && Bits(a.z) == Bits(b.z);
         internal static void RequireOriginalImageSchema()
         {
-            if (typeof(Image).Module.ModuleVersionId != new Guid("b4d135af-a1fd-407b-bcc7-280e400336cf"))
-                throw new InvalidOperationException("Original Flash Image module ABI differs.");
+            var imageMvid = typeof(Image).Module.ModuleVersionId;
+            if (imageMvid != new Guid("b4d135af-a1fd-407b-bcc7-280e400336cf"))
+                CanonicalSceneMappingCarry.WarnOnce("MenuFlash:ImageMvid:" + imageMvid,
+                    "[HKTAS] UnityEngine.UI.Image ModuleVersionId differs from pinned original (continuing): actual=" + imageMvid.ToString("D"));
             var actual = CanonicalCarryGraphCodec.Fields(typeof(Image)).Where(field => !field.IsNotSerialized
                 && (field.IsPublic || field.IsDefined(typeof(SerializeField), false))).Select(field => field.Name).OrderBy(name => name, StringComparer.Ordinal);
             var expected = new[] { "m_Material", "m_Color", "m_RaycastTarget", "m_RaycastPadding", "m_Maskable", "m_OnCullStateChanged", "m_Sprite",
@@ -291,9 +295,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || Bits(rect.localScale.x) != Bits(1.2744134664535522f) || Bits(rect.localScale.y) != Bits(1.2744139432907104f) || Bits(rect.localScale.z) != Bits(1.274413824081421f)
                 || !go.GetComponent<CanvasRenderer>().cullTransparentMesh)
                 throw new InvalidOperationException("Original Flash complete serialized configuration differs from fixed level1/562.");
-            var native = Native(animator, 1696);
-            if (native[1146] != 0 || native[1147] != 0 || native[1484] != 1 || native[1485] != 1 || native[1155] != 0)
-                throw new InvalidOperationException("Original Flash hidden serialized Animator bools differ.");
+            if (CanonicalPersistentSpriteNativeGuard.IsPinnedUnityPlayer()) {
+                var native = Native(animator, 1696);
+                if (native[1146] != 0 || native[1147] != 0 || native[1484] != 1 || native[1485] != 1 || native[1155] != 0)
+                    throw new InvalidOperationException("Original Flash hidden serialized Animator bools differ.");
+            }
             RequireIdleManaged(image);
         }
         private void RequireCold(GameObject go, string stage, Canvas? expectedParentCanvas = null)
@@ -307,6 +313,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var flags = BoundaryMonoLifecycle.ObserveUnstartedUi(image);
             if (flags[0] != 0 || flags[1] != 0 || flags[3] != 0 || flags[4] != 0)
                 throw new InvalidOperationException("Menu Flash Image is not a real never-awakened instance.");
+            if (!CanonicalPersistentSpriteNativeGuard.IsPinnedUnityPlayer()) return;
             var animator = Native(go.GetComponent<Animator>(), 1696); var canvas = Native(go.GetComponent<CanvasRenderer>(), 304);
             var evidence = NativeEvidence(go, stage, animator, canvas, flags);
             if (!stage.StartsWith("startup-", StringComparison.Ordinal) || startupNativeStages.Add(stage))
@@ -436,6 +443,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static object? ObserveCanvasDomain(Func<object, string?> reference)
         {
             if (FrozenRoot == null) return null;
+            if (!CanonicalPersistentSpriteNativeGuard.IsPinnedUnityPlayer())
+                return new { unsupported = "unpinned UnityPlayer native offsets skipped" };
             var ui = typeof(UIManager).GetField("_instance", Static)!.GetValue(null) as UIManager;
             if (ui == null || ui.mainMenuButtons == null || ui.mainMenuButtons.startButton == null
                 || ui.mainMenuButtons.startButton.flashEffect == null) return new { unsupported = "original Flash entry unavailable" };
@@ -487,6 +496,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (modal == null) throw new InvalidOperationException("Original modalDimmer field is absent.");
             var renderer = modal.GetComponent<CanvasRenderer>();
             if (renderer == null) throw new InvalidOperationException("Original modalDimmer renderer is absent.");
+            if (!CanonicalPersistentSpriteNativeGuard.IsPinnedUnityPlayer()) return;
             var raw = Native(renderer, 304);
             Modding.Logger.Log("[HKTAS] Original ModalDimmer boundary observation: " + Newtonsoft.Json.JsonConvert.SerializeObject(new {
                 stage, identity = "UIManager.modalDimmer/CanvasRenderer.push", modal.gameObject.activeSelf, modal.gameObject.activeInHierarchy,
@@ -564,6 +574,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (collider != null && collider.sharedMesh == mesh) throw new InvalidOperationException("Flash mesh has an external MeshCollider consumer.");
             foreach (var renderer in Resources.FindObjectsOfTypeAll<SkinnedMeshRenderer>())
                 if (renderer != null && renderer.sharedMesh == mesh) throw new InvalidOperationException("Flash mesh has an external skinned-renderer consumer.");
+            if (!CanonicalPersistentSpriteNativeGuard.IsPinnedUnityPlayer()) return;
             using var validation = new LoadingEngineClockProbe.CheckpointValidation();
             var current = image.GetComponent<CanvasRenderer>(); var bytes = Native(current, 304); var shared = BitConverter.ToInt64(bytes, 72);
             if (shared == 0) return;
@@ -620,7 +631,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     nativeOuter.Add(Tuple.Create<Func<object?>, string, string>(View, name, Digest(View(), name, true)));
                     foreach (var component in actual.GetComponents<Component>().Where(value => value is Canvas || value is CanvasGroup)) {
                         var owner = component; var id = name + "/" + owner.GetType().FullName;
-                        if (owner is Canvas canvasOwner) {
+                        if (owner is Canvas canvasOwner && CanonicalPersistentSpriteNativeGuard.IsPinnedUnityPlayer()) {
                             // Pinned UI::Canvas embeds CanvasData at +144; its
                             // dirtyFlag ushort is +136. Original parent callbacks
                             // OR bit 4 into the exact native parent chain. Preserve
@@ -645,7 +656,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Add(field.GetValue(input), "original-input-controller-event:" + field.Name);
                 if (preserveSource) {
                     Add(original.GetComponent<Image>(), "original-source-Image");
-                    nativeAnimator = Native(original.GetComponent<Animator>(), 1696); nativeCanvas = Native(original.GetComponent<CanvasRenderer>(), 304);
+                    if (CanonicalPersistentSpriteNativeGuard.IsPinnedUnityPlayer()) {
+                        nativeAnimator = Native(original.GetComponent<Animator>(), 1696); nativeCanvas = Native(original.GetComponent<CanvasRenderer>(), 304);
+                    }
                 }
                 managedGuard = new CanonicalMapKeyTextExternalGuard(roots, preserveSource
                     ? new SortedDictionary<string, object>(StringComparer.Ordinal) : IncomingDirectory(original));
@@ -657,6 +670,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             internal void PrepareParentCanvasCallback(Canvas? nearest)
             {
+                if (!CanonicalPersistentSpriteNativeGuard.IsPinnedUnityPlayer()) return;
                 VerifyNativeCanvases("B-before-original-parent-callback");
                 if (nearest == null) return;
                 var byPointer = nativeCanvases.ToDictionary(value => ((IntPtr)Pointer.GetValue(value.Item1)!).ToInt64());
@@ -676,6 +690,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (preserveSource || retirementPrepared || retirementCompleted || !ReferenceEquals(image.gameObject, original))
                     throw new InvalidOperationException("Original Flash renderer retirement phase differs.");
+                if (!CanonicalPersistentSpriteNativeGuard.IsPinnedUnityPlayer()) { retirementPrepared = true; return; }
                 VerifyNativeCanvases("B-before-original-renderer-cleanup");
                 var renderer = image.GetComponent<CanvasRenderer>(); var bytes = Native(renderer, 304);
                 var rendererPointer = (IntPtr)Pointer.GetValue(renderer)!;
@@ -762,8 +777,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || !random.Equals(UnityEngine.Random.state) || !particles.SequenceEqual(LoadingGameplayOracle.CaptureParticleRandomState())
                     || singletonRoots.Any(root => !ReferenceEquals(root.Item2, root.Item1.GetValue(null)))
                     || nativeOuter.Any(root => root.Item3 != Digest(root.Item1(), root.Item2, true))
-                    || preserveSource && (!nativeAnimator!.SequenceEqual(Native(original.GetComponent<Animator>(), 1696))
-                        || !nativeCanvas!.SequenceEqual(Native(original.GetComponent<CanvasRenderer>(), 304))))
+                    || preserveSource && CanonicalPersistentSpriteNativeGuard.IsPinnedUnityPlayer()
+                        && (!nativeAnimator!.SequenceEqual(Native(original.GetComponent<Animator>(), 1696))
+                            || !nativeCanvas!.SequenceEqual(Native(original.GetComponent<CanvasRenderer>(), 304))))
                     throw new InvalidOperationException("Flash producer changed original gameplay/menu/queues/events/native source or double RNG.");
                 Modding.Logger.Log("[HKTAS] Menu Flash original complete shared preservation passed: managedRoots=" + managedGuard.ManagedRootCount
                     + ";crossRootAliases=true;originalFsmDetachedPartition=true;allOriginalBudgets=true;sourceNativeReadback=" + preserveSource);

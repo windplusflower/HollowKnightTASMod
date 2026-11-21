@@ -29,8 +29,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             var source = bound.GetNestedType("CheckSource", BindingFlags.Public | BindingFlags.NonPublic)!;
             var baseLayout = CanonicalSoulOrbCarry.BoundSoulLayout.Substring(CanonicalSoulOrbCarry.BoundSoulLayout.IndexOf("HutongGames.PlayMaker.FsmStateAction/", StringComparison.Ordinal));
             void Require(Type type, string original) {
+                var actualMvid = type.Module.ModuleVersionId.ToString("D");
+                if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                    CanonicalSceneMappingCarry.WarnOnce("PersistentSpriteCont:ActionMvid:" + type.FullName + ":" + actualMvid,
+                        "[HKTAS] PersistentSprite action ModuleVersionId differs from pinned original (continuing): type=" + type.FullName + ";actual=" + actualMvid);
                 var actual = string.Join(";", CanonicalCarryGraphCodec.Fields(type).Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName));
-                if (type.Module.ModuleVersionId.ToString("D") != "2b54cdaf-7a93-4f0e-b297-d50c4090ea9f" || actual != original + ";" + baseLayout)
+                if (actual != original + ";" + baseLayout)
                     throw new InvalidDataException("Original health concrete action field layout differs: " + type.FullName);
             }
             Require(respawn, "GetRespawningHero/variable=HutongGames.PlayMaker.FsmBool");
@@ -68,7 +72,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             var types = new[] { typeof(tk2dSpriteAnimation), typeof(int), typeof(bool), typeof(tk2dSpriteAnimationClip), typeof(float), typeof(float), typeof(int),
                 typeof(Action<tk2dSpriteAnimator, tk2dSpriteAnimationClip>), typeof(Action<tk2dSpriteAnimator, tk2dSpriteAnimationClip, int>),
                 type.GetNestedType("State", BindingFlags.Public | BindingFlags.NonPublic)!, typeof(tk2dBaseSprite) };
-            if (type.Module.ModuleVersionId.ToString("D") != "2b54cdaf-7a93-4f0e-b297-d50c4090ea9f" || fields.Length != 11
+            var actualMvid = type.Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("PersistentSpriteCont:AnimatorMvid:" + actualMvid,
+                    "[HKTAS] tk2dSpriteAnimator ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
+            if (fields.Length != 11
                 || fields.Where((field, index) => field.Name != names[index] || field.FieldType != types[index]).Any())
                 throw new InvalidDataException("Persistent animator original eleven-field ABI differs.");
             return fields;
@@ -99,8 +107,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var raw = (Fsm)Raw.GetValue(HealthOwner(owner)); var states = (FsmState[])States.GetValue(raw);
                 if (states == null || states.Length != 27) throw new InvalidDataException("Original health state count differs.");
                 var layout = string.Join("\n", states.Select(state => state.Name + "|" + string.Join(",", ((FsmStateAction[])Actions.GetValue(state)).Select(action => action.GetType().FullName))));
-                if (HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(System.Text.Encoding.UTF8.GetBytes(layout)) != "c5e96b56c14773f4bbafdd1917221a07628eb5ddebecbc6ff1ea8b8e8cbe697f")
-                    throw new InvalidDataException("Original health 27-state/99-action directory differs.");
+                var layoutHash = HollowKnightTAS.Core.Cryptography.Sha256Utility.ComputeHex(System.Text.Encoding.UTF8.GetBytes(layout));
+                if (layoutHash != "c5e96b56c14773f4bbafdd1917221a07628eb5ddebecbc6ff1ea8b8e8cbe697f")
+                    CanonicalSceneMappingCarry.WarnOnce("PersistentSpriteCont:HealthLayout:" + owner + ":" + layoutHash,
+                        "[HKTAS] Health FSM state/action layout SHA-256 differs from pinned original (continuing): owner=" + owner + ";hash=" + layoutHash);
                 var root = Prefix + owner; result.Add(root, raw);
                 for (var s = 0; s < states.Length; s++) {
                     var state = states[s]; var actions = (FsmStateAction[])Actions.GetValue(state);

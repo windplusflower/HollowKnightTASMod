@@ -183,6 +183,43 @@ $whitelist = [ordered]@{
     bridgeSha256 = Get-Sha256 $bridgePath
     payloadSha256 = Get-Sha256 $payloadPath
 }
+$nativeWhitelistPath = Join-Path $repoRoot 'packaging\native-build-whitelist-v1.json'
+if (-not (Test-Path -LiteralPath $nativeWhitelistPath -PathType Leaf)) {
+    Write-Warning "Native build whitelist not found (continuing with actual local hashes): $nativeWhitelistPath"
+}
+else {
+    try {
+        $nativeWhitelistDoc = Get-Content -LiteralPath $nativeWhitelistPath -Raw | ConvertFrom-Json
+        $buildsProp = $nativeWhitelistDoc.PSObject.Properties['builds']
+        $matchedBuild = if ($null -ne $buildsProp) {
+            @(
+                $buildsProp.Value |
+                    Where-Object {
+                        $_.PSObject.Properties['imageSha256'] -and
+                        $_.PSObject.Properties['assemblyCSharpSha256'] -and
+                        $_.imageSha256 -eq $whitelist.processImageSha256 -and
+                        $_.assemblyCSharpSha256 -eq $whitelist.assemblyCSharpSha256
+                    }
+            )
+        }
+        else {
+            @()
+        }
+        if ($matchedBuild.Count -eq 0) {
+            Write-Warning ((
+                'Local game binaries do not match any entry in {0} ' +
+                '(hollow_knight.exe={1}, UnityPlayer.dll={2}, Assembly-CSharp.dll={3}); ' +
+                'continuing with actual local hashes.') -f `
+                $nativeWhitelistPath, `
+                $whitelist.processImageSha256, `
+                $whitelist.unityPlayerSha256, `
+                $whitelist.assemblyCSharpSha256)
+        }
+    }
+    catch {
+        Write-Warning "Failed to inspect native build whitelist '$nativeWhitelistPath': $($_.Exception.Message). Continuing with actual local hashes."
+    }
+}
 $whitelistPath = Join-Path $OutputRoot 'clock-build-whitelist-v1.json'
 $whitelist |
     ConvertTo-Json -Depth 10 |

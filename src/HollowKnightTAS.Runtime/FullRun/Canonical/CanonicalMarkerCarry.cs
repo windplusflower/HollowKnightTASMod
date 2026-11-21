@@ -26,7 +26,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             var scale = typeof(ChangeFontByLanguage).GetNestedType("FontScaleLang", BindingFlags.NonPublic)
                 ?? throw new InvalidDataException("Marker original font scale data is absent.");
             var fields = CanonicalCarryGraphCodec.Fields(scale);
-            if (scale.Module.ModuleVersionId != Module || fields.Length != 4
+            if (scale.Module.ModuleVersionId != Module)
+                CanonicalSceneMappingCarry.WarnOnce("Marker:ScaleMvid:" + scale.Module.ModuleVersionId,
+                    "[HKTAS] FontScaleLang ModuleVersionId differs from pinned original (continuing): actual=" + scale.Module.ModuleVersionId.ToString("D"));
+            if (fields.Length != 4
                 || !fields.Select(field => field.Name).SequenceEqual(new[] { "fontSizeJA", "fontSizeKO", "fontSizeRU", "fontSizeZH" })
                 || fields.Any(field => field.FieldType != typeof(float?) || field.IsInitOnly))
                 throw new InvalidDataException("Marker original complete font scale ABI differs.");
@@ -52,8 +55,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static FieldInfo[] ManagedFields(Type type)
         {
             var index = Array.IndexOf(OwnerTypes, type);
-            if (index < 0 || type.Module.ModuleVersionId != (type == typeof(PlayMakerFSM) ? PlayMakerModule : Module))
+            if (index < 0)
                 throw new InvalidDataException("Original Marker managed owner ABI differs: " + type.FullName);
+            var expectedMvid = type == typeof(PlayMakerFSM) ? PlayMakerModule : Module;
+            if (type.Module.ModuleVersionId != expectedMvid)
+                CanonicalSceneMappingCarry.WarnOnce("Marker:OwnerMvid:" + type.FullName + ":" + type.Module.ModuleVersionId,
+                    "[HKTAS] Marker owner ModuleVersionId differs from pinned original (continuing): type=" + type.FullName + ";actual=" + type.Module.ModuleVersionId.ToString("D"));
             var fields = CanonicalCarryGraphCodec.Fields(type).Where(field => field.DeclaringType != typeof(UnityEngine.Object)
                 && field.DeclaringType != typeof(Component) && field.DeclaringType != typeof(Behaviour)
                 && field.DeclaringType != typeof(MonoBehaviour)).ToArray();

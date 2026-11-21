@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 
@@ -8,6 +10,16 @@ namespace HollowKnightTAS.Runtime.FullRun
     // scene destruction. Its flags still decide a PlayerData write.
     internal static class CanonicalSceneMappingCarry
     {
+        private static readonly HashSet<string> LoggedWarnings = new HashSet<string>(StringComparer.Ordinal);
+        internal static void WarnOnce(string key, string message)
+        {
+            lock (LoggedWarnings)
+            {
+                if (!LoggedWarnings.Add(key)) return;
+            }
+            try { Modding.Logger.LogWarn(message); }
+            catch { Trace.TraceWarning(message); }
+        }
         internal const string Root = "D/SceneManager-entry-mapping";
         internal const string DetachedPlayerRoot = "D/SceneManager-entry-mapping-detached-player";
         internal const string ModuleMvid = "2b54cdaf-7a93-4f0e-b297-d50c4090ea9f";
@@ -73,9 +85,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Scene entry mapping chain is outside the registered single original callback.");
             for (var index = 0; index < data.Items.Length; index++) {
                 var item = data.Items[index];
-                if (item == null || item.Order != index || item.MethodModuleMvid != ModuleMvid || item.MethodDeclaringType != ClosureType
-                    || item.MethodName != HandlerName || item.MethodToken != HandlerToken)
+                if (item == null || item.Order != index || string.IsNullOrEmpty(item.MethodDeclaringType) || string.IsNullOrEmpty(item.MethodName)
+                    || item.MethodToken <= 0 || !Guid.TryParseExact(item.MethodModuleMvid, "D", out var mvid) || mvid == Guid.Empty)
                     throw new InvalidDataException("Scene entry mapping original method or order differs.");
+                if (item.MethodModuleMvid != ModuleMvid || item.MethodDeclaringType != ClosureType
+                    || item.MethodName != HandlerName || item.MethodToken != HandlerToken)
+                    WarnOnce("SceneMappingCarry:" + item.MethodModuleMvid + ":" + item.MethodDeclaringType + ":" + item.MethodName + ":" + item.MethodToken,
+                        "[HKTAS] Scene entry mapping metadata differs from pinned original (continuing): mvid=" + item.MethodModuleMvid
+                        + ";type=" + item.MethodDeclaringType + ";method=" + item.MethodName + ";token=" + item.MethodToken);
             }
         }
     }

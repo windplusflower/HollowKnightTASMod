@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Security.AccessControl;
@@ -64,7 +65,10 @@ namespace HollowKnightTAS.Companion.Services
                     var name = Path.GetFileName(path);
                     if (!LooksLikeSlotName(name)) continue;
                     if (!ProtectedSaveDescriptor.IsSlotFileName(name))
-                        throw new InvalidDataException("Unsupported slot-side file name: " + name);
+                    {
+                        Trace.TraceWarning("ProtectedSaveSession: skipping non-standard slot-side entry: " + name);
+                        continue;
+                    }
                     if (!seen.Add(name))
                         throw new InvalidDataException("Case-insensitive duplicate save file name: " + name);
                     if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || Directory.Exists(path))

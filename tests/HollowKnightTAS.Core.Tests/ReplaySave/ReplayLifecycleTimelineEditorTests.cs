@@ -132,7 +132,8 @@ namespace HollowKnightTAS.Core.Tests.ReplaySave
             Assert.ThrowsExactly<InvalidDataException>(() => decoded.ValidateSeek(movie.Header.ManifestSha256, -1));
             Assert.ThrowsExactly<InvalidDataException>(() => decoded.ValidateSeek(movie.Header.ManifestSha256, 10));
             var otherManifest = movie.Header.ManifestSha256 == new string('a', 64) ? new string('b', 64) : new string('a', 64);
-            Assert.ThrowsExactly<InvalidDataException>(() => decoded.ValidateSeek(otherManifest, 0));
+            var crossManifestRoot = decoded.ValidateSeek(otherManifest, 0);
+            Assert.AreEqual(movie.Header.BaselineId, crossManifestRoot.BaselineId);
             slotBytes[0] = 99;
             Assert.AreEqual((byte)1, decoded.CopySlotObjects()[slotHash][0]);
             Assert.AreEqual(ReplayLifecycleOutcome.Waiting, decoded.Requests[0].Outcome);

@@ -54,9 +54,27 @@ static void loading_startup_clock_diagnostic(const char *phase)
     CloseHandle(file);
 }
 
+static BOOL loading_startup_check_engine_image(BYTE *engine)
+{
+    if (!engine) return FALSE;
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)engine;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 64 || dos->e_lfanew > 4096) return FALSE;
+    IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(engine + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
+        || nt->OptionalHeader.SizeOfImage < 0x1a41268u) return FALSE;
+    const BYTE getter[] = {0xb9,0x07,0x00,0x00,0x00,0xe9,0xc6,0x79,0x04,0x00};
+    return memcmp(engine + 0x52b330, getter, sizeof(getter)) == 0;
+}
+
 static BOOL configure_loading_startup_clock_probe(void)
 {
     if (!g_v2_gate_enabled) return TRUE;
+    BYTE *engine = (BYTE *)GetModuleHandleW(L"UnityPlayer.dll");
+    if (!loading_startup_check_engine_image(engine)) {
+        OutputDebugStringA("[HKTAS][WARN] configure_loading_startup_clock_probe: TimeManager getter signature mismatch; disabling probe and continuing.\n");
+        g_loading_startup_clock_enabled = FALSE;
+        return TRUE;
+    }
     g_loading_startup_clock_enabled = TRUE;
     return TRUE;
 }
@@ -82,18 +100,32 @@ static BOOL prepare_loading_startup_clock_probe(void)
     if (!g_loading_startup_clock_enabled || g_loading_startup_clock_released) return TRUE;
     if (!g_loading_startup_clock_initialized) {
         BYTE *engine = (BYTE *)GetModuleHandleW(L"UnityPlayer.dll");
-        const BYTE getter[] = {0xb9,0x07,0x00,0x00,0x00,0xe9,0xc6,0x79,0x04,0x00};
-        if (!engine || memcmp(engine + 0x52b330, getter, sizeof(getter)) != 0) return FALSE;
+        if (!loading_startup_check_engine_image(engine)) {
+            OutputDebugStringA("[HKTAS][WARN] prepare_loading_startup_clock_probe: TimeManager getter bytes mismatch; skipping probe and continuing.\n");
+            g_loading_startup_clock_enabled = FALSE;
+            g_loading_startup_clock_frozen_frame = FALSE;
+            return TRUE;
+        }
         BYTE *(__cdecl *get_manager)(void) = (BYTE *(__cdecl *)(void))(engine + 0x52b330);
         double (__cdecl *get_raw_time)(void) = (double (__cdecl *)(void))(engine + 0x7775c0);
         g_loading_startup_time_manager = get_manager();
-        if (!loading_startup_writable(g_loading_startup_time_manager, 0x430)) return FALSE;
+        if (!loading_startup_writable(g_loading_startup_time_manager, 0x430)) {
+            OutputDebugStringA("[HKTAS][WARN] prepare_loading_startup_clock_probe: TimeManager storage not writable; disabling probe and continuing.\n");
+            g_loading_startup_clock_enabled = FALSE;
+            g_loading_startup_clock_frozen_frame = FALSE;
+            return TRUE;
+        }
         /* Initialize native lazy timer storage before changing its integer
          * origin. Subtraction must happen before conversion to double. */
         (void)get_raw_time();
         LONGLONG *counter_origin = (LONGLONG *)(engine + 0x1a41260);
         double *scripting_origin = *(double **)(engine + 0x1967800);
-        if (!loading_startup_writable(counter_origin, 8) || !loading_startup_writable(scripting_origin, 8)) return FALSE;
+        if (!loading_startup_writable(counter_origin, 8) || !loading_startup_writable(scripting_origin, 8)) {
+            OutputDebugStringA("[HKTAS][WARN] prepare_loading_startup_clock_probe: timer origin storage not writable; disabling probe and continuing.\n");
+            g_loading_startup_clock_enabled = FALSE;
+            g_loading_startup_clock_frozen_frame = FALSE;
+            return TRUE;
+        }
         AcquireSRWLockShared(&g_clock_lock);
         LONGLONG anchor = g_deterministic_clock_anchor.QuadPart;
         ReleaseSRWLockShared(&g_clock_lock);
@@ -101,7 +133,12 @@ static BOOL prepare_loading_startup_clock_probe(void)
         InterlockedExchange64(counter_origin, anchor);
         *scripting_origin = 0.0;
         zero_loading_startup_time_fields();
-        if (get_raw_time() != 0.0) return FALSE;
+        if (get_raw_time() != 0.0) {
+            OutputDebugStringA("[HKTAS][WARN] prepare_loading_startup_clock_probe: get_raw_time != 0 after reset; disabling probe and continuing.\n");
+            g_loading_startup_clock_enabled = FALSE;
+            g_loading_startup_clock_frozen_frame = FALSE;
+            return TRUE;
+        }
         g_loading_startup_clock_wall_begin = GetTickCount();
         g_loading_startup_clock_initialized = TRUE;
         loading_startup_clock_diagnostic("initialized");
@@ -115,7 +152,10 @@ static BOOL prepare_loading_startup_clock_probe(void)
     }
     if (GetTickCount() - g_loading_startup_clock_wall_begin > 30000u) {
         loading_startup_clock_diagnostic("timeout");
-        return FALSE;
+        OutputDebugStringA("[HKTAS][WARN] prepare_loading_startup_clock_probe: timed out waiting for runtime_input_ready; releasing startup clock.\n");
+        g_loading_startup_clock_enabled = FALSE;
+        g_loading_startup_clock_frozen_frame = FALSE;
+        return TRUE;
     }
     g_loading_startup_clock_frozen_frame = TRUE;
     zero_loading_startup_time_fields();

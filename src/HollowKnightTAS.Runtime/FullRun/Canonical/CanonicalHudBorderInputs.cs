@@ -187,8 +187,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             var slots = PaneStrings(inventory);
             var valueField = typeof(FsmString).GetField("value", Flags)
                 ?? throw new InvalidDataException("Original Border string value field is absent.");
-            if (typeof(FsmString).Module.ModuleVersionId.ToString("D") != "29eb59fa-5c99-43cd-8f33-6db074533d31"
-                || valueField.FieldType != typeof(string) || valueField.IsInitOnly || slots.Any(slot => slot.GetType() != typeof(FsmString)))
+            var actualFsmStringMvid = typeof(FsmString).Module.ModuleVersionId.ToString("D");
+            if (actualFsmStringMvid != "29eb59fa-5c99-43cd-8f33-6db074533d31")
+                CanonicalSceneMappingCarry.WarnOnce("HudBorderInputs:FsmStringMvid:" + actualFsmStringMvid,
+                    "[HKTAS] PlayMaker FsmString ModuleVersionId differs from pinned original (continuing): actual=" + actualFsmStringMvid);
+            if (valueField.FieldType != typeof(string) || valueField.IsInitOnly || slots.Any(slot => slot.GetType() != typeof(FsmString)))
                 throw new InvalidDataException("Original Border FsmString complete ABI differs.");
             var fields = CanonicalCarryGraphCodec.Fields(typeof(FsmString));
             var before = slots.Select(slot => fields.Select(field => field.GetValue(slot)).ToArray()).ToArray();

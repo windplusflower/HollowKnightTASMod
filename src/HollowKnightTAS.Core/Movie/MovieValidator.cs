@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text;
 using HollowKnightTAS.Core.Input;
 
@@ -57,19 +58,37 @@ namespace HollowKnightTAS.Core.Movie
 
     public sealed class MovieValidationReport
     {
+        private readonly MovieDiagnostic[] errors;
+        private readonly MovieDiagnostic[] warnings;
         private readonly MovieDiagnostic[] diagnostics;
 
         internal MovieValidationReport(
             IEnumerable<MovieDiagnostic> diagnostics,
             long expandedTickCount)
+            : this(diagnostics, Array.Empty<MovieDiagnostic>(), expandedTickCount)
         {
-            this.diagnostics = new List<MovieDiagnostic>(diagnostics).ToArray();
+        }
+
+        internal MovieValidationReport(
+            IEnumerable<MovieDiagnostic> errors,
+            IEnumerable<MovieDiagnostic> warnings,
+            long expandedTickCount)
+        {
+            this.errors = new List<MovieDiagnostic>(errors).ToArray();
+            this.warnings = new List<MovieDiagnostic>(warnings).ToArray();
+            var combined = new List<MovieDiagnostic>(this.errors.Length + this.warnings.Length);
+            combined.AddRange(this.errors);
+            combined.AddRange(this.warnings);
+            diagnostics = combined.ToArray();
             ExpandedTickCount = expandedTickCount;
         }
 
         public IReadOnlyList<MovieDiagnostic> Diagnostics => diagnostics;
+        public IReadOnlyList<MovieDiagnostic> Errors => errors;
+        public IReadOnlyList<MovieDiagnostic> Warnings => warnings;
         public long ExpandedTickCount { get; }
-        public bool Success => diagnostics.Length == 0;
+        public bool HasErrors => errors.Length > 0;
+        public bool Success => errors.Length == 0;
     }
 
     public sealed class MovieValidator
@@ -91,7 +110,8 @@ namespace HollowKnightTAS.Core.Movie
             }
 
             var diagnostics = new List<MovieDiagnostic>();
-            ValidateHeader(movie, context, diagnostics);
+            var warnings = new List<MovieDiagnostic>();
+            ValidateHeader(movie, context, diagnostics, warnings);
 
             long expandedTicks = 0;
             var expandedLimitReported = false;
@@ -165,13 +185,14 @@ namespace HollowKnightTAS.Core.Movie
                 }
             }
 
-            return new MovieValidationReport(diagnostics, expandedTicks);
+            return new MovieValidationReport(diagnostics, warnings, expandedTicks);
         }
 
         private static void ValidateHeader(
             MovieDocument movie,
             MovieValidationContext context,
-            ICollection<MovieDiagnostic> diagnostics)
+            ICollection<MovieDiagnostic> diagnostics,
+            ICollection<MovieDiagnostic> warnings)
         {
             var header = movie.Header;
             if (header.ProtocolVersion != MovieProtocolV1.Version)
@@ -265,7 +286,9 @@ namespace HollowKnightTAS.Core.Movie
                     context.ExpectedManifestSha256,
                     StringComparison.Ordinal))
             {
-                diagnostics.Add(
+                Trace.TraceWarning(
+                    "MovieValidator: movie manifest SHA-256 differs from expected environment; continuing with warning.");
+                warnings.Add(
                     new MovieDiagnostic(
                         MovieDiagnosticCodes.ManifestMismatch,
                         header.GetSpan("manifest-sha256", movie.SourceName),
@@ -279,7 +302,9 @@ namespace HollowKnightTAS.Core.Movie
                     context.ExpectedBaselineSha256,
                     StringComparison.Ordinal))
             {
-                diagnostics.Add(
+                Trace.TraceWarning(
+                    "MovieValidator: movie baseline SHA-256 differs from expected baseline; continuing with warning.");
+                warnings.Add(
                     new MovieDiagnostic(
                         MovieDiagnosticCodes.BaselineMismatch,
                         header.GetSpan("baseline-sha256", movie.SourceName),

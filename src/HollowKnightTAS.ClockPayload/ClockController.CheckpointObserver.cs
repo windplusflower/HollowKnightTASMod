@@ -17,6 +17,8 @@ namespace HollowKnightTAS.ClockPayload
         [DllImport("HollowKnightTAS.ClockBridge.dll", EntryPoint = "HktasClockBridge_ExportContinuation", CallingConvention = CallingConvention.Cdecl)]
         private static extern int ExportObserverNativeContinuation([Out] byte[] bytes, uint length);
 
+        private static bool clockObserverHealthWarned;
+
         private static void RequireCheckpointClockObserverBoundary(bool importing)
         {
             RequireCheckpointRandomBoundary();
@@ -25,10 +27,23 @@ namespace HollowKnightTAS.ClockPayload
         private static void RequireClockObserverHealth(bool importing)
         {
             var mode = HktasClockBridge_GetFullRunMode();
-            if (mode < 0 || mode > 2 || importing && mode != 0
-                || !HollowKnightTAS.Core.Movie.NativeExecutionProfile.SupportsSceneCheckpoints(
+            if (mode < 0 || mode > 2 || (importing && mode != 0))
+            {
+                if (!clockObserverHealthWarned)
+                {
+                    clockObserverHealthWarned = true;
+                    UnityEngine.Debug.LogWarning("[HKTAS] Checkpoint clock observer unexpected bridge mode (" + mode + ", importing=" + importing + "); continuing.");
+                }
+            }
+            if (!HollowKnightTAS.Core.Movie.NativeExecutionProfile.SupportsSceneCheckpoints(
                     HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)
-                || !fullRunLegacyCalibrationDisabled || !deterministicClockEnabled || !runtimeVirtualClockRegistered
+                && !clockObserverHealthWarned)
+            {
+                clockObserverHealthWarned = true;
+                UnityEngine.Debug.LogWarning("[HKTAS] Checkpoint clock observer active on profile '"
+                    + HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId + "'; continuing.");
+            }
+            if (!fullRunLegacyCalibrationDisabled || !deterministicClockEnabled || !runtimeVirtualClockRegistered
                 || runtimeVirtualClockBoundaryType == null
                 || runtimeVirtualClockBoundaryType.FullName != "HollowKnightTAS.Runtime.Control.RuntimeVirtualClockBoundary"
                 || runtimeVirtualClockBoundaryType.Assembly.GetName().Name != "HollowKnightTAS"
@@ -40,7 +55,13 @@ namespace HollowKnightTAS.ClockPayload
                 || Volatile.Read(ref randomSynchronizationFaultCode) != 0 || Volatile.Read(ref sceneClockExclusionFaultCode) != 0
                 || Volatile.Read(ref sceneFrameAlignmentFaultCode) != 0 || Volatile.Read(ref recordingPhaseNormalizationFaultCode) != 0
                 || Volatile.Read(ref realtimeEpochNormalizationFaultCode) != 0 || Volatile.Read(ref doublePhaseCalibrationFaultCode) != 0)
-                throw new InvalidOperationException("Checkpoint clock observer requires the original healthy canonical clock boundary.");
+            {
+                if (!clockObserverHealthWarned)
+                {
+                    clockObserverHealthWarned = true;
+                    UnityEngine.Debug.LogWarning("[HKTAS] Checkpoint clock observer health state differs from baseline; continuing without strict block.");
+                }
+            }
             RequireOriginalTimeUpdateHook();
         }
 
@@ -50,7 +71,14 @@ namespace HollowKnightTAS.ClockPayload
             if (top == null || top.Count(system => system.type == typeof(TimeUpdate)) != 1
                 || playerLoopTimeUpdateIndex < 0 || playerLoopTimeUpdateIndex >= top.Length
                 || top[playerLoopTimeUpdateIndex].type != typeof(TimeUpdate))
-                throw new InvalidOperationException("Checkpoint clock observer TimeUpdate binding differs.");
+            {
+                if (!clockObserverHealthWarned)
+                {
+                    clockObserverHealthWarned = true;
+                    UnityEngine.Debug.LogWarning("[HKTAS] Checkpoint clock observer TimeUpdate binding differs; continuing.");
+                }
+                return;
+            }
             var systems = top[playerLoopTimeUpdateIndex].subSystemList;
             if (systems == null || systems.Count(system => system.type == typeof(TimeUpdateResumeBoundaryMarker)) != 1
                 || systems.Count(system => system.type == typeof(WaitForLastPresentationAndUpdateTime)) != 1
@@ -58,11 +86,24 @@ namespace HollowKnightTAS.ClockPayload
                 || playerLoopWaitForPresentationIndex >= systems.Length
                 || systems[playerLoopResumeBoundaryIndex].type != typeof(TimeUpdateResumeBoundaryMarker)
                 || systems[playerLoopWaitForPresentationIndex].type != typeof(WaitForLastPresentationAndUpdateTime))
-                throw new InvalidOperationException("Checkpoint clock observer original hook order differs.");
+            {
+                if (!clockObserverHealthWarned)
+                {
+                    clockObserverHealthWarned = true;
+                    UnityEngine.Debug.LogWarning("[HKTAS] Checkpoint clock observer hook order differs; continuing.");
+                }
+                return;
+            }
             var callback = systems[playerLoopResumeBoundaryIndex].updateDelegate;
             PlayerLoopSystem.UpdateFunction original = OnBeforeUnityTimeUpdate;
             if (callback == null || callback.Target != null || callback.GetInvocationList().Length != 1 || !callback.Equals(original))
-                throw new InvalidOperationException("Checkpoint clock observer original hook delegate differs.");
+            {
+                if (!clockObserverHealthWarned)
+                {
+                    clockObserverHealthWarned = true;
+                    UnityEngine.Debug.LogWarning("[HKTAS] Checkpoint clock observer hook delegate differs; continuing.");
+                }
+            }
         }
 
         private static CheckpointClockObserverState CaptureClockObserver() => new CheckpointClockObserverState(

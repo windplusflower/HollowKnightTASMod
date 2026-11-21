@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text;
@@ -112,6 +113,13 @@ namespace HollowKnightTAS.Core.Deployment
 
         public static CompanionManifestDecodeResult TryDeserialize(
             byte[] bytes)
+        {
+            return TryDeserialize(bytes, requireCanonical: false);
+        }
+
+        public static CompanionManifestDecodeResult TryDeserialize(
+            byte[] bytes,
+            bool requireCanonical)
         {
             if (bytes == null)
             {
@@ -234,9 +242,15 @@ namespace HollowKnightTAS.Core.Deployment
 
             if (!IpcPayloadCodec.ByteArraysEqual(canonical, bytes))
             {
-                return Fail(
-                    "NonCanonical",
-                    "Manifest JSON is not canonical.");
+                if (requireCanonical)
+                {
+                    return Fail(
+                        "NonCanonical",
+                        "Manifest JSON is not canonical.");
+                }
+
+                Trace.TraceWarning(
+                    "CompanionManifestCodec: Manifest JSON is not canonical; continuing.");
             }
 
             return new CompanionManifestDecodeResult(

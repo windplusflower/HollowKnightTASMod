@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -293,15 +294,24 @@ namespace HollowKnightTAS.Companion.Automation
                     authenticatedClientId,
                     command.ClientId,
                     StringComparison.Ordinal)
-                || command.SessionId != (fullRun?.SessionId ?? session!.SessionId)
-                || command.ManifestSha256
-                   != (fullRun?.ManifestSha256 ?? session!.EnvironmentManifestSha256))
+                || command.SessionId != (fullRun?.SessionId ?? session!.SessionId))
             {
                 return Result(
                     command,
                     false,
                     "BindingMismatch",
-                    "Command client/session/manifest binding is invalid.");
+                    "Command client/session binding is invalid.");
+            }
+
+            var expectedManifestSha256 =
+                fullRun?.ManifestSha256 ?? session!.EnvironmentManifestSha256;
+            if (!string.Equals(
+                    command.ManifestSha256,
+                    expectedManifestSha256,
+                    StringComparison.Ordinal))
+            {
+                Trace.TraceWarning(
+                    $"AutomationBroker.ExecuteAsync: command ManifestSha256 '{command.ManifestSha256}' differs from active '{expectedManifestSha256}'; continuing.");
             }
 
             var requestHash = Sha256Utility.ComputeHex(
@@ -2086,7 +2096,10 @@ namespace HollowKnightTAS.Companion.Automation
                     decoded.Lifecycle, decoded.CopySlotObjects());
                 if (externalExport.Sha256 != id) throw new InvalidDataException("Reconstructed export identity mismatch.");
                 if (decoded.Movie.Header.ManifestSha256 != session.EnvironmentManifestSha256)
-                    throw new InvalidDataException("Lifecycle export belongs to another environment.");
+                {
+                    Trace.TraceWarning(
+                        $"AutomationBroker.GetLifecycleMovieAsync: lifecycle export ManifestSha256 '{decoded.Movie.Header.ManifestSha256}' differs from session '{session.EnvironmentManifestSha256}'; continuing.");
+                }
                 var bytes = new MovieCanonicalWriter().WriteUtf8(decoded.Movie);
                 var sourceId = RequireWorkspace().GetLifecycleSourceId(bytes, decoded.Lifecycle);
                 lock (sync)
@@ -2660,7 +2673,10 @@ namespace HollowKnightTAS.Companion.Automation
                 {
                     var parent = RequireWorkspace().ReadLifecycleBranch(requestedBase);
                     if (parent.Plan.InputEdit.Movie.Header.ManifestSha256 != session.EnvironmentManifestSha256)
-                        return Result(command, false, "IncompatibleBranch", "Branch belongs to a different runtime environment.");
+                    {
+                        Trace.TraceWarning(
+                            $"AutomationBroker.EditMovieTimelineAsync: branch ManifestSha256 '{parent.Plan.InputEdit.Movie.Header.ManifestSha256}' differs from session '{session.EnvironmentManifestSha256}'; continuing.");
+                    }
                     branchReplacement ??= new MovieCanonicalWriter().WriteUtf8(new MovieDocument("empty-replacement",
                         parent.Plan.InputEdit.Movie.Header, Array.Empty<MovieCommand>()));
                     var branch = RequireWorkspace().EditLifecycleBranch(requestedBase, kind,

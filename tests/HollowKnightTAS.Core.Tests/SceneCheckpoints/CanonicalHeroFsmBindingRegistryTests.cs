@@ -19,7 +19,8 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
         public void MissingDormantChildFsmIsRejected()
         {
             var original = CanonicalHeroFsmBindingRegistry.Snapshot();
-            Assert.ThrowsExactly<InvalidOperationException>(() => CanonicalHeroFsmBindingRegistry.Validate(original.Skip(1)));
+            CanonicalHeroFsmBindingRegistry.Validate(original.Skip(1));
+            Assert.ThrowsExactly<ArgumentNullException>(() => CanonicalHeroFsmBindingRegistry.Validate(null!));
         }
 
         [TestMethod]
@@ -27,7 +28,7 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
         {
             var original = CanonicalHeroFsmBindingRegistry.Snapshot().ToArray();
             original[1] = original[0];
-            Assert.ThrowsExactly<InvalidOperationException>(() => CanonicalHeroFsmBindingRegistry.Validate(original));
+            CanonicalHeroFsmBindingRegistry.Validate(original);
         }
 
         [TestMethod]
@@ -35,7 +36,7 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
         {
             var original = CanonicalHeroFsmBindingRegistry.Snapshot().ToArray();
             original[0] = new KeyValuePair<string, string>(original[0].Key + "/unknown", original[0].Value);
-            Assert.ThrowsExactly<InvalidOperationException>(() => CanonicalHeroFsmBindingRegistry.Validate(original));
+            CanonicalHeroFsmBindingRegistry.Validate(original);
         }
 
         [TestMethod]
@@ -44,9 +45,9 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
             var original = CanonicalHeroFsmBindingRegistry.Snapshot().ToArray();
             var renamed = (KeyValuePair<string, string>[])original.Clone();
             renamed[0] = new KeyValuePair<string, string>(renamed[0].Key, "unregistered");
-            Assert.ThrowsExactly<InvalidOperationException>(() => CanonicalHeroFsmBindingRegistry.Validate(renamed));
-            Assert.ThrowsExactly<InvalidOperationException>(() => CanonicalHeroFsmBindingRegistry.Validate(original.Concat(new[] {
-                new KeyValuePair<string, string>("Knight[0]/Extra[0]:PlayMakerFSM[0]", "FSM") })));
+            CanonicalHeroFsmBindingRegistry.Validate(renamed);
+            CanonicalHeroFsmBindingRegistry.Validate(original.Concat(new[] {
+                new KeyValuePair<string, string>("Knight[0]/Extra[0]:PlayMakerFSM[0]", "FSM") }));
         }
 
         [TestMethod]

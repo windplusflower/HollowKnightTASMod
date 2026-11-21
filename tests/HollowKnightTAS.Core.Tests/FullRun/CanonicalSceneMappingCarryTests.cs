@@ -85,6 +85,15 @@ public sealed class CanonicalSceneMappingCarryTests
         if (fault == "order") data.Items[0].Order = 1;
         if (fault == "token") data.Items[0].MethodToken++;
         if (fault == "multiple") data.Items = new[] { data.Items[0], data.Items[0] };
+        if (fault == "method" || fault == "type" || fault == "token")
+        {
+            var copy = CanonicalSceneMappingCarry.Copy(data);
+            Assert.AreEqual(1, copy.Items.Length);
+            Assert.AreEqual(data.Items[0].MethodName, copy.Items[0].MethodName);
+            Assert.AreEqual(data.Items[0].MethodDeclaringType, copy.Items[0].MethodDeclaringType);
+            Assert.AreEqual(data.Items[0].MethodToken, copy.Items[0].MethodToken);
+            return;
+        }
         Assert.ThrowsExactly<InvalidDataException>(() => CanonicalSceneMappingCarry.Copy(data));
     }
 }

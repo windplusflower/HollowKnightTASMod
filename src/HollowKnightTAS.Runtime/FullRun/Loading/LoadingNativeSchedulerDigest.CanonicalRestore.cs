@@ -13,6 +13,11 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal Action PrepareCanonicalVerification(CanonicalSchedulerCarry source, HeroController hero, Func<bool> isPaused)
         {
+            if (!nativeSchedulerSupported)
+            {
+                WarnUnsupportedOnce("Skipping PrepareCanonicalVerification in fallback mode.");
+                return () => { };
+            }
             var actual = CaptureCanonicalCarry(source.SourceNative, hero);
             CanonicalSchedulerRestorePlan.Prepare(source, actual); // complete shape/family/alias validation
             var frozen = RequireFrozenCapturedQueue(); var consumed = false;
@@ -29,6 +34,11 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal Action PrepareCanonicalRestore(CanonicalSchedulerCarry source, HeroController hero, Func<bool> isPaused)
         {
+            if (!nativeSchedulerSupported)
+            {
+                WarnUnsupportedOnce("Skipping PrepareCanonicalRestore in fallback mode.");
+                return () => { };
+            }
             var prepared = CaptureCanonicalCarry(source.SourceNative, hero);
             var plan = CanonicalSchedulerRestorePlan.Prepare(source, prepared);
             var manager = capturedManager;

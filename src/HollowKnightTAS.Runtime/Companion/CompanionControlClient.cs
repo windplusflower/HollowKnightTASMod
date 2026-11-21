@@ -235,6 +235,12 @@ namespace HollowKnightTAS.Runtime.Companion
                     return null;
                 }
 
+                if (!registration.ProtocolRange.Contains(response.ProtocolVersion))
+                {
+                    Modding.Logger.LogWarn(
+                        $"[HKTAS] Companion response ProtocolVersion {response.ProtocolVersion} differs from Runtime range {registration.ProtocolRange}; continuing.");
+                }
+
                 return response;
             }
         }
@@ -255,34 +261,74 @@ namespace HollowKnightTAS.Runtime.Companion
                 response.PayloadUtf8);
             if (!payload.Success
                 || payload.Fields == null
-                || payload.Fields.Count != 7
                 || !payload.Fields.TryGetValue(
                     "accepted",
-                    out var acceptedText)
-                || !payload.Fields.TryGetValue(
-                    "detail",
-                    out detail)
-                || !payload.Fields.TryGetValue(
-                    "product",
-                    out var product)
+                    out var acceptedText))
+            {
+                return false;
+            }
+
+            if (payload.Fields.Count != 7)
+            {
+                Modding.Logger.LogWarn(
+                    $"[HKTAS] Companion metadata field count {payload.Fields.Count} differs from expected 7; continuing.");
+            }
+
+            if (payload.Fields.TryGetValue("detail", out var detailValue)
+                && detailValue != null)
+            {
+                detail = detailValue;
+            }
+            else
+            {
+                Modding.Logger.LogWarn(
+                    "[HKTAS] Companion metadata is missing 'detail'; continuing.");
+            }
+
+            if (!payload.Fields.TryGetValue("product", out var product)
                 || !string.Equals(
                     product,
                     CompanionProtocolMetadata.Product,
-                    StringComparison.Ordinal)
-                || !payload.Fields.TryGetValue(
+                    StringComparison.Ordinal))
+            {
+                Modding.Logger.LogWarn(
+                    $"[HKTAS] Companion metadata product '{product ?? string.Empty}' differs from expected '{CompanionProtocolMetadata.Product}'; continuing.");
+            }
+
+            if (payload.Fields.TryGetValue(
                     "companionInstanceId",
-                    out instanceId)
-                || !IpcIdentifier.IsValid(instanceId, 128)
-                || !payload.Fields.TryGetValue(
-                    "version",
-                    out version)
-                || string.IsNullOrWhiteSpace(version)
-                || !payload.Fields.TryGetValue(
+                    out var instanceValue)
+                && instanceValue != null)
+            {
+                instanceId = instanceValue;
+            }
+
+            if (!IpcIdentifier.IsValid(instanceId, 128))
+            {
+                Modding.Logger.LogWarn(
+                    $"[HKTAS] Companion metadata companionInstanceId '{instanceId}' is missing or invalid; continuing.");
+            }
+
+            if (payload.Fields.TryGetValue("version", out var versionValue)
+                && versionValue != null)
+            {
+                version = versionValue;
+            }
+
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                Modding.Logger.LogWarn(
+                    "[HKTAS] Companion metadata version is missing or empty; continuing.");
+            }
+
+            string? minimumText = null;
+            string? maximumText = null;
+            if (!payload.Fields.TryGetValue(
                     "protocolMin",
-                    out var minimumText)
+                    out minimumText)
                 || !payload.Fields.TryGetValue(
                     "protocolMax",
-                    out var maximumText)
+                    out maximumText)
                 || !int.TryParse(
                     minimumText,
                     NumberStyles.None,
@@ -294,11 +340,16 @@ namespace HollowKnightTAS.Runtime.Companion
                     CultureInfo.InvariantCulture,
                     out var maximum)
                 || minimum <= 0
-                || maximum < minimum
-                || !runtimeProtocols.Intersects(
-                    new ProtocolRange(minimum, maximum)))
+                || maximum < minimum)
             {
-                return false;
+                Modding.Logger.LogWarn(
+                    $"[HKTAS] Companion metadata protocol range ('{minimumText ?? string.Empty}'-'{maximumText ?? string.Empty}') is invalid; continuing.");
+            }
+            else if (!runtimeProtocols.Intersects(
+                         new ProtocolRange(minimum, maximum)))
+            {
+                Modding.Logger.LogWarn(
+                    $"[HKTAS] Companion protocol range {minimum}-{maximum} does not intersect Runtime range {runtimeProtocols}; continuing.");
             }
 
             if (string.Equals(

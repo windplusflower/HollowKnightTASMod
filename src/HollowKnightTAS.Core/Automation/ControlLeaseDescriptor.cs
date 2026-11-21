@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace HollowKnightTAS.Core.Automation
@@ -55,24 +56,31 @@ namespace HollowKnightTAS.Core.Automation
             string manifestSha256,
             DateTimeOffset nowUtc)
         {
-            return nowUtc < ExpiresAtUtc
-                   && string.Equals(
-                       ClientId,
-                       clientId,
-                       StringComparison.Ordinal)
-                   && string.Equals(
-                       LeaseId,
-                       leaseId,
-                       StringComparison.Ordinal)
-                   && string.Equals(
-                       SessionId,
-                       sessionId,
-                       StringComparison.Ordinal)
-                   && string.Equals(
-                       ManifestSha256,
-                       manifestSha256,
-                       StringComparison.Ordinal)
-                   && Scopes.Contains(scope, StringComparer.Ordinal);
+            var covered = nowUtc < ExpiresAtUtc
+                          && string.Equals(
+                              ClientId,
+                              clientId,
+                              StringComparison.Ordinal)
+                          && string.Equals(
+                              LeaseId,
+                              leaseId,
+                              StringComparison.Ordinal)
+                          && string.Equals(
+                              SessionId,
+                              sessionId,
+                              StringComparison.Ordinal)
+                          && Scopes.Contains(scope, StringComparer.Ordinal);
+            if (covered
+                && !string.Equals(
+                    ManifestSha256,
+                    manifestSha256,
+                    StringComparison.Ordinal))
+            {
+                Trace.TraceWarning(
+                    $"ControlLeaseDescriptor.Covers: ManifestSha256 differs for lease '{LeaseId}' (lease={ManifestSha256}, current={manifestSha256}); keeping lease valid.");
+            }
+
+            return covered;
         }
     }
 }

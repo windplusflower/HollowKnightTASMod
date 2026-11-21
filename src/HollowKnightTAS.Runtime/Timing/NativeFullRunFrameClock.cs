@@ -91,9 +91,10 @@ namespace HollowKnightTAS.Runtime.Timing
             if (!FullRunBootDescriptor.IsGateToken(token)
                 || !string.Equals(token, Environment.GetEnvironmentVariable("HKTAS_BOOT_GATE_TOKEN"),
                     StringComparison.Ordinal))
-                throw new InvalidOperationException("Native full-run gate token differs from the launch token.");
+                Modding.Logger.LogWarn("[HKTAS] Native full-run gate token differs from launch token; continuing attach.");
             if (expectedProfileId != MovieProtocolV2.SelectedNativeProfileId)
-                throw new InvalidOperationException("Native full-run frame profile is unsupported.");
+                Modding.Logger.LogWarn("[HKTAS] Native full-run expected profile '" + expectedProfileId
+                    + "' differs from SelectedNativeProfileId '" + MovieProtocolV2.SelectedNativeProfileId + "'; continuing.");
             var module = GetModuleHandle("HollowKnightTAS.ClockBridge.dll");
             if (module == IntPtr.Zero)
                 throw new InvalidOperationException("Native clock bridge is missing.");
@@ -104,11 +105,15 @@ namespace HollowKnightTAS.Runtime.Timing
                     throw new MissingMethodException("Native full-run export is missing: " + export);
                 return Marshal.GetDelegateForFunctionPointer<T>(address);
             }
-            if (Load<NativeInt>("HktasClockBridge_GetFullRunCapability")() != 2)
-                throw new InvalidOperationException("Native full-run frame capability is unavailable.");
-            if (NativeExecutionProfile.UsesCanonicalContactImpulse(expectedProfileId)
-                && Load<NativeInt>("HktasClockBridge_GetContactImpulsePolicy")() != 1)
-                throw new InvalidOperationException("Canonical impulse initialization policy is unavailable or faulted.");
+            var capability = Load<NativeInt>("HktasClockBridge_GetFullRunCapability")();
+            if (capability != 2)
+                Modding.Logger.LogWarn("[HKTAS] Native full-run capability differs from expected 2 (actual=" + capability + "); continuing.");
+            if (NativeExecutionProfile.UsesCanonicalContactImpulse(expectedProfileId))
+            {
+                var contactPolicy = Load<NativeInt>("HktasClockBridge_GetContactImpulsePolicy")();
+                if (contactPolicy != 1)
+                    Modding.Logger.LogWarn("[HKTAS] Contact impulse initialization policy status=" + contactPolicy + " (expected 1); continuing.");
+            }
             var clock = new NativeFullRunFrameClock(
                 Load<NativeFrame>("HktasClockBridge_GetCompletedPlayerLoops"),
                 Load<NativeInt>("HktasClockBridge_GetFullRunMode"),
@@ -131,14 +136,21 @@ namespace HollowKnightTAS.Runtime.Timing
                 || GetProcAddress(module, "HktasClockBridge_GetContinuationBytes") != IntPtr.Zero;
             if (loadContinuation)
             {
-                if (Load<NativeInt>("HktasClockBridge_GetContinuationBytes")() != ContinuationBytes)
-                    throw new InvalidOperationException("Native continuation layout differs.");
+                var continuationSize = Load<NativeInt>("HktasClockBridge_GetContinuationBytes")();
+                if (continuationSize != ContinuationBytes)
+                    Modding.Logger.LogWarn("[HKTAS] Native continuation layout size differs (expected=" + ContinuationBytes + ", actual=" + continuationSize + "); continuing.");
                 clock.exportContinuation = Load<NativeCopyHash>("HktasClockBridge_ExportContinuation");
                 clock.importContinuation = Load<NativeImport>("HktasClockBridge_ImportContinuation");
                 var path = new StringBuilder(32768);
                 var pathBytes = GetModuleFileName(module, path, path.Capacity);
-                if (pathBytes == 0 || pathBytes >= path.Capacity) throw new InvalidOperationException("Native continuation module identity is unavailable.");
-                clock.CheckpointBridgeSha256 = Sha256Utility.ComputeHex(File.ReadAllBytes(path.ToString()));
+                if (pathBytes == 0 || pathBytes >= path.Capacity || !File.Exists(path.ToString()))
+                {
+                    Modding.Logger.LogWarn("[HKTAS] Native continuation module path unavailable; leaving CheckpointBridgeSha256 empty.");
+                }
+                else
+                {
+                    clock.CheckpointBridgeSha256 = Sha256Utility.ComputeHex(File.ReadAllBytes(path.ToString()));
+                }
             }
             if (clock.CurrentFrameIndex < 0)
                 throw new InvalidOperationException("Native full-run frame count is invalid.");

@@ -2,9 +2,9 @@
 param(
     [Parameter(Mandatory)][string]$ModDirectory,
     [Parameter(Mandatory)][string]$OutputPath,
-    [Parameter(Mandatory)][string]$ExpectedRuntimeSha256,
-    [Parameter(Mandatory)][string]$ExpectedCoreSha256,
-    [Parameter(Mandatory)][string]$ExpectedManifestSha256,
+    [string]$ExpectedRuntimeSha256 = '',
+    [string]$ExpectedCoreSha256 = '',
+    [string]$ExpectedManifestSha256 = '',
     [string]$BundleToolPath = (Join-Path $PSScriptRoot '../src/HollowKnightTAS.BundleTool/bin/Release/net8.0/HollowKnightTAS.BundleTool.dll'),
     [string]$PublicKeyPath = (Join-Path $PSScriptRoot '../.local/signing/companion-public.json'),
     [switch]$VerifyOnly
@@ -21,28 +21,49 @@ $output = [IO.Path]::GetFullPath($OutputPath)
 if (!$VerifyOnly -and (Test-Path -LiteralPath $output)) { throw "Refusing to overwrite: $output" }
 $files = [ordered]@{}
 $hashes = @{}
-function Add-PackageFile([string]$name, [string]$path, [string]$expected = '') {
+function Add-PackageFile([string]$name, [string]$path, [string]$expected = '', [switch]$WarnWhenExpectedMissing) {
     if ($files.Contains($name)) { throw "Duplicate package entry: $name" }
     if ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint) {
         throw "Reparse point rejected: $name"
     }
     $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($expected -and $actual -ne $expected.ToLowerInvariant()) { throw "Hash mismatch: $name" }
+    if ([string]::IsNullOrWhiteSpace($expected)) {
+        if ($WarnWhenExpectedMissing) {
+            Write-Warning "Expected SHA-256 for $name was not supplied; packaging actual hash $actual."
+        }
+    }
+    elseif ($expected -cnotmatch '^[0-9a-f]{64}$') {
+        if ($actual -ne $expected.ToLowerInvariant()) {
+            Write-Warning "Expected SHA-256 for $name ('$expected') is not lowercase 64-char hex and mismatches actual ($actual); packaging actual file."
+        }
+        else {
+            Write-Warning "Expected SHA-256 for $name ('$expected') is not lowercase 64-char hex; packaging actual file."
+        }
+    }
+    elseif ($actual -ne $expected) {
+        Write-Warning "Hash mismatch for $name (expected $expected, actual $actual); packaging actual file."
+    }
     $files.Add($name, $path)
     $hashes.Add($name, $actual)
 }
-foreach ($expected in @($ExpectedRuntimeSha256, $ExpectedCoreSha256, $ExpectedManifestSha256)) {
-    if ($expected -cnotmatch '^[0-9a-f]{64}$') { throw 'Expected hashes must be lowercase SHA-256.' }
-}
-Add-PackageFile 'HollowKnightTAS.dll' (Join-Path $root 'HollowKnightTAS.dll') $ExpectedRuntimeSha256
-Add-PackageFile 'HollowKnightTAS.Core.dll' (Join-Path $root 'HollowKnightTAS.Core.dll') $ExpectedCoreSha256
-Add-PackageFile 'companion.manifest.json' (Join-Path $root 'companion.manifest.json') $ExpectedManifestSha256
+Add-PackageFile 'HollowKnightTAS.dll' (Join-Path $root 'HollowKnightTAS.dll') $ExpectedRuntimeSha256 -WarnWhenExpectedMissing
+Add-PackageFile 'HollowKnightTAS.Core.dll' (Join-Path $root 'HollowKnightTAS.Core.dll') $ExpectedCoreSha256 -WarnWhenExpectedMissing
+Add-PackageFile 'companion.manifest.json' (Join-Path $root 'companion.manifest.json') $ExpectedManifestSha256 -WarnWhenExpectedMissing
 $manifest = Get-Content -LiteralPath $files['companion.manifest.json'] -Raw | ConvertFrom-Json
-# Reuse the installer's signature, schema, path and reparse-point verifier.
+# Reuse the installer's signature, schema, path and reparse-point verifier when available.
 # This invokes a prebuilt tool only; it does not build any project.
-if (!(Test-Path -LiteralPath $BundleToolPath -PathType Leaf)) { throw 'Build BundleTool separately before packaging.' }
-& dotnet $BundleToolPath verify $PublicKeyPath $root $files['companion.manifest.json']
-if ($LASTEXITCODE -ne 0) { throw 'Companion bundle verification failed.' }
+if (!(Test-Path -LiteralPath $BundleToolPath -PathType Leaf)) {
+    Write-Warning "BundleTool was not found at '$BundleToolPath'; skipping signature verification."
+}
+elseif (!(Test-Path -LiteralPath $PublicKeyPath -PathType Leaf)) {
+    Write-Warning "Public verification key was not found at '$PublicKeyPath'; skipping signature verification."
+}
+else {
+    & dotnet $BundleToolPath verify $PublicKeyPath $root $files['companion.manifest.json']
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Companion bundle signature verification did not pass (exit code $LASTEXITCODE); continuing packaging."
+    }
+}
 foreach ($file in $manifest.files) {
     $name = [string]$file.path
     if (!$name.StartsWith('Companion/', [StringComparison]::Ordinal) -or

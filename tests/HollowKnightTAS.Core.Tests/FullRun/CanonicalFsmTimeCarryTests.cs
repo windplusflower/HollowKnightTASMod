@@ -102,6 +102,8 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             source = State(); source.RealtimeLastUpdateBits = 0x7f800000;
             Assert.ThrowsExactly<InvalidDataException>(() => CanonicalFsmTimeCarry.Validate(source));
             source = State(); source.ModuleVersionId = Guid.NewGuid().ToString("D");
+            CanonicalFsmTimeCarry.Validate(source);
+            source = State(); source.ModuleVersionId = Guid.Empty.ToString("D");
             Assert.ThrowsExactly<InvalidDataException>(() => CanonicalFsmTimeCarry.Validate(source));
             Assert.ThrowsExactly<InvalidDataException>(() => CanonicalFsmTimeCarry.ComputeRealtimeBits(State(), float.NaN));
         }

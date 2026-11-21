@@ -217,9 +217,51 @@ namespace HollowKnightTAS.Core.Tests.Verification
 
             var comparison = RunComparator.Compare(expected, actual);
 
-            Assert.AreEqual(RunComparisonStatus.Incomparable, comparison.Status);
+            Assert.AreEqual(RunComparisonStatus.Desync, comparison.Status);
             Assert.IsNull(comparison.Desync);
-            StringAssert.Contains(comparison.Message, "Manifest");
+            StringAssert.Contains(comparison.Message, "run signatures differ");
+
+            var baselineMismatch = new RunEvidence(
+                "session-b",
+                "process-b",
+                expected.ManifestSha256,
+                new string('e', 64),
+                expected.MovieId,
+                expected.SnapshotSchemaVersion,
+                expected.LedgerSchemaVersion,
+                expected.Milestones);
+            var baselineComparison = RunComparator.Compare(expected, baselineMismatch);
+            Assert.AreEqual(RunComparisonStatus.Incomparable, baselineComparison.Status);
+            Assert.IsNull(baselineComparison.Desync);
+            StringAssert.Contains(baselineComparison.Message, "Baseline");
+
+            var movieMismatch = new RunEvidence(
+                "session-b",
+                "process-b",
+                expected.ManifestSha256,
+                expected.BaselineSha256,
+                new string('d', 64),
+                expected.SnapshotSchemaVersion,
+                expected.LedgerSchemaVersion,
+                expected.Milestones);
+            var movieComparison = RunComparator.Compare(expected, movieMismatch);
+            Assert.AreEqual(RunComparisonStatus.Incomparable, movieComparison.Status);
+            Assert.IsNull(movieComparison.Desync);
+            StringAssert.Contains(movieComparison.Message, "Movie ID");
+
+            var schemaMismatch = new RunEvidence(
+                "session-b",
+                "process-b",
+                expected.ManifestSha256,
+                expected.BaselineSha256,
+                expected.MovieId,
+                expected.SnapshotSchemaVersion + 1,
+                expected.LedgerSchemaVersion,
+                expected.Milestones);
+            var schemaComparison = RunComparator.Compare(expected, schemaMismatch);
+            Assert.AreEqual(RunComparisonStatus.Incomparable, schemaComparison.Status);
+            Assert.IsNull(schemaComparison.Desync);
+            StringAssert.Contains(schemaComparison.Message, "schema");
         }
 
         [TestMethod]

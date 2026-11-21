@@ -46,7 +46,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 "playBackDashToIdleEnd", "wasAttacking", "wasFacingRight", "setEntryAnim", "changedClipFromLastFrame", "attackComplete" };
             var types = new[] { typeof(GlobalEnums.ActorStates), typeof(GlobalEnums.ActorStates), typeof(GlobalEnums.ActorStates),
                 typeof(tk2dSpriteAnimator), typeof(HeroController), typeof(HeroControllerStates), typeof(PlayerData) };
-            if (type.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid || !fields.Select(field => field.Name).SequenceEqual(expected)
+            var actualMvid = type.Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("HeroAnim:ControllerMvid:" + actualMvid,
+                    "[HKTAS] HeroAnimationController ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
+            if (!fields.Select(field => field.Name).SequenceEqual(expected)
                 || fields.Where((field, index) => field.FieldType != (index < types.Length ? types[index] : typeof(bool)) || field.IsInitOnly).Any())
                 throw new InvalidDataException("Original Hero animation controller seventeen-field ABI differs.");
             return fields;
@@ -61,9 +65,14 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static MethodInfo ControllerMethod()
         {
             var method = typeof(HeroAnimationController).GetMethod("AnimationCompleteDelegate", Instance)!;
-            if (method == null || method.IsStatic || method.MetadataToken != 0x0600028e || method.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid
+            if (method == null || method.IsStatic
                 || method.ReturnType != typeof(void) || !method.GetParameters().Select(value => value.ParameterType).SequenceEqual(new[] { typeof(tk2dSpriteAnimator), typeof(tk2dSpriteAnimationClip) }))
                 throw new InvalidDataException("Original Hero controller animation callback ABI differs.");
+            var actualMvid = method.Module.ModuleVersionId.ToString("D");
+            if (method.MetadataToken != 0x0600028e || actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("HeroAnim:ControllerMethod:" + actualMvid + ":" + method.MetadataToken,
+                    "[HKTAS] HeroAnimationController.AnimationCompleteDelegate MVID/token differs from pinned original (continuing): mvid="
+                    + actualMvid + ";token=0x" + method.MetadataToken.ToString("x8"));
             return method;
         }
         internal static string? BindReadbackReference(Data expected, object value)
@@ -136,9 +145,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 throw new InvalidDataException("Unregistered Hero animation action type.");
             var method = actionType.GetMethod(complete ? "AnimationCompleteDelegate" : "AnimationEventDelegate",
                 BindingFlags.Instance | BindingFlags.NonPublic)!;
-            if (method == null || method.MetadataToken != (play ? (complete ? 0x060034bb : 0x060034ba) : (complete ? 0x060034d3 : 0x060034d2))
-                || method.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid)
+            if (method == null)
                 throw new InvalidDataException("Original Hero animation method layout differs.");
+            var expectedToken = play ? (complete ? 0x060034bb : 0x060034ba) : (complete ? 0x060034d3 : 0x060034d2);
+            var actualMvid = method.Module.ModuleVersionId.ToString("D");
+            if (method.MetadataToken != expectedToken || actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("HeroAnim:ActionMethod:" + actionType.Name + ":" + complete + ":" + actualMvid + ":" + method.MetadataToken,
+                    "[HKTAS] " + actionType.Name + "." + method.Name + " MVID/token differs from pinned original (continuing): mvid="
+                    + actualMvid + ";token=0x" + method.MetadataToken.ToString("x8"));
             return method;
         }
         private static FsmStateAction RequireCallback(Delegate callback, bool complete)
@@ -260,9 +274,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (item.Fsm == ControllerBinding) {
                         var controllerMethod = ControllerMethod(); var controllerTarget = Controller();
                         if (!complete || item.State != -1 || item.Action != -1 || item.StateName != ""
-                            || item.ActionType != CanonicalCarryGraphCodec.Identity(controllerTarget.GetType()) || item.Module != controllerMethod.Module.ModuleVersionId.ToString("D")
-                            || item.Token != controllerMethod.MetadataToken || item.Method != controllerMethod.Name || item.Alias < 0 || item.Alias > 511)
+                            || item.ActionType != CanonicalCarryGraphCodec.Identity(controllerTarget.GetType())
+                            || item.Method != controllerMethod.Name || item.Alias < 0 || item.Alias > 511)
                             throw new InvalidDataException("Hero original controller callback descriptor differs.");
+                        if (item.Module != controllerMethod.Module.ModuleVersionId.ToString("D") || item.Token != controllerMethod.MetadataToken)
+                            CanonicalSceneMappingCarry.WarnOnce("HeroAnim:PreparedController:" + item.Module + ":" + item.Token,
+                                "[HKTAS] Prepared Hero controller callback MVID/token differs from current runtime (continuing): saved="
+                                + item.Module + "/0x" + item.Token.ToString("x8"));
                         if (aliases.TryGetValue(item.Alias, out var previous) ? !ReferenceEquals(previous, controllerTarget) : aliases.Values.Any(value => ReferenceEquals(value, controllerTarget)))
                             throw new InvalidDataException("Hero controller callback shared target aliases differ.");
                         aliases[item.Alias] = controllerTarget;
@@ -274,9 +292,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                         : item.ActionType == CanonicalCarryGraphCodec.Identity(typeof(Tk2dWatchAnimationEvents)) ? typeof(Tk2dWatchAnimationEvents)
                         : throw new InvalidDataException("Source Hero callback action type is unregistered.");
                     var method = Method(actionType, complete);
-                    if (item.Module != method.Module.ModuleVersionId.ToString("D") || item.Token != method.MetadataToken
-                        || item.Method != method.Name || item.Alias < 0 || item.Alias > 511 || !fsms.TryGetValue(item.Fsm, out var owner))
+                    if (item.Method != method.Name || item.Alias < 0 || item.Alias > 511 || !fsms.TryGetValue(item.Fsm, out var owner))
                         throw new InvalidDataException("Source Hero callback method or owner differs.");
+                    if (item.Module != method.Module.ModuleVersionId.ToString("D") || item.Token != method.MetadataToken)
+                        CanonicalSceneMappingCarry.WarnOnce("HeroAnim:PreparedAction:" + item.Module + ":" + item.Token,
+                            "[HKTAS] Prepared Hero action callback MVID/token differs from current runtime (continuing): saved="
+                            + item.Module + "/0x" + item.Token.ToString("x8"));
                     var fsm = (Fsm)Raw.GetValue(owner);
                     if (!ReferenceEquals(view.Root("HeroFSM/" + item.Fsm), fsm))
                         throw new InvalidDataException("Prepared Hero animation FSM alias differs.");

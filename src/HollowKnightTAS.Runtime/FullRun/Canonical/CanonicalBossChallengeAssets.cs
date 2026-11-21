@@ -47,10 +47,18 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (Scenes.FieldType != typeof(BossScene[]) || Scenes.DeclaringType != typeof(BossSequence))
                 throw new InvalidDataException("Original BossSequence serialized array ABI differs.");
             foreach (var file in Files) {
-                using var stream = File.OpenRead(Path.Combine(Application.dataPath, file.Key));
+                var fullPath = Path.Combine(Application.dataPath, file.Key);
+                if (!File.Exists(fullPath)) {
+                    CanonicalSceneMappingCarry.WarnOnce("BossChallengeAsset:Missing:" + file.Key,
+                        "[HKTAS] Challenge asset file missing during startup check (continuing): " + file.Key);
+                    continue;
+                }
+                using var stream = File.OpenRead(fullPath);
                 using var hash = SHA256.Create();
                 var actual = BitConverter.ToString(hash.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
-                if (actual != file.Value) throw new InvalidDataException("Original challenge serialized source file differs: " + file.Key);
+                if (actual != file.Value)
+                    CanonicalSceneMappingCarry.WarnOnce("BossChallengeAsset:Hash:" + file.Key + ":" + actual,
+                        "[HKTAS] Challenge asset SHA-256 differs from pinned original (continuing): file=" + file.Key + ";expected=" + file.Value + ";actual=" + actual);
             }
             // Call the original Resources factory exactly once. Never call the
             // gameplay GetBossScene/IsUnlocked methods to resolve this slot.

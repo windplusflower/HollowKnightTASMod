@@ -30,8 +30,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             typeof(Action<tk2dBaseSprite>), typeof(Renderer), typeof(int) };
         internal static FieldInfo[] Fields()
         {
-            if (typeof(tk2dSprite).Module.ModuleVersionId.ToString("D") != "2b54cdaf-7a93-4f0e-b297-d50c4090ea9f")
-                throw new InvalidDataException("Persistent sprite original assembly differs.");
+            var actualMvid = typeof(tk2dSprite).Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("PersistentSpriteCarry:Mvid:" + actualMvid,
+                    "[HKTAS] tk2dSprite ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
             var fields = typeof(tk2dSprite).GetFields(Flags).Concat(typeof(tk2dBaseSprite).GetFields(Flags)).ToArray();
             if (fields.Length != OriginalNames.Length || fields.Where((field, index) => field.Name != OriginalNames[index]
                 || field.FieldType != OriginalTypes[index] || field.DeclaringType != (index < 5 ? typeof(tk2dSprite) : typeof(tk2dBaseSprite))).Any())

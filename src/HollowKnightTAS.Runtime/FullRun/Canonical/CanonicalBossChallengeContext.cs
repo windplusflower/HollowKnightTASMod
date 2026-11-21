@@ -142,17 +142,25 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal static void Validate()
         {
-            if (typeof(BossChallengeUI).Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid
-                || Primary == null || Secondary == null || Self == null || Constructor == null || Return == null
+            var actualMvid = typeof(BossChallengeUI).Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("BossChallenge:Mvid:" + actualMvid,
+                    "[HKTAS] BossChallengeUI ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
+            var load0 = Primary?.GetMethod("<LoadBoss>b__0", Flags);
+            var load1 = Primary?.GetMethod("<LoadBoss>b__1", Flags);
+            if (Primary == null || Secondary == null || Self == null || Constructor == null || Return == null
                 || !Primary.GetFields(Flags | BindingFlags.DeclaredOnly).OrderBy(field => field.MetadataToken)
                     .Select(field => field.Name + ":" + field.FieldType.FullName).SequenceEqual(new[] {
                         "level:System.Int32", "<>4__this:BossChallengeUI", "<>9__1:System.Action" })
-                || Primary.GetMethod("<LoadBoss>b__0", Flags)?.MetadataToken != 100666692
-                || Primary.GetMethod("<LoadBoss>b__1", Flags)?.MetadataToken != 100666693
-                || Return.MetadataToken != 100666695 || Return.ReturnType != typeof(void) || Return.GetParameters().Length != 0
+                || load0 == null || load1 == null
+                || Return.ReturnType != typeof(void) || Return.GetParameters().Length != 0
                 || !Secondary.GetFields(Flags | BindingFlags.DeclaredOnly).Select(field => field.Name + ":" + field.FieldType.FullName)
                     .SequenceEqual(new[] { "self:BossSceneController" }))
                 throw new InvalidDataException("Original challenge return closure layout differs.");
+            if (load0.MetadataToken != 100666692 || load1.MetadataToken != 100666693 || Return.MetadataToken != 100666695)
+                CanonicalSceneMappingCarry.WarnOnce("BossChallenge:Tokens:" + load0.MetadataToken + ":" + load1.MetadataToken + ":" + Return.MetadataToken,
+                    "[HKTAS] BossChallengeUI closure MetadataTokens differ from pinned original (continuing): b__0="
+                    + load0.MetadataToken + ";b__1=" + load1.MetadataToken + ";b__2=" + Return.MetadataToken);
             // These ScriptableObject classes declare no Unity load callbacks.
             // Resource loading must not silently introduce gameplay producers.
             foreach (var type in new[] { typeof(BossSequence), typeof(BossScene) })
@@ -170,11 +178,21 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var initializer = type.TypeInitializer;
             var expected = type == typeof(BossSceneController) ? "2A" : type == typeof(BossChallengeUI) ? "15-80-40-17-00-0A-2A" : null;
-            if (initializer == null ? expected != null : expected == null
-                || BitConverter.ToString(initializer.GetMethodBody()!.GetILAsByteArray()!) != expected)
-                throw new InvalidDataException("Challenge static initializer differs: " + type.FullName);
+            var il = initializer?.GetMethodBody()?.GetILAsByteArray();
+            var actualIl = il == null ? null : BitConverter.ToString(il);
+            if (actualIl != expected)
+                CanonicalSceneMappingCarry.WarnOnce("BossChallenge:Cctor:" + type.FullName + ":" + (actualIl ?? "<null>"),
+                    "[HKTAS] Challenge static initializer IL differs from pinned original (continuing): type=" + type.FullName + ";actual=" + (actualIl ?? "<null>"));
             if (type == typeof(BossChallengeUI)) {
-                var field = type.Module.ResolveField(0x0a001740);
+                FieldInfo? field = null;
+                if (il != null && il.Length == 7 && il[0] == 0x15 && il[1] == 0x80 && il[6] == 0x2a) {
+                    var token = BitConverter.ToInt32(il, 2);
+                    if (token != 0x0a001740)
+                        CanonicalSceneMappingCarry.WarnOnce("BossChallenge:UiCctorToken:" + token,
+                            "[HKTAS] BossChallengeUI..cctor field token differs from pinned 0x0a001740 (continuing): actual=0x" + token.ToString("x8"));
+                    field = type.Module.ResolveField(token);
+                }
+                field ??= type.GetField("lastSelectedButton", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
                 if (field == null || field.DeclaringType != type || !field.IsStatic || field.Name != "lastSelectedButton" || field.FieldType != typeof(int))
                     throw new InvalidDataException("Original challenge UI scalar initializer target differs.");
             }

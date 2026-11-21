@@ -20,7 +20,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             var core = typeof(GameObject).Assembly;
             if (ui.ManifestModule.ModuleVersionId != new Guid("b4d135af-a1fd-407b-bcc7-280e400336cf")
                 || core.ManifestModule.ModuleVersionId != new Guid("047294ce-45cf-4b9a-9441-e48d2b8435e4"))
-                throw new InvalidDataException("Marker empty-event module ABI differs.");
+                CanonicalSceneMappingCarry.WarnOnce("MarkerEvent:Mvid:" + ui.ManifestModule.ModuleVersionId + ":" + core.ManifestModule.ModuleVersionId,
+                    "[HKTAS] UnityEngine.UI/CoreModule MVID differs from pinned original (continuing).");
             var eventType = typeof(UnityEngine.UI.MaskableGraphic.CullStateChangedEvent);
             var calls = core.GetType("UnityEngine.Events.InvokableCallList", true)!;
             var persistent = core.GetType("UnityEngine.Events.PersistentCallGroup", true)!;

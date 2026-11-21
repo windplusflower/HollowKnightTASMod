@@ -133,9 +133,26 @@ namespace HollowKnightTAS.Core.Tests.Cli
                 output,
                 new StringWriter());
 
-            Assert.AreEqual(5, exitCode);
-            StringAssert.Contains(output.ToString(), "INCOMPARABLE");
-            StringAssert.Contains(output.ToString(), "Manifest");
+            Assert.AreEqual(4, exitCode);
+            StringAssert.Contains(output.ToString(), "DESYNC");
+            StringAssert.Contains(output.ToString(), "run signatures differ");
+
+            var baselineActual = WriteRun(
+                Path.Combine(temporary.Path, "baseline-actual"),
+                "session-c",
+                "process-c",
+                changedSnapshot: false,
+                Manifest,
+                new string('e', 64));
+            var baselineOutput = new StringWriter();
+            var baselineExitCode = Program.Run(
+                new[] { "verification", "compare", expected, baselineActual },
+                baselineOutput,
+                new StringWriter());
+
+            Assert.AreEqual(5, baselineExitCode);
+            StringAssert.Contains(baselineOutput.ToString(), "INCOMPARABLE");
+            StringAssert.Contains(baselineOutput.ToString(), "Baseline");
         }
 
         [TestMethod]
@@ -210,8 +227,8 @@ namespace HollowKnightTAS.Core.Tests.Cli
                 "DESYNC");
             AssertFixtureComparison(
                 Path.Combine(root, "incomparable"),
-                5,
-                "INCOMPARABLE");
+                4,
+                "DESYNC");
         }
 
         private static string WriteRun(
@@ -219,8 +236,10 @@ namespace HollowKnightTAS.Core.Tests.Cli
             string sessionId,
             string processId,
             bool changedSnapshot,
-            string manifest)
+            string manifest,
+            string? baseline = null)
         {
+            var effectiveBaseline = baseline ?? Baseline;
             Directory.CreateDirectory(directory);
             var snapshot = ReadSnapshot(
                 changedSnapshot
@@ -261,7 +280,7 @@ namespace HollowKnightTAS.Core.Tests.Cli
                 sessionId,
                 processId,
                 manifest,
-                Baseline,
+                effectiveBaseline,
                 Movie,
                 1,
                 1,
@@ -274,7 +293,7 @@ namespace HollowKnightTAS.Core.Tests.Cli
                 ["sessionId"] = sessionId,
                 ["processInstanceId"] = processId,
                 ["manifestSha256"] = manifest,
-                ["baselineSha256"] = Baseline,
+                ["baselineSha256"] = effectiveBaseline,
                 ["movieId"] = Movie,
                 ["snapshotSchemaVersion"] = 1,
                 ["ledgerSchemaVersion"] = 1,

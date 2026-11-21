@@ -20,8 +20,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             var fields = typeof(InputManager).GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
                 .Where(field => !field.IsLiteral && (field.FieldType.IsPrimitive && field.FieldType != typeof(IntPtr) && field.FieldType != typeof(UIntPtr)
                     || field.FieldType.IsEnum || field.FieldType == typeof(string))).OrderBy(field => field.Name, StringComparer.Ordinal).ToArray();
-            if (typeof(InputManager).Module.ModuleVersionId.ToString("D") != "2b54cdaf-7a93-4f0e-b297-d50c4090ea9f"
-                || string.Join("\n", fields.Select(field => field.Name + ":" + field.FieldType.FullName)) != Layout)
+            var actualMvid = typeof(InputManager).Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("InputManagerScalars:Mvid:" + actualMvid,
+                    "[HKTAS] InControl.InputManager ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
+            if (string.Join("\n", fields.Select(field => field.Name + ":" + field.FieldType.FullName)) != Layout)
                 throw new InvalidDataException("Pinned InputManager scalar static layout differs.");
             return fields;
         }

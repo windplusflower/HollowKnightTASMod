@@ -80,8 +80,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var assembly = assemblies.SingleOrDefault(value => value.GetName().Name == parts[offset])
                     ?? throw new InvalidDataException("Metadata assembly is not registered.");
                 var type = assembly.GetType(parts[offset + 2], false) ?? throw new InvalidDataException("Metadata type is absent.");
-                if (TypeKey(type) != string.Join("|", parts.Skip(offset).Take(3)))
+                if (!Guid.TryParseExact(parts[offset + 1], "D", out var savedMvid) || savedMvid == Guid.Empty)
                     throw new InvalidDataException("Metadata module identity differs.");
+                var expectedKey = TypeKey(type);
+                var actualPrefix = string.Join("|", parts.Skip(offset).Take(3));
+                if (expectedKey != actualPrefix) {
+                    if (savedMvid != type.Module.ModuleVersionId && parts[offset] == assembly.GetName().Name && parts[offset + 2] == type.FullName)
+                        CanonicalSceneMappingCarry.WarnOnce("CarryReflection:TypeMvid:" + type.FullName + ":" + savedMvid,
+                            "[HKTAS] Metadata module MVID differs for " + type.FullName + " (continuing): saved=" + savedMvid + ";actual=" + type.Module.ModuleVersionId);
+                    else
+                        throw new InvalidDataException("Metadata module identity differs.");
+                }
                 return type;
             }
             MethodInfo MethodAt(int offset)
@@ -92,7 +101,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var method = type.GetMethods(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Static
                     | BindingFlags.NonPublic | BindingFlags.Public).SingleOrDefault(value => value.MetadataToken == token)
                     ?? throw new InvalidDataException("Metadata method is absent.");
-                if (MethodKey(method) != string.Join("|", parts.Skip(offset).Take(4)))
+                if (method is DynamicMethod || method.DeclaringType != type || method.IsGenericMethod)
                     throw new InvalidDataException("Metadata method identity differs.");
                 return method;
             }

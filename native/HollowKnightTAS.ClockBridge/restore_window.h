@@ -1,5 +1,6 @@
 #ifndef HKTAS_RESTORE_WINDOW_H
 #define HKTAS_RESTORE_WINDOW_H
+#include <stdio.h>
 
 /* Presentation only: Unity keeps executing and rendering normally. The controller
  * shows the HWND under its captured image using its own, unhooked USER32 imports.
@@ -86,14 +87,26 @@ static BOOL install_restore_window_hooks(void)
         {"SetWindowLongA", (void *)restore_window_long_a32, FALSE}
     };
     BYTE *base = (BYTE *)GetModuleHandleW(L"UnityPlayer.dll");
-    if (!base) return FALSE;
+    if (!base) {
+        OutputDebugStringA("[HKTAS][WARN] restore_window: UnityPlayer.dll module not found; skipping USER32 IAT hooks.\n");
+        return FALSE;
+    }
     IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return FALSE;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        OutputDebugStringA("[HKTAS][WARN] restore_window: UnityPlayer.dll invalid DOS header; skipping USER32 IAT hooks.\n");
+        return FALSE;
+    }
     IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(base + dos->e_lfanew);
     if (nt->Signature != IMAGE_NT_SIGNATURE
-        || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) return FALSE;
+        || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+        OutputDebugStringA("[HKTAS][WARN] restore_window: UnityPlayer.dll invalid NT64 header; skipping USER32 IAT hooks.\n");
+        return FALSE;
+    }
     IMAGE_DATA_DIRECTORY directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-    if (!directory.VirtualAddress || directory.Size < sizeof(IMAGE_IMPORT_DESCRIPTOR)) return FALSE;
+    if (!directory.VirtualAddress || directory.Size < sizeof(IMAGE_IMPORT_DESCRIPTOR)) {
+        OutputDebugStringA("[HKTAS][WARN] restore_window: UnityPlayer.dll missing import directory; skipping USER32 IAT hooks.\n");
+        return FALSE;
+    }
     IMAGE_IMPORT_DESCRIPTOR *imports = (IMAGE_IMPORT_DESCRIPTOR *)(base + directory.VirtualAddress);
     for (; imports->Name; ++imports) {
         if (lstrcmpiA((const char *)(base + imports->Name), "USER32.dll") != 0
@@ -106,15 +119,29 @@ static BOOL install_restore_window_hooks(void)
             for (unsigned i = 0; i < sizeof(hooks) / sizeof(hooks[0]); ++i) {
                 if (lstrcmpA((const char *)name->Name, hooks[i].name) != 0) continue;
                 DWORD previous, ignored;
-                if (!VirtualProtect(&addresses->u1.Function, sizeof(void *), PAGE_READWRITE, &previous)) return FALSE;
+                if (!VirtualProtect(&addresses->u1.Function, sizeof(void *), PAGE_READWRITE, &previous)) {
+                    char msg[160];
+                    snprintf(msg, sizeof(msg), "[HKTAS][WARN] restore_window: VirtualProtect failed for %s; skipping.\n", hooks[i].name);
+                    OutputDebugStringA(msg);
+                    continue;
+                }
                 InterlockedExchangePointer((PVOID volatile *)&addresses->u1.Function, hooks[i].hook);
-                if (!VirtualProtect(&addresses->u1.Function, sizeof(void *), previous, &ignored)) return FALSE;
+                if (!VirtualProtect(&addresses->u1.Function, sizeof(void *), previous, &ignored)) {
+                    char msg[160];
+                    snprintf(msg, sizeof(msg), "[HKTAS][WARN] restore_window: VirtualProtect restore failed for %s.\n", hooks[i].name);
+                    OutputDebugStringA(msg);
+                }
                 hooks[i].found = TRUE;
             }
         }
     }
-    for (unsigned i = 0; i < sizeof(hooks) / sizeof(hooks[0]); ++i)
-        if (!hooks[i].found) return FALSE;
+    for (unsigned i = 0; i < sizeof(hooks) / sizeof(hooks[0]); ++i) {
+        if (!hooks[i].found) {
+            char msg[160];
+            snprintf(msg, sizeof(msg), "[HKTAS][WARN] restore_window: USER32 import '%s' not found; skipping hook.\n", hooks[i].name);
+            OutputDebugStringA(msg);
+        }
+    }
     return TRUE;
 }
 #endif

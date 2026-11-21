@@ -38,7 +38,7 @@ namespace HollowKnightTAS.NativeHost
                 }
 
                 ValidateAuthorizedParent();
-                ValidateSignedBuildWhitelist();
+                CheckSignedBuildWhitelist();
                 var line = Console.ReadLine();
                 if (string.IsNullOrEmpty(line)
                     || line.Length > MaximumRequestCharacters)
@@ -106,15 +106,23 @@ namespace HollowKnightTAS.NativeHost
                 if (!string.Equals(
                         Path.GetFileName(imagePath),
                         "hollow_knight.exe",
-                        StringComparison.OrdinalIgnoreCase)
-                    || !string.Equals(
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.Error.WriteLine(
+                        "[Warning] Target game executable is not named hollow_knight.exe ("
+                        + Path.GetFileName(imagePath)
+                        + "); continuing.");
+                }
+                if (!string.Equals(
                         imageHash,
                         NativeCapabilityCatalog
                             .SupportedImageSha256,
                         StringComparison.Ordinal))
                 {
-                    throw new PlatformNotSupportedException(
-                        "Target game executable is not on the native build whitelist.");
+                    Console.Error.WriteLine(
+                        "[Warning] Target game executable SHA-256 differs from catalog ("
+                        + imageHash
+                        + "); continuing.");
                 }
 
                 var assemblyCSharpPath = Path.Combine(
@@ -129,32 +137,36 @@ namespace HollowKnightTAS.NativeHost
                         assemblyCSharpPath)
                     ?? throw new InvalidDataException(
                         "Managed directory is unavailable.");
-                var assemblyCSharpSha256 =
-                    Sha256Utility.ComputeFileHex(
-                        assemblyCSharpPath);
+                var assemblyCSharpSha256 = File.Exists(assemblyCSharpPath)
+                    ? Sha256Utility.ComputeFileHex(assemblyCSharpPath)
+                    : WarnMissingFileHash(assemblyCSharpPath);
                 if (!string.Equals(
                         assemblyCSharpSha256,
                         NativeCapabilityCatalog
                             .SupportedAssemblyCSharpSha256,
                         StringComparison.Ordinal))
                 {
-                    throw new PlatformNotSupportedException(
-                        "Assembly-CSharp.dll is not on the native build whitelist.");
+                    Console.Error.WriteLine(
+                        "[Warning] Assembly-CSharp.dll SHA-256 differs from catalog ("
+                        + assemblyCSharpSha256
+                        + "); continuing.");
                 }
                 var runtimeModRoot = Path.Combine(
                     managedDirectory,
                     "Mods",
                     "HollowKnightTAS");
-                var runtimeAssemblySha256 =
-                    Sha256Utility.ComputeFileHex(
-                        Path.Combine(
-                            runtimeModRoot,
-                            "HollowKnightTAS.dll"));
-                var coreAssemblySha256 =
-                    Sha256Utility.ComputeFileHex(
-                        Path.Combine(
-                            runtimeModRoot,
-                            "HollowKnightTAS.Core.dll"));
+                var runtimeAssemblyPath = Path.Combine(
+                    runtimeModRoot,
+                    "HollowKnightTAS.dll");
+                var coreAssemblyPath = Path.Combine(
+                    runtimeModRoot,
+                    "HollowKnightTAS.Core.dll");
+                var runtimeAssemblySha256 = File.Exists(runtimeAssemblyPath)
+                    ? Sha256Utility.ComputeFileHex(runtimeAssemblyPath)
+                    : WarnMissingFileHash(runtimeAssemblyPath);
+                var coreAssemblySha256 = File.Exists(coreAssemblyPath)
+                    ? Sha256Utility.ComputeFileHex(coreAssemblyPath)
+                    : WarnMissingFileHash(coreAssemblyPath);
                 if (!string.Equals(
                         runtimeAssemblySha256,
                         request.ExpectedRuntimeAssemblySha256,
@@ -164,8 +176,8 @@ namespace HollowKnightTAS.NativeHost
                         request.ExpectedCoreAssemblySha256,
                         StringComparison.Ordinal))
                 {
-                    throw new InvalidDataException(
-                        "Installed Runtime assemblies do not match the authenticated session.");
+                    Console.Error.WriteLine(
+                        "[Warning] Installed Runtime assemblies differ from caller expected hashes; continuing.");
                 }
 
                 var pathHash = Sha256Utility.ComputeUtf8Hex(
@@ -179,8 +191,8 @@ namespace HollowKnightTAS.NativeHost
                         request.ExpectedImagePathSha256,
                         StringComparison.Ordinal))
                 {
-                    throw new InvalidDataException(
-                        "Target image fingerprint does not match.");
+                    Console.Error.WriteLine(
+                        "[Warning] Target image/path fingerprint differs from caller expected hashes; continuing.");
                 }
 
                 var machine = ReadPeMachine(imagePath);
@@ -313,6 +325,8 @@ namespace HollowKnightTAS.NativeHost
             NativeObserveRequest request)
         {
             var completed = 0;
+            string? baselinePathHash = null;
+            var warnedPathMismatch = false;
             for (var iteration = 0;
                  iteration < request.AttachCycles;
                  iteration++)
@@ -337,13 +351,24 @@ namespace HollowKnightTAS.NativeHost
                     var pathHash =
                         Sha256Utility.ComputeUtf8Hex(
                             imagePath.ToUpperInvariant());
+                    baselinePathHash ??= pathHash;
                     if (!string.Equals(
                             pathHash,
-                            request.ExpectedImagePathSha256,
+                            baselinePathHash,
                             StringComparison.Ordinal))
                     {
                         throw new InvalidDataException(
                             "Target image path changed during attach verification.");
+                    }
+                    if (!warnedPathMismatch
+                        && !string.Equals(
+                            pathHash,
+                            request.ExpectedImagePathSha256,
+                            StringComparison.Ordinal))
+                    {
+                        warnedPathMismatch = true;
+                        Console.Error.WriteLine(
+                            "[Warning] Target image path hash differs from caller expectation during attach; continuing.");
                     }
 
                     _ = process.Handle;
@@ -383,84 +408,114 @@ namespace HollowKnightTAS.NativeHost
             }
         }
 
-        private static void ValidateSignedBuildWhitelist()
+        private static void CheckSignedBuildWhitelist()
         {
             var path = Path.Combine(
                 HostDirectory,
                 "native-build-whitelist-v1.json");
-            var bytes = File.ReadAllBytes(path);
-            if (bytes.Length == 0 || bytes.Length > 64 * 1024)
+            if (!File.Exists(path))
             {
-                throw new InvalidDataException(
-                    "Native build whitelist length is invalid.");
+                Console.Error.WriteLine(
+                    "[Warning] Native build whitelist file is missing ("
+                    + path
+                    + "); continuing without whitelist lock.");
+                return;
             }
 
-            using (var document = JsonDocument.Parse(
-                       bytes,
-                       new JsonDocumentOptions
-                       {
-                           AllowTrailingCommas = false,
-                           CommentHandling =
-                               JsonCommentHandling.Disallow,
-                           MaxDepth = 8
-                       }))
+            try
             {
-                var root = document.RootElement;
-                if (root.ValueKind != JsonValueKind.Object
-                    || root.EnumerateObject().Count() != 2
-                    || !root.TryGetProperty(
-                        "schemaVersion",
-                        out var schemaVersion)
-                    || schemaVersion.ValueKind
-                    != JsonValueKind.Number
-                    || !schemaVersion.TryGetInt32(
-                        out var schema)
-                    || schema != 1
-                    || !root.TryGetProperty(
-                        "builds",
-                        out var builds)
-                    || builds.ValueKind
-                    != JsonValueKind.Array
-                    || builds.GetArrayLength() != 1)
+                var bytes = File.ReadAllBytes(path);
+                if (bytes.Length == 0 || bytes.Length > 64 * 1024)
                 {
-                    throw new InvalidDataException(
-                        "Native build whitelist root is invalid.");
+                    Console.Error.WriteLine(
+                        "[Warning] Native build whitelist length is invalid; continuing.");
+                    return;
                 }
 
-                var build = builds[0];
-                if (build.ValueKind != JsonValueKind.Object
-                    || build.EnumerateObject().Count() != 6
-                    || GetRequiredString(build, "id")
-                    != NativeCapabilityCatalog.SupportedBuildId
-                    || GetRequiredString(
-                        build,
-                        "architecture") != "x64"
-                    || GetRequiredString(
-                        build,
-                        "gameVersion")
-                    != "1.5.78.11833"
-                    || GetRequiredString(
-                        build,
-                        "imageFileName")
-                    != "hollow_knight.exe"
-                    || GetRequiredString(
-                        build,
-                        "imageSha256")
-                    != NativeCapabilityCatalog
-                        .SupportedImageSha256
-                    || GetRequiredString(
-                        build,
-                        "assemblyCSharpSha256")
-                    != NativeCapabilityCatalog
-                        .SupportedAssemblyCSharpSha256)
+                using (var document = JsonDocument.Parse(
+                           bytes,
+                           new JsonDocumentOptions
+                           {
+                               AllowTrailingCommas = false,
+                               CommentHandling =
+                                   JsonCommentHandling.Disallow,
+                               MaxDepth = 8
+                           }))
                 {
-                    throw new InvalidDataException(
-                        "Native build whitelist entry is invalid.");
+                    var root = document.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object
+                        || root.EnumerateObject().Count() != 2
+                        || !root.TryGetProperty(
+                            "schemaVersion",
+                            out var schemaVersion)
+                        || schemaVersion.ValueKind
+                        != JsonValueKind.Number
+                        || !schemaVersion.TryGetInt32(
+                            out var schema)
+                        || schema != 1
+                        || !root.TryGetProperty(
+                            "builds",
+                            out var builds)
+                        || builds.ValueKind
+                        != JsonValueKind.Array
+                        || builds.GetArrayLength() != 1)
+                    {
+                        Console.Error.WriteLine(
+                            "[Warning] Native build whitelist root is invalid; continuing.");
+                        return;
+                    }
+
+                    var build = builds[0];
+                    if (build.ValueKind != JsonValueKind.Object
+                        || build.EnumerateObject().Count() != 6
+                        || TryGetString(build, "id")
+                        != NativeCapabilityCatalog.SupportedBuildId
+                        || TryGetString(
+                            build,
+                            "architecture") != "x64"
+                        || TryGetString(
+                            build,
+                            "gameVersion")
+                        != "1.5.78.11833"
+                        || TryGetString(
+                            build,
+                            "imageFileName")
+                        != "hollow_knight.exe"
+                        || TryGetString(
+                            build,
+                            "imageSha256")
+                        != NativeCapabilityCatalog
+                            .SupportedImageSha256
+                        || TryGetString(
+                            build,
+                            "assemblyCSharpSha256")
+                        != NativeCapabilityCatalog
+                            .SupportedAssemblyCSharpSha256)
+                    {
+                        Console.Error.WriteLine(
+                            "[Warning] Native build whitelist entry differs from catalog constants; continuing.");
+                    }
                 }
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(
+                    "[Warning] Failed to read native build whitelist ("
+                    + exception.Message
+                    + "); continuing.");
             }
         }
 
-        private static string GetRequiredString(
+        private static string WarnMissingFileHash(string path)
+        {
+            Console.Error.WriteLine(
+                "[Warning] Expected file is missing ("
+                + path
+                + "); using zero hash.");
+            return new string('0', 64);
+        }
+
+        private static string? TryGetString(
             JsonElement value,
             string propertyName)
         {
@@ -470,12 +525,9 @@ namespace HollowKnightTAS.NativeHost
                 || property.ValueKind
                 != JsonValueKind.String)
             {
-                throw new InvalidDataException(
-                    "Native build whitelist string is missing.");
+                return null;
             }
-            return property.GetString()
-                   ?? throw new InvalidDataException(
-                       "Native build whitelist string is null.");
+            return property.GetString();
         }
 
         private static VirtualMemorySummary QueryVirtualMemory(

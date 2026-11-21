@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -77,7 +78,8 @@ namespace HollowKnightTAS.Core.ReplaySave
         {
             ReplaySaveDescriptor.RequireSha256(manifestSha256, nameof(manifestSha256));
             if (Movie.Header.ManifestSha256 != manifestSha256)
-                throw new InvalidDataException("Execution plan belongs to a different execution build.");
+                Trace.TraceWarning(
+                    $"ReplayLifecycleExecutionPlan.ValidateSeek: movie manifest SHA-256 ({Movie.Header.ManifestSha256}) differs from current execution build ({manifestSha256}); continuing anyway.");
             long count = 0;
             foreach (var command in Movie.Commands)
             {

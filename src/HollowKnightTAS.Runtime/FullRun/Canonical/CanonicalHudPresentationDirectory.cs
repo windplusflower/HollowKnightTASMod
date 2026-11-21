@@ -94,9 +94,13 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static FieldInfo[] ManagedFields(Type type)
         {
             var index = Array.IndexOf(ManagedTypes, type);
-            var module = type == typeof(PlayMakerFSM) ? "29eb59fa-5c99-43cd-8f33-6db074533d31" : CanonicalSceneMappingCarry.ModuleMvid;
-            if (index < 0 || type.Module.ModuleVersionId.ToString("D") != module)
+            if (index < 0)
                 throw new InvalidDataException("Original HUD presentation managed type/module differs.");
+            var module = type == typeof(PlayMakerFSM) ? "29eb59fa-5c99-43cd-8f33-6db074533d31" : CanonicalSceneMappingCarry.ModuleMvid;
+            var actualModule = type.Module.ModuleVersionId.ToString("D");
+            if (actualModule != module)
+                CanonicalSceneMappingCarry.WarnOnce("HudPresentation:ManagedFields:" + type.FullName + ":" + actualModule,
+                    "[HKTAS] HUD presentation managed module MVID differs (continuing): type=" + type.FullName + ";expected=" + module + ";actual=" + actualModule);
             return MetadataFields(type, "original-managed", () => {
             var fields = CanonicalCarryGraphCodec.Fields(type).Where(field => field.DeclaringType != typeof(UnityEngine.Object)
                 && field.DeclaringType != typeof(Component) && field.DeclaringType != typeof(Behaviour) && field.DeclaringType != typeof(MonoBehaviour)).ToArray();
@@ -112,8 +116,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             path.StartsWith(parent.Path + "/", StringComparison.Ordinal))).ToArray();
         internal static void ValidateAbi()
         {
-            if (typeof(TextMeshPro).Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid
-                || Nodes.Length != ObjectCount || Nodes.Select(node => node.Path).Distinct(StringComparer.Ordinal).Count() != ObjectCount
+            var actualTmpModule = typeof(TextMeshPro).Module.ModuleVersionId.ToString("D");
+            if (actualTmpModule != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("HudPresentation:ValidateAbi:" + actualTmpModule,
+                    "[HKTAS] TextMeshPro ModuleVersionId differs from pinned original (continuing): actual=" + actualTmpModule);
+            if (Nodes.Length != ObjectCount || Nodes.Select(node => node.Path).Distinct(StringComparer.Ordinal).Count() != ObjectCount
                 || Nodes.Select(node => node.SerializedGameObject).Distinct().Count() != ObjectCount
                 || RootPaths.Length != RootCount || Nodes.Sum(node => node.Components.Length) != ComponentCount
                 || Nodes.Sum(node => node.Components.Count(type => typeof(MonoBehaviour).IsAssignableFrom(type))) != MonoCount

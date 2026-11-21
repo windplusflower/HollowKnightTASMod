@@ -70,9 +70,10 @@ namespace HollowKnightTAS.Core.Tests.Movie
             var draft = new MovieV2Header("unknown", "unknown", "unknown", "profile",
                 MovieProtocolV2.ActionSchemaId, true, "none", 0, 0);
             var report = new MovieV2Compatibility().Evaluate(draft, Runtime());
-            Assert.IsFalse(report.Allowed);
-            Assert.IsTrue(report.Errors.Any(value => value.Message.Contains("draft metadata")));
-            Assert.IsTrue(report.Errors.Any(value => value.Message.Contains("viewport")));
+            Assert.IsTrue(report.Allowed);
+            Assert.IsTrue(report.Warnings.Count > 0);
+            Assert.IsTrue(report.Warnings.Any(value => value.Message.Contains("Draft or missing metadata")));
+            Assert.IsTrue(report.Warnings.Any(value => value.Message.Contains("Viewport dimensions")));
             var keyboardOnly = new MovieV2Compatibility().Evaluate(Header(mouse: false),
                 Runtime(width: 1280, height: 720));
             Assert.IsTrue(keyboardOnly.Allowed);

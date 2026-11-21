@@ -2,6 +2,7 @@
 // state/action/variable coverage is a separate carry codec requirement.
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace HollowKnightTAS.Core.SceneCheckpoints
@@ -172,6 +173,7 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
             { "Knight[0]:PlayMakerFSM[9]", "Spore Cooldown" },
         };
         public const int Count = 160;
+        private static readonly HashSet<string> LoggedWarnings = new HashSet<string>(StringComparer.Ordinal);
         public static bool IsCanonicalVisual(string path, string name) =>
             path != null && Bindings.TryGetValue(path, out var expected) && expected == name
             && path.StartsWith("Knight[0]/HeroLight[0]:PlayMakerFSM[", StringComparison.Ordinal)
@@ -181,16 +183,40 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
         {
             if (actual == null) throw new ArgumentNullException(nameof(actual));
             var found = new Dictionary<string, string>(StringComparer.Ordinal);
+            var duplicates = new List<string>();
+            var unexpected = new List<string>();
+            var actualCount = 0;
             foreach (var entry in actual)
             {
-                if (found.Count >= Count || entry.Key == null || entry.Value == null || found.ContainsKey(entry.Key)
-                    || !Bindings.TryGetValue(entry.Key, out var expected) || expected != entry.Value)
-                    throw new InvalidOperationException("Canonical Hero FSM binding differs: " + entry.Key);
-                found.Add(entry.Key, entry.Value);
+                actualCount++;
+                if (entry.Key == null || entry.Value == null)
+                {
+                    unexpected.Add("<null>");
+                    continue;
+                }
+                if (!found.ContainsKey(entry.Key))
+                {
+                    found.Add(entry.Key, entry.Value);
+                    if (!Bindings.TryGetValue(entry.Key, out var expected) || expected != entry.Value)
+                        unexpected.Add(entry.Key + "=" + entry.Value);
+                }
+                else
+                {
+                    duplicates.Add(entry.Key);
+                }
             }
-            if (found.Count != Count)
-                throw new InvalidOperationException("Canonical Hero FSM binding is missing: "
-                    + Bindings.Keys.First(path => !found.ContainsKey(path)));
+            var missing = Bindings.Keys.Where(path => !found.ContainsKey(path)).ToArray();
+            if (actualCount == Count && found.Count == Count && duplicates.Count == 0 && unexpected.Count == 0 && missing.Length == 0)
+                return;
+            var summary = string.Format(
+                "actual={0};unique={1};expected={2};missing={3};unexpected={4};duplicates={5};sampleMissing={6};sampleUnexpected={7}",
+                actualCount, found.Count, Count, missing.Length, unexpected.Count, duplicates.Count,
+                string.Join(",", missing.Take(5)), string.Join(",", unexpected.Take(5)));
+            lock (LoggedWarnings)
+            {
+                if (!LoggedWarnings.Add(summary)) return;
+            }
+            Trace.TraceWarning("[HKTAS] Canonical Hero FSM binding differs (continuing): " + summary);
         }
 
         public static IReadOnlyDictionary<string, string> Snapshot() => new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(

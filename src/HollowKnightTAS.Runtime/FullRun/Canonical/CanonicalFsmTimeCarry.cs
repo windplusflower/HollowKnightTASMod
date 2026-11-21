@@ -27,12 +27,16 @@ namespace HollowKnightTAS.Runtime.FullRun
         private sealed class Fields
         {
             internal readonly FieldInfo First, Offset, LastRealtime, LastFrame;
+            internal readonly string ActualModule;
             internal Fields(Type owner)
             {
                 if (owner.FullName != OwnerName || owner.Assembly.GetName().Name != "PlayMaker"
-                    || owner.Assembly.IsDynamic || !owner.IsAbstract || !owner.IsSealed
-                    || owner.Module.ModuleVersionId.ToString("D") != OriginalModule)
+                    || owner.Assembly.IsDynamic || !owner.IsAbstract || !owner.IsSealed)
                     throw new InvalidDataException("Original FsmTime owner/module binding differs.");
+                ActualModule = owner.Module.ModuleVersionId.ToString("D");
+                if (ActualModule != OriginalModule)
+                    CanonicalSceneMappingCarry.WarnOnce("FsmTime:Mvid:" + ActualModule,
+                        "[HKTAS] PlayMaker FsmTime ModuleVersionId differs from expected " + OriginalModule + ": actual=" + ActualModule);
                 var all = owner.GetFields(BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
                 var names = new[] { "firstUpdateHasHappened", "frameCountLastUpdate", "realtimeLastUpdate", "totalEditorPlayerPausedTime" };
                 if (all.Length != 4 || !all.Select(x => x.Name).OrderBy(x => x, StringComparer.Ordinal).SequenceEqual(names)
@@ -49,7 +53,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             internal Data Capture()
             {
-                var value = new Data { ModuleVersionId = OriginalModule, FirstUpdateHasHappened = (bool)First.GetValue(null)!,
+                var value = new Data { ModuleVersionId = ActualModule, FirstUpdateHasHappened = (bool)First.GetValue(null)!,
                     TotalEditorPlayerPausedTimeBits = Bits((float)Offset.GetValue(null)!), RealtimeLastUpdateBits = Bits((float)LastRealtime.GetValue(null)!),
                     FrameCountLastUpdate = (int)LastFrame.GetValue(null)! };
                 Validate(value); return value;
@@ -86,7 +90,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (captureRawFields == null || writeRawFields == null || nativeClockImportedAndParked == null) throw new ArgumentNullException();
             var frozen = Copy(source); var old = Copy(captureRawFields());
-            if (frozen.ModuleVersionId != old.ModuleVersionId) throw new InvalidDataException("FsmTime source/target module differs.");
+            if (frozen.ModuleVersionId != old.ModuleVersionId)
+                CanonicalSceneMappingCarry.WarnOnce("FsmTime:SourceTargetMvid:" + frozen.ModuleVersionId + ":" + old.ModuleVersionId,
+                    "[HKTAS] FsmTime source/target ModuleVersionId differs (continuing): source=" + frozen.ModuleVersionId + ";target=" + old.ModuleVersionId);
             return new Prepared(frozen, old, captureRawFields, writeRawFields, nativeClockImportedAndParked);
         }
         internal sealed class Prepared
@@ -142,8 +148,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal static void Validate(Data value)
         {
-            if (value == null || value.Schema != 1 || value.ModuleVersionId != OriginalModule)
+            if (value == null || value.Schema != 1 || string.IsNullOrEmpty(value.ModuleVersionId)
+                || !Guid.TryParseExact(value.ModuleVersionId, "D", out var mvid) || mvid == Guid.Empty)
                 throw new InvalidDataException("FsmTime source schema/original module differs.");
+            if (value.ModuleVersionId != OriginalModule)
+                CanonicalSceneMappingCarry.WarnOnce("FsmTime:ValidateMvid:" + value.ModuleVersionId,
+                    "[HKTAS] FsmTime Data.ModuleVersionId differs from expected " + OriginalModule + ": actual=" + value.ModuleVersionId);
             RequireFinite(Float(value.TotalEditorPlayerPausedTimeBits), "paused-time offset");
             RequireFinite(Float(value.RealtimeLastUpdateBits), "last realtime");
         }

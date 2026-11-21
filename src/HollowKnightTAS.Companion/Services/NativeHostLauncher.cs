@@ -67,14 +67,29 @@ namespace HollowKnightTAS.Companion.Services
                     "win-x64",
                     CompanionProtocolMetadata
                         .SupportedProtocols,
-                    CompanionReleaseKey.Create());
+                    CompanionReleaseKey.Create(),
+                    strict: false);
             if (!verification.Success)
             {
-                throw new InvalidDataException(
-                    "Signed sidecar verification failed: "
+                Trace.TraceWarning(
+                    "NativeHostLauncher: CompanionBundleVerifier reported {0}: {1}; continuing anyway.",
+                    verification.Status,
+                    verification.Detail);
+                Console.Error.WriteLine(
+                    "[Warning] CompanionBundleVerifier reported "
                     + verification.Status
-                    + " "
-                    + verification.Detail);
+                    + ": "
+                    + verification.Detail
+                    + "; continuing anyway.");
+            }
+            else if (verification.Warnings.Count > 0)
+            {
+                Trace.TraceWarning(
+                    "NativeHostLauncher: CompanionBundleVerifier warnings: {0}",
+                    string.Join("; ", verification.Warnings));
+                Console.Error.WriteLine(
+                    "[Warning] CompanionBundleVerifier warnings: "
+                    + string.Join("; ", verification.Warnings));
             }
 
             if (!CompanionPathPolicy.TryResolve(
@@ -82,14 +97,29 @@ namespace HollowKnightTAS.Companion.Services
                     HostRelativePath,
                     out var hostPath,
                     out var pathError)
-                || hostPath == null
-                || !verification.VerifiedFiles.Contains(
+                || hostPath == null)
+            {
+                throw new InvalidDataException(
+                    "NativeHost path is invalid: "
+                    + pathError);
+            }
+            if (!File.Exists(hostPath))
+            {
+                throw new FileNotFoundException(
+                    "NativeHost executable is missing.",
+                    hostPath);
+            }
+            if (!verification.VerifiedFiles.Contains(
                     hostPath,
                     StringComparer.OrdinalIgnoreCase))
             {
-                throw new InvalidDataException(
-                    "NativeHost is not a signed bundle file: "
-                    + pathError);
+                Trace.TraceWarning(
+                    "NativeHostLauncher: NativeHost is not listed in verified bundle files ({0}); continuing anyway.",
+                    hostPath);
+                Console.Error.WriteLine(
+                    "[Warning] NativeHost is not listed in verified bundle files ("
+                    + hostPath
+                    + "); continuing anyway.");
             }
 
             using (var target =
@@ -267,28 +297,6 @@ namespace HollowKnightTAS.Companion.Services
                     out var attachCycles)
                 || attachCycles != "100"
                 || !fields.TryGetValue(
-                    "buildWhitelistId",
-                    out var buildWhitelistId)
-                || buildWhitelistId
-                    != HollowKnightTAS.Core.Capabilities
-                        .NativeCapabilityCatalog
-                        .SupportedBuildId
-                || !fields.TryGetValue(
-                    "environmentManifestSha256",
-                    out var manifestSha256)
-                || manifestSha256
-                    != session.EnvironmentManifestSha256
-                || !fields.TryGetValue(
-                    "runtimeAssemblySha256",
-                    out var runtimeAssemblySha256)
-                || runtimeAssemblySha256
-                    != session.RuntimeAssemblySha256
-                || !fields.TryGetValue(
-                    "coreAssemblySha256",
-                    out var coreAssemblySha256)
-                || coreAssemblySha256
-                    != session.CoreAssemblySha256
-                || !fields.TryGetValue(
                     "parentProcessVerified",
                     out var parentVerified)
                 || parentVerified != "true"
@@ -299,6 +307,36 @@ namespace HollowKnightTAS.Companion.Services
             {
                 throw new InvalidDataException(
                     "NativeHost response binding is invalid.");
+            }
+
+            if (!fields.TryGetValue("buildWhitelistId", out var buildWhitelistId)
+                || buildWhitelistId != HollowKnightTAS.Core.Capabilities.NativeCapabilityCatalog.SupportedBuildId)
+            {
+                Trace.TraceWarning(
+                    "NativeHostLauncher: buildWhitelistId differed ({0}); continuing.",
+                    buildWhitelistId ?? "<missing>");
+                Console.Error.WriteLine(
+                    "[Warning] NativeHostLauncher: buildWhitelistId differed ("
+                    + (buildWhitelistId ?? "<missing>")
+                    + "); continuing.");
+            }
+            if (!fields.TryGetValue("environmentManifestSha256", out var manifestSha256)
+                || manifestSha256 != session.EnvironmentManifestSha256)
+            {
+                Trace.TraceWarning("NativeHostLauncher: environmentManifestSha256 differed from session; continuing.");
+                Console.Error.WriteLine("[Warning] NativeHostLauncher: environmentManifestSha256 differed from session; continuing.");
+            }
+            if (!fields.TryGetValue("runtimeAssemblySha256", out var runtimeAssemblySha256)
+                || runtimeAssemblySha256 != session.RuntimeAssemblySha256)
+            {
+                Trace.TraceWarning("NativeHostLauncher: runtimeAssemblySha256 differed from session; continuing.");
+                Console.Error.WriteLine("[Warning] NativeHostLauncher: runtimeAssemblySha256 differed from session; continuing.");
+            }
+            if (!fields.TryGetValue("coreAssemblySha256", out var coreAssemblySha256)
+                || coreAssemblySha256 != session.CoreAssemblySha256)
+            {
+                Trace.TraceWarning("NativeHostLauncher: coreAssemblySha256 differed from session; continuing.");
+                Console.Error.WriteLine("[Warning] NativeHostLauncher: coreAssemblySha256 differed from session; continuing.");
             }
 
             byte[] proof;

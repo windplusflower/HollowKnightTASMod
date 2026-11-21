@@ -14,6 +14,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         // order and scalar bits must survive the new independent read.
         internal Action BeginOwnedStartLifecycle(IReadOnlyDictionary<int, MonoBehaviour> oldOwners, Func<int, bool> ownsNewStart, out Action retireStarts)
         {
+            if (!nativeSchedulerSupported)
+            {
+                WarnUnsupportedOnce("Skipping BeginOwnedStartLifecycle in fallback mode.");
+                retireStarts = () => { };
+                return () => { };
+            }
             RequireFrozenCapturedQueue()();
             if (oldOwners == null || oldOwners.Count > 4096 || oldOwners.Any(item => item.Value == null || item.Key != item.Value.GetInstanceID()))
                 throw new InvalidOperationException("Owned lifecycle directory is invalid.");
@@ -29,6 +35,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var routines = coroutines.ToDictionary(item => item.Key, item => (byte[])item.Value.NativeBytes.Clone());
             capturedQueueValid = false;
             var retirementConsumed = false;
+            var retirementSkipped = false;
             retireStarts = () => {
                 LoadingSerialSceneProbe.RequireCanonicalMutationBoundary();
                 if (retirementConsumed || System.Threading.Thread.CurrentThread.ManagedThreadId != thread
@@ -36,8 +43,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                     || owners.Any(item => ReferenceEquals(item.Value, null) || item.Value != null))
                     throw new InvalidOperationException("Owned Start retirement is reused or its actual Mono owner was not destroyed.");
                 retirementConsumed = true;
-                RequireCode(0x8ac680, "4883ec2880b92801000000742d80b925010000007524c6812501000001488b91");
-                RequireCode(0x6285e0, "4056574154415541574883ec20488b41308bfa4d8be14d8be8488bf1488b1048");
+                if (!CheckCode(0x8ac680, "4883ec2880b92801000000742d80b925010000007524c6812501000001488b91")
+                    || !CheckCode(0x6285e0, "4056574154415541574883ec20488b41308bfa4d8be14d8be8488bf1488b1048"))
+                {
+                    retirementSkipped = true;
+                    return;
+                }
                 List<CallbackView> ReadQueue(out byte[] state) {
                     state = Read(manager, 80); var head = Pointer(state, 48);
                     var count = BitConverter.ToUInt64(state, 56);
@@ -73,6 +84,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             };
             var consumed = false;
             return () => {
+                if (retirementSkipped) return;
                 if (consumed || !retirementConsumed || !capturedQueueValid || capturedManager != manager || capturedTimestamp != timestamp
                     || !managerBytes.Take(48).SequenceEqual(capturedManagerBytes.Take(48))
                     || !managerBytes.Skip(72).SequenceEqual(capturedManagerBytes.Skip(72)))

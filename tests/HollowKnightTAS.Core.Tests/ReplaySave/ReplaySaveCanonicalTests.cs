@@ -178,7 +178,8 @@ namespace HollowKnightTAS.Core.Tests.ReplaySave
                 commit.Descriptor,
                 commit.TryGetObject,
                 new string('a', 64));
-            Assert.AreEqual(ReplaySaveStatus.Incompatible, mismatch.Status);
+            Assert.AreEqual(ReplaySaveStatus.Ready, mismatch.Status);
+            Assert.IsTrue(mismatch.Success, mismatch.Detail);
 
             var source = commit.Descriptor;
             var incompatible = new ReplaySaveDescriptor(

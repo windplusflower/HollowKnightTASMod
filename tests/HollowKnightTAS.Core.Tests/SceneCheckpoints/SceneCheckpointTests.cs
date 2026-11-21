@@ -70,9 +70,15 @@ namespace HollowKnightTAS.Core.Tests.SceneCheckpoints
         {
             var scope = new SceneCheckpointScope(Id(), Id(), Id(), 1); var packet = Packet(scope);
             Assert.ThrowsExactly<InvalidDataException>(() => new SceneCheckpointReceiver(packet.Header, new SceneCheckpointScope(scope.StudioSessionId, scope.TreeId, Id(), 1), Binding));
-            Assert.ThrowsExactly<InvalidDataException>(() => new SceneCheckpointReceiver(packet.Header, scope, new SceneCheckpointBinding(new string('c', 64), Binding.InitialSavesSha256, Binding.NativeProfileId)));
+            using (var envMismatch = new SceneCheckpointReceiver(packet.Header, scope, new SceneCheckpointBinding(new string('c', 64), Binding.InitialSavesSha256, Binding.NativeProfileId)))
+            {
+                Assert.AreEqual(packet.Header.CheckpointId, envMismatch.Header.CheckpointId);
+            }
             Assert.ThrowsExactly<InvalidDataException>(() => new SceneCheckpointReceiver(packet.Header, scope, new SceneCheckpointBinding(Binding.EnvironmentSha256, new string('c', 64), Binding.NativeProfileId)));
-            Assert.ThrowsExactly<InvalidDataException>(() => new SceneCheckpointReceiver(packet.Header, scope, new SceneCheckpointBinding(Binding.EnvironmentSha256, Binding.InitialSavesSha256, "other-profile")));
+            using (var profileMismatch = new SceneCheckpointReceiver(packet.Header, scope, new SceneCheckpointBinding(Binding.EnvironmentSha256, Binding.InitialSavesSha256, "other-profile")))
+            {
+                Assert.AreEqual(packet.Header.CheckpointId, profileMismatch.Header.CheckpointId);
+            }
             foreach (var key in new[] { "schema", "adapter", "restoreQualified", "payloadBytes" })
             {
                 var fields = packet.Header.ToFields(); fields[key] = key == "payloadBytes" ? (SceneCheckpointPacket.MaximumPayloadBytes + 1).ToString() : "unknown";

@@ -109,9 +109,27 @@ static BOOL install_contact_impulse_probe(BYTE *base)
     if (policy_length && (policy_length >= 64 || wcscmp(policy, L"zero-unused-impulse-slots-v1") != 0
         || wcscmp(canonical, L"1") != 0 || wcscmp(legacy, L"1") == 0)) return FALSE;
     if (!probe_length && !policy_length) return TRUE;
+    if (!base) {
+        OutputDebugStringA("[HKTAS][WARN] contact_impulse_probe: UnityPlayer.dll base is NULL; skipping probe.\n");
+        return FALSE;
+    }
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 64 || dos->e_lfanew > 4096) {
+        OutputDebugStringA("[HKTAS][WARN] contact_impulse_probe: invalid DOS header; skipping probe.\n");
+        return FALSE;
+    }
+    IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
+        || nt->OptionalHeader.SizeOfImage < 0xc134c4u + 5u) {
+        OutputDebugStringA("[HKTAS][WARN] contact_impulse_probe: UnityPlayer image too small or invalid PE; skipping probe.\n");
+        return FALSE;
+    }
     BYTE *site = base + 0xc134c4;
     const BYTE prefix[4] = {0x48,0x8b,0x49,0x08};
-    if (memcmp(site - 4, prefix, 4) || memcmp(site, g_impulse_expected, 5)) return FALSE;
+    if (memcmp(site - 4, prefix, 4) || memcmp(site, g_impulse_expected, 5)) {
+        OutputDebugStringA("[HKTAS][WARN] contact_impulse_probe: instruction bytes mismatch at RVA 0xc134c4; skipping probe.\n");
+        return FALSE;
+    }
     SYSTEM_INFO info; GetSystemInfo(&info);
     uintptr_t aligned = (uintptr_t)base & ~((uintptr_t)info.dwAllocationGranularity - 1);
     BYTE *relay = NULL;

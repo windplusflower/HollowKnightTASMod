@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
@@ -38,44 +39,68 @@ namespace HollowKnightTAS.Companion.Services
             Directory.CreateDirectory(fullRoot);
             RestrictDirectoryToCurrentUser(fullRoot);
             var path = Path.Combine(fullRoot, "identity-v1.txt");
-            if (!File.Exists(path))
+            if (File.Exists(path))
             {
-                var secret = new byte[32];
-                using (var random = RandomNumberGenerator.Create())
-                {
-                    random.GetBytes(secret);
-                }
-
-                var identity = new ColdRestoreSupervisorIdentity(
-                    "companion-" + Guid.NewGuid().ToString("N"),
-                    secret);
-                var temporary = Path.Combine(
-                    fullRoot,
-                    ".identity-" + Guid.NewGuid().ToString("N"));
                 try
                 {
-                    WriteDurable(temporary, Serialize(identity));
-                    File.Move(temporary, path);
-                }
-                finally
-                {
-                    if (File.Exists(temporary))
+                    var bytes = ReadBounded(path);
+                    var result = Deserialize(bytes);
+                    var canonical = Serialize(result);
+                    if (FixedEquals(bytes, canonical))
                     {
-                        File.Delete(temporary);
+                        return result;
                     }
+
+                    Trace.TraceWarning(
+                        "ColdRestoreSupervisorIdentity: identity-v1.txt is non-canonical; regenerating.");
+                    Console.Error.WriteLine(
+                        "[Warning] ColdRestoreSupervisorIdentity: identity-v1.txt is non-canonical; regenerating.");
+                }
+                catch (Exception exception)
+                {
+                    Trace.TraceWarning(
+                        "ColdRestoreSupervisorIdentity: identity-v1.txt is invalid or corrupted ({0}); regenerating.",
+                        exception.Message);
+                    Console.Error.WriteLine(
+                        "[Warning] ColdRestoreSupervisorIdentity: identity-v1.txt is invalid or corrupted ("
+                        + exception.Message
+                        + "); regenerating.");
                 }
             }
 
-            var bytes = ReadBounded(path);
-            var result = Deserialize(bytes);
-            var canonical = Serialize(result);
-            if (!FixedEquals(bytes, canonical))
+            return CreateAndPersist(fullRoot, path);
+        }
+
+        private static ColdRestoreSupervisorIdentity CreateAndPersist(
+            string fullRoot,
+            string path)
+        {
+            var secret = new byte[32];
+            using (var random = RandomNumberGenerator.Create())
             {
-                throw new InvalidDataException(
-                    "Cold-restore supervisor identity is not canonical.");
+                random.GetBytes(secret);
             }
 
-            return result;
+            var identity = new ColdRestoreSupervisorIdentity(
+                "companion-" + Guid.NewGuid().ToString("N"),
+                secret);
+            var temporary = Path.Combine(
+                fullRoot,
+                ".identity-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                WriteDurable(temporary, Serialize(identity));
+                File.Move(temporary, path, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporary))
+                {
+                    File.Delete(temporary);
+                }
+            }
+
+            return identity;
         }
 
         private static byte[] Serialize(

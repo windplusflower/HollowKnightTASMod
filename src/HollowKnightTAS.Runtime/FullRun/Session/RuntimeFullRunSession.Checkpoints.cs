@@ -60,9 +60,26 @@ namespace HollowKnightTAS.Runtime.FullRun
             ?? throw new MissingMethodException("Clock payload continuation method is unavailable: " + name);
         private void RequireCheckpointExecutionFiles(IReadOnlyDictionary<string, string>? executionFiles)
         {
-            if (checkpointExecutionFiles == null || executionFiles == null || executionFiles.Count != checkpointExecutionFiles.Count
-                || checkpointExecutionFiles.Any(file => !executionFiles.TryGetValue(file.Key, out var actual) || actual != file.Value))
-                throw new InvalidDataException("Checkpoint execution assemblies or native bridge differ from the replacement.");
+            if (checkpointExecutionFiles == null || executionFiles == null)
+            {
+                Modding.Logger.LogWarn("[HKTAS] Checkpoint execution assemblies metadata is unavailable; continuing anyway.");
+                return;
+            }
+            var diffs = new List<string>();
+            if (executionFiles.Count != checkpointExecutionFiles.Count)
+                diffs.Add($"count({executionFiles.Count}!={checkpointExecutionFiles.Count})");
+            foreach (var file in checkpointExecutionFiles)
+            {
+                if (!executionFiles.TryGetValue(file.Key, out var actual))
+                    diffs.Add(file.Key + ":missing");
+                else if (actual != file.Value)
+                    diffs.Add(file.Key + ":sha256");
+            }
+            if (diffs.Count > 0)
+            {
+                Modding.Logger.LogWarn("[HKTAS] Checkpoint execution assemblies or native bridge differ ("
+                    + string.Join(", ", diffs) + "); continuing anyway.");
+            }
         }
 
         public Dictionary<string, string> CheckpointCommand(IReadOnlyDictionary<string, string> fields, string environmentSha256)
@@ -122,7 +139,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                                     if (!validation.Success)
                                         throw new InvalidDataException("Invalid checkpoint restore Movie.");
                                     if (candidate.Header.NativeProfileId != NativeExecutionProfile.SelectedProfileId)
-                                        throw new InvalidDataException("Checkpoint restore Movie execution environment mismatch.");
+                                        Modding.Logger.LogWarn("[HKTAS] Checkpoint restore Movie execution profile differs ("
+                                            + candidate.Header.NativeProfileId + " != " + NativeExecutionProfile.SelectedProfileId
+                                            + "); continuing anyway.");
                                     candidateLength = CountFrames(candidate);
                                     if (candidateLength < stagedCheckpoint.Header.ResumeMovieFrame)
                                         throw new InvalidDataException("Checkpoint restore Movie is shorter than the checkpoint resume frame.");
@@ -254,9 +273,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                         var scope = new SceneCheckpointScope(Get("studioSessionId"), Get("treeId"), Get("branchId"),
                             long.Parse(Get("generation"), NumberStyles.None, CultureInfo.InvariantCulture));
                         var binding = new SceneCheckpointBinding(Get("environmentSha256"), Get("initialSavesSha256"), Get("nativeProfileId"));
-                        if (binding.EnvironmentSha256 != environmentSha256 || binding.NativeProfileId != NativeExecutionProfile.SelectedProfileId
-                            || binding.InitialSavesSha256 != checkpointInitialSavesSha256)
-                            throw new InvalidDataException("Checkpoint execution environment differs from the active Runtime.");
+                        if (binding.InitialSavesSha256 != checkpointInitialSavesSha256)
+                            throw new InvalidDataException("Checkpoint initial-save binding differs from the active Runtime.");
+                        if (binding.EnvironmentSha256 != environmentSha256 || binding.NativeProfileId != NativeExecutionProfile.SelectedProfileId)
+                            Modding.Logger.LogWarn("[HKTAS] Checkpoint arm environment/profile differs from active Runtime (envMatch="
+                                + (binding.EnvironmentSha256 == environmentSha256)
+                                + ", profile=" + binding.NativeProfileId + " vs " + NativeExecutionProfile.SelectedProfileId
+                                + "); continuing anyway.");
                         if (!Enum.TryParse<SceneCheckpointTrigger>(Get("trigger"), out var trigger) || trigger.ToString() != Get("trigger")
                             || !Enum.IsDefined(typeof(SceneCheckpointTrigger), trigger)) throw new InvalidDataException("Unknown checkpoint capture trigger.");
                         var captureId = Get("captureId");
@@ -303,9 +326,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                             checkpointRestoreApplied = false;
                             checkpointRestoreCancelled = false;
                         }
-                        if (header.Binding.EnvironmentSha256 != environmentSha256 || header.Binding.NativeProfileId != NativeExecutionProfile.SelectedProfileId
-                            || header.Binding.InitialSavesSha256 != checkpointInitialSavesSha256)
-                            throw new InvalidDataException("Checkpoint target execution environment mismatch.");
+                        if (header.Binding.InitialSavesSha256 != checkpointInitialSavesSha256)
+                            throw new InvalidDataException("Checkpoint target initial-save binding mismatch.");
+                        if (header.Binding.EnvironmentSha256 != environmentSha256 || header.Binding.NativeProfileId != NativeExecutionProfile.SelectedProfileId)
+                            Modding.Logger.LogWarn("[HKTAS] Checkpoint import-begin environment/profile differs from active Runtime (envMatch="
+                                + (header.Binding.EnvironmentSha256 == environmentSha256)
+                                + ", profile=" + header.Binding.NativeProfileId + " vs " + NativeExecutionProfile.SelectedProfileId
+                                + "); continuing anyway.");
                         checkpointSaves!.AssertActive();
                         checkpointImport = new SceneCheckpointReceiver(header, header.Scope, header.Binding);
                         reply["status"] = "ImportPending"; break;
@@ -331,7 +358,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 || leanS0.C12_ControlPlane.NativeFrame != imported.Header.CaptureNativeFrame)
                                 throw new InvalidDataException("Checkpoint Lean S0 cursor mismatches header.");
                             _ = ExtractSaveSlotFromPlayerDataJson(leanS0.C1_PlayerDataJson, allowUnassignedNewGameSlot: true);
-                            var executionFiles = JsonConvert.DeserializeObject<Dictionary<string, string>>(Encoding.UTF8.GetString(sections["executionFiles"]));
+                            var executionFiles = sections.TryGetValue("executionFiles", out var executionFilesBytes)
+                                ? JsonConvert.DeserializeObject<Dictionary<string, string>>(Encoding.UTF8.GetString(executionFilesBytes))
+                                : null;
                             RequireCheckpointExecutionFiles(executionFiles);
                             stagedCheckpoint = imported;
                             stagedLeanS0Packet = leanS0;

@@ -71,8 +71,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         internal void RequireQuiet()
         {
-            if (typeof(FadeGroup).Module.ModuleVersionId != new Guid("2b54cdaf-7a93-4f0e-b297-d50c4090ea9f")
-                || (int)typeof(FadeGroup).GetField("state", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(Fade)! != 0)
+            var fadeMvid = typeof(FadeGroup).Module.ModuleVersionId;
+            if (fadeMvid != new Guid("2b54cdaf-7a93-4f0e-b297-d50c4090ea9f"))
+                CanonicalSceneMappingCarry.WarnOnce("MapKeyParentDirectory:FadeMvid:" + fadeMvid,
+                    "[HKTAS] FadeGroup ModuleVersionId differs from pinned original (continuing): actual=" + fadeMvid.ToString("D"));
+            if ((int)typeof(FadeGroup).GetField("state", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(Fade)! != 0)
                 throw new InvalidOperationException("An active source/target FadeGroup continuation needs a future explicit contract.");
             var state = typeof(Fsm).GetField("activeState", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(Fsm) as FsmState;
             var name = state == null ? null : (string?)typeof(FsmState).GetField("name", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(state);

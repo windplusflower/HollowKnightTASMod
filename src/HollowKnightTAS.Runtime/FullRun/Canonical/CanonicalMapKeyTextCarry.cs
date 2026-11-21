@@ -36,8 +36,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static FieldInfo[] ManagedFields(Type type)
         {
             var index = Array.IndexOf(Types, type);
-            if (index < 0 || type.Module.ModuleVersionId != Module)
+            if (index < 0)
                 throw new InvalidDataException("Original Map Key Text managed owner ABI differs: " + type.FullName);
+            if (type.Module.ModuleVersionId != Module)
+                CanonicalSceneMappingCarry.WarnOnce("MapKeyText:Mvid:" + type.FullName + ":" + type.Module.ModuleVersionId,
+                    "[HKTAS] MapKeyText ModuleVersionId differs from pinned original (continuing): type=" + type.FullName + ";actual=" + type.Module.ModuleVersionId.ToString("D"));
             // Callers receive an independent array; cached metadata order
             // cannot be changed by a consumer preparing its own field plan.
             return (FieldInfo[])Layouts[index].Clone();
@@ -45,8 +48,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static FieldInfo[] BuildFields(Type type)
         {
             var index = Array.IndexOf(Types, type);
-            if (index < 0 || type.Module.ModuleVersionId != Module)
+            if (index < 0)
                 throw new InvalidDataException("Original Map Key Text managed owner ABI differs: " + type.FullName);
+            if (type.Module.ModuleVersionId != Module)
+                CanonicalSceneMappingCarry.WarnOnce("MapKeyText:BuildMvid:" + type.FullName + ":" + type.Module.ModuleVersionId,
+                    "[HKTAS] MapKeyText ModuleVersionId differs from pinned original (continuing): type=" + type.FullName + ";actual=" + type.Module.ModuleVersionId.ToString("D"));
             var fields = CanonicalCarryGraphCodec.Fields(type).Where(field => field.DeclaringType != typeof(UnityEngine.Object)
                 && field.DeclaringType != typeof(Component) && field.DeclaringType != typeof(Behaviour)
                 && field.DeclaringType != typeof(MonoBehaviour)).ToArray();

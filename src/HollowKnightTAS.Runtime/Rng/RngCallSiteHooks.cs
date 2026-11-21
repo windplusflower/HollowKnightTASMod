@@ -63,16 +63,23 @@ namespace HollowKnightTAS.Runtime.Rng
             var whitelist = RngWhitelist.CreateTargetBuild();
             var assembly = typeof(HeroController).Assembly;
             var location = assembly.Location;
-            if (string.IsNullOrWhiteSpace(location)
-                || !File.Exists(location))
+            string assemblyName;
+            string assemblySha256;
+            if (!string.IsNullOrWhiteSpace(location) && File.Exists(location))
             {
-                throw new InvalidOperationException(
-                    "Assembly-CSharp path is unavailable.");
+                assemblyName = Path.GetFileName(location);
+                assemblySha256 = Sha256Utility.ComputeFileHex(location);
+            }
+            else
+            {
+                assemblyName = assembly.GetName().Name ?? "Assembly-CSharp.dll";
+                assemblySha256 = new string('0', 64);
+                Modding.Logger.LogWarn("[HKTAS] Assembly-CSharp path is unavailable; resolving RNG call sites via reflection.");
             }
 
             var actualAssembly = new RngAssemblyIdentity(
-                Path.GetFileName(location),
-                Sha256Utility.ComputeFileHex(location),
+                assemblyName,
+                assemblySha256,
                 assembly.ManifestModule.ModuleVersionId.ToString("D"));
             var actualSites = ResolveCallSites(
                 location,
@@ -81,6 +88,11 @@ namespace HollowKnightTAS.Runtime.Rng
             var callSites = whitelist.Resolve(
                 actualAssembly,
                 actualSites);
+            if (!string.Equals(actualAssembly.Sha256, whitelist.Assembly.Sha256, StringComparison.Ordinal)
+                || !string.Equals(actualAssembly.ModuleVersionId, whitelist.Assembly.ModuleVersionId, StringComparison.Ordinal))
+            {
+                Modding.Logger.LogWarn("[HKTAS] Assembly-CSharp identity differs from baseline; RNG call-site hooks resolved via reflection/name fallback.");
+            }
             return new RuntimeRngCapabilityResolution(
                 codec,
                 whitelist,
@@ -96,65 +108,170 @@ namespace HollowKnightTAS.Runtime.Rng
             IReadOnlyList<RngCallSiteDescriptor> expected)
         {
             var result = new List<RngCallSiteDescriptor>();
-            using (var definition = AssemblyDefinition.ReadAssembly(path))
+            AssemblyDefinition? definition = null;
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+                {
+                    definition = AssemblyDefinition.ReadAssembly(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                Modding.Logger.LogWarn("[HKTAS] Failed to open Assembly-CSharp via Cecil (" + ex.Message + "); falling back to reflection.");
+            }
+
+            using (definition)
             {
                 foreach (var item in expected)
                 {
-                    var method = definition.MainModule.LookupToken(
-                        item.MetadataToken) as MethodDefinition;
-                    if (method == null || !method.HasBody)
+                    var targetMethodName = ExtractMethodName(item.MethodSignature);
+                    MethodDefinition? method = null;
+                    if (definition != null)
                     {
+                        var byToken = definition.MainModule.LookupToken(item.MetadataToken) as MethodDefinition;
+                        if (byToken != null && byToken.HasBody
+                            && byToken.DeclaringType != null
+                            && string.Equals(byToken.DeclaringType.FullName, item.DeclaringType, StringComparison.Ordinal)
+                            && string.Equals(byToken.Name, targetMethodName, StringComparison.Ordinal))
+                        {
+                            method = byToken;
+                        }
+                        else
+                        {
+                            method = FindCecilMethodByName(definition.MainModule, item.DeclaringType, targetMethodName);
+                            if (method != null)
+                            {
+                                Modding.Logger.LogWarn("[HKTAS] RNG call site '" + item.CallSiteId + "' token 0x"
+                                    + item.MetadataToken.ToString("x8") + " relocated by name to 0x"
+                                    + method.MetadataToken.ToInt32().ToString("x8") + ".");
+                            }
+                        }
+                    }
+
+                    MethodBase? reflected = null;
+                    if (method != null)
+                    {
+                        try
+                        {
+                            reflected = reflectionAssembly.ManifestModule.ResolveMethod(method.MetadataToken.ToInt32());
+                        }
+                        catch
+                        {
+                            reflected = null;
+                        }
+                    }
+                    if (reflected == null)
+                    {
+                        reflected = FindReflectedMethodByName(reflectionAssembly, item.DeclaringType, targetMethodName);
+                    }
+
+                    if (method == null && reflected == null)
+                    {
+                        Modding.Logger.LogWarn("[HKTAS] RNG call site '" + item.CallSiteId + "' could not be located ("
+                            + item.DeclaringType + "." + targetMethodName + ").");
                         continue;
                     }
 
-                    var randomCalls = method.Body.Instructions
-                        .Select(value => value.Operand)
-                        .OfType<MethodReference>()
-                        .Where(
-                            value => string.Equals(
-                                value.DeclaringType.FullName,
-                                "UnityEngine.Random",
-                                StringComparison.Ordinal))
-                        .ToList();
-                    var randomApis = randomCalls
-                        .Select(value => value.FullName)
-                        .Distinct(StringComparer.Ordinal)
-                        .ToList();
-                    if (randomCalls.Count == 0
-                        || randomApis.Count != 1)
+                    var ilHash = item.MethodIlSha256;
+                    var bytes = reflected?.GetMethodBody()?.GetILAsByteArray();
+                    if (bytes != null)
                     {
-                        continue;
+                        ilHash = Sha256Utility.ComputeHex(bytes);
+                    }
+                    else
+                    {
+                        ilHash = new string('0', 64);
+                        Modding.Logger.LogWarn("[HKTAS] Unable to read IL bytes for RNG call site '" + item.CallSiteId + "'; using placeholder hash.");
                     }
 
-                    var reflected = reflectionAssembly.ManifestModule
-                        .ResolveMethod(item.MetadataToken);
-                    var body = reflected.GetMethodBody();
-                    var bytes = body?.GetILAsByteArray();
-                    if (bytes == null)
+                    var randomApi = item.ExpectedRandomApi;
+                    var randomCount = item.ExpectedRandomCallCount;
+                    if (method != null && method.HasBody)
                     {
-                        continue;
+                        var randomCalls = method.Body.Instructions
+                            .Select(value => value.Operand)
+                            .OfType<MethodReference>()
+                            .Where(
+                                value => string.Equals(
+                                    value.DeclaringType.FullName,
+                                    "UnityEngine.Random",
+                                    StringComparison.Ordinal))
+                            .ToList();
+                        var randomApis = randomCalls
+                            .Select(value => value.FullName)
+                            .Distinct(StringComparer.Ordinal)
+                            .ToList();
+                        if (randomCalls.Count > 0 && randomApis.Count == 1)
+                        {
+                            randomApi = randomApis[0];
+                            randomCount = randomCalls.Count;
+                        }
+                        else
+                        {
+                            Modding.Logger.LogWarn("[HKTAS] RNG call site '" + item.CallSiteId + "' UnityEngine.Random call shape differs (count="
+                                + randomCalls.Count + ", distinctApis=" + randomApis.Count + "); keeping hook active.");
+                        }
                     }
+
+                    var resolvedToken = method != null
+                        ? method.MetadataToken.ToInt32()
+                        : (reflected != null && reflected.MetadataToken > 0 ? reflected.MetadataToken : item.MetadataToken);
+                    var declaringType = method?.DeclaringType?.FullName ?? reflected?.DeclaringType?.FullName ?? item.DeclaringType;
+                    var signature = method?.FullName ?? item.MethodSignature;
 
                     result.Add(
                         new RngCallSiteDescriptor(
                             item.CallSiteId,
-                            method.DeclaringType.FullName,
-                            method.FullName,
-                            method.MetadataToken.ToInt32(),
-                            Sha256Utility.ComputeHex(bytes),
+                            declaringType,
+                            signature,
+                            resolvedToken > 0 ? resolvedToken : item.MetadataToken,
+                            ilHash,
                             item.HookType,
-                            randomApis[0],
-                            randomCalls.Count));
+                            randomApi,
+                            randomCount));
                 }
             }
 
             return result;
+        }
+
+        private static string ExtractMethodName(string methodSignature)
+        {
+            var colonIndex = methodSignature.IndexOf("::", StringComparison.Ordinal);
+            var start = colonIndex >= 0 ? colonIndex + 2 : 0;
+            var parenIndex = methodSignature.IndexOf('(', start);
+            return parenIndex > start
+                ? methodSignature.Substring(start, parenIndex - start)
+                : methodSignature.Substring(start);
+        }
+
+        private static MethodDefinition? FindCecilMethodByName(
+            ModuleDefinition module,
+            string declaringType,
+            string methodName)
+        {
+            var type = module.Types.FirstOrDefault(t => string.Equals(t.FullName, declaringType, StringComparison.Ordinal))
+                ?? module.GetTypes().FirstOrDefault(t => string.Equals(t.FullName, declaringType, StringComparison.Ordinal));
+            return type?.Methods.FirstOrDefault(m => m.HasBody && string.Equals(m.Name, methodName, StringComparison.Ordinal));
+        }
+
+        private static MethodBase? FindReflectedMethodByName(
+            Assembly assembly,
+            string declaringType,
+            string methodName)
+        {
+            var type = assembly.GetType(declaringType, throwOnError: false);
+            if (type == null) return null;
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+            return type.GetMethods(flags).FirstOrDefault(m => string.Equals(m.Name, methodName, StringComparison.Ordinal));
         }
     }
 
     public sealed class RngCallSiteHooks : IDisposable
     {
         private readonly RuntimeRngProbe owner;
+        private readonly bool supported;
         private bool attached;
 
         public RngCallSiteHooks(
@@ -168,16 +285,16 @@ namespace HollowKnightTAS.Runtime.Rng
                 throw new ArgumentNullException(nameof(capability));
             }
 
-            if (!capability.HooksAvailable)
+            supported = capability.HooksAvailable;
+            if (!supported)
             {
-                throw new InvalidOperationException(
-                    "RNG call-site hooks require an exact whitelist resolution.");
+                Modding.Logger.LogWarn("[HKTAS] RngCallSiteHooks constructed without full hook capability (" + capability.CallSites.Detail + "); Attach() will be a no-op.");
             }
         }
 
         public void Attach()
         {
-            if (attached)
+            if (attached || !supported)
             {
                 return;
             }
@@ -189,12 +306,12 @@ namespace HollowKnightTAS.Runtime.Rng
                 On.HeroController.TakeDamage += OnHeroTakeDamage;
                 attached = true;
             }
-            catch
+            catch (Exception ex)
             {
                 On.Helper.GetRandomVector2InRange -=
                     OnGetRandomVector2InRange;
                 On.HeroController.TakeDamage -= OnHeroTakeDamage;
-                throw;
+                Modding.Logger.LogWarn("[HKTAS] Failed to attach RNG call-site hooks (" + ex.Message + "); continuing without RNG call-site hooks.");
             }
         }
 

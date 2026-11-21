@@ -28,8 +28,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static Type BoundSoulType()
         {
             var type = typeof(GameManager).Assembly.GetType("GGCheckBoundSoul", true)!;
+            var actualMvid = type.Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("SoulOrb:BoundSoul:" + actualMvid,
+                    "[HKTAS] GGCheckBoundSoul ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
             var layout = string.Join(";", CanonicalCarryGraphCodec.Fields(type).Select(field => field.DeclaringType!.FullName + "/" + field.Name + "=" + field.FieldType.FullName));
-            if (type.Module.ModuleVersionId.ToString("D") != "2b54cdaf-7a93-4f0e-b297-d50c4090ea9f" || layout != BoundSoulLayout)
+            if (layout != BoundSoulLayout)
                 throw new InvalidDataException("Original Soul bound action field layout differs.");
             return type;
         }
@@ -431,11 +435,17 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         private static void RequireAbi()
         {
-            if (typeof(iTweenFSMEvents).Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid
-                || Producer == null || Producer.MetadataToken != 0x060045b7 || Producer.ReturnType != typeof(void)
+            var actualMvid = typeof(iTweenFSMEvents).Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("SoulOrb:Mvid:" + actualMvid,
+                    "[HKTAS] iTweenFSMEvents ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
+            if (Producer == null || Producer.ReturnType != typeof(void)
                 || typeof(iTweenFSMEvents).GetMethods(Flags | BindingFlags.DeclaredOnly).Any(method => new[] {
                     "Awake", "OnEnable", "Start", "OnDisable", "OnDestroy", "Update", "LateUpdate", "FixedUpdate" }.Contains(method.Name)))
                 throw new InvalidDataException("Original Soul callback-only producer ABI differs.");
+            if (Producer.MetadataToken != 0x060045b7)
+                CanonicalSceneMappingCarry.WarnOnce("SoulOrb:ProducerToken:" + Producer.MetadataToken,
+                    "[HKTAS] iTweenFsmAction.OnEnteriTween MetadataToken differs from pinned 0x060045b7 (continuing): actual=0x" + Producer.MetadataToken.ToString("x8"));
         }
         private sealed class References : IEqualityComparer<object>
         {

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -291,10 +292,17 @@ namespace HollowKnightTAS.Companion.Automation
                 var source = new UTF8Encoding(false, true).GetString(bytes);
                 var codec = new MovieV2Codec();
                 var parsed = codec.Parse(new StringReader(source), "<automation>");
-                if (!parsed.Success || parsed.Document == null
-                    || codec.WriteCanonical(parsed.Document) != source)
+                if (!parsed.Success || parsed.Document == null)
                     return Result(command, false, "InvalidMovie",
-                        "Full-run replay requires a canonical v2 movie.");
+                        "Full-run replay requires a valid v2 movie.");
+                if (!string.Equals(
+                        codec.WriteCanonical(parsed.Document),
+                        source,
+                        StringComparison.Ordinal))
+                {
+                    Trace.TraceWarning(
+                        "AutomationBroker.BeginFullRunReplay: movie source differs from canonical v2 formatting; continuing with parsed document.");
+                }
                 coordinator.ArmReplay(parsed.Document, command.Arguments.TryGetValue("pauseAtFrame", out var target)
                     ? long.Parse(target, CultureInfo.InvariantCulture) : -1);
                 return Result(command, true, "Ok", "Replay armed at native frame 0.",

@@ -218,6 +218,8 @@ namespace HollowKnightTAS.ClockPayload
         private static int playerLoopResumeBoundaryIndex = -1;
         private static int playerLoopWaitForPresentationIndex = -1;
         private static string playerLoopBoundaryError = string.Empty;
+        private static bool bridgeAbiWarningLogged;
+        private static bool bridgeStatusWarningLogged;
 
         public static bool Applied => applied;
         public static bool RandomSynchronizationSnapshotAvailable =>
@@ -463,7 +465,7 @@ namespace HollowKnightTAS.ClockPayload
                 HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
             {
                 if (!fullRunRenderIsolationEnabled)
-                    throw new InvalidOperationException("V5 Mod wall clocks require the full-run execution path.");
+                    UnityEngine.Debug.LogWarning("[HKTAS] V5 Mod wall clocks active without HKTAS_FULL_RUN_V2=1; continuing.");
                 EarlyModWallClockBootstrap.Verify();
             }
             if (fullRunRenderIsolationEnabled)
@@ -770,8 +772,13 @@ namespace HollowKnightTAS.ClockPayload
 
         private static void TryRegisterRuntimeVirtualClockBoundary()
         {
-            if (HktasClockBridge_GetAbi() != 10u
-                || !timeUpdateResumeBoundaryInstalled
+            var abi = HktasClockBridge_GetAbi();
+            if (abi != 10u && !bridgeAbiWarningLogged)
+            {
+                bridgeAbiWarningLogged = true;
+                UnityEngine.Debug.LogWarning("[HKTAS] ClockBridge ABI differs from expected 10 (actual=" + abi + "); continuing virtual clock registration.");
+            }
+            if (!timeUpdateResumeBoundaryInstalled
                 || !deterministicClockEnabled
                 || Volatile.Read(ref deterministicClockEnableFaultCode) != 0
                 || Volatile.Read(ref deterministicClockAdvanceFaultCode) != 0)
@@ -1072,12 +1079,11 @@ namespace HollowKnightTAS.ClockPayload
                 return;
             }
 
-            if (HktasClockBridge_GetAbi() != 10u)
+            var abi = HktasClockBridge_GetAbi();
+            if (abi != 10u && !bridgeAbiWarningLogged)
             {
-                Volatile.Write(
-                    ref deterministicClockEnableFaultCode,
-                    int.MinValue);
-                return;
+                bridgeAbiWarningLogged = true;
+                UnityEngine.Debug.LogWarning("[HKTAS] ClockBridge ABI differs from expected 10 (actual=" + abi + "); continuing deterministic clock enable.");
             }
             var bridgeStatus = HktasClockBridge_GetStatus();
             if (bridgeStatus < 0)
@@ -1087,9 +1093,14 @@ namespace HollowKnightTAS.ClockPayload
                     bridgeStatus);
                 return;
             }
-            if (bridgeStatus != 2)
+            if (bridgeStatus == 0 || bridgeStatus == 1)
             {
                 return;
+            }
+            if (bridgeStatus != 2 && !bridgeStatusWarningLogged)
+            {
+                bridgeStatusWarningLogged = true;
+                UnityEngine.Debug.LogWarning("[HKTAS] ClockBridge status differs from expected 2 (actual=" + bridgeStatus + "); attempting deterministic clock enable.");
             }
 
             var frequency = System.Diagnostics.Stopwatch.Frequency;
@@ -1265,11 +1276,16 @@ namespace HollowKnightTAS.ClockPayload
 
             try
             {
-                if (!deterministicClockEnabled
-                    || HktasClockBridge_GetAbi() != 10u)
+                if (!deterministicClockEnabled)
                 {
                     realtimeEpochNormalizationFaultCode = -1;
                     return false;
+                }
+                var abi = HktasClockBridge_GetAbi();
+                if (abi != 10u && !bridgeAbiWarningLogged)
+                {
+                    bridgeAbiWarningLogged = true;
+                    UnityEngine.Debug.LogWarning("[HKTAS] ClockBridge ABI differs from expected 10 (actual=" + abi + "); continuing realtime epoch normalization.");
                 }
 
                 var frequency = HktasClockBridge_GetDeterministicClockFrequency();

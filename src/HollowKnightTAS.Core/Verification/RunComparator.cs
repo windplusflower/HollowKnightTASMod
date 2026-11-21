@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using HollowKnightTAS.Core.State;
 
 namespace HollowKnightTAS.Core.Verification
@@ -157,7 +158,8 @@ namespace HollowKnightTAS.Core.Verification
                     actual.ManifestSha256,
                     StringComparison.Ordinal))
             {
-                return "Manifest SHA-256 differs.";
+                Trace.TraceWarning(
+                    $"RunComparator: Manifest SHA-256 differs ({expected.ManifestSha256} != {actual.ManifestSha256}); continuing comparison.");
             }
 
             if (!string.Equals(

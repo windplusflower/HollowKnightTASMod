@@ -389,14 +389,22 @@ public sealed class StudioTimelineCheckpointIntegrationTests
             Assert.IsNotNull(withoutKnownEnv);
             Assert.AreEqual(cp800Id, withoutKnownEnv.CheckpointId);
 
-            // With runtime environment set to envNew: excludes stale envOld (K=800) and selects K=300.
+            // With runtime environment set to envNew: EnvironmentSha256 mismatch is allowed with warning;
+            // K=900 is still excluded by initial-save mismatch, so K=800 remains the latest compatible checkpoint.
             fixture.Vm.RememberRuntimeEnvironmentManifestSha256(envNew);
             var withEnvNew = fixture.Vm.FindBestSceneCheckpoint(treeId, 950, baseDoc);
             Assert.IsNotNull(withEnvNew);
-            Assert.AreEqual(cp300Id, withEnvNew.CheckpointId);
+            Assert.AreEqual(cp800Id, withEnvNew.CheckpointId);
 
-            // With runtime environment set to envAnother: no compatible checkpoint remains.
+            // With runtime environment set to envAnother: EnvironmentSha256 mismatch still allows K=800 (and K=300).
             fixture.Vm.RememberRuntimeEnvironmentManifestSha256(envAnother);
+            var withEnvAnother = fixture.Vm.FindBestSceneCheckpoint(treeId, 950, baseDoc);
+            Assert.IsNotNull(withEnvAnother);
+            Assert.AreEqual(cp800Id, withEnvAnother.CheckpointId);
+
+            // With an unrelated initial save snapshot: all checkpoints are still filtered out.
+            var unrelatedSnapshot = new InitialSaveSnapshot(new Dictionary<string, byte[]> { ["user1.dat"] = new byte[] { 70, 80, 90 } });
+            SetField(fixture.Vm, "sequenceInitialSaves", unrelatedSnapshot);
             Assert.IsNull(fixture.Vm.FindBestSceneCheckpoint(treeId, 950, baseDoc));
         }
         finally

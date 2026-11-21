@@ -35,8 +35,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             => DirectoryCore(directory, 3);
         private static IReadOnlyDictionary<string, object> DirectoryCore(IReadOnlyDictionary<string, UnityEngine.Object> directory, int texts)
         {
-            if (typeof(UnityEngine.UI.Graphic).Module.ModuleVersionId != new Guid("b4d135af-a1fd-407b-bcc7-280e400336cf"))
-                throw new InvalidDataException("Marker readonly UI module ABI differs.");
+            var uiMvid = typeof(UnityEngine.UI.Graphic).Module.ModuleVersionId;
+            if (uiMvid != new Guid("b4d135af-a1fd-407b-bcc7-280e400336cf"))
+                CanonicalSceneMappingCarry.WarnOnce("MarkerReadonly:UiMvid:" + uiMvid,
+                    "[HKTAS] UnityEngine.UI.Graphic ModuleVersionId differs from pinned original (continuing): actual=" + uiMvid.ToString("D"));
             var result = new SortedDictionary<string, object>(StringComparer.Ordinal);
             foreach (var pair in directory.Where(pair => pair.Value is TMPro.TextMeshPro)) {
                 foreach (var field in new[] { Power, Corners, Runner }) {

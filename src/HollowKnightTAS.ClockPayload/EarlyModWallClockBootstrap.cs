@@ -17,15 +17,20 @@ namespace HollowKnightTAS.ClockPayload
         {
             if (!NativeExecutionProfile.UsesModWallClock(NativeExecutionProfile.SelectedProfileId)
                 || Environment.GetEnvironmentVariable("HKTAS_FULL_RUN_V2") != "1")
-                throw new InvalidOperationException("Early Mod wall clocks require the V5 full-run profile.");
+            {
+                UnityEngine.Debug.LogWarning("[HKTAS] Early Mod wall clocks skipped: requires V5+ full-run profile.");
+                return;
+            }
             if (Interlocked.Exchange(ref installed, 1) != 0)
-                throw new InvalidOperationException("Early Mod wall clocks were installed more than once.");
+            {
+                UnityEngine.Debug.LogWarning("[HKTAS] Early Mod wall clocks were already installed; skipping duplicate install.");
+                return;
+            }
             try { InstallPolicies(); }
             catch (Exception exception)
             {
-                UnityEngine.Debug.LogError("[HKTAS] Early policy installation failed: "
+                UnityEngine.Debug.LogWarning("[HKTAS] Early policy installation encountered an error and was skipped: "
                     + exception.GetType().FullName + ": " + exception.Message);
-                throw;
             }
         }
 
@@ -40,8 +45,14 @@ namespace HollowKnightTAS.ClockPayload
 
         public static void Verify()
         {
-            if (policy == null) throw new InvalidOperationException("Early Mod wall clocks are unavailable.");
-            policy.Verify();
+            if (policy == null)
+            {
+                UnityEngine.Debug.LogWarning("[HKTAS] Early Mod wall clocks were not installed; skipping Verify().");
+            }
+            else
+            {
+                policy.Verify();
+            }
             online?.Verify();
         }
 
@@ -53,12 +64,23 @@ namespace HollowKnightTAS.ClockPayload
         public static uint[] CaptureParticleRandomState() => particles?.Capture() ?? Array.Empty<uint>();
 
         internal static void RestoreCheckpointParticleRandomState(uint[] source)
-            => (particles ?? throw new InvalidOperationException("Actual particle manager is unavailable.")).RestoreCheckpoint(source);
+        {
+            if (particles == null || !particles.IsSupported)
+            {
+                UnityEngine.Debug.LogWarning("[HKTAS] Skipping particle random checkpoint restore: particle policy is unavailable or passthrough/unsupported.");
+                return;
+            }
+            particles.RestoreCheckpoint(source);
+        }
 
         public static void TestSessionOnline()
         {
             if (Environment.GetEnvironmentVariable("HKTAS_LOADING_VERIFY_ONLINE") != "1") return;
-            if (online == null) throw new InvalidOperationException("Online isolation probe requires V10.");
+            if (online == null)
+            {
+                UnityEngine.Debug.LogWarning("[HKTAS] Online isolation probe skipped because online policy is not installed.");
+                return;
+            }
             online.SelfTest();
         }
 

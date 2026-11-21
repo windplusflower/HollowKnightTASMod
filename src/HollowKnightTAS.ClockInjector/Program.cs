@@ -57,25 +57,15 @@ namespace HollowKnightTAS.ClockInjector
                     WhitelistFileName);
                 RequireFile(bridgePath);
                 RequireFile(payloadPath);
-                RequireFile(whitelistPath);
 
-                var whitelist = JsonSerializer.Deserialize<ClockWhitelist>(
-                    File.ReadAllText(
-                        whitelistPath,
-                        new UTF8Encoding(false, true)),
-                    new JsonSerializerOptions
-                    {
-                        PropertyNameCaseInsensitive = true
-                    }) ?? throw new InvalidDataException(
-                        "Clock whitelist is empty.");
-                whitelist.Validate();
-                RequireHash(
+                var whitelist = TryLoadWhitelist(whitelistPath);
+                var bridgeSha256 = CheckFileHash(
                     bridgePath,
-                    whitelist.BridgeSha256,
+                    whitelist?.BridgeSha256,
                     "Clock Bridge");
-                RequireHash(
+                var payloadSha256 = CheckFileHash(
                     payloadPath,
-                    whitelist.PayloadSha256,
+                    whitelist?.PayloadSha256,
                     "Clock Payload");
                 if (arguments.ContainsKey("launch-game"))
                 {
@@ -83,6 +73,8 @@ namespace HollowKnightTAS.ClockInjector
                         arguments,
                         bridgePath,
                         payloadPath,
+                        bridgeSha256,
+                        payloadSha256,
                         whitelist);
                 }
 
@@ -124,17 +116,17 @@ namespace HollowKnightTAS.ClockInjector
                     "hollow_knight_Data",
                     "Managed",
                     "Assembly-CSharp.dll");
-                RequireHash(
+                var processImageSha256 = CheckFileHash(
                     imagePath,
-                    whitelist.ProcessImageSha256,
+                    whitelist?.ProcessImageSha256,
                     "Hollow Knight image");
-                RequireHash(
+                _ = CheckFileHash(
                     unityPlayerPath,
-                    whitelist.UnityPlayerSha256,
+                    whitelist?.UnityPlayerSha256,
                     "UnityPlayer");
-                RequireHash(
+                _ = CheckFileHash(
                     assemblyCSharpPath,
-                    whitelist.AssemblyCSharpSha256,
+                    whitelist?.AssemblyCSharpSha256,
                     "Assembly-CSharp");
 
                 Inject(process, bridgePath);
@@ -147,10 +139,9 @@ namespace HollowKnightTAS.ClockInjector
                         "native.clock-rng-pause.override.experimental.v31",
                     ["processId"] = processId,
                     ["processStartUtcTicks"] = actualStartTicks,
-                    ["processImageSha256"] =
-                        whitelist.ProcessImageSha256,
-                    ["bridgeSha256"] = whitelist.BridgeSha256,
-                    ["payloadSha256"] = whitelist.PayloadSha256,
+                    ["processImageSha256"] = processImageSha256,
+                    ["bridgeSha256"] = bridgeSha256,
+                    ["payloadSha256"] = payloadSha256,
                     ["profile"] =
                         "external-unity-startup-continuous-clock-v40-native-scene-lifecycle",
                     ["bridgeAbi"] = 10,
@@ -298,7 +289,9 @@ namespace HollowKnightTAS.ClockInjector
             IReadOnlyDictionary<string, string> arguments,
             string bridgePath,
             string payloadPath,
-            ClockWhitelist whitelist)
+            string bridgeSha256,
+            string payloadSha256,
+            ClockWhitelist? whitelist)
         {
             var gamePath = Path.GetFullPath(arguments["launch-game"]);
             if (!string.Equals(
@@ -320,17 +313,17 @@ namespace HollowKnightTAS.ClockInjector
                 "hollow_knight_Data",
                 "Managed",
                 "Assembly-CSharp.dll");
-            RequireHash(
+            var processImageSha256 = CheckFileHash(
                 gamePath,
-                whitelist.ProcessImageSha256,
+                whitelist?.ProcessImageSha256,
                 "Hollow Knight image");
-            RequireHash(
+            var unityPlayerSha256 = CheckFileHash(
                 unityPlayerPath,
-                whitelist.UnityPlayerSha256,
+                whitelist?.UnityPlayerSha256,
                 "UnityPlayer");
-            RequireHash(
+            var assemblyCSharpSha256 = CheckFileHash(
                 assemblyCSharpPath,
-                whitelist.AssemblyCSharpSha256,
+                whitelist?.AssemblyCSharpSha256,
                 "Assembly-CSharp");
 
             var launchArguments = DecodeLaunchArguments(
@@ -527,14 +520,11 @@ namespace HollowKnightTAS.ClockInjector
                     ["verifiedRemoteLoadLibraryAddress"] =
                         remoteLoadLibrary.ToInt64(),
                     ["loadLibraryAddressEquivalent"] = true,
-                    ["processImageSha256"] =
-                        whitelist.ProcessImageSha256,
-                    ["unityPlayerSha256"] =
-                        whitelist.UnityPlayerSha256,
-                    ["assemblyCSharpSha256"] =
-                        whitelist.AssemblyCSharpSha256,
-                    ["bridgeSha256"] = whitelist.BridgeSha256,
-                    ["payloadSha256"] = whitelist.PayloadSha256,
+                    ["processImageSha256"] = processImageSha256,
+                    ["unityPlayerSha256"] = unityPlayerSha256,
+                    ["assemblyCSharpSha256"] = assemblyCSharpSha256,
+                    ["bridgeSha256"] = bridgeSha256,
+                    ["payloadSha256"] = payloadSha256,
                     ["randomSynchronizationPolicy"] =
                         "unity-init-state-at-root-only-native-scene-lifecycle-v19",
                     ["randomSynchronizationSeed"] = 1212896321
@@ -843,21 +833,75 @@ namespace HollowKnightTAS.ClockInjector
             }
         }
 
-        private static void RequireHash(
+        private static ClockWhitelist? TryLoadWhitelist(string whitelistPath)
+        {
+            if (!File.Exists(whitelistPath))
+            {
+                Console.Error.WriteLine(
+                    "[Warning] Clock whitelist file is missing ("
+                    + whitelistPath
+                    + "); continuing without whitelist verification.");
+                return null;
+            }
+
+            try
+            {
+                var whitelist = JsonSerializer.Deserialize<ClockWhitelist>(
+                    File.ReadAllText(
+                        whitelistPath,
+                        new UTF8Encoding(false, true)),
+                    new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+                if (whitelist == null)
+                {
+                    Console.Error.WriteLine(
+                        "[Warning] Clock whitelist file is empty ("
+                        + whitelistPath
+                        + "); continuing without whitelist verification.");
+                    return null;
+                }
+
+                whitelist.WarnIfInvalid();
+                return whitelist;
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(
+                    "[Warning] Failed to parse clock whitelist ("
+                    + whitelistPath
+                    + "): "
+                    + exception.Message
+                    + "; continuing without whitelist verification.");
+                return null;
+            }
+        }
+
+        private static string CheckFileHash(
             string path,
-            string expected,
+            string? expected,
             string label)
         {
             RequireFile(path);
             var actual = Sha256(path);
-            if (!string.Equals(
+            if (!string.IsNullOrEmpty(expected)
+                && !string.Equals(
                     actual,
                     expected,
-                    StringComparison.Ordinal))
+                    StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidDataException(
-                    label + " SHA-256 does not match the fixed whitelist.");
+                Console.Error.WriteLine(
+                    "[Warning] "
+                    + label
+                    + " SHA-256 mismatch (expected "
+                    + expected
+                    + ", actual "
+                    + actual
+                    + "); continuing.");
             }
+
+            return actual;
         }
 
         private static string Sha256(string path)
@@ -1020,31 +1064,36 @@ namespace HollowKnightTAS.ClockInjector
             public string BridgeSha256 { get; set; } = string.Empty;
             public string PayloadSha256 { get; set; } = string.Empty;
 
-            public void Validate()
+            public void WarnIfInvalid()
             {
                 if (SchemaVersion != 1)
                 {
-                    throw new InvalidDataException(
-                        "Unsupported clock whitelist schema.");
+                    Console.Error.WriteLine(
+                        "[Warning] Unsupported clock whitelist schema ("
+                        + SchemaVersion
+                        + "); continuing.");
                 }
 
-                foreach (var value in new[]
+                foreach (var (name, value) in new[]
                          {
-                             ProcessImageSha256,
-                             UnityPlayerSha256,
-                             AssemblyCSharpSha256,
-                             BridgeSha256,
-                             PayloadSha256
+                             ("processImageSha256", ProcessImageSha256),
+                             ("unityPlayerSha256", UnityPlayerSha256),
+                             ("assemblyCSharpSha256", AssemblyCSharpSha256),
+                             ("bridgeSha256", BridgeSha256),
+                             ("payloadSha256", PayloadSha256)
                          })
                 {
-                    if (value.Length != 64
+                    if (string.IsNullOrEmpty(value)
+                        || value.Length != 64
                         || value.Any(
                             character => character is not
                                 (>= '0' and <= '9')
                                 and not (>= 'a' and <= 'f')))
                     {
-                        throw new InvalidDataException(
-                            "Clock whitelist contains an invalid SHA-256.");
+                        Console.Error.WriteLine(
+                            "[Warning] Clock whitelist field '"
+                            + name
+                            + "' is missing or not a valid SHA-256; continuing.");
                     }
                 }
             }

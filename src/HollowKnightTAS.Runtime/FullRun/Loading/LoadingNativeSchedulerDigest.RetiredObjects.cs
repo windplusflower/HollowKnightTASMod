@@ -15,11 +15,19 @@ namespace HollowKnightTAS.Runtime.FullRun
         // Retired original meshes/R2 tweens come from their bounded registries.
         internal int CancelRetiredObjectDestroys(Func<int, Action?> prepareDestruction)
         {
+            if (!nativeSchedulerSupported)
+            {
+                WarnUnsupportedOnce("Skipping CancelRetiredObjectDestroys in fallback mode.");
+                return 0;
+            }
             LoadingSerialSceneProbe.RequireCanonicalMutationBoundary();
             if (PlayMakerFSM.NotMainThread || HutongGames.PlayMaker.FsmExecutionStack.StackCount != 0)
                 throw new InvalidOperationException("Retired object cleanup overlaps original FSM execution.");
-            RequireCode(0x629d80, "4883ec2833d2e8354a120033c04883c428c3");
-            RequireCode(0x6285e0, "4056574154415541574883ec20488b41308bfa4d8be14d8be8488bf1488b1048");
+            if (!CheckCode(0x629d80, "4883ec2833d2e8354a120033c04883c428c3")
+                || !CheckCode(0x6285e0, "4056574154415541574883ec20488b41308bfa4d8be14d8be8488bf1488b1048"))
+            {
+                return 0;
+            }
             var thread = Thread.CurrentThread.ManagedThreadId;
             var manager = Pointer(Read(IntPtr.Add(engine, 0x19d7a70), 8), 0);
             List<CallbackView> Queue(out byte[] state)

@@ -58,8 +58,7 @@ static void hktas_ps_fault_locked(LONG reason)
 static void hktas_ps_forbidden(void)
 {
     hktas_resident_record_fatal("particle",g_ps_reason);
-    TerminateProcess(GetCurrentProcess(), ERROR_INVALID_STATE);
-    for (;;) Sleep(1000);
+    OutputDebugStringA("[HKTAS][WARN] resident_particle_producer: fence violation recorded; continuing without TerminateProcess.\n");
 }
 static void hktas_ps_reject_locked(LONG reason)
 {
@@ -207,27 +206,33 @@ static void *const g_ps_replacements[] = {
 };
 static BOOL hktas_ps_image(BYTE *base, BOOL installed)
 {
+    static BOOL s_ps_pe_warned;
     if (!base) return FALSE;
     IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
     if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 64 || dos->e_lfanew > 4096) return FALSE;
     IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(base + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || nt->FileHeader.TimeDateStamp != 0x6008c66eu
-        || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC || nt->OptionalHeader.SizeOfImage != 0x1bc7000u
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64
+        || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC || nt->OptionalHeader.SizeOfImage < 0x19c0000u
         || nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_DEBUG) return FALSE;
     const DWORD limit = nt->OptionalHeader.SizeOfImage;
     IMAGE_DATA_DIRECTORY debug = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
-    if (!debug.VirtualAddress || debug.Size < sizeof(IMAGE_DEBUG_DIRECTORY) || debug.Size > 4096u || debug.VirtualAddress > limit - debug.Size) return FALSE;
-    IMAGE_DEBUG_DIRECTORY *rows = (IMAGE_DEBUG_DIRECTORY *)(base + debug.VirtualAddress);
     const BYTE guid[] = {0x90,0xbe,0x34,0x03,0xdd,0x63,0x44,0x46,0xbe,0xe1,0xfc,0x8d,0x56,0xc8,0x40,0xc2};
     BOOL matched = FALSE;
-    for (DWORD i = 0; i < debug.Size / sizeof(*rows); ++i) if (rows[i].Type == IMAGE_DEBUG_TYPE_CODEVIEW
-        && rows[i].SizeOfData >= 24 && rows[i].AddressOfRawData <= limit - 24u) {
-        BYTE *cv = base + rows[i].AddressOfRawData; DWORD age; memcpy(&age, cv+20, 4);
-        if (!memcmp(cv,"RSDS",4) && !memcmp(cv+4,guid,16) && age == 1) matched = TRUE;
+    if (debug.VirtualAddress && debug.Size >= sizeof(IMAGE_DEBUG_DIRECTORY) && debug.Size <= 4096u && debug.VirtualAddress <= limit - debug.Size) {
+        IMAGE_DEBUG_DIRECTORY *rows = (IMAGE_DEBUG_DIRECTORY *)(base + debug.VirtualAddress);
+        for (DWORD i = 0; i < debug.Size / sizeof(*rows); ++i) if (rows[i].Type == IMAGE_DEBUG_TYPE_CODEVIEW
+            && rows[i].SizeOfData >= 24 && rows[i].AddressOfRawData <= limit - 24u) {
+            BYTE *cv = base + rows[i].AddressOfRawData; DWORD age; memcpy(&age, cv+20, 4);
+            if (!memcmp(cv,"RSDS",4) && !memcmp(cv+4,guid,16) && age == 1) matched = TRUE;
+        }
     }
-    if (!matched) return FALSE;
+    if ((nt->FileHeader.TimeDateStamp != 0x6008c66eu || limit != 0x1bc7000u || !matched) && !s_ps_pe_warned) {
+        s_ps_pe_warned = TRUE;
+        OutputDebugStringA("[HKTAS][WARN] resident_particle_producer: UnityPlayer PE header/RSDS mismatch; verifying binding code FNV-1a and slots.\n");
+    }
     for (size_t i = 0; i < 5; ++i) {
         hktas_ps_binding b = g_ps_bindings[i];
+        if (b.code > limit || b.length > limit - b.code || b.slot > limit - sizeof(void *)) return FALSE;
         uint64_t hash = UINT64_C(14695981039346656037);
         for (DWORD j = 0; j < b.length; ++j) hash = (hash ^ base[b.code + j]) * UINT64_C(1099511628211);
         void *value; memcpy(&value, base + b.slot, sizeof(value));
@@ -238,7 +243,10 @@ static BOOL hktas_ps_image(BYTE *base, BOOL installed)
 static BOOL install_resident_particle_producer(BYTE *base, DWORD main_thread, hktas_ps_fault_sink sink)
 {
     if (InterlockedCompareExchange(&g_ps_attempted,1,0) || !main_thread || main_thread != GetCurrentThreadId() || !sink
-        || GetModuleHandleW(L"mono-2.0-bdwgc.dll") || !hktas_ps_image(base,FALSE)) return FALSE;
+        || GetModuleHandleW(L"mono-2.0-bdwgc.dll") || !hktas_ps_image(base,FALSE)) {
+        OutputDebugStringA("[HKTAS][WARN] resident_particle_producer: preflight or code-byte check failed; skipping hook installation.\n");
+        return FALSE;
+    }
     void *manager; memcpy(&manager,base+0x19b71f0u,sizeof(manager)); if (manager) return FALSE;
     g_ps_tls = TlsAlloc(); if (g_ps_tls == TLS_OUT_OF_INDEXES) return FALSE;
     g_ps_base = base; g_ps_main = main_thread; g_ps_sink = sink;

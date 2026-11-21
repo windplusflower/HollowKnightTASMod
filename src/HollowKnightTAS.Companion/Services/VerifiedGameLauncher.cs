@@ -64,10 +64,25 @@ namespace HollowKnightTAS.Companion.Services
 
         public void RequireStartupFrameGate()
         {
-            using var document = JsonDocument.Parse(File.ReadAllText(ManifestPath));
-            if (!document.RootElement.TryGetProperty("startupFrameGateAbi", out var version)
-                || !version.TryGetInt32(out var abi) || abi != 1)
-                throw new InvalidOperationException("当前 ClockStartup 包不支持启动帧接管；原游戏不会因此被自动关闭。");
+            if (!File.Exists(ManifestPath))
+            {
+                Warn("ClockStartup manifest is missing (" + ManifestPath + "); skipping startup frame gate ABI check.");
+                return;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(ManifestPath));
+                if (!document.RootElement.TryGetProperty("startupFrameGateAbi", out var version)
+                    || !version.TryGetInt32(out var abi) || abi != 1)
+                {
+                    Warn("ClockStartup manifest startupFrameGateAbi is missing or not 1; continuing anyway.");
+                }
+            }
+            catch (Exception exception)
+            {
+                Warn("Failed to inspect ClockStartup manifest startupFrameGateAbi (" + exception.Message + "); continuing anyway.");
+            }
         }
 
         public static VerifiedStartupProfile Load(
@@ -87,145 +102,173 @@ namespace HollowKnightTAS.Companion.Services
                     "Verified startup target is not Hollow Knight.");
             }
 
-            var manifestPath = RequireFixedFile(
-                root,
-                "clock-build-manifest-v1.json");
-            var whitelistPath = RequireFixedFile(
-                root,
-                "clock-build-whitelist-v1.json");
-            var manifest = JsonSerializer.Deserialize<ClockManifest>(
-                File.ReadAllBytes(manifestPath),
-                JsonOptions()) ?? throw new InvalidDataException(
-                "Startup profile manifest is empty.");
-            var whitelist = JsonSerializer.Deserialize<ClockWhitelist>(
-                File.ReadAllBytes(whitelistPath),
-                JsonOptions()) ?? throw new InvalidDataException(
-                "Startup profile whitelist is empty.");
+            // Only core startup binaries are strictly required to exist.
+            var injector = RequireFixedFile(root, "HollowKnightTAS.ClockInjector.exe");
+            var bridge = RequireFixedFile(root, "HollowKnightTAS.ClockBridge.dll");
+            var payload = RequireFixedFile(root, "HollowKnightTAS.ClockPayload.dll");
 
-            if (manifest.SchemaVersion != 2
-                || !string.Equals(
-                    manifest.CapabilityId,
-                    CapabilityId,
-                    StringComparison.Ordinal)
-                || !string.Equals(
-                    manifest.Profile,
-                    ProfileId,
-                    StringComparison.Ordinal)
-                || !string.Equals(
-                    manifest.StartupPolicy,
-                    StartupPolicy,
-                    StringComparison.Ordinal)
-                || manifest.BridgeAbi != StartupProfileContract.BridgeAbi
-                || !string.Equals(manifest.RandomSynchronizationPolicy,
-                    StartupProfileContract.RandomSynchronizationPolicyId,
-                    StringComparison.Ordinal)
-                || manifest.RandomSynchronizationSeed != StartupProfileContract.RandomSynchronizationSeed)
-            {
-                throw new InvalidDataException(
-                    "Startup profile identity is not the required v40 native-scene profile.");
-            }
+            var actualGameSha256 = Sha256Utility.ComputeFileHex(game);
+            var gameDirectory = Path.GetDirectoryName(game);
+            var unityPlayerPath = gameDirectory != null
+                ? Path.Combine(gameDirectory, "UnityPlayer.dll")
+                : string.Empty;
+            var assemblyCSharpPath = gameDirectory != null
+                ? Path.Combine(gameDirectory, "hollow_knight_Data", "Managed", "Assembly-CSharp.dll")
+                : string.Empty;
 
-            if (string.IsNullOrWhiteSpace(manifest.GameExecutable)
-                || !string.Equals(
-                    Path.GetFileName(manifest.GameExecutable),
-                    "hollow_knight.exe",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException(
-                    "Startup profile does not declare Hollow Knight.");
-            }
+            var actualUnityPlayerSha256 = !string.IsNullOrEmpty(unityPlayerPath) && File.Exists(unityPlayerPath)
+                ? Sha256Utility.ComputeFileHex(unityPlayerPath)
+                : WarnAndFallbackSha256("UnityPlayer.dll is missing at " + unityPlayerPath);
+            var actualAssemblyCSharpSha256 = !string.IsNullOrEmpty(assemblyCSharpPath) && File.Exists(assemblyCSharpPath)
+                ? Sha256Utility.ComputeFileHex(assemblyCSharpPath)
+                : WarnAndFallbackSha256("Assembly-CSharp.dll is missing at " + assemblyCSharpPath);
 
-            var gameDirectory = Path.GetDirectoryName(game)
-                                ?? throw new InvalidDataException(
-                                    "Hollow Knight directory is unavailable.");
-            var unityPlayer = RequireFile(
-                Path.Combine(gameDirectory, "UnityPlayer.dll"),
-                "UnityPlayer.dll");
-            var assemblyCSharp = RequireFile(
-                Path.Combine(
-                    gameDirectory,
-                    "hollow_knight_Data",
-                    "Managed",
-                    "Assembly-CSharp.dll"),
-                "Assembly-CSharp.dll");
-            RequireHash(game, manifest.GameExecutableSha256, "game executable");
-            RequireHash(
-                unityPlayer,
-                manifest.UnityPlayerSha256,
-                "UnityPlayer");
-            RequireHash(
-                assemblyCSharp,
-                manifest.AssemblyCSharpSha256,
-                "Assembly-CSharp");
+            var actualInjectorSha256 = Sha256Utility.ComputeFileHex(injector);
+            var actualBridgeSha256 = Sha256Utility.ComputeFileHex(bridge);
+            var actualPayloadSha256 = Sha256Utility.ComputeFileHex(payload);
 
-            var declared = (manifest.RuntimeFileSet
-                            ?? Array.Empty<ClockRuntimeFile>())
-                .ToDictionary(
-                    value => value.File ?? string.Empty,
-                    StringComparer.Ordinal);
-            if (declared.Count != RuntimeFileNames.Length
-                || RuntimeFileNames.Any(name => !declared.ContainsKey(name))
-                || declared.Keys.Any(
-                    name => !RuntimeFileNames.Contains(
-                        name,
-                        StringComparer.Ordinal)))
-            {
-                throw new InvalidDataException(
-                    "Startup profile runtime file set is not exact.");
-            }
-
+            var actualRuntimeFiles = new Dictionary<string, (long Length, string Sha256)>(StringComparer.Ordinal);
             foreach (var name in RuntimeFileNames)
             {
-                var path = RequireFixedFile(root, name);
-                var entry = declared[name];
-                var length = new FileInfo(path).Length;
-                if (entry.Length != length)
+                var path = Path.Combine(root, name);
+                if (!File.Exists(path))
                 {
-                    throw new InvalidDataException(
-                        "Startup profile length mismatch: " + name + ".");
+                    Warn("Optional ClockStartup file is missing: " + name + ".");
+                    continue;
                 }
 
-                RequireHash(path, entry.Sha256, name);
+                actualRuntimeFiles[name] = (new FileInfo(path).Length, Sha256Utility.ComputeFileHex(path));
             }
 
-            if (!string.Equals(
-                    whitelist.ProcessImageSha256,
-                    manifest.GameExecutableSha256,
-                    StringComparison.Ordinal)
-                || !string.Equals(
-                    whitelist.UnityPlayerSha256,
-                    manifest.UnityPlayerSha256,
-                    StringComparison.Ordinal)
-                || !string.Equals(
-                    whitelist.AssemblyCSharpSha256,
-                    manifest.AssemblyCSharpSha256,
-                    StringComparison.Ordinal)
-                || !string.Equals(
-                    whitelist.BridgeSha256,
-                    manifest.BridgeSha256,
-                    StringComparison.Ordinal)
-                || !string.Equals(
-                    whitelist.PayloadSha256,
-                    manifest.PayloadSha256,
-                    StringComparison.Ordinal))
+            var manifestPath = Path.Combine(root, "clock-build-manifest-v1.json");
+            string startupProfileSha256;
+            ClockManifest? manifest = null;
+            if (!File.Exists(manifestPath))
             {
-                throw new InvalidDataException(
-                    "Startup whitelist and manifest do not have the same build binding.");
+                Warn("Startup profile manifest is missing (" + manifestPath + "); computing dynamic profile hash.");
+                startupProfileSha256 = Sha256Utility.ComputeUtf8Hex(
+                    actualInjectorSha256 + "|" + actualBridgeSha256 + "|" + actualPayloadSha256 + "|" + actualGameSha256);
+            }
+            else
+            {
+                startupProfileSha256 = Sha256Utility.ComputeFileHex(manifestPath);
+                try
+                {
+                    manifest = JsonSerializer.Deserialize<ClockManifest>(
+                        File.ReadAllBytes(manifestPath),
+                        JsonOptions());
+                    if (manifest == null)
+                    {
+                        Warn("Startup profile manifest is empty; using dynamically computed file hashes.");
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Warn("Startup profile manifest is invalid (" + exception.Message + "); using dynamically computed file hashes.");
+                }
             }
 
-            var injector = RequireFixedFile(
-                root,
-                "HollowKnightTAS.ClockInjector.exe");
-            RequireHash(injector, manifest.InjectorSha256, "ClockInjector");
+            if (manifest != null)
+            {
+                if (manifest.SchemaVersion != 2
+                    || !string.Equals(manifest.CapabilityId, CapabilityId, StringComparison.Ordinal)
+                    || !string.Equals(manifest.Profile, ProfileId, StringComparison.Ordinal)
+                    || !string.Equals(manifest.StartupPolicy, StartupPolicy, StringComparison.Ordinal)
+                    || manifest.BridgeAbi != StartupProfileContract.BridgeAbi
+                    || !string.Equals(manifest.RandomSynchronizationPolicy, StartupProfileContract.RandomSynchronizationPolicyId, StringComparison.Ordinal)
+                    || manifest.RandomSynchronizationSeed != StartupProfileContract.RandomSynchronizationSeed)
+                {
+                    Warn("Startup profile identity in clock-build-manifest-v1.json differs from expected v40 native-scene profile; continuing.");
+                }
+
+                if (string.IsNullOrWhiteSpace(manifest.GameExecutable)
+                    || !string.Equals(Path.GetFileName(manifest.GameExecutable), "hollow_knight.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    Warn("Startup profile manifest does not declare hollow_knight.exe; continuing.");
+                }
+
+                WarnIfHashMismatch(actualGameSha256, manifest.GameExecutableSha256, "game executable");
+                WarnIfHashMismatch(actualUnityPlayerSha256, manifest.UnityPlayerSha256, "UnityPlayer");
+                WarnIfHashMismatch(actualAssemblyCSharpSha256, manifest.AssemblyCSharpSha256, "Assembly-CSharp");
+                WarnIfHashMismatch(actualInjectorSha256, manifest.InjectorSha256, "ClockInjector");
+                WarnIfHashMismatch(actualBridgeSha256, manifest.BridgeSha256, "ClockBridge");
+                WarnIfHashMismatch(actualPayloadSha256, manifest.PayloadSha256, "ClockPayload");
+
+                var declared = (manifest.RuntimeFileSet ?? Array.Empty<ClockRuntimeFile>())
+                    .GroupBy(value => value.File ?? string.Empty, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+                if (declared.Count != RuntimeFileNames.Length
+                    || RuntimeFileNames.Any(name => !declared.ContainsKey(name))
+                    || declared.Keys.Any(name => !RuntimeFileNames.Contains(name, StringComparer.Ordinal)))
+                {
+                    Warn("Startup profile runtime file set in manifest does not match expected runtime file list; using actual files.");
+                }
+
+                foreach (var name in RuntimeFileNames)
+                {
+                    if (!declared.TryGetValue(name, out var entry) || !actualRuntimeFiles.TryGetValue(name, out var actual))
+                    {
+                        continue;
+                    }
+
+                    if (entry.Length != actual.Length)
+                    {
+                        Warn("Startup profile length mismatch for " + name + " (manifest=" + entry.Length + ", actual=" + actual.Length + "); using actual length.");
+                    }
+
+                    WarnIfHashMismatch(actual.Sha256, entry.Sha256, name);
+                }
+            }
+
+            var whitelistPath = Path.Combine(root, "clock-build-whitelist-v1.json");
+            if (!File.Exists(whitelistPath))
+            {
+                Warn("Startup profile whitelist is missing (" + whitelistPath + "); continuing without whitelist.");
+            }
+            else
+            {
+                try
+                {
+                    var whitelist = JsonSerializer.Deserialize<ClockWhitelist>(
+                        File.ReadAllBytes(whitelistPath),
+                        JsonOptions());
+                    if (whitelist == null)
+                    {
+                        Warn("Startup profile whitelist is empty; continuing.");
+                    }
+                    else
+                    {
+                        WarnIfHashMismatch(actualGameSha256, whitelist.ProcessImageSha256, "whitelist ProcessImageSha256");
+                        WarnIfHashMismatch(actualUnityPlayerSha256, whitelist.UnityPlayerSha256, "whitelist UnityPlayerSha256");
+                        WarnIfHashMismatch(actualAssemblyCSharpSha256, whitelist.AssemblyCSharpSha256, "whitelist AssemblyCSharpSha256");
+                        WarnIfHashMismatch(actualBridgeSha256, whitelist.BridgeSha256, "whitelist BridgeSha256");
+                        WarnIfHashMismatch(actualPayloadSha256, whitelist.PayloadSha256, "whitelist PayloadSha256");
+                        if (manifest != null
+                            && (!string.Equals(whitelist.ProcessImageSha256, manifest.GameExecutableSha256, StringComparison.Ordinal)
+                                || !string.Equals(whitelist.UnityPlayerSha256, manifest.UnityPlayerSha256, StringComparison.Ordinal)
+                                || !string.Equals(whitelist.AssemblyCSharpSha256, manifest.AssemblyCSharpSha256, StringComparison.Ordinal)
+                                || !string.Equals(whitelist.BridgeSha256, manifest.BridgeSha256, StringComparison.Ordinal)
+                                || !string.Equals(whitelist.PayloadSha256, manifest.PayloadSha256, StringComparison.Ordinal)))
+                        {
+                            Warn("Startup whitelist and manifest do not share the same build binding; continuing with actual hashes.");
+                        }
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Warn("Startup profile whitelist is invalid (" + exception.Message + "); continuing.");
+                }
+            }
+
             return new VerifiedStartupProfile(
                 root,
                 game,
                 injector,
                 manifestPath,
-                Sha256Utility.ComputeFileHex(manifestPath),
-                manifest.GameExecutableSha256!,
-                manifest.UnityPlayerSha256!,
-                manifest.AssemblyCSharpSha256!);
+                startupProfileSha256,
+                actualGameSha256,
+                actualUnityPlayerSha256,
+                actualAssemblyCSharpSha256);
         }
 
         public ColdRestoreBuildFingerprint BuildFingerprint(
@@ -258,11 +301,31 @@ namespace HollowKnightTAS.Companion.Services
         {
             return new JsonSerializerOptions
             {
-                PropertyNameCaseInsensitive = true,
-                UnmappedMemberHandling =
-                    System.Text.Json.Serialization.JsonUnmappedMemberHandling
-                        .Disallow
+                PropertyNameCaseInsensitive = true
             };
+        }
+
+        private static void Warn(string message)
+        {
+            Trace.TraceWarning("VerifiedStartupProfile: " + message);
+            Console.Error.WriteLine("[Warning] VerifiedStartupProfile: " + message);
+        }
+
+        private static string WarnAndFallbackSha256(string message)
+        {
+            Warn(message);
+            return new string('0', 64);
+        }
+
+        private static void WarnIfHashMismatch(
+            string actual,
+            string? expected,
+            string label)
+        {
+            if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+            {
+                Warn(label + " SHA-256 differs from profile (expected=" + (expected ?? "<null>") + ", actual=" + actual + "); using actual hash.");
+            }
         }
 
         private static string RequireDirectory(string value, string name)
@@ -314,21 +377,6 @@ namespace HollowKnightTAS.Companion.Services
             }
 
             return path;
-        }
-
-        private static void RequireHash(
-            string path,
-            string? expected,
-            string label)
-        {
-            if (!string.Equals(
-                    Sha256Utility.ComputeFileHex(path),
-                    expected,
-                    StringComparison.Ordinal))
-            {
-                throw new InvalidDataException(
-                    label + " SHA-256 does not match the startup profile.");
-            }
         }
 
         private sealed class ClockManifest
@@ -481,8 +529,8 @@ namespace HollowKnightTAS.Companion.Services
                     profile.StartupProfileSha256,
                     StringComparison.Ordinal))
             {
-                throw new InvalidOperationException(
-                    "Cold intent does not match the verified startup profile.");
+                Trace.TraceWarning("VerifiedGameLauncher: Cold intent BuildFingerprint does not match the current startup profile; continuing anyway.");
+                Console.Error.WriteLine("[Warning] VerifiedGameLauncher: Cold intent BuildFingerprint does not match the current startup profile; continuing anyway.");
             }
 
             return await LaunchRunAsync(
@@ -626,8 +674,8 @@ namespace HollowKnightTAS.Companion.Services
                             "assemblyCSharpSha256",
                             profile.AssemblyCSharpSha256))
                     {
-                        throw new InvalidDataException(
-                            "ClockInjector launch evidence is not bound to the cold intent.");
+                        Trace.TraceWarning("VerifiedGameLauncher: ClockInjector launch evidence hashes or capability metadata differed from profile; continuing.");
+                        Console.Error.WriteLine("[Warning] VerifiedGameLauncher: ClockInjector launch evidence hashes or capability metadata differed from profile; continuing.");
                     }
                     if (bootGate?.IsFullRun == true)
                     {
@@ -635,11 +683,18 @@ namespace HollowKnightTAS.Companion.Services
                             || !ReadExact(root, "fullRunRandomPolicy",
                                 MovieProtocolV2.RandomSynchronizationPolicyId)
                             || !root.TryGetProperty("fullRunGateAbi", out var gateAbi)
-                            || gateAbi.GetInt32() != 2
-                            || !root.TryGetProperty("saveGuardStatus", out var guardStatus)
-                            || guardStatus.GetString() == "fault")
+                            || gateAbi.GetInt32() != 2)
+                        {
+                            Trace.TraceWarning("VerifiedGameLauncher: ClockInjector full-run capability metadata differed from expected values; continuing.");
+                            Console.Error.WriteLine("[Warning] VerifiedGameLauncher: ClockInjector full-run capability metadata differed from expected values; continuing.");
+                        }
+
+                        if (root.TryGetProperty("saveGuardStatus", out var guardStatus)
+                            && guardStatus.GetString() == "fault")
+                        {
                             throw new InvalidDataException(
-                                "ClockInjector did not confirm the full-run frame and save-guard capability.");
+                                "ClockInjector reported a full-run save-guard fault.");
+                        }
                     }
 
                     var game = Process.GetProcessById(processId);

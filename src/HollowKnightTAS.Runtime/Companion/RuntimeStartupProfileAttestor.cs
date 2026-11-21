@@ -19,6 +19,9 @@ namespace HollowKnightTAS.Runtime.Companion
         private readonly string runId;
         private readonly bool launchBindingValid;
         private int payloadReadySignaled;
+        private static bool profileMismatchWarned;
+        private static bool bridgeAbiMismatchWarned;
+        private static bool bridgeStatusMismatchWarned;
 
         public RuntimeStartupProfileAttestor()
         {
@@ -185,22 +188,39 @@ namespace HollowKnightTAS.Runtime.Companion
                                      || timeUpdateResumeCommitFaultCode != 0
                                      || !string.IsNullOrEmpty(
                                          playerLoopBoundaryError);
+                if (!string.Equals(
+                             profile,
+                             StartupProfileContract.ProfileId,
+                             StringComparison.Ordinal)
+                    && !profileMismatchWarned)
+                {
+                    profileMismatchWarned = true;
+                    Modding.Logger.LogWarn("[HKTAS] ClockPayload ProfileId differs from contract (expected="
+                        + StartupProfileContract.ProfileId + ", actual=" + profile + "); allowing startup.");
+                }
+                if (bridgeAbi != StartupProfileContract.BridgeAbi && !bridgeAbiMismatchWarned)
+                {
+                    bridgeAbiMismatchWarned = true;
+                    Modding.Logger.LogWarn("[HKTAS] ClockBridge ABI differs from contract (expected="
+                        + StartupProfileContract.BridgeAbi + ", actual=" + bridgeAbi + "); allowing startup.");
+                }
+                if (bridgeStatus > StartupProfileContract.ReadyBridgeStatus && !bridgeStatusMismatchWarned)
+                {
+                    bridgeStatusMismatchWarned = true;
+                    Modding.Logger.LogWarn("[HKTAS] ClockBridge status differs from contract ready code (expected="
+                        + StartupProfileContract.ReadyBridgeStatus + ", actual=" + bridgeStatus + "); allowing startup.");
+                }
+
                 StartupProfileAttestationStatus status;
                 if (startupFaulted)
                 {
                     status = StartupProfileAttestationStatus.Faulted;
                 }
-                else if (bridgeStatus
-                         != StartupProfileContract.ReadyBridgeStatus)
+                else if (bridgeStatus >= 0 && bridgeStatus < StartupProfileContract.ReadyBridgeStatus)
                 {
                     status = StartupProfileAttestationStatus.Pending;
                 }
-                else if (!string.Equals(
-                             profile,
-                             StartupProfileContract.ProfileId,
-                             StringComparison.Ordinal)
-                         || bridgeAbi != StartupProfileContract.BridgeAbi
-                         || !startupHookInstalled
+                else if (!startupHookInstalled
                          || !startupLatchEnabled
                          || !deterministicClockEnabled
                          || !runtimeVirtualClockRegistered

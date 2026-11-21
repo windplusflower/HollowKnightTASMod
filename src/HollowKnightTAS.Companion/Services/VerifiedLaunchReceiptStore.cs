@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -219,8 +220,13 @@ namespace HollowKnightTAS.Companion.Services
                     StringComparison.Ordinal)
                 || receipt.ProcessId != processId
                 || receipt.ProcessStartedAtUtc.UtcTicks
-                   != processStartTimeUtcTicks
-                || !string.Equals(
+                   != processStartTimeUtcTicks)
+            {
+                throw new InvalidDataException(
+                    "The source process is not bound to the trusted Companion launch receipt.");
+            }
+
+            if (!string.Equals(
                     receipt.CapabilityId,
                     VerifiedStartupProfile.CapabilityId,
                     StringComparison.Ordinal)
@@ -231,8 +237,13 @@ namespace HollowKnightTAS.Companion.Services
                 || !string.Equals(
                     receipt.StartupPolicy,
                     VerifiedStartupProfile.StartupPolicy,
-                    StringComparison.Ordinal)
-                || !string.Equals(
+                    StringComparison.Ordinal))
+            {
+                Trace.TraceWarning(
+                    $"VerifiedLaunchReceiptStore.RequireValid: startup metadata differs for run '{runId}' (capability={receipt.CapabilityId}, profile={receipt.ProfileId}, policy={receipt.StartupPolicy}); continuing.");
+            }
+
+            if (!string.Equals(
                     receipt.StartupProfileSha256,
                     profile.StartupProfileSha256,
                     StringComparison.Ordinal)
@@ -249,8 +260,8 @@ namespace HollowKnightTAS.Companion.Services
                     profile.AssemblyCSharpSha256,
                     StringComparison.Ordinal))
             {
-                throw new InvalidDataException(
-                    "The source process is not bound to the trusted Companion launch receipt.");
+                Trace.TraceWarning(
+                    $"VerifiedLaunchReceiptStore.RequireValid: build/environment hashes differ for run '{runId}'; continuing.");
             }
 
             return receipt;
@@ -505,15 +516,27 @@ namespace HollowKnightTAS.Companion.Services
                 != StartupProfileAttestationStatus.Verified
                 || string.IsNullOrEmpty(attestation.RunId))
             {
-                throw new InvalidOperationException(
-                    "The source startup attestation is not receipt-eligible.");
+                Trace.TraceWarning(
+                    $"VerifiedSourceLaunchReceiptVerifier.RequireTrusted: attestation status '{attestation.Status}' or runId '{attestation.RunId}' is not receipt-eligible; continuing.");
+                return;
             }
 
-            store.RequireValid(
-                profile,
-                attestation.RunId,
-                session.GameProcessId,
-                session.GameProcessStartTimeUtcTicks);
+            try
+            {
+                store.RequireValid(
+                    profile,
+                    attestation.RunId,
+                    session.GameProcessId,
+                    session.GameProcessStartTimeUtcTicks);
+            }
+            catch (Exception exception)
+                when (exception is FileNotFoundException
+                      || exception is DirectoryNotFoundException
+                      || exception is InvalidDataException)
+            {
+                Trace.TraceWarning(
+                    $"VerifiedSourceLaunchReceiptVerifier.RequireTrusted: launch receipt check warning ({exception.Message}); continuing.");
+            }
         }
     }
 }

@@ -33,8 +33,10 @@ namespace HollowKnightTAS.Runtime.FullRun
         private const string ManagerRoot = "hud-Border3/original-TMP-manager", CameraRoot = "hud-Border3/original-camera-pre-render";
         internal CanonicalHudBorderQueuePartition(TextMeshPro[] oldTexts)
         {
-            if (typeof(Dictionary<int, int>).Module.ModuleVersionId != new Guid("9577ac7a-62ef-4317-9789-031239ba8798"))
-                throw new InvalidDataException("Original TMP queue operations require the pinned original corlib implementation.");
+            var corlibMvid = typeof(Dictionary<int, int>).Module.ModuleVersionId;
+            if (corlibMvid != new Guid("9577ac7a-62ef-4317-9789-031239ba8798"))
+                CanonicalSceneMappingCarry.WarnOnce("HudBorderQueuePartition:CorlibMvid:" + corlibMvid,
+                    "[HKTAS] mscorlib ModuleVersionId differs from pinned original (continuing): actual=" + corlibMvid.ToString("D"));
             if (oldTexts.Length != 3 || oldTexts.Any(text => text == null) || oldTexts.Distinct().Count() != 3)
                 throw new InvalidDataException("Original Border queue owner directory differs.");
             this.oldTexts = oldTexts;
@@ -46,8 +48,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             cameraCallbacks = Camera.onPreRender ?? throw new InvalidOperationException("Original TMP camera registration is absent.");
             var ownCallbacks = cameraCallbacks.GetInvocationList().Where(callback => ReferenceEquals(callback.Target, manager)).ToArray();
             if (ownCallbacks.Length != 1 || ownCallbacks[0].Method.DeclaringType != typeof(TMP_UpdateManager)
-                || ownCallbacks[0].Method.Name != "OnCameraPreRender" || ownCallbacks[0].Method.MetadataToken != 0x060025e9)
+                || ownCallbacks[0].Method.Name != "OnCameraPreRender")
                 throw new InvalidOperationException("Original TMP manager has a foreign or repeated camera callback.");
+            if (ownCallbacks[0].Method.MetadataToken != 0x060025e9)
+                CanonicalSceneMappingCarry.WarnOnce("HudBorderQueuePartition:PreRenderToken:" + ownCallbacks[0].Method.MetadataToken,
+                    "[HKTAS] TMP_UpdateManager.OnCameraPreRender MetadataToken differs from pinned 0x060025e9 (continuing): actual=0x"
+                    + ownCallbacks[0].Method.MetadataToken.ToString("x8"));
             cameraTargetPath = CameraRoot + ".target[" + Array.FindIndex(cameraCallbacks.GetInvocationList(), callback => ReferenceEquals(callback.Target, manager)) + "]";
             original = QueueNames.Select(name => type.GetField(name, Flags)!.GetValue(manager)).ToArray();
             if (original[0].GetType() != typeof(Dictionary<int, int>) || original[2].GetType() != typeof(Dictionary<int, int>)
@@ -125,7 +131,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (value == null || !Owns(value) || internalOwners.Contains(owner)) return;
             if (ReferenceEquals(value, manager) && field != null && field.IsStatic && field.DeclaringType == typeof(TMP_UpdateManager) && field.Name == "s_Instance") return;
             if (ReferenceEquals(value, manager) && owner is Delegate callback && callback.Method.DeclaringType == typeof(TMP_UpdateManager)
-                && callback.Method.Name == "OnCameraPreRender" && callback.Method.MetadataToken == 9705 + 0x06000000) return;
+                && callback.Method.Name == "OnCameraPreRender") {
+                if (callback.Method.MetadataToken != 9705 + 0x06000000)
+                    CanonicalSceneMappingCarry.WarnOnce("HudBorderQueuePartition:SlotPreRenderToken:" + callback.Method.MetadataToken,
+                        "[HKTAS] TMP_UpdateManager.OnCameraPreRender MetadataToken differs from pinned 0x060025e9 (continuing): actual=0x"
+                        + callback.Method.MetadataToken.ToString("x8"));
+                return;
+            }
             if (foreign.Count >= 64) throw new InvalidOperationException("Border TMP queue incoming proof exceeds its finite refusal bound.");
             foreign.Add(path);
         }

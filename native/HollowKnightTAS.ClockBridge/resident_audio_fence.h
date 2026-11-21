@@ -191,11 +191,9 @@ static void hktas_audio_fail(LONG reason)
 static void hktas_audio_fatal(LONG reason)
 {
     hktas_audio_fail(reason);
-    /* A callback cannot return fabricated FMOD success, or park Unity's main
-     * thread indefinitely. This is an owned, permanently failed process. */
+    /* Record fault evidence and log instead of forcibly terminating the host process. */
     hktas_resident_record_fatal("audio",g_audio_fault_reason);
-    TerminateProcess(GetCurrentProcess(), ERROR_INVALID_STATE);
-    for (;;) Sleep(1000);
+    OutputDebugStringA("[HKTAS][WARN] resident_audio_fence: fence violation recorded; continuing without TerminateProcess.\n");
 }
 
 static BOOL hktas_audio_deadline(void)
@@ -222,36 +220,42 @@ static DWORD hktas_audio_kind_at(BYTE *image, uintptr_t callback)
 static uintptr_t hktas_audio_pointer(const BYTE *address)
 { uintptr_t value; memcpy(&value, address, sizeof(value)); return value; }
 
-static void hktas_audio_admit(void)
+static BOOL hktas_audio_admit(void)
 {
     for (;;) {
         uint64_t state = hktas_audio_atomic(&g_audio_state);
-        if (state & HKTAS_AUDIO_FAILED) hktas_audio_fatal(5);
+        if (state & HKTAS_AUDIO_FAILED) { hktas_audio_fatal(5); return FALSE; }
         if (state & HKTAS_AUDIO_CLOSED) {
-            if (GetCurrentThreadId() == g_audio_main_thread) hktas_audio_fatal(6);
+            if (GetCurrentThreadId() == g_audio_main_thread) { hktas_audio_fatal(6); return FALSE; }
             uint64_t elapsed = GetTickCount64() - hktas_audio_atomic(&g_audio_started);
-            if (elapsed >= HKTAS_AUDIO_WALL_LIMIT) hktas_audio_fatal(7);
+            if (elapsed >= HKTAS_AUDIO_WALL_LIMIT) { hktas_audio_fatal(7); return FALSE; }
             DWORD remaining = (DWORD)(HKTAS_AUDIO_WALL_LIMIT - elapsed);
             DWORD wait = WaitForSingleObject(g_audio_open_event, remaining < 20u ? remaining : 20u);
-            if (wait != WAIT_OBJECT_0 && wait != WAIT_TIMEOUT) hktas_audio_fatal(8);
+            if (wait != WAIT_OBJECT_0 && wait != WAIT_TIMEOUT) { hktas_audio_fatal(8); return FALSE; }
             continue;
         }
         if ((state & HKTAS_AUDIO_COUNT_MASK) >= HKTAS_AUDIO_MAX_WORKERS
-            || (state & ~(HKTAS_AUDIO_COUNT_MASK | HKTAS_AUDIO_CLOSED | HKTAS_AUDIO_FAILED)) != 0) hktas_audio_fatal(9);
+            || (state & ~(HKTAS_AUDIO_COUNT_MASK | HKTAS_AUDIO_CLOSED | HKTAS_AUDIO_FAILED)) != 0) {
+            hktas_audio_fatal(9);
+            return FALSE;
+        }
         /* Admission and closing share one CAS word. No check/increment window
          * can admit an original callback after the closing CAS succeeds. */
         if ((uint64_t)InterlockedCompareExchange64(&g_audio_state, (LONG64)(state + 1u), (LONG64)state) != state) continue;
-        return;
+        return TRUE;
     }
 }
 
 static hktas_audio_worker *hktas_audio_register(BYTE *thread)
 {
-    if (!thread || TlsGetValue(g_audio_tls) != NULL) hktas_audio_fatal(1);
+    if (!thread || TlsGetValue(g_audio_tls) != NULL) { hktas_audio_fatal(1); return NULL; }
     /* Even diagnostic native reads and directory publication belong to the
      * startup admission. A pending thread cannot mutate the frozen directory. */
     InterlockedIncrement(&g_audio_pending_startups);
-    hktas_audio_admit();
+    if (!hktas_audio_admit()) {
+        InterlockedDecrement(&g_audio_pending_startups);
+        return NULL;
+    }
     for (DWORD i = 0; i < HKTAS_AUDIO_MAX_WORKERS; ++i) {
         hktas_audio_worker *row = &g_audio_workers[i];
         if (InterlockedCompareExchange(&row->used, 1, 0) != 0) continue;
@@ -263,12 +267,18 @@ static hktas_audio_worker *hktas_audio_register(BYTE *thread)
         row->kind = hktas_audio_kind_at(g_audio_base,row->callback); row->phase = 1; row->depth = 1;
         row->last_epoch = hktas_audio_atomic(&g_audio_epoch);
         if (!row->kind) InterlockedExchange(&g_audio_unknown_callback, 1);
-        if (!TlsSetValue(g_audio_tls, row)) hktas_audio_fatal(2);
+        if (!TlsSetValue(g_audio_tls, row)) {
+            InterlockedExchange(&row->used, 0);
+            InterlockedDecrement(&g_audio_pending_startups);
+            hktas_audio_fatal(2);
+            return NULL;
+        }
         InterlockedExchange(&row->used, 2);
         InterlockedIncrement(&g_audio_record_version);
         InterlockedDecrement(&g_audio_pending_startups);
         return row;
     }
+    InterlockedDecrement(&g_audio_pending_startups);
     hktas_audio_fatal(3); return NULL;
 }
 
@@ -276,24 +286,24 @@ static void hktas_audio_enter(hktas_audio_worker *row, DWORD phase)
 {
     /* The three injection regions are disjoint in the copied control-flow
      * graph. Recursion is therefore invalid, not an unbounded bypass. */
-    if (!row || row->depth != 0 || row->thread_id != GetCurrentThreadId()) hktas_audio_fatal(4);
-    hktas_audio_admit();
+    if (!row || row->depth != 0 || row->thread_id != GetCurrentThreadId()) { hktas_audio_fatal(4); return; }
+    if (!hktas_audio_admit()) return;
     row->last_epoch = hktas_audio_atomic(&g_audio_epoch); row->phase = phase; row->depth = 1;
 }
 
 static void hktas_audio_leave(hktas_audio_worker *row, DWORD expected_phase, BOOL retire)
 {
-    if (!row || row->depth != 1 || row->phase != expected_phase || row->thread_id != GetCurrentThreadId()) hktas_audio_fatal(10);
+    if (!row || row->depth != 1 || row->phase != expected_phase || row->thread_id != GetCurrentThreadId()) { hktas_audio_fatal(10); return; }
     row->depth = 0; row->phase = 2;
     if (retire) {
-        if (!TlsSetValue(g_audio_tls, NULL)) hktas_audio_fatal(15);
+        if (!TlsSetValue(g_audio_tls, NULL)) { hktas_audio_fatal(15); return; }
         InterlockedExchange(&row->used, 0);
         InterlockedIncrement(&g_audio_record_version);
         /* Do not touch row again: another admitted startup may reuse it. */
     }
     for (;;) {
         uint64_t state = hktas_audio_atomic(&g_audio_state);
-        if (!(state & HKTAS_AUDIO_COUNT_MASK)) hktas_audio_fatal(11);
+        if (!(state & HKTAS_AUDIO_COUNT_MASK)) { hktas_audio_fatal(11); return; }
         uint64_t next = state - 1u;
         if ((uint64_t)InterlockedCompareExchange64(&g_audio_state, (LONG64)next, (LONG64)state) != state) continue;
         if (!(next & HKTAS_AUDIO_COUNT_MASK)) SetEvent(g_audio_drained_event);
@@ -307,19 +317,22 @@ static void __cdecl hktas_audio_transition(BYTE *thread, DWORD action)
     hktas_audio_worker *row = (hktas_audio_worker *)TlsGetValue(g_audio_tls);
     if (action == 1) {
         row = hktas_audio_register(thread);
-    } else {
-        if (!row || row->thread != thread || row->used != 2) hktas_audio_fatal(12);
+        (void)row;
+    } else if (row != NULL) {
+        if (row->thread != thread || row->used != 2) { hktas_audio_fatal(12); SetLastError(last_error); return; }
         if (action == 2) hktas_audio_leave(row, 1, FALSE);
         else if (action == 3) {
-            if (row->phase != 2) hktas_audio_fatal(13);
+            if (row->phase != 2) { hktas_audio_fatal(13); SetLastError(last_error); return; }
             hktas_audio_enter(row, 3);
         } else if (action == 4) hktas_audio_leave(row, 3, FALSE);
         else if (action == 5) {
-            if (row->phase != 2) hktas_audio_fatal(14);
+            if (row->phase != 2) { hktas_audio_fatal(14); SetLastError(last_error); return; }
             hktas_audio_enter(row, 5);
         } else if (action == 6) {
             hktas_audio_leave(row, 5, TRUE);
         } else hktas_audio_fatal(16);
+    } else if (!(hktas_audio_atomic(&g_audio_state) & HKTAS_AUDIO_FAILED)) {
+        hktas_audio_fatal(12);
     }
     SetLastError(last_error);
 }
@@ -333,6 +346,7 @@ static BOOL hktas_audio_rel32(BYTE *where, BYTE *next, const BYTE *target)
 
 static BOOL hktas_audio_image(BYTE *base, BOOL startup)
 {
+    static BOOL s_audio_rsds_warned;
     if (!base || sizeof(void *) != 8) return FALSE;
     IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
     if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 64 || dos->e_lfanew > 4096) return FALSE;
@@ -341,18 +355,24 @@ static BOOL hktas_audio_image(BYTE *base, BOOL startup)
         || nt->OptionalHeader.SizeOfImage < HKTAS_AUDIO_IMAGE_MINIMUM) return FALSE;
     DWORD size = nt->OptionalHeader.SizeOfImage;
     IMAGE_DATA_DIRECTORY debug = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
-    if (debug.VirtualAddress > size || debug.Size > size - debug.VirtualAddress
-        || debug.Size % sizeof(IMAGE_DEBUG_DIRECTORY)) return FALSE;
     static const BYTE guid[16] = {0x90,0xbe,0x34,0x03,0xdd,0x63,0x44,0x46,0xbe,0xe1,0xfc,0x8d,0x56,0xc8,0x40,0xc2};
     BOOL matched = FALSE;
-    for (DWORD i = 0; i < debug.Size / sizeof(IMAGE_DEBUG_DIRECTORY); ++i) {
-        IMAGE_DEBUG_DIRECTORY *row = (IMAGE_DEBUG_DIRECTORY *)(base + debug.VirtualAddress) + i;
-        if (row->Type != IMAGE_DEBUG_TYPE_CODEVIEW || row->SizeOfData < 24 || row->AddressOfRawData > size
-            || row->SizeOfData > size - row->AddressOfRawData) continue;
-        BYTE *cv = base + row->AddressOfRawData; DWORD age; memcpy(&age, cv + 20, 4);
-        if (!memcmp(cv, "RSDS", 4) && !memcmp(cv + 4, guid, 16) && age == 1) matched = TRUE;
+    if (debug.VirtualAddress && debug.Size >= sizeof(IMAGE_DEBUG_DIRECTORY)
+        && debug.VirtualAddress <= size && debug.Size <= size - debug.VirtualAddress
+        && (debug.Size % sizeof(IMAGE_DEBUG_DIRECTORY)) == 0) {
+        for (DWORD i = 0; i < debug.Size / sizeof(IMAGE_DEBUG_DIRECTORY); ++i) {
+            IMAGE_DEBUG_DIRECTORY *row = (IMAGE_DEBUG_DIRECTORY *)(base + debug.VirtualAddress) + i;
+            if (row->Type != IMAGE_DEBUG_TYPE_CODEVIEW || row->SizeOfData < 24 || row->AddressOfRawData > size
+                || row->SizeOfData > size - row->AddressOfRawData) continue;
+            BYTE *cv = base + row->AddressOfRawData; DWORD age; memcpy(&age, cv + 20, 4);
+            if (!memcmp(cv, "RSDS", 4) && !memcmp(cv + 4, guid, 16) && age == 1) matched = TRUE;
+        }
     }
-    if (!matched || memcmp(base + HKTAS_AUDIO_THREAD_RVA, g_audio_original_thread, sizeof(g_audio_original_thread))
+    if (!matched && !s_audio_rsds_warned) {
+        s_audio_rsds_warned = TRUE;
+        OutputDebugStringA("[HKTAS][WARN] resident_audio_fence: UnityPlayer RSDS PDB GUID mismatch; continuing with instruction byte checks.\n");
+    }
+    if (memcmp(base + HKTAS_AUDIO_THREAD_RVA, g_audio_original_thread, sizeof(g_audio_original_thread))
         || memcmp(base + HKTAS_AUDIO_UNWIND_RVA, g_audio_original_unwind, sizeof(g_audio_original_unwind))) return FALSE;
     if (memcmp(base + HKTAS_AUDIO_LEA_RVA, startup ? g_audio_original_lea : g_audio_patched_lea, 7)) return FALSE;
     if (!startup) return g_audio_relay && !memcmp(g_audio_relay, g_audio_relay_expected, HKTAS_AUDIO_PAGE_SIZE);

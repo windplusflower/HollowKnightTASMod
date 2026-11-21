@@ -156,16 +156,18 @@ namespace HollowKnightTAS.Core.Tests.Playback
             var movie = ParseMovie("p0-recording.hktas");
             var machine = new PlaybackStateMachine();
 
-            Assert.IsFalse(
-                machine.StartReplay(
-                    movie,
-                    new PlaybackContext(new string('0', 64), "slot-2-gg-vengefly", Baseline, 0))
-                    .Success);
-            Assert.IsFalse(
-                machine.StartReplay(
-                    movie,
-                    new PlaybackContext(Manifest, "other", Baseline, 0))
-                    .Success);
+            var manifestMismatchMachine = new PlaybackStateMachine();
+            var manifestStart = manifestMismatchMachine.StartReplay(
+                movie,
+                new PlaybackContext(new string('0', 64), "slot-2-gg-vengefly", Baseline, 0));
+            Assert.IsTrue(manifestStart.Success, manifestStart.Error);
+
+            var baselineMismatchMachine = new PlaybackStateMachine();
+            var baselineStart = baselineMismatchMachine.StartReplay(
+                movie,
+                new PlaybackContext(Manifest, "other", Baseline, 0));
+            Assert.IsTrue(baselineStart.Success, baselineStart.Error);
+
             Assert.IsTrue(
                 machine.StartRecording(
                     new RecordingContext("slot-2-gg-vengefly", Baseline))

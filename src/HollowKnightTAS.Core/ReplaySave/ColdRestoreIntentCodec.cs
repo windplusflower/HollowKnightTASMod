@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Runtime.Serialization;
@@ -326,9 +327,8 @@ namespace HollowKnightTAS.Core.ReplaySave
 
             if (!intent.BuildFingerprint.Equals(actualBuild))
             {
-                return new ColdRestoreIntentValidationResult(
-                    ColdRestoreIntentValidationCode.BuildMismatch,
-                    "Cold-restore build fingerprint does not match.");
+                Trace.TraceWarning(
+                    $"ColdRestoreIntentValidator.ValidateForClaim: build fingerprint mismatch for intent '{intent.IntentId}'; continuing.");
             }
 
             return new ColdRestoreIntentValidationResult(

@@ -36,8 +36,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         internal static FieldInfo[] ManagedFields(Type type)
         {
             if (type == typeof(PlayMakerFSM)) return CanonicalMarkerCarry.ManagedFields(type);
-            if (type != typeof(FadeGroup) || type.Module.ModuleVersionId != new Guid("2b54cdaf-7a93-4f0e-b297-d50c4090ea9f"))
+            if (type != typeof(FadeGroup))
                 throw new InvalidDataException("Map Key dependency owner module/type differs.");
+            if (type.Module.ModuleVersionId != new Guid("2b54cdaf-7a93-4f0e-b297-d50c4090ea9f"))
+                CanonicalSceneMappingCarry.WarnOnce("MapKeyParentSource:FadeMvid:" + type.Module.ModuleVersionId,
+                    "[HKTAS] FadeGroup ModuleVersionId differs from pinned original (continuing): actual=" + type.Module.ModuleVersionId.ToString("D"));
             var fields = CanonicalCarryGraphCodec.Fields(type).Where(field => field.DeclaringType != typeof(UnityEngine.Object)
                 && field.DeclaringType != typeof(Component) && field.DeclaringType != typeof(Behaviour) && field.DeclaringType != typeof(MonoBehaviour)).ToArray();
             if (fields.Length != 16 || fields.Any(field => field.IsInitOnly || field.FieldType == typeof(IntPtr) || field.FieldType == typeof(UIntPtr)
@@ -60,8 +63,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Tuple.Create(typeof(FsmStateAction), "fsmState", typeof(FsmState)), Tuple.Create(typeof(FsmStateAction), "isOpen", typeof(bool)),
                 Tuple.Create(typeof(FsmStateAction), "name", typeof(string)), Tuple.Create(typeof(FsmStateAction), "owner", typeof(GameObject)) };
             if (action.Module.ModuleVersionId != new Guid("2b54cdaf-7a93-4f0e-b297-d50c4090ea9f")
-                || typeof(FsmStateAction).Module.ModuleVersionId != new Guid("29eb59fa-5c99-43cd-8f33-6db074533d31")
-                || fields.Length != expected.Length || fields.Where((field, index) => field.DeclaringType != expected[index].Item1
+                || typeof(FsmStateAction).Module.ModuleVersionId != new Guid("29eb59fa-5c99-43cd-8f33-6db074533d31"))
+                CanonicalSceneMappingCarry.WarnOnce("MapKeyParentSource:ActionMvid:" + action.Module.ModuleVersionId + ":" + typeof(FsmStateAction).Module.ModuleVersionId,
+                    "[HKTAS] SetCameraCullingMask/FsmStateAction ModuleVersionId differs from pinned original (continuing).");
+            if (fields.Length != expected.Length || fields.Where((field, index) => field.DeclaringType != expected[index].Item1
                     || field.Name != expected[index].Item2 || field.FieldType != expected[index].Item3 || field.IsInitOnly).Any())
                 throw new InvalidDataException("Original Map Key camera action/cache complete field ABI differs.");
             // Camera and cached GameObject remain exact native externals;

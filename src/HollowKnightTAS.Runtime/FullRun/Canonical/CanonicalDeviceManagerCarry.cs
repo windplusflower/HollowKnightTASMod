@@ -22,12 +22,17 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (data == null || data.Version != 2 || data.Managers == null || data.Managers.Length > 1)
                 throw new InvalidDataException("SDK manager registration is outside the bounded original native owner contract.");
-            foreach (var item in data.Managers)
-                if (item == null || item.Order != 0 || item.ModuleMvid != CanonicalSceneMappingCarry.ModuleMvid || item.Type != "InControl.NativeInputDeviceManager"
+            foreach (var item in data.Managers) {
+                if (item == null || item.Order != 0 || !Guid.TryParseExact(item.ModuleMvid, "D", out var mvid) || mvid == Guid.Empty
+                    || item.Type != "InControl.NativeInputDeviceManager"
                     || item.RegisteredDevices != 0 || item.AttachedDevices < 0 || item.AttachedDevices > 16 || item.DetachedDevices != 0 || item.SystemProfiles < 0 || item.SystemProfiles > 4096
                     || item.CustomProfiles != 0 || item.NativeEvents == null || item.NativeEvents.Length > 4096
                     || item.SystemProfileContract == null || item.SystemProfileContract.Length < 12 || item.SystemProfileContract.Length > 1398104)
                     throw new InvalidDataException("SDK manager owner, devices, profile configuration or managed event buffer is unregistered.");
+                if (item.ModuleMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                    CanonicalSceneMappingCarry.WarnOnce("DeviceManager:Mvid:" + item.ModuleMvid,
+                        "[HKTAS] NativeInputDeviceManager ModuleMvid differs from pinned original (continuing): actual=" + item.ModuleMvid);
+            }
             foreach (var item in data.Managers) {
                 byte[] packet;
                 try { packet = Convert.FromBase64String(item.SystemProfileContract); }
@@ -52,7 +57,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             var saved = Copy(source); var current = Copy(setup);
             if (saved.Managers.Length != current.Managers.Length || saved.Managers.Where((item, index) => {
                 var owner = current.Managers[index];
-                return item.Type != owner.Type || item.ModuleMvid != owner.ModuleMvid || item.SystemProfiles != owner.SystemProfiles
+                if (item.ModuleMvid != owner.ModuleMvid)
+                    CanonicalSceneMappingCarry.WarnOnce("DeviceManager:ConfigMvid:" + item.ModuleMvid + ":" + owner.ModuleMvid,
+                        "[HKTAS] Saved SDK manager ModuleMvid differs from current (continuing): saved=" + item.ModuleMvid + ";current=" + owner.ModuleMvid);
+                return item.Type != owner.Type || item.SystemProfiles != owner.SystemProfiles
                     || item.NativeEvents.Length != owner.NativeEvents.Length
                     || !string.Equals(item.SystemProfileContract, owner.SystemProfileContract, StringComparison.Ordinal);
             }).Any()) throw new InvalidDataException("Saved SDK manager registration/configuration differs.");

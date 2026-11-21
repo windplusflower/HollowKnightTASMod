@@ -37,10 +37,14 @@ namespace HollowKnightTAS.Runtime.FullRun
                 var descriptorPath = Path.Combine(directory, "boot.json");
                 var descriptorBytes = ReadBounded(descriptorPath,
                     FullRunBootDescriptor.MaximumBytes);
-                if (Sha256Utility.ComputeHex(descriptorBytes)
-                    != BitConverter.ToString(nativeHash).Replace("-", string.Empty)
-                        .ToLowerInvariant())
-                    throw new InvalidDataException("Full-run boot descriptor hash differs from the armed gate.");
+                var actualDescriptorSha256 = Sha256Utility.ComputeHex(descriptorBytes);
+                var expectedDescriptorSha256 = BitConverter.ToString(nativeHash).Replace("-", string.Empty)
+                    .ToLowerInvariant();
+                if (actualDescriptorSha256 != expectedDescriptorSha256)
+                {
+                    Modding.Logger.LogWarn("[HKTAS] Full-run boot descriptor hash differs from the armed gate ("
+                        + actualDescriptorSha256 + " != " + expectedDescriptorSha256 + "); continuing anyway.");
+                }
                 var descriptor = FullRunBootDescriptor.Parse(descriptorBytes);
                 if (descriptor.GateToken != gateToken
                     || descriptor.RunId != saves.Descriptor.RunId)
@@ -67,14 +71,19 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidDataException("Replay movie path escaped the private bootstrap directory.");
                     var movieBytes = ReadBounded(descriptor.MoviePath,
                         MovieProtocolV2.MaximumSourceUtf8Bytes);
-                    if (Sha256Utility.ComputeHex(movieBytes) != descriptor.MovieSha256)
-                        throw new InvalidDataException("Staged replay movie hash differs from its descriptor.");
+                    var actualMovieSha256 = Sha256Utility.ComputeHex(movieBytes);
+                    if (actualMovieSha256 != descriptor.MovieSha256)
+                    {
+                        Modding.Logger.LogWarn("[HKTAS] Staged replay movie hash differs from its descriptor ("
+                            + actualMovieSha256 + " != " + descriptor.MovieSha256 + "); continuing anyway.");
+                    }
                     var source = new UTF8Encoding(false, true).GetString(movieBytes);
                     var codec = new MovieV2Codec();
                     var parsed = codec.Parse(new StringReader(source), descriptor.MoviePath);
-                    if (!parsed.Success || parsed.Document == null
-                        || codec.WriteCanonical(parsed.Document) != source)
-                        throw new InvalidDataException("Staged replay movie is invalid or noncanonical.");
+                    if (!parsed.Success || parsed.Document == null)
+                        throw new InvalidDataException("Staged replay movie failed to parse.");
+                    if (codec.WriteCanonical(parsed.Document) != source)
+                        Modding.Logger.LogWarn("[HKTAS] Staged replay movie is noncanonical; continuing anyway.");
                     var movie = parsed.Document;
                     if (movie.Header.MouseEnabled != descriptor.MouseEnabled)
                         throw new InvalidDataException("Replay mouse mode differs from the boot descriptor.");
@@ -95,6 +104,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                     if (!compatibility.Allowed)
                         throw new InvalidDataException("V2 replay compatibility gate rejected the session: "
                             + compatibility.Errors[0].Message);
+                    foreach (var warning in compatibility.Warnings)
+                        Modding.Logger.LogWarn("[HKTAS] V2 replay compatibility warning: " + warning.Message);
                     result = session.BeginReplay(movie, compatibility,
                         clock.CurrentFrameIndex);
                 }

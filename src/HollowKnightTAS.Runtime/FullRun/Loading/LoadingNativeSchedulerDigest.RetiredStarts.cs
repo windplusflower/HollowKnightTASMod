@@ -12,11 +12,19 @@ namespace HollowKnightTAS.Runtime.FullRun
         // ran but Start did not, may retire this exact engine Start family.
         internal int CancelRetiredCanonicalStarts(Func<int, bool> ownsRetiredPendingStart)
         {
+            if (!nativeSchedulerSupported)
+            {
+                WarnUnsupportedOnce("Skipping CancelRetiredCanonicalStarts in fallback mode.");
+                return 0;
+            }
             LoadingSerialSceneProbe.RequireCanonicalMutationBoundary();
             if (PlayMakerFSM.NotMainThread || HutongGames.PlayMaker.FsmExecutionStack.StackCount != 0)
                 throw new InvalidOperationException("Retired Start cleanup overlaps original FSM execution.");
-            RequireCode(0x6285e0, "4056574154415541574883ec20488b41308bfa4d8be14d8be8488bf1488b1048");
-            RequireCode(0x8ac680, "4883ec2880b92801000000742d80b925010000007524c6812501000001");
+            if (!CheckCode(0x6285e0, "4056574154415541574883ec20488b41308bfa4d8be14d8be8488bf1488b1048")
+                || !CheckCode(0x8ac680, "4883ec2880b92801000000742d80b925010000007524c6812501000001"))
+            {
+                return 0;
+            }
             var thread = Thread.CurrentThread.ManagedThreadId;
             var manager = Pointer(Read(IntPtr.Add(engine, 0x19d7a70), 8), 0);
             List<CallbackView> Queue(out byte[] state)

@@ -249,14 +249,19 @@ static BOOL hktas_vc_prefix(BYTE *base,uint32_t rva,const unsigned char *expecte
 }
 static BYTE *hktas_vc_image(void)
 {
+    static BOOL s_vc_pe_warned;
     BYTE *base=(BYTE *)GetModuleHandleW(L"UnityPlayer.dll");
     IMAGE_DOS_HEADER dos;
     IMAGE_NT_HEADERS64 nt;
     if (!base || !hktas_vc_read((uintptr_t)base,&dos,sizeof(dos)) || dos.e_magic!=IMAGE_DOS_SIGNATURE
         || dos.e_lfanew<=0 || dos.e_lfanew>4096
         || !hktas_vc_read((uintptr_t)(base+dos.e_lfanew),&nt,sizeof(nt)) || nt.Signature!=IMAGE_NT_SIGNATURE
-        || nt.FileHeader.Machine!=IMAGE_FILE_MACHINE_AMD64 || nt.FileHeader.TimeDateStamp!=0x6008c66eu
-        || nt.OptionalHeader.SizeOfImage!=0x1bc7000u) return NULL;
+        || nt.FileHeader.Machine!=IMAGE_FILE_MACHINE_AMD64 || nt.OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC
+        || nt.OptionalHeader.SizeOfImage<0x1150000u) return NULL;
+    if ((nt.FileHeader.TimeDateStamp!=0x6008c66eu || nt.OptionalHeader.SizeOfImage!=0x1bc7000u) && !s_vc_pe_warned) {
+        s_vc_pe_warned=TRUE;
+        OutputDebugStringA("[HKTAS][WARN] resident_audio_voice_control: UnityPlayer PE header mismatch; verifying function byte prefixes.\n");
+    }
     return base;
 }
 static int hktas_vc_loop(uintptr_t real,int32_t *output)

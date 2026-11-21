@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using HollowKnightTAS.Companion.Services;
+using HollowKnightTAS.Core.Cryptography;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace HollowKnightTAS.Companion.Tests
@@ -41,7 +42,7 @@ namespace HollowKnightTAS.Companion.Tests
             var root = TemporaryDirectory();
             try
             {
-                ColdRestoreSupervisorIdentity.LoadOrCreate(root);
+                var initial = ColdRestoreSupervisorIdentity.LoadOrCreate(root);
                 var path = Path.Combine(root, "identity-v1.txt");
                 var bytes = File.ReadAllBytes(path);
                 var marker = Encoding.UTF8.GetBytes("companion-");
@@ -53,8 +54,12 @@ namespace HollowKnightTAS.Companion.Tests
                         : (byte)'a';
                 File.WriteAllBytes(path, bytes);
 
-                Assert.ThrowsExactly<InvalidDataException>(
-                    () => ColdRestoreSupervisorIdentity.LoadOrCreate(root));
+                var rebuilt = ColdRestoreSupervisorIdentity.LoadOrCreate(root);
+                AssertRebuiltIdentity(path, initial, rebuilt);
+
+                var reloaded = ColdRestoreSupervisorIdentity.LoadOrCreate(root);
+                Assert.AreEqual(rebuilt.CompanionInstanceId, reloaded.CompanionInstanceId);
+                CollectionAssert.AreEqual(rebuilt.ClaimSecret, reloaded.ClaimSecret);
             }
             finally
             {
@@ -68,20 +73,47 @@ namespace HollowKnightTAS.Companion.Tests
             var root = TemporaryDirectory();
             try
             {
-                ColdRestoreSupervisorIdentity.LoadOrCreate(root);
+                var initial = ColdRestoreSupervisorIdentity.LoadOrCreate(root);
                 var path = Path.Combine(root, "identity-v1.txt");
                 File.AppendAllText(
                     path,
                     "trailing\n",
                     new UTF8Encoding(false));
 
-                Assert.ThrowsExactly<InvalidDataException>(
-                    () => ColdRestoreSupervisorIdentity.LoadOrCreate(root));
+                var rebuilt = ColdRestoreSupervisorIdentity.LoadOrCreate(root);
+                AssertRebuiltIdentity(path, initial, rebuilt);
+
+                var reloaded = ColdRestoreSupervisorIdentity.LoadOrCreate(root);
+                Assert.AreEqual(rebuilt.CompanionInstanceId, reloaded.CompanionInstanceId);
+                CollectionAssert.AreEqual(rebuilt.ClaimSecret, reloaded.ClaimSecret);
             }
             finally
             {
                 Directory.Delete(root, true);
             }
+        }
+
+        private static void AssertRebuiltIdentity(
+            string path,
+            ColdRestoreSupervisorIdentity previous,
+            ColdRestoreSupervisorIdentity rebuilt)
+        {
+            Assert.IsNotNull(rebuilt);
+            Assert.IsTrue(rebuilt.CompanionInstanceId.StartsWith("companion-", StringComparison.Ordinal));
+            Assert.AreEqual(32, rebuilt.ClaimSecret.Length);
+            Assert.AreNotEqual(previous.CompanionInstanceId, rebuilt.CompanionInstanceId);
+            Assert.IsFalse(previous.ClaimSecret.SequenceEqual(rebuilt.ClaimSecret));
+
+            var raw = File.ReadAllText(path, new UTF8Encoding(false, true));
+            var lines = raw.Split('\n');
+            Assert.AreEqual(5, lines.Length);
+            Assert.AreEqual("HKTAS-COLD-IDENTITY-V1", lines[0]);
+            Assert.AreEqual(rebuilt.CompanionInstanceId, lines[1]);
+            Assert.AreEqual(Convert.ToBase64String(rebuilt.ClaimSecret), lines[2]);
+            var expectedChecksum = Sha256Utility.ComputeUtf8Hex(
+                lines[0] + "\n" + lines[1] + "\n" + lines[2] + "\n");
+            Assert.AreEqual(expectedChecksum, lines[3]);
+            Assert.AreEqual(string.Empty, lines[4]);
         }
 
         private static int Find(byte[] value, byte[] marker)

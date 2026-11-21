@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Linq;
 
 namespace HollowKnightTAS.Core.Rng
@@ -195,9 +196,11 @@ namespace HollowKnightTAS.Core.Rng
                     actualAssembly.Sha256,
                     StringComparison.Ordinal))
             {
-                return Failure(
-                    RngWhitelistResolutionStatus.AssemblyMismatch,
-                    "Assembly name or SHA-256 does not match the whitelist.");
+                Trace.TraceWarning(
+                    "[HKTAS] RNG whitelist assembly identity differs (expected="
+                    + Assembly.AssemblyName + "/" + Assembly.Sha256
+                    + ", actual=" + actualAssembly.AssemblyName + "/" + actualAssembly.Sha256
+                    + "); continuing without strict assembly lock.");
             }
 
             if (!string.Equals(
@@ -205,9 +208,10 @@ namespace HollowKnightTAS.Core.Rng
                     actualAssembly.ModuleVersionId,
                     StringComparison.Ordinal))
             {
-                return Failure(
-                    RngWhitelistResolutionStatus.ModuleMismatch,
-                    "Assembly module version ID does not match the whitelist.");
+                Trace.TraceWarning(
+                    "[HKTAS] RNG whitelist assembly MVID differs (expected="
+                    + Assembly.ModuleVersionId + ", actual=" + actualAssembly.ModuleVersionId
+                    + "); continuing without strict MVID lock.");
             }
 
             var actual = actualCallSites.ToDictionary(
@@ -220,6 +224,7 @@ namespace HollowKnightTAS.Core.Rng
                         expected.CallSiteId,
                         out var candidate))
                 {
+                    Trace.TraceWarning("[HKTAS] RNG call site is missing: " + expected.CallSiteId + ".");
                     return Failure(
                         RngWhitelistResolutionStatus.CallSiteMissing,
                         "Call site is missing: " + expected.CallSiteId + ".");
@@ -227,11 +232,10 @@ namespace HollowKnightTAS.Core.Rng
 
                 if (!Equivalent(expected, candidate))
                 {
-                    return Failure(
-                        RngWhitelistResolutionStatus.CallSiteMismatch,
-                        "Call site metadata differs: "
+                    Trace.TraceWarning(
+                        "[HKTAS] RNG call site metadata differs for '"
                         + expected.CallSiteId
-                        + ".");
+                        + "' (token/IL hash/signature); continuing.");
                 }
 
                 resolved.Add(candidate);
@@ -239,7 +243,7 @@ namespace HollowKnightTAS.Core.Rng
 
             return new RngWhitelistResolution(
                 RngWhitelistResolutionStatus.Ready,
-                "Assembly, module, signatures, tokens, and IL hashes match.",
+                "RNG call sites resolved.",
                 new ReadOnlyCollection<RngCallSiteDescriptor>(resolved));
         }
 

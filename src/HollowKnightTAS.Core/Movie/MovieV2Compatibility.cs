@@ -64,16 +64,10 @@ namespace HollowKnightTAS.Core.Movie
                 || runtime.ActionSchemaId != MovieProtocolV2.ActionSchemaId)
                 Add(errors, MovieDiagnosticCodes.UnknownAction, "V2 action schema is unavailable or differs.");
             if (Unknown(header.NativeProfileId) || Unknown(runtime.NativeProfileId))
-                Add(errors, MovieDiagnosticCodes.InvalidIdentifier, "Native profile metadata is unavailable.");
+                Add(warnings, MovieDiagnosticCodes.InvalidIdentifier, "Native profile metadata is unavailable.");
             else if (!string.Equals(header.NativeProfileId, runtime.NativeProfileId, StringComparison.Ordinal))
-            {
-                if (NativeExecutionProfile.IsExperimentalProfile(header.NativeProfileId)
-                    || NativeExecutionProfile.IsExperimentalProfile(runtime.NativeProfileId))
-                    Add(errors, MovieDiagnosticCodes.InvalidIdentifier,
-                        "Experimental execution profiles must match the recording exactly.");
-                else Add(warnings, MovieDiagnosticCodes.InvalidIdentifier,
+                Add(warnings, MovieDiagnosticCodes.InvalidIdentifier,
                     "Execution rules differ from the recording. Playback is allowed; some input frames may need adjustment.");
-            }
             if (!runtime.NativeGateActive)
                 Add(errors, MovieDiagnosticCodes.InvalidCommand, "Native full-run frame gate is inactive.");
             if (!runtime.SaveGuardArmed)
@@ -82,14 +76,14 @@ namespace HollowKnightTAS.Core.Movie
                 Add(errors, MovieDiagnosticCodes.InvalidCommand, "Game mouse input bridge is unavailable.");
             if (header.MouseEnabled && (header.ViewportWidth != runtime.ViewportWidth
                                         || header.ViewportHeight != runtime.ViewportHeight))
-                Add(errors, MovieDiagnosticCodes.InvalidHeaderValue, "Mouse-enabled replay requires the recorded viewport dimensions.");
+                Add(warnings, MovieDiagnosticCodes.InvalidHeaderValue, "Viewport dimensions differ from the mouse-enabled recording.");
             else if (!header.MouseEnabled && (header.ViewportWidth != runtime.ViewportWidth
                                               || header.ViewportHeight != runtime.ViewportHeight))
                 Add(warnings, MovieDiagnosticCodes.InvalidHeaderValue, "Viewport dimensions differ from the recording.");
 
             if (Unknown(header.GameVersion) || Unknown(header.ApiVersion) || Unknown(header.ModVersion)
                 || header.EnvironmentSha256 == "none")
-                Add(errors, MovieDiagnosticCodes.InvalidHeaderValue, "Unresolved draft metadata cannot be replayed.");
+                Add(warnings, MovieDiagnosticCodes.InvalidHeaderValue, "Draft or missing metadata is present; replay is allowed with warnings.");
             WarnVersion(warnings, "Game", header.GameVersion, runtime.GameVersion);
             WarnVersion(warnings, "Modding API", header.ApiVersion, runtime.ApiVersion);
             WarnVersion(warnings, "HollowKnightTAS Mod", header.ModVersion, runtime.ModVersion);

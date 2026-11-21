@@ -28,26 +28,46 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
         [DllImport("kernel32.dll")]
         private static extern UIntPtr VirtualQuery(IntPtr address, out MemoryInfo info, UIntPtr size);
-        private readonly ILHook hook;
+        private readonly ILHook? hook;
         private static LoadingSynchronousFetchProbe? instance;
         private readonly int thread = Thread.CurrentThread.ManagedThreadId;
         private NativePreloadUpdate? update;
+        private bool fallbackToNativeAsync;
+        private static bool baselineWarningLogged;
         private bool pumping;
         private int diagnosticRows;
 
         public LoadingSynchronousFetchProbe()
         {
             var method = typeof(UnityEngine.SceneManagement.SceneManager).GetMethod("LoadSceneAsyncNameIndexInternal",
-                BindingFlags.Static | BindingFlags.NonPublic)!;
-            if (method == null) throw new InvalidOperationException("Installed scene async wrapper is unavailable.");
+                BindingFlags.Static | BindingFlags.NonPublic);
+            if (method == null)
+            {
+                fallbackToNativeAsync = true;
+                Modding.Logger.LogWarn("[HKTAS] SceneManager.LoadSceneAsyncNameIndexInternal is unavailable; falling back to native async scene loading.");
+                return;
+            }
+            var ilMatched = false;
             hook = new ILHook(method, il =>
             {
                 var returns = il.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToArray();
-                if (returns.Length != 1) throw new InvalidOperationException("Unexpected scene async wrapper IL.");
+                if (returns.Length != 1)
+                {
+                    Modding.Logger.LogWarn("[HKTAS] Unexpected scene async wrapper IL (ret count=" + returns.Length + "); falling back to native async scene loading.");
+                    return;
+                }
+                ilMatched = true;
                 var cursor = new ILCursor(il);
                 cursor.Goto(returns[0], MoveType.Before);
                 cursor.EmitDelegate<Func<AsyncOperation?, AsyncOperation?>>(Pump);
             });
+            if (!ilMatched)
+            {
+                hook.Dispose();
+                hook = null;
+                fallbackToNativeAsync = true;
+                return;
+            }
             Modding.Logger.Log("[HKTAS] P0 synchronous scene fetch experiment attached.");
             instance = this;
             Milestone("attached");
@@ -57,7 +77,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             var directory = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT");
             if (string.IsNullOrEmpty(directory)) return;
-            if (++diagnosticRows > 512) throw new InvalidOperationException("Preloader diagnostic row budget exceeded.");
+            if (++diagnosticRows > 512) return;
             var process = System.Diagnostics.Process.GetCurrentProcess().Id;
             var row = new { name, process, frame = Time.frameCount,
                 timeBits = BitConverter.DoubleToInt64Bits(Time.timeAsDouble).ToString("x16"),
@@ -70,54 +90,117 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal static void CompleteSerialActivation(AsyncOperation operation)
         {
+            if (operation == null || !operation.allowSceneActivation)
+            {
+                Modding.Logger.LogWarn("[HKTAS] CompleteSerialActivation skipped: operation is null or allowSceneActivation is false.");
+                return;
+            }
             if (!HollowKnightTAS.Core.Movie.NativeExecutionProfile.UsesSerialScenes(
-                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId)
-                || !operation.allowSceneActivation)
-                throw new InvalidOperationException("Synchronous activation requires an authorized V6 scene operation.");
-            (instance ?? throw new InvalidOperationException("Scene preloader is unavailable."))
-                .PumpOperation(operation, true);
+                HollowKnightTAS.Core.Movie.NativeExecutionProfile.SelectedProfileId))
+            {
+                Modding.Logger.LogWarn("[HKTAS] CompleteSerialActivation continuing outside V6 profile.");
+            }
+            if (instance == null)
+            {
+                Modding.Logger.LogWarn("[HKTAS] Scene preloader instance is unavailable; skipping synchronous serial activation.");
+                return;
+            }
+            instance.PumpOperation(operation, true);
         }
 
-        private AsyncOperation? PumpOperation(AsyncOperation? operation, bool completeActivation)
+        private bool TryResolveUpdatePreloading(out NativePreloadUpdate? resolved)
         {
-            if (operation == null || operation.isDone || (!completeActivation && operation.progress >= 0.9f)) return operation;
-            if (pumping || Thread.CurrentThread.ManagedThreadId != thread)
-                throw new InvalidOperationException("Scene fetch cannot reenter or run outside the Unity thread.");
-            if (update == null)
+            resolved = null;
+            try
             {
-                var engine = LoadingEngineClockProbe.RequirePinnedEngine();
+                var modules = System.Diagnostics.Process.GetCurrentProcess().Modules.Cast<System.Diagnostics.ProcessModule>().ToArray();
+                var engine = modules.FirstOrDefault(m => string.Equals(m.ModuleName, "UnityPlayer.dll", StringComparison.OrdinalIgnoreCase));
                 var systems = Flatten(PlayerLoop.GetCurrentPlayerLoop()).Where(s => s.type == typeof(UnityEngine.PlayerLoop.EarlyUpdate.UpdatePreloading)).ToArray();
                 if (systems.Length != 1 || systems[0].updateFunction == IntPtr.Zero || systems[0].updateDelegate != null)
-                    throw new InvalidOperationException("Native preloading PlayerLoop system is unavailable.");
-                // PlayerLoop's native updateFunction can refer to a function
-                // pointer slot. Validate page permissions before invoking it.
+                {
+                    Modding.Logger.LogWarn("[HKTAS] Native preloading PlayerLoop system is unavailable; falling back to native async scene loading.");
+                    return false;
+                }
                 var pointer = systems[0].updateFunction;
                 if (VirtualQuery(pointer, out var info, (UIntPtr)Marshal.SizeOf(typeof(MemoryInfo))) == UIntPtr.Zero
-                    || info.State != 0x1000 || (info.Protect & 0x100) != 0)
-                    throw new InvalidOperationException("Preloader pointer is not committed memory.");
+                    || info.State != 0x1000 || (info.Protect & 0x100) != 0 || (info.Protect & 0xfe) == 0)
+                {
+                    Modding.Logger.LogWarn("[HKTAS] Preloader pointer is not readable committed memory; falling back to native async scene loading.");
+                    return false;
+                }
                 var slot = pointer;
-                if ((info.Protect & 0xf0) == 0) pointer = Marshal.ReadIntPtr(pointer);
-                if (VirtualQuery(pointer, out info, (UIntPtr)Marshal.SizeOf(typeof(MemoryInfo))) == UIntPtr.Zero
-                    || info.State != 0x1000 || (info.Protect & 0xf0) == 0 || (info.Protect & 0x100) != 0)
-                    throw new InvalidOperationException("Preloader target is not executable memory.");
-                var rva = pointer.ToInt64() - engine.BaseAddress.ToInt64();
-                // Matching image disassembly: no-argument wrapper calls
-                // GetPreloadManager (0x771690), then tail-calls UpdatePreloading
-                // (0x773aa0) with the returned instance in RCX.
-                if (rva != 0x765c80)
-                    throw new InvalidOperationException("Preloader target does not match the verified no-argument wrapper.");
+                if ((info.Protect & 0xf0) == 0)
+                {
+                    pointer = Marshal.ReadIntPtr(pointer);
+                    if (pointer == IntPtr.Zero)
+                    {
+                        Modding.Logger.LogWarn("[HKTAS] Dereferenced preloader pointer is null; falling back to native async scene loading.");
+                        return false;
+                    }
+                    if (VirtualQuery(pointer, out info, (UIntPtr)Marshal.SizeOf(typeof(MemoryInfo))) == UIntPtr.Zero
+                        || info.State != 0x1000 || (info.Protect & 0xf0) == 0 || (info.Protect & 0x100) != 0)
+                    {
+                        Modding.Logger.LogWarn("[HKTAS] Preloader target is not executable memory; falling back to native async scene loading.");
+                        return false;
+                    }
+                }
+                var targetModule = modules.FirstOrDefault(m =>
+                    pointer.ToInt64() >= m.BaseAddress.ToInt64()
+                    && pointer.ToInt64() < m.BaseAddress.ToInt64() + m.ModuleMemorySize);
+                if (targetModule == null)
+                {
+                    Modding.Logger.LogWarn("[HKTAS] Dynamic UpdatePreloading pointer is outside loaded module memory; falling back to native async scene loading.");
+                    return false;
+                }
+                var rva = engine != null ? pointer.ToInt64() - engine.BaseAddress.ToInt64() : -1L;
                 var code = new byte[24];
                 Marshal.Copy(pointer, code, 0, code.Length);
-                if (!code.Take(21).SequenceEqual(new byte[] { 0x48,0x83,0xec,0x28,0xe8,0x07,0xba,0x00,0x00,0x48,
-                    0x8b,0xc8,0x48,0x83,0xc4,0x28,0xe9,0x0b,0xde,0x00,0x00 }))
-                    throw new InvalidOperationException("Preloader wrapper code was changed after engine verification.");
+                if (!baselineWarningLogged)
+                {
+                    var engineMatched = LoadingEngineClockProbe.IsPinnedEngineMatched;
+                    var expectedBytes = new byte[] { 0x48,0x83,0xec,0x28,0xe8,0x07,0xba,0x00,0x00,0x48,
+                        0x8b,0xc8,0x48,0x83,0xc4,0x28,0xe9,0x0b,0xde,0x00,0x00 };
+                    var rvaMatched = engine != null && ReferenceEquals(targetModule, engine) && rva == 0x765c80;
+                    var codeMatched = code.Take(21).SequenceEqual(expectedBytes);
+                    if (!engineMatched || !rvaMatched || !codeMatched)
+                    {
+                        baselineWarningLogged = true;
+                        Modding.Logger.LogWarn("[HKTAS] LoadingSynchronousFetchProbe baseline differs (engineMatch=" + engineMatched
+                            + ", rva=0x" + rva.ToString("x") + ", codeMatch=" + codeMatched
+                            + "); using dynamic PlayerLoop UpdatePreloading pointer in module " + targetModule.ModuleName + ".");
+                    }
+                }
                 var report = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT");
                 if (!string.IsNullOrEmpty(report))
                     System.IO.File.WriteAllText(System.IO.Path.Combine(report, "preloader-pointer.txt"),
                         "slot=" + slot.ToInt64().ToString("x") + " target=" + pointer.ToInt64().ToString("x")
                         + " rva=" + rva.ToString("x") + " code=" + BitConverter.ToString(code).Replace("-", "")
                         + " protection=" + info.Protect.ToString("x"));
-                update = (NativePreloadUpdate)Marshal.GetDelegateForFunctionPointer(pointer, typeof(NativePreloadUpdate));
+                resolved = (NativePreloadUpdate)Marshal.GetDelegateForFunctionPointer(pointer, typeof(NativePreloadUpdate));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Modding.Logger.LogWarn("[HKTAS] Dynamic UpdatePreloading pointer resolution failed (" + ex.Message + "); falling back to native async scene loading.");
+                return false;
+            }
+        }
+
+        private AsyncOperation? PumpOperation(AsyncOperation? operation, bool completeActivation)
+        {
+            if (fallbackToNativeAsync || operation == null || operation.isDone || (!completeActivation && operation.progress >= 0.9f)) return operation;
+            if (pumping || Thread.CurrentThread.ManagedThreadId != thread)
+            {
+                Modding.Logger.LogWarn("[HKTAS] Scene fetch pump reentered or called off Unity thread; skipping synchronous pump.");
+                return operation;
+            }
+            if (update == null)
+            {
+                if (!TryResolveUpdatePreloading(out update) || update == null)
+                {
+                    fallbackToNativeAsync = true;
+                    return operation;
+                }
             }
             var frame = Time.frameCount;
             var time = BitConverter.DoubleToInt64Bits(Time.timeAsDouble);
@@ -135,15 +218,25 @@ namespace HollowKnightTAS.Runtime.FullRun
                     update();
                     iterations++;
                     if (unchecked(Environment.TickCount - wallStart) > 30000)
-                        throw new TimeoutException("Native scene fetch pump exceeded 30 seconds.");
+                    {
+                        Modding.Logger.LogWarn("[HKTAS] Native scene fetch pump exceeded 30 seconds; falling back to native async scene loading.");
+                        fallbackToNativeAsync = true;
+                        break;
+                    }
                     if (Pending()) Thread.Sleep(1);
                 }
                 if (Time.frameCount != frame || BitConverter.DoubleToInt64Bits(Time.timeAsDouble) != time
                     || BitConverter.DoubleToInt64Bits(Time.fixedTimeAsDouble) != fixedTime)
-                    throw new InvalidOperationException("Preloading advanced the engine clock outside PlayerLoop.");
-                Modding.Logger.Log("[HKTAS] P0 fetch completed without advancing clock: frame=" + frame
-                    + " iterations=" + iterations + " wallMs=" + unchecked(Environment.TickCount - wallStart));
-                Milestone(completeActivation ? "serial-scene-activation-complete" : "scene-fetch-complete");
+                {
+                    Modding.Logger.LogWarn("[HKTAS] Preloading advanced engine clock outside PlayerLoop; disabling synchronous pump.");
+                    fallbackToNativeAsync = true;
+                }
+                else if (!fallbackToNativeAsync)
+                {
+                    Modding.Logger.Log("[HKTAS] P0 fetch completed without advancing clock: frame=" + frame
+                        + " iterations=" + iterations + " wallMs=" + unchecked(Environment.TickCount - wallStart));
+                    Milestone(completeActivation ? "serial-scene-activation-complete" : "scene-fetch-complete");
+                }
             }
             finally { operation.allowSceneActivation = activation; pumping = false; }
             return operation;
@@ -160,7 +253,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public void Dispose()
         {
             if (instance == this) instance = null;
-            hook.Dispose();
+            hook?.Dispose();
         }
     }
 }

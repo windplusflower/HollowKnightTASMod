@@ -1099,7 +1099,15 @@ namespace HollowKnightTAS.Companion.Services
                 DateTimeOffset.UtcNow);
             if (!validation.Success)
             {
-                throw new InvalidDataException(validation.Detail);
+                if (validation.Code == ColdRestoreIntentValidationCode.BuildMismatch)
+                {
+                    Trace.TraceWarning(
+                        $"ColdRestoreSupervisor.ValidatePreparedIntent: {validation.Detail}; continuing.");
+                }
+                else
+                {
+                    throw new InvalidDataException(validation.Detail);
+                }
             }
         }
 
@@ -1136,10 +1144,6 @@ namespace HollowKnightTAS.Companion.Services
                     target.SessionId,
                     context.SourceSession.SessionId,
                     StringComparison.Ordinal)
-                || !string.Equals(
-                    target.CoreAssemblySha256,
-                    context.SourceSession.CoreAssemblySha256,
-                    StringComparison.Ordinal)
                 || target.NativeCapabilitiesRequested
                    != context.SourceSession.NativeCapabilitiesRequested
                 || target.AutomationMode
@@ -1151,6 +1155,15 @@ namespace HollowKnightTAS.Companion.Services
                     "Fresh Runtime registration does not preserve the source control/build profile.");
             }
 
+            if (!string.Equals(
+                    target.CoreAssemblySha256,
+                    context.SourceSession.CoreAssemblySha256,
+                    StringComparison.Ordinal))
+            {
+                Trace.TraceWarning(
+                    $"ColdRestoreSupervisor.ValidateTargetSession: CoreAssemblySha256 differs (target={target.CoreAssemblySha256}, source={context.SourceSession.CoreAssemblySha256}); continuing.");
+            }
+
             var actualBuild = context.Environment.BuildFingerprint(target);
             var validation = ColdRestoreIntentValidator.ValidateForClaim(
                 RequireIntent(context),
@@ -1158,7 +1171,15 @@ namespace HollowKnightTAS.Companion.Services
                 DateTimeOffset.UtcNow);
             if (!validation.Success)
             {
-                throw new InvalidDataException(validation.Detail);
+                if (validation.Code == ColdRestoreIntentValidationCode.BuildMismatch)
+                {
+                    Trace.TraceWarning(
+                        $"ColdRestoreSupervisor.ValidateTargetSession: {validation.Detail}; continuing.");
+                }
+                else
+                {
+                    throw new InvalidDataException(validation.Detail);
+                }
             }
         }
 

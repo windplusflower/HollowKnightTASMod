@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using GlobalEnums;
 
@@ -9,7 +10,22 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         private const BindingFlags Instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
         private static readonly FieldInfo Slot = Required(typeof(GameManager), "OnFinishedEnteringScene");
-        private static readonly Type Closure = typeof(global::SceneManager).Assembly.GetType(CanonicalSceneMappingCarry.ClosureType, true)!;
+        private static readonly Type Closure = ResolveClosure();
+        private static Type ResolveClosure()
+        {
+            var exact = typeof(global::SceneManager).Assembly.GetType(CanonicalSceneMappingCarry.ClosureType, false);
+            if (exact != null) return exact;
+            var fallback = typeof(global::SceneManager).GetNestedTypes(BindingFlags.NonPublic | BindingFlags.Public)
+                .FirstOrDefault(nested => nested.GetField("<>4__this", Instance)?.FieldType == typeof(global::SceneManager)
+                    && nested.GetField("temp", Instance)?.FieldType == typeof(GameManager.EnterSceneEvent)
+                    && nested.GetMethod(CanonicalSceneMappingCarry.HandlerName, Instance) != null);
+            if (fallback != null) {
+                CanonicalSceneMappingCarry.WarnOnce("SceneMappingBindings:ClosureFallback:" + fallback.FullName,
+                    "[HKTAS] SceneManager closure type fell back from " + CanonicalSceneMappingCarry.ClosureType + " to " + fallback.FullName);
+                return fallback;
+            }
+            return typeof(global::SceneManager).Assembly.GetType(CanonicalSceneMappingCarry.ClosureType, true)!;
+        }
         private static readonly FieldInfo ClosureOwner = Required(Closure, "<>4__this"), ClosureSelf = Required(Closure, "temp");
         private static readonly FieldInfo GhostManager = Required(typeof(global::SceneManager), "gm"), GhostPlayer = Required(typeof(global::SceneManager), "pd");
         private static readonly FieldInfo MapZoneField = Required(typeof(global::SceneManager), "mapZone"), ManualField = Required(typeof(global::SceneManager), "manualMapTrigger");
@@ -34,12 +50,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (chain.Length > 1) throw new InvalidDataException("Title callback retention has multiple owners.");
             if (chain.Length == 0) return null;
             var item = chain[0]; var target = item.Target;
-            if (item.Method.MetadataToken != CanonicalSceneMappingCarry.HandlerToken
-                || item.Method.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid
-                || target?.GetType() != Closure || !ReferenceEquals(ClosureSelf.GetValue(target), item)
+            if (target?.GetType() != Closure || !ReferenceEquals(ClosureSelf.GetValue(target), item)
                 || !(ClosureOwner.GetValue(target) is global::SceneManager owner) || owner == null
                 || owner.gameObject.scene.name != "Menu_Title")
                 throw new InvalidDataException("Retained callback is not the actual original live title SceneManager.");
+            if (item.Method.MetadataToken != CanonicalSceneMappingCarry.HandlerToken
+                || item.Method.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("SceneMappingBindings:Retain:" + item.Method.Module.ModuleVersionId + ":" + item.Method.MetadataToken,
+                    "[HKTAS] Retained title SceneManager callback MVID/token differs from pinned original (continuing): mvid="
+                    + item.Method.Module.ModuleVersionId.ToString("D") + ";token=" + item.Method.MetadataToken);
             return callback;
         }
         internal CanonicalSceneMappingBindings(GameManager.EnterSceneEvent? retainedTitleCallback = null, bool useCurrentEmptySlot = false)
@@ -71,11 +90,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             for (var index = 0; index < chain.Length; index++) {
                 var callback = chain[index]; var method = callback.Method; var target = callback.Target;
                 if (callback.GetType() != typeof(GameManager.EnterSceneEvent) || method.IsStatic || method.ReturnType != typeof(void)
-                    || method.GetParameters().Length != 0 || method.MetadataToken != CanonicalSceneMappingCarry.HandlerToken
-                    || method.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid
+                    || method.GetParameters().Length != 0
                     || method.DeclaringType != Closure || method.Name != CanonicalSceneMappingCarry.HandlerName
                     || ReferenceEquals(target, null) || target!.GetType() != Closure || !ReferenceEquals(ClosureSelf.GetValue(target), callback))
                     throw new InvalidDataException("Unregistered scene entry mapping delegate, target or self alias.");
+                if (method.MetadataToken != CanonicalSceneMappingCarry.HandlerToken
+                    || method.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid)
+                    CanonicalSceneMappingCarry.WarnOnce("SceneMappingBindings:Ctor:" + method.Module.ModuleVersionId + ":" + method.MetadataToken,
+                        "[HKTAS] Scene entry mapping callback MVID/token differs from pinned original (continuing): mvid="
+                        + method.Module.ModuleVersionId.ToString("D") + ";token=" + method.MetadataToken);
                 var owner = ClosureOwner.GetValue(target) as global::SceneManager;
                 if (ReferenceEquals(owner, null) || owner!.GetType() != typeof(global::SceneManager) || owner != null || owner!.GetInstanceID() != 0)
                     throw new InvalidDataException("Scene entry mapping original SceneManager is not a zero-id fake-null owner.");

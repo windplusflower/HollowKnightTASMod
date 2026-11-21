@@ -52,7 +52,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             var type = typeof(InvAnimateUpAndDown); var fields = type.GetFields(Flags | BindingFlags.DeclaredOnly);
             var names = new[] { "upAnimation", "downAnimation", "upDelay", "randomStartFrameSpriteMax", "spriteAnimator", "meshRenderer", "timer", "animatingDown", "readyingAnimUp" };
             var types = new[] { typeof(string), typeof(string), typeof(float), typeof(int), typeof(tk2dSpriteAnimator), typeof(MeshRenderer), typeof(float), typeof(bool), typeof(bool) };
-            if (type.Module.ModuleVersionId.ToString("D") != "2b54cdaf-7a93-4f0e-b297-d50c4090ea9f" || fields.Length != 9
+            var actualMvid = type.Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("BorderArrow:Mvid:" + actualMvid,
+                    "[HKTAS] InvAnimateUpAndDown ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
+            if (fields.Length != 9
                 || fields.Where((field, index) => field.Name != names[index] || field.FieldType != types[index]).Any()) throw new InvalidDataException("Original Arrow Left complete animation ABI differs.");
             return fields;
         }
@@ -123,8 +127,11 @@ namespace HollowKnightTAS.Runtime.FullRun
             bool needsInstance, string directoryHash, object material, object rendererMaterial, object?[] definitionMaterials, int[] materialIds,
             string shader, object texture, object mainTexture)
         {
-            if (!ReferenceEquals(original, collection) || guid != "0da62180aa569654fbb53b30e4cd76a3" || dataGuid != "abe5a82bf1d4fee43ad073dd01f384af"
-                || name != "UI_inventory_animated" || needsInstance || directoryHash != "f4d4b2f35d0d68016003bd358c85f2ddd5e367662dc8b721596dcc95ee2ad352"
+            if (guid != "0da62180aa569654fbb53b30e4cd76a3" || dataGuid != "abe5a82bf1d4fee43ad073dd01f384af"
+                || name != "UI_inventory_animated" || directoryHash != "f4d4b2f35d0d68016003bd358c85f2ddd5e367662dc8b721596dcc95ee2ad352")
+                CanonicalSceneMappingCarry.WarnOnce("BorderArrow:MaterialHash:" + directoryHash + ":" + guid,
+                    "[HKTAS] Arrow Left collection metadata/hash differs from pinned original (continuing): name=" + name + ";guid=" + guid + ";hash=" + directoryHash);
+            if (!ReferenceEquals(original, collection) || needsInstance
                 || material == null || !ReferenceEquals(material, rendererMaterial) || definitionMaterials.Length != 51 || materialIds.Length != 51
                 || definitionMaterials.Any(value => !ReferenceEquals(value, material)) || materialIds.Any(value => value != 0)
                 || shader != "tk2d/BlendVertexColor" || texture == null || !ReferenceEquals(texture, mainTexture))

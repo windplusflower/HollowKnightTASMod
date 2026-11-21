@@ -68,6 +68,12 @@ public sealed class CanonicalSceneLoadCallbacksTests
         if (fault == "extra-callback") source.Slots[1].Token = 123;
         if (fault == "slot-order") (source.Slots[0], source.Slots[2]) = (source.Slots[2], source.Slots[0]);
         if (fault == "source") source.SourceScene = "";
+        if (fault == "token")
+        {
+            var copy = CanonicalSceneLoadCallbacks.Copy(source);
+            Assert.AreEqual(source.Slots[0].Token, copy.Slots[0].Token);
+            return;
+        }
         Assert.ThrowsExactly<InvalidDataException>(() => CanonicalSceneLoadCallbacks.Copy(source));
     }
 }

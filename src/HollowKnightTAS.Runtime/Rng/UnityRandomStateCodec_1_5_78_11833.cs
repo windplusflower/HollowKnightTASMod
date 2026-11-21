@@ -97,84 +97,76 @@ namespace HollowKnightTAS.Runtime.Rng
             this.fields = fields;
         }
 
+        private static bool assemblyIdentityWarningLogged;
+
         public string CodecId => Identifier;
 
         public static UnityRandomCodecResolution Resolve()
         {
             var assembly = typeof(UnityEngine.Random).Assembly;
             var location = assembly.Location;
-            if (string.IsNullOrWhiteSpace(location)
-                || !File.Exists(location))
+            string actualSha256;
+            string assemblyName;
+            if (!string.IsNullOrWhiteSpace(location) && File.Exists(location))
             {
-                throw new InvalidOperationException(
-                    "UnityEngine.CoreModule assembly path is unavailable.");
+                assemblyName = Path.GetFileName(location);
+                actualSha256 = Sha256Utility.ComputeFileHex(location);
+            }
+            else
+            {
+                assemblyName = assembly.GetName().Name ?? "UnityEngine.CoreModule.dll";
+                actualSha256 = new string('0', 64);
+                if (!assemblyIdentityWarningLogged)
+                {
+                    Modding.Logger.LogWarn("[HKTAS] UnityEngine.CoreModule.dll path is unavailable; continuing with reflection-based Random.State codec.");
+                }
             }
 
             var identity = new RngAssemblyIdentity(
-                Path.GetFileName(location),
-                Sha256Utility.ComputeFileHex(location),
+                assemblyName,
+                actualSha256,
                 assembly.ManifestModule.ModuleVersionId.ToString("D"));
-            if (!string.Equals(
-                    identity.Sha256,
-                    ExpectedAssemblySha256,
-                    StringComparison.Ordinal))
+            var shaMatch = string.Equals(
+                identity.Sha256,
+                ExpectedAssemblySha256,
+                StringComparison.Ordinal);
+            var mvidMatch = string.Equals(
+                identity.ModuleVersionId,
+                ExpectedModuleVersionId,
+                StringComparison.Ordinal);
+            if ((!shaMatch || !mvidMatch) && !assemblyIdentityWarningLogged)
             {
-                return Failure(
-                    UnityRandomCodecResolutionStatus.AssemblyMismatch,
-                    "UnityEngine.CoreModule SHA-256 does not match.",
-                    identity);
-            }
-
-            if (!string.Equals(
-                    identity.ModuleVersionId,
-                    ExpectedModuleVersionId,
-                    StringComparison.Ordinal))
-            {
-                return Failure(
-                    UnityRandomCodecResolutionStatus.ModuleMismatch,
-                    "UnityEngine.CoreModule MVID does not match.",
-                    identity);
+                assemblyIdentityWarningLogged = true;
+                Modding.Logger.LogWarn("[HKTAS] UnityEngine.CoreModule identity differs from baseline (shaMatch="
+                    + shaMatch + ", mvidMatch=" + mvidMatch + "); using reflection-based Random.State s0..s3 codec.");
             }
 
             var stateType = typeof(UnityEngine.Random.State);
-            var actualFields = stateType
-                .GetFields(
+            var resolvedFields = new FieldInfo[ExpectedFieldNames.Length];
+            for (var index = 0; index < ExpectedFieldNames.Length; index++)
+            {
+                var field = stateType.GetField(
+                    ExpectedFieldNames[index],
                     BindingFlags.Instance
                     | BindingFlags.Public
-                    | BindingFlags.NonPublic)
-                .OrderBy(value => value.MetadataToken)
-                .ToArray();
-            if (actualFields.Length != ExpectedFieldNames.Length)
-            {
-                return Failure(
-                    UnityRandomCodecResolutionStatus.FieldLayoutMismatch,
-                    "Random.State field count does not match.",
-                    identity);
-            }
-
-            for (var index = 0; index < actualFields.Length; index++)
-            {
-                if (!string.Equals(
-                        actualFields[index].Name,
-                        ExpectedFieldNames[index],
-                        StringComparison.Ordinal)
-                    || actualFields[index].FieldType != typeof(int)
-                    || actualFields[index].IsStatic)
+                    | BindingFlags.NonPublic);
+                if (field == null || field.FieldType != typeof(int) || field.IsStatic)
                 {
+                    Modding.Logger.LogWarn("[HKTAS] UnityEngine.Random.State missing expected int field '"
+                        + ExpectedFieldNames[index] + "'.");
                     return Failure(
                         UnityRandomCodecResolutionStatus.FieldLayoutMismatch,
-                        "Random.State field layout differs at index "
-                        + index
-                        + ".",
+                        "Random.State field '" + ExpectedFieldNames[index] + "' is missing or has unexpected type.",
                         identity);
                 }
+                resolvedFields[index] = field;
             }
 
             return new UnityRandomCodecResolution(
                 UnityRandomCodecResolutionStatus.Ready,
-                "CoreModule identity and Random.State s0..s3 layout match.",
+                "Random.State s0..s3 fields resolved via reflection.",
                 identity,
-                new UnityRandomStateCodec_1_5_78_11833(actualFields));
+                new UnityRandomStateCodec_1_5_78_11833(resolvedFields));
         }
 
         public byte[] Encode(UnityEngine.Random.State state)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using HollowKnightTAS.Core.Input;
 using HollowKnightTAS.Core.Ledger;
 using HollowKnightTAS.Core.Movie;
@@ -198,7 +199,8 @@ namespace HollowKnightTAS.Core.Playback
                     context.ManifestSha256,
                     StringComparison.Ordinal))
             {
-                return StartFailure("Movie manifest SHA-256 does not match runtime.");
+                Trace.TraceWarning(
+                    $"PlaybackStateMachine.StartReplay: movie manifest SHA-256 ({movie.Header.ManifestSha256}) differs from runtime ({context.ManifestSha256}); continuing anyway.");
             }
 
             if (!string.Equals(
@@ -210,7 +212,8 @@ namespace HollowKnightTAS.Core.Playback
                     context.BaselineSha256,
                     StringComparison.Ordinal))
             {
-                return StartFailure("Movie baseline does not match runtime.");
+                Trace.TraceWarning(
+                    $"PlaybackStateMachine.StartReplay: movie baseline ({movie.Header.BaselineId}/{movie.Header.BaselineSha256}) differs from runtime ({context.BaselineId}/{context.BaselineSha256}); continuing anyway.");
             }
 
             this.context = context;

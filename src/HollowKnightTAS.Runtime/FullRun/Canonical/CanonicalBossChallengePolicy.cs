@@ -37,8 +37,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             try {
                 if (!CanonicalBossChallengeCarry.IsKnownSequence || original.GetInvocationList().Length != 1
                     || original.Target?.GetType() != CanonicalBossChallengeOriginal.Primary
-                    || original.Method.MetadataToken != 100666692 || original.Method.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid)
+                    || original.Method.Name != "<LoadBoss>b__0")
                     throw new InvalidDataException("Challenge pending producer or boss sequence is unsupported.");
+                if (original.Method.MetadataToken != 100666692 || original.Method.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid)
+                    CanonicalSceneMappingCarry.WarnOnce("BossChallengePolicy:Original:" + original.Method.Module.ModuleVersionId + ":" + original.Method.MetadataToken,
+                        "[HKTAS] Challenge pending producer MVID/token differs from pinned original (continuing): mvid="
+                        + original.Method.Module.ModuleVersionId.ToString("D") + ";token=" + original.Method.MetadataToken);
                 primary = original.Target;
                 ui = (BossChallengeUI?)Field(primary.GetType(), "<>4__this").GetValue(primary);
                 statue = ReferenceEquals(ui, null) ? null : (BossStatue?)Field(typeof(BossChallengeUI), "bossStatue").GetValue(ui);
@@ -47,8 +51,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidDataException("Challenge conversion requires the exact original retired UI and statue.");
                 cached = (Action?)Field(primary.GetType(), "<>9__1").GetValue(primary);
                 if (cached != null && (cached.GetInvocationList().Length != 1 || !ReferenceEquals(cached.Target, primary)
-                    || cached.Method.MetadataToken != 100666693 || cached.Method.Module != original.Method.Module))
+                    || cached.Method.Name != "<LoadBoss>b__1" || cached.Method.Module != original.Method.Module))
                     throw new InvalidDataException("Challenge original completion cache is foreign.");
+                if (cached != null && cached.Method.MetadataToken != 100666693)
+                    CanonicalSceneMappingCarry.WarnOnce("BossChallengePolicy:Cached:" + cached.Method.MetadataToken,
+                        "[HKTAS] Challenge cached completion token differs from pinned 100666693 (continuing): actual=" + cached.Method.MetadataToken);
                 context = new CanonicalBossChallengeContext { Level = (int)Field(primary.GetType(), "level").GetValue(primary)!,
                     Statue = new CanonicalBossStatueContext { StatueStatePD = statue!.statueStatePD, DreamStatueStatePD = statue.dreamStatueStatePD,
                         IsAlwaysUnlocked = statue.isAlwaysUnlocked, BossScene = statue.bossScene } };

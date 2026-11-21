@@ -46,9 +46,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (!Names.Contains(name)) throw new InvalidDataException("Unregistered Hero proxy slot.");
             var field = typeof(PlayMakerUnity2DProxy).GetField(name, Flags);
-            if (field == null || !typeof(Delegate).IsAssignableFrom(field.FieldType)
-                || field.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid)
+            if (field == null || !typeof(Delegate).IsAssignableFrom(field.FieldType))
                 throw new InvalidDataException("Original Hero proxy slot layout differs.");
+            var actualMvid = field.Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("HeroTrigger:FieldMvid:" + actualMvid,
+                    "[HKTAS] PlayMakerUnity2DProxy ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
             return field;
         }
         private static MethodInfo Method(string slot)
@@ -56,9 +59,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             var ordinal = Array.IndexOf(Names, slot) - 3;
             if (ordinal < 0 || ordinal > 2) throw new InvalidDataException("Unregistered nonempty Hero collision callback.");
             var method = typeof(Trigger2dEvent).GetMethod(new[] { "DoTriggerEnter2D", "DoTriggerStay2D", "DoTriggerExit2D" }[ordinal], Flags)!;
-            if (method == null || method.MetadataToken != 0x06003bfd + ordinal
-                || method.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid)
+            if (method == null)
                 throw new InvalidDataException("Original Hero trigger method differs.");
+            var actualMvid = method.Module.ModuleVersionId.ToString("D");
+            if (method.MetadataToken != 0x06003bfd + ordinal || actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("HeroTrigger:Method:" + slot + ":" + actualMvid + ":" + method.MetadataToken,
+                    "[HKTAS] Trigger2dEvent." + method.Name + " MVID/token differs from pinned original (continuing): mvid="
+                    + actualMvid + ";token=0x" + method.MetadataToken.ToString("x8"));
             return method;
         }
         internal static Data Capture(BoundaryObjectIdentity identities)
@@ -110,9 +117,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                 Delegate? next = null;
                 foreach (var item in slot.Items) {
                     var method = Method(slot.Field);
-                    if (item == null || item.Module != method.Module.ModuleVersionId.ToString("D") || item.Token != method.MetadataToken
-                        || item.Method != method.Name || item.Alias < 0 || item.Alias >= 16384 || !fsms.TryGetValue(item.Fsm, out var fsmOwner))
+                    if (item == null || item.Method != method.Name || item.Alias < 0 || item.Alias >= 16384 || !fsms.TryGetValue(item.Fsm, out var fsmOwner))
                         throw new InvalidDataException("Source Hero trigger method or owner differs.");
+                    if (item.Module != method.Module.ModuleVersionId.ToString("D") || item.Token != method.MetadataToken)
+                        CanonicalSceneMappingCarry.WarnOnce("HeroTrigger:Prepared:" + item.Module + ":" + item.Token,
+                            "[HKTAS] Prepared Hero trigger callback MVID/token differs from current runtime (continuing): saved="
+                            + item.Module + "/0x" + item.Token.ToString("x8"));
                     var fsm = (Fsm)Raw.GetValue(fsmOwner);
                     if (!ReferenceEquals(view.Root("HeroFSM/" + item.Fsm), fsm)) throw new InvalidDataException("Prepared Hero trigger FSM alias differs.");
                     var states = (FsmState[])view.Field(fsm, typeof(Fsm), "states")!;

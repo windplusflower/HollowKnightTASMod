@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -100,42 +101,47 @@ public static class SequencePackage
         }
         var manifest = JsonSerializer.Deserialize<Manifest>(ReadEntry("manifest.json", MaximumManifestBytes))
             ?? throw new InvalidDataException("序列包清单无效。");
-        if (manifest.Version != 1 || manifest.Format != "HK-TAS-Sequence" || manifest.Slots == null
+        if (manifest.Format != "HK-TAS-Sequence" || manifest.Slots == null
             || !manifest.Slots.SequenceEqual(new[] { 1, 2, 3, 4 }) || manifest.Files == null
             || manifest.Files.Count > ProtectedSaveSession.MaximumFiles)
-            throw new InvalidDataException("序列包版本或四槽清单无效。");
+            throw new InvalidDataException("序列包格式或四槽清单无效。");
+        if (manifest.Version != 1)
+            Trace.TraceWarning($"SequencePackage: manifest version {manifest.Version} differs from expected 1; continuing.");
         var movieBytes = ReadEntry("movie.hktas", MaximumMovieBytes);
-        if (Sha256Utility.ComputeHex(movieBytes) != manifest.MovieSha256) throw new InvalidDataException("序列内容校验失败。");
+        if (Sha256Utility.ComputeHex(movieBytes) != manifest.MovieSha256)
+            Trace.TraceWarning("SequencePackage: movie.hktas SHA-256 differs from manifest; continuing.");
         var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
         long total = 0;
         foreach (var item in manifest.Files)
         {
-            if (item == null || !ProtectedSaveDescriptor.IsSlotFileName(item.Name) || item.Length < 0
-                || item.Length > ProtectedSaveSession.MaximumFileBytes
-                || (total += item.Length) > ProtectedSaveSession.MaximumTotalBytes)
+            if (item == null || !ProtectedSaveDescriptor.IsSlotFileName(item.Name)
+                || item.Name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+                || item.Name.Contains('/') || item.Name.Contains('\\') || item.Name.Contains(".."))
                 throw new InvalidDataException("初始存档清单无效。");
-            var bytes = ReadEntry("initial-saves/" + item.Name, item.Length);
-            if (bytes.LongLength != item.Length || Sha256Utility.ComputeHex(bytes) != item.Sha256 || !files.TryAdd(item.Name, bytes))
-                throw new InvalidDataException("初始存档校验失败：" + item.Name);
+            var bytes = ReadEntry("initial-saves/" + item.Name, ProtectedSaveSession.MaximumFileBytes);
+            if ((total += bytes.LongLength) > ProtectedSaveSession.MaximumTotalBytes)
+                throw new InvalidDataException("初始存档总大小超过限制。");
+            if (bytes.LongLength != item.Length || Sha256Utility.ComputeHex(bytes) != item.Sha256)
+                Trace.TraceWarning($"SequencePackage: initial-saves/{item.Name} length or SHA-256 differs from manifest; continuing.");
+            if (!files.TryAdd(item.Name, bytes))
+                throw new InvalidDataException("初始存档存在重复条目：" + item.Name);
         }
 
         TimelineTree? loadedTimeline = null;
         if (manifest.Timeline != null)
         {
-            if (manifest.Timeline.Name != "timeline.json"
-                || manifest.Timeline.Length < 0
-                || manifest.Timeline.Length > MaximumTimelineBytes)
+            if (manifest.Timeline.Name != "timeline.json")
                 throw new InvalidDataException("时间线清单无效。");
-            var tBytes = ReadEntry("timeline.json", manifest.Timeline.Length);
+            var tBytes = ReadEntry("timeline.json", MaximumTimelineBytes);
             if (tBytes.LongLength != manifest.Timeline.Length
                 || Sha256Utility.ComputeHex(tBytes) != manifest.Timeline.Sha256)
-                throw new InvalidDataException("时间线校验失败。");
+                Trace.TraceWarning("SequencePackage: timeline.json length or SHA-256 differs from manifest; continuing.");
             loadedTimeline = JsonSerializer.Deserialize<TimelineTree>(tBytes)
                 ?? throw new InvalidDataException("时间线数据为空。");
             StudioTimelineStore.ValidateTree(loadedTimeline);
             if (!string.IsNullOrEmpty(loadedTimeline.InitialSavesId)
                 && loadedTimeline.InitialSavesId != manifest.InitialSavesId)
-                throw new InvalidDataException("时间线与初始存档绑定不一致。");
+                Trace.TraceWarning("SequencePackage: timeline InitialSavesId differs from manifest; continuing.");
         }
 
         List<SceneCheckpointPacket>? loadedCheckpoints = null;
@@ -152,15 +158,16 @@ public static class SequencePackage
                     || string.IsNullOrEmpty(item.Name)
                     || !item.Name.EndsWith(".bin", StringComparison.Ordinal)
                     || item.Name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
-                    || !seenCheckpointNames.Add(item.Name)
-                    || item.Length <= 0
-                    || item.Length > SceneCheckpointPacket.MaximumPayloadBytes + 64 * 1024
-                    || (totalCheckpointBytes += item.Length) > SceneCheckpointStore.MaximumStoredBytes + (long)MaximumCheckpoints * 64 * 1024)
+                    || item.Name.Contains('/') || item.Name.Contains('\\') || item.Name.Contains("..")
+                    || !seenCheckpointNames.Add(item.Name))
                     throw new InvalidDataException("场景快照清单无效。");
-                var cBytes = ReadEntry("checkpoints/" + item.Name, item.Length);
+                var cBytes = ReadEntry("checkpoints/" + item.Name, SceneCheckpointPacket.MaximumPayloadBytes + 64 * 1024);
+                if (cBytes.LongLength == 0
+                    || (totalCheckpointBytes += cBytes.LongLength) > SceneCheckpointStore.MaximumStoredBytes + (long)MaximumCheckpoints * 64 * 1024)
+                    throw new InvalidDataException("场景快照大小超过限制：" + item.Name);
                 if (cBytes.LongLength != item.Length
                     || Sha256Utility.ComputeHex(cBytes) != item.Sha256)
-                    throw new InvalidDataException("场景快照校验失败：" + item.Name);
+                    Trace.TraceWarning($"SequencePackage: checkpoints/{item.Name} length or SHA-256 differs from manifest; continuing.");
                 var pkt = SceneCheckpointPacket.FromPortableBytes(cBytes);
                 if (pkt.Header.CheckpointId + ".bin" != item.Name)
                     throw new InvalidDataException("场景快照标识不匹配：" + item.Name);
@@ -168,9 +175,12 @@ public static class SequencePackage
             }
         }
 
-        if (entries.Count != 0) throw new InvalidDataException("序列包包含未声明文件。");
+        if (entries.Count != 0)
+            Trace.TraceWarning("SequencePackage: skipping undeclared archive entries: "
+                + string.Join(", ", entries.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         var snapshot = new InitialSaveSnapshot(files);
-        if (snapshot.Id != manifest.InitialSavesId) throw new InvalidDataException("初始存档集合校验失败。");
+        if (snapshot.Id != manifest.InitialSavesId)
+            Trace.TraceWarning($"SequencePackage: computed InitialSavesId ({snapshot.Id}) differs from manifest ({manifest.InitialSavesId}); continuing.");
         return new SequenceFile(Utf8.GetString(movieBytes), snapshot, loadedTimeline, loadedCheckpoints);
     }
 

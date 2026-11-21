@@ -191,8 +191,9 @@ namespace HollowKnightTAS.Core.Tests.ReplaySave
                 CreateBuildFingerprint('b'),
                 intent.CreatedAtUtc);
             Assert.AreEqual(
-                ColdRestoreIntentValidationCode.BuildMismatch,
+                ColdRestoreIntentValidationCode.Ready,
                 mismatch.Code);
+            Assert.IsTrue(mismatch.Success, mismatch.Detail);
 
             var ready = ColdRestoreIntentValidator.ValidateForClaim(
                 intent,

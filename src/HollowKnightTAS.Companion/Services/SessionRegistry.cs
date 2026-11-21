@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -134,10 +135,16 @@ namespace HollowKnightTAS.Companion.Services
                 ThrowIfDisposed();
                 if (!clients.TryGetValue(
                         registration.SessionId,
-                        out var existing)
-                    || !existing.MatchesRegistration(
+                        out var existing))
+                {
+                    return false;
+                }
+
+                if (!existing.MatchesRegistration(
                         registration))
                 {
+                    Trace.TraceWarning(
+                        $"SessionRegistry.Remove rejected mismatched registration for session '{registration.SessionId}'.");
                     return false;
                 }
 

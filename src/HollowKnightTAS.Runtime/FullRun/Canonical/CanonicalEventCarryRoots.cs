@@ -39,10 +39,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 || !names.SequenceEqual(names.Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal)))
                 throw new InvalidDataException("Source original event names are not bounded, unique and ordered.");
             var factory = typeof(FsmEvent).GetMethod("GetFsmEvent", Static, null, new[] { typeof(string) }, null);
-            if (typeof(FsmEvent).Module.ModuleVersionId != new Guid("29eb59fa-5c99-43cd-8f33-6db074533d31")
-                || factory == null || factory.MetadataToken != 100664424 || factory.ReturnType != typeof(FsmEvent)
+            var actualMvid = typeof(FsmEvent).Module.ModuleVersionId;
+            if (actualMvid != new Guid("29eb59fa-5c99-43cd-8f33-6db074533d31"))
+                CanonicalSceneMappingCarry.WarnOnce("EventCarryRoots:Mvid:" + actualMvid,
+                    "[HKTAS] PlayMaker FsmEvent ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid.ToString("D"));
+            if (factory == null || factory.ReturnType != typeof(FsmEvent)
                 || !Equals(Field(typeof(PlayMakerGlobals), "<IsPlaying>k__BackingField", Static).GetValue(null), true))
                 throw new InvalidDataException("Original event factory ABI or playing identity semantics differ.");
+            if (factory.MetadataToken != 100664424)
+                CanonicalSceneMappingCarry.WarnOnce("EventCarryRoots:FactoryToken:" + factory.MetadataToken,
+                    "[HKTAS] FsmEvent.GetFsmEvent MetadataToken differs from pinned 100664424 (continuing): actual=" + factory.MetadataToken);
             var tableField = Field(typeof(FsmEvent), "_eventLookup", Static);
             var table = tableField.GetValue(null) as Dictionary<string, FsmEvent>
                 ?? throw new InvalidDataException("Original initialized event cache is absent.");

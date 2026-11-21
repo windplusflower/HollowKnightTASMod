@@ -47,18 +47,23 @@ namespace HollowKnightTAS.Runtime.FullRun
             var registry = JObject.Parse(text);
             var eventRegistry = JObject.Parse(eventText);
             var inputRegistry = JObject.Parse(inputText);
+            var actualGameMvid = typeof(GameManager).Module.ModuleVersionId.ToString("D");
             if ((int?)registry["version"] != 1 || (bool?)registry["diagnosticOnly"] != true || !(registry["types"] is JArray entries)
                 || (int?)eventRegistry["version"] != 1 || (bool?)eventRegistry["diagnosticOnly"] != true || !(eventRegistry["types"] is JArray eventEntries)
                 || (int?)inputRegistry["version"] != 1 || (bool?)inputRegistry["diagnosticOnly"] != true || !(inputRegistry["types"] is JArray inputEntries)
-                || (int?)loadingRegistry["version"] != 1 || (bool?)loadingRegistry["diagnosticOnly"] != true || !(loadingRegistry["types"] is JArray loadingEntries)
-                || (string?)loadingRegistry["moduleMvid"] != typeof(GameManager).Module.ModuleVersionId.ToString("D"))
+                || (int?)loadingRegistry["version"] != 1 || (bool?)loadingRegistry["diagnosticOnly"] != true || !(loadingRegistry["types"] is JArray loadingEntries))
                 throw new InvalidDataException("Unsupported frozen carry field registry.");
+            if ((string?)loadingRegistry["moduleMvid"] != actualGameMvid)
+                CanonicalSceneMappingCarry.WarnOnce("CarryFieldRegistry:LoadingMvid:" + actualGameMvid,
+                    "[HKTAS] CanonicalCarryLoadingFieldRegistry moduleMvid differs from loaded Assembly-CSharp (continuing): actual=" + actualGameMvid);
             if ((int?)geoRegistry["version"] != 1 || (bool?)geoRegistry["diagnosticOnly"] != true
                 || !(geoRegistry["types"] is JArray geoEntries) || geoEntries.Count != 2
                 || !geoEntries.Select(entry => (string?)entry["name"]).SequenceEqual(new[] {
-                    "HutongGames.PlayMaker.Actions.ObjectJitter", "HutongGames.PlayMaker.Actions.ObjectJitterLocal" })
-                || (string?)geoRegistry["moduleMvid"] != typeof(GameManager).Module.ModuleVersionId.ToString("D"))
+                    "HutongGames.PlayMaker.Actions.ObjectJitter", "HutongGames.PlayMaker.Actions.ObjectJitterLocal" }))
                 throw new InvalidDataException("Unsupported frozen original Geo action registry.");
+            if ((string?)geoRegistry["moduleMvid"] != actualGameMvid)
+                CanonicalSceneMappingCarry.WarnOnce("CarryFieldRegistry:GeoMvid:" + actualGameMvid,
+                    "[HKTAS] CanonicalCarryGeoFieldRegistry moduleMvid differs from loaded Assembly-CSharp (continuing): actual=" + actualGameMvid);
             var assemblies = new[] { typeof(object).Assembly, typeof(Fsm).Assembly, typeof(HeroController).Assembly,
                 typeof(Vector3).Assembly, typeof(UnityEngine.UI.Image).Assembly, typeof(AudioClip).Assembly,
                 typeof(RaycastHit).Assembly, typeof(Rigidbody2D).Assembly }.Distinct().ToArray();

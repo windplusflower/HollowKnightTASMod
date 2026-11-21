@@ -22,8 +22,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             this.load = load; this.manager = manager; this.info = info; this.closure = closure; sourceBefore = source;
             var type = closure.GetType();
-            if (type.FullName != CanonicalSceneLoadCallbacks.ClosureType || type.Module.ModuleVersionId.ToString("D") != CanonicalSceneMappingCarry.ModuleMvid)
+            if (type.FullName != CanonicalSceneLoadCallbacks.ClosureType)
                 throw new InvalidDataException("Original scene loader closure type or module differs.");
+            var actualMvid = type.Module.ModuleVersionId.ToString("D");
+            if (actualMvid != CanonicalSceneMappingCarry.ModuleMvid)
+                CanonicalSceneMappingCarry.WarnOnce("SceneLoadCallbackBindings:Mvid:" + actualMvid,
+                    "[HKTAS] SceneLoad closure ModuleVersionId differs from pinned original (continuing): actual=" + actualMvid);
             if (!CanonicalCarryGraphCodec.Fields(type).Select(field => field.Name).SequenceEqual(new[] { "<>4__this", "info", "lastSceneName" }))
                 throw new InvalidDataException("Original scene loader closure complete layout differs.");
             FieldInfo Field(Type owner, string name) => owner.GetField(name, Instance) ?? throw new InvalidDataException("Scene loader raw callback field is absent: " + name);

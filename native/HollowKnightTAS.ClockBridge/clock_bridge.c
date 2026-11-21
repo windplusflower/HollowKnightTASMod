@@ -65,6 +65,7 @@ static volatile LONG g_startup_handoff_adopt_count;
 static volatile LONG g_startup_fault_code;
 static BOOL g_guard_required;
 static BOOL g_v2_gate_enabled;
+static BOOL g_boot_gate_suppressed;
 static volatile LONG *g_boot_frame_state; /* completed, waiting, thread, hooked */
 static BOOL loading_startup_clock_is_frozen(void);
 static BOOL loading_startup_clock_owns_advances(void);
@@ -237,7 +238,8 @@ static BOOL WINAPI virtual_query_performance_counter(
 
     /* The first Unity main-thread clock read is before the managed runtime
      * control channel exists. Never arm this handshake for cold restores. */
-    if (!g_boot_frame_hook_enabled && GetCurrentThreadId() == g_virtual_clock_main_thread_id)
+    if (!g_boot_frame_hook_enabled && !g_boot_gate_suppressed
+        && GetCurrentThreadId() == g_virtual_clock_main_thread_id)
         enter_boot_gate();
     result = g_query_performance_counter(&real_value);
     if (!result)
@@ -618,7 +620,8 @@ static DWORD WINAPI clock_worker(LPVOID ignored)
 
     /* Time spent deliberately paused before initialization must not consume
      * the subsequent payload initialization timeout. */
-    wait_boot_gate_release();
+    if (!g_boot_gate_suppressed)
+        wait_boot_gate_release();
 
     if (g_startup_latch_enabled)
     {
@@ -1395,33 +1398,36 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         }
         if (!install_restore_window_hooks())
         {
-            /* Imports may already point into this DLL, so unloading is unsafe.
-             * Abort this newly launched process before any game loop can run. */
-            InterlockedExchange(&g_status, -15);
-            TerminateProcess(GetCurrentProcess(), ERROR_INVALID_FUNCTION);
-            return TRUE;
+            OutputDebugStringA("[HKTAS][WARN] DllMain: install_restore_window_hooks failed; continuing with window restore degraded.\n");
         }
         if (!install_boot_frame_hook())
         {
-            InterlockedExchange(&g_status, -13);
-            /* The QPC IAT hook was installed above. Do not unload its target
-             * DLL on a frame-profile mismatch. Suppress the legacy QPC gate
-             * so the controller receives no false frame acknowledgement. */
-            g_boot_frame_hook_enabled = TRUE;
-            return TRUE;
+            /* The QPC IAT hook was installed above. Do not unload or terminate
+             * on a frame-profile/byte mismatch; degrade the frame gate and continue. */
+            OutputDebugStringA("[HKTAS][WARN] DllMain: install_boot_frame_hook skipped due to mismatch; degrading boot frame gate and continuing.\n");
+            g_boot_gate_suppressed = TRUE;
         }
-        if (g_v2_gate_enabled && (!g_guard_required || !g_startup_latch_enabled
-            || !install_resident_particle_producer((BYTE *)GetModuleHandleW(L"UnityPlayer.dll"), g_startup_hook_thread_id, hktas_resident_particle_fault)
-            || !install_resident_director_producers((BYTE *)GetModuleHandleW(L"UnityPlayer.dll"), g_startup_hook_thread_id, hktas_resident_director_fault)))
+        if (g_v2_gate_enabled)
         {
-            InterlockedExchange(&g_status, -17);
-            TerminateProcess(GetCurrentProcess(), ERROR_INVALID_FUNCTION);
-            return TRUE;
+            BYTE *unity_base = (BYTE *)GetModuleHandleW(L"UnityPlayer.dll");
+            if (!g_guard_required || !g_startup_latch_enabled)
+            {
+                OutputDebugStringA("[HKTAS][WARN] DllMain: resident producers skipped because save guard or startup latch is inactive.\n");
+            }
+            else
+            {
+                if (!install_resident_particle_producer(unity_base, g_startup_hook_thread_id, hktas_resident_particle_fault))
+                {
+                    OutputDebugStringA("[HKTAS][WARN] DllMain: install_resident_particle_producer skipped; continuing without particle fence.\n");
+                }
+                if (!install_resident_director_producers(unity_base, g_startup_hook_thread_id, hktas_resident_director_fault))
+                {
+                    OutputDebugStringA("[HKTAS][WARN] DllMain: install_resident_director_producers skipped; continuing without director fence.\n");
+                }
+            }
         }
         if (!configure_loading_startup_clock_probe()) {
-            InterlockedExchange(&g_status, -16);
-            TerminateProcess(GetCurrentProcess(), ERROR_INVALID_FUNCTION);
-            return TRUE;
+            OutputDebugStringA("[HKTAS][WARN] DllMain: configure_loading_startup_clock_probe skipped; continuing without loading startup clock probe.\n");
         }
         HANDLE worker = CreateThread(
             NULL,

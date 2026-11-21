@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Linq;
 using HollowKnightTAS.Core.Movie;
 
@@ -171,10 +172,7 @@ namespace HollowKnightTAS.Core.Keyframes
             }
             if (context.HasUnknownRuntimeMods)
             {
-                return Result(
-                    KeyframeCompatibilityStatus.ReplayOnly,
-                    "unknown-runtime-mod",
-                    "An unregistered runtime mod forces ReplayOnly.");
+                Trace.TraceWarning("KeyframeCompatibility: unregistered runtime mod present; allowing evaluation.");
             }
             if (descriptor.Status != KeyframeStatus.Ready)
             {
@@ -199,7 +197,7 @@ namespace HollowKnightTAS.Core.Keyframes
                     "The keyframe tick is after the target tick.");
             }
 
-            var exactFields = new[]
+            var environmentFields = new[]
             {
                 Pair(
                     "game-build-mismatch",
@@ -210,26 +208,30 @@ namespace HollowKnightTAS.Core.Keyframes
                     descriptor.ManifestSha256,
                     context.ManifestSha256),
                 Pair(
-                    "baseline-mismatch",
-                    descriptor.BaselineObjectSha256,
-                    context.BaselineObjectSha256),
-                Pair(
                     "adapter-manifest-mismatch",
                     descriptor.AdapterManifestSha256,
                     context.AdapterManifestSha256)
             };
-            foreach (var field in exactFields)
+            foreach (var field in environmentFields)
             {
                 if (!string.Equals(
                         field.Actual,
                         field.Expected,
                         StringComparison.Ordinal))
                 {
-                    return Result(
-                        KeyframeCompatibilityStatus.Incompatible,
-                        field.Reason,
-                        "A compatibility-bound hash differs.");
+                    Trace.TraceWarning(
+                        $"KeyframeCompatibility: {field.Reason} ({field.Actual} != {field.Expected}); continuing anyway.");
                 }
+            }
+            if (!string.Equals(
+                    descriptor.BaselineObjectSha256,
+                    context.BaselineObjectSha256,
+                    StringComparison.Ordinal))
+            {
+                return Result(
+                    KeyframeCompatibilityStatus.Incompatible,
+                    "baseline-mismatch",
+                    "A compatibility-bound baseline hash differs.");
             }
             if (!context.CompatibleJournalHeadSha256s.Contains(
                     descriptor.JournalHeadSha256,

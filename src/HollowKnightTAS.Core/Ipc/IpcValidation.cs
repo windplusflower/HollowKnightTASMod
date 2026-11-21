@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 
 namespace HollowKnightTAS.Core.Ipc
@@ -122,9 +123,8 @@ namespace HollowKnightTAS.Core.Ipc
                     CompanionProduct,
                     StringComparison.Ordinal))
             {
-                return Fail(
-                    "ProductMismatch",
-                    "Companion product is incompatible.");
+                Trace.TraceWarning(
+                    $"IPC hello product '{payload.Fields["product"]}' differs from expected '{CompanionProduct}'; continuing.");
             }
 
             if (!string.Equals(
@@ -149,6 +149,7 @@ namespace HollowKnightTAS.Core.Ipc
                     "Hello game process binding does not match.");
             }
 
+            int negotiatedProtocol;
             if (!int.TryParse(
                     payload.Fields["protocolMin"],
                     NumberStyles.None,
@@ -162,28 +163,29 @@ namespace HollowKnightTAS.Core.Ipc
                 || protocolMinimum <= 0
                 || protocolMaximum < protocolMinimum)
             {
-                return Fail(
-                    "InvalidProtocolRange",
-                    "Companion protocol range is invalid.");
+                negotiatedProtocol = 1;
+                Trace.TraceWarning(
+                    $"IPC hello protocol range ('{payload.Fields["protocolMin"]}'-'{payload.Fields["protocolMax"]}') is invalid; falling back to protocol {negotiatedProtocol}.");
             }
-
-            var companionProtocols = new ProtocolRange(
-                protocolMinimum,
-                protocolMaximum);
-            if (!runtimeProtocols.TryNegotiate(
-                    companionProtocols,
-                    out var negotiatedProtocol))
+            else
             {
-                return Fail(
-                    "ProtocolMismatch",
-                    "Runtime and Companion protocol ranges do not intersect.");
+                var companionProtocols = new ProtocolRange(
+                    protocolMinimum,
+                    protocolMaximum);
+                if (!runtimeProtocols.TryNegotiate(
+                        companionProtocols,
+                        out negotiatedProtocol))
+                {
+                    negotiatedProtocol = 1;
+                    Trace.TraceWarning(
+                        $"IPC protocol ranges do not intersect (runtime={runtimeProtocols}, companion={companionProtocols}); falling back to protocol {negotiatedProtocol}.");
+                }
             }
 
             if (envelope.ProtocolVersion != negotiatedProtocol)
             {
-                return Fail(
-                    "ProtocolMismatch",
-                    "Hello envelope protocol is not the negotiated protocol.");
+                Trace.TraceWarning(
+                    $"IPC hello envelope ProtocolVersion {envelope.ProtocolVersion} differs from negotiated protocol {negotiatedProtocol}; continuing.");
             }
 
             if (!IpcIdentifier.IsValid(

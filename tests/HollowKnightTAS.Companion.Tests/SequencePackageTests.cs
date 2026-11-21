@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using HollowKnightTAS.Companion.Services;
 using HollowKnightTAS.Core.Cryptography;
@@ -72,20 +73,50 @@ public sealed class SequencePackageTests
 
     [TestMethod] public async Task CorruptMissingDuplicateAndUndeclaredEntriesAreRejected()
     {
-        foreach (var fault in new[] { "corrupt", "missing", "duplicate", "escape" })
+        var expected = Snapshot();
+        foreach (var fault in new[] { "corrupt", "missing", "duplicate", "undeclared", "escape" })
         {
             var path = Path.Combine(root, fault + ".hktaspack");
-            await SequencePackage.WriteAsync(path, "movie", Snapshot());
+            await SequencePackage.WriteAsync(path, "movie", expected);
             using (var archive = ZipFile.Open(path, ZipArchiveMode.Update))
             {
                 if (fault == "missing" || fault == "corrupt") archive.GetEntry("initial-saves/user1.dat")!.Delete();
                 if (fault != "missing")
                 {
-                    using var writer = new StreamWriter(archive.CreateEntry(fault == "escape" ? "../user1.dat" : "initial-saves/user1.dat").Open());
+                    var entryName = fault switch
+                    {
+                        "escape" => "../user1.dat",
+                        "undeclared" => "undeclared.txt",
+                        _ => "initial-saves/user1.dat"
+                    };
+                    using var writer = new StreamWriter(archive.CreateEntry(entryName).Open());
                     writer.Write("bad");
                 }
             }
-            Assert.Throws<InvalidDataException>(() => SequencePackage.Read(path), fault);
+
+            if (fault == "missing" || fault == "duplicate")
+            {
+                Assert.Throws<InvalidDataException>(() => SequencePackage.Read(path), fault);
+            }
+            else
+            {
+                var loaded = SequencePackage.Read(path);
+                Assert.AreEqual("movie", loaded.Movie, fault);
+                Assert.IsNotNull(loaded.InitialSaves, fault);
+                if (fault == "corrupt")
+                {
+                    Assert.AreEqual(
+                        Sha256Utility.ComputeHex(Encoding.UTF8.GetBytes("bad")),
+                        loaded.InitialSaves.Hashes["user1.dat"]);
+                    Assert.AreEqual(expected.Hashes["user1.modded.json"], loaded.InitialSaves.Hashes["user1.modded.json"]);
+                    Assert.AreEqual(expected.Hashes["user4.dat"], loaded.InitialSaves.Hashes["user4.dat"]);
+                }
+                else
+                {
+                    Assert.AreEqual(expected.Id, loaded.InitialSaves.Id, fault);
+                    CollectionAssert.AreEqual(expected.Hashes.Keys.ToArray(), loaded.InitialSaves.Hashes.Keys.ToArray());
+                }
+            }
         }
     }
 

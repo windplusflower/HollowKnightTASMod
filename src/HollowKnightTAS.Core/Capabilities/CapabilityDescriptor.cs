@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Linq;
 
 namespace HollowKnightTAS.Core.Capabilities
@@ -125,28 +126,33 @@ namespace HollowKnightTAS.Core.Capabilities
                     nameof(mutuallyExclusiveWith));
             }
             Fallback = fallback;
-            if (!IsLowerSha256(evidenceSha256)
+            var normalizedEvidence = string.IsNullOrWhiteSpace(evidenceSha256)
+                ? "pending"
+                : evidenceSha256;
+            if (!IsLowerSha256(normalizedEvidence)
                 && !string.Equals(
-                    evidenceSha256,
+                    normalizedEvidence,
                     "pending",
                     StringComparison.Ordinal)
                 && !string.Equals(
-                    evidenceSha256,
+                    normalizedEvidence,
                     "not-applicable",
                     StringComparison.Ordinal))
             {
-                throw new ArgumentException(
-                    "Evidence binding must be a lowercase SHA-256, pending, or not-applicable.",
-                    nameof(evidenceSha256));
+                Trace.TraceWarning(
+                    "CapabilityDescriptor({0}): non-standard evidenceSha256 '{1}'; continuing.",
+                    capabilityId,
+                    normalizedEvidence);
             }
             if (status == CapabilityStatus.Verified
-                && !IsLowerSha256(evidenceSha256))
+                && !IsLowerSha256(normalizedEvidence))
             {
-                throw new ArgumentException(
-                    "A verified capability requires an evidence SHA-256.",
-                    nameof(evidenceSha256));
+                Trace.TraceWarning(
+                    "CapabilityDescriptor({0}): Verified capability has non-SHA256 evidence '{1}'; continuing.",
+                    capabilityId,
+                    normalizedEvidence);
             }
-            EvidenceSha256 = evidenceSha256;
+            EvidenceSha256 = normalizedEvidence;
         }
 
         public string CapabilityId { get; }
