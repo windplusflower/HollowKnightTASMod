@@ -27,6 +27,7 @@ using HollowKnightTAS.Runtime.Inspector;
 using HollowKnightTAS.Runtime.Input;
 using HollowKnightTAS.Runtime.FullRun;
 using HollowKnightTAS.Runtime.Keyframes;
+using HollowKnightTAS.Runtime.Localization;
 using HollowKnightTAS.Runtime.Playback;
 using HollowKnightTAS.Runtime.ReplaySave;
 using HollowKnightTAS.Runtime.State;
@@ -1316,7 +1317,8 @@ namespace HollowKnightTAS.Runtime.Ipc
                 ["bossesDeadObserved"] = status.BossesDeadObserved ? "true" : "false",
                 ["bossSceneCompleteObserved"] = status.BossSceneCompleteObserved ? "true" : "false",
                 ["bossDeathFrame"] = status.BossDeathFrame.ToString(CultureInfo.InvariantCulture),
-                ["bossSceneEntryMovieFrame"] = status.BossSceneEntryMovieFrame.ToString(CultureInfo.InvariantCulture)
+                ["bossSceneEntryMovieFrame"] = status.BossSceneEntryMovieFrame.ToString(CultureInfo.InvariantCulture),
+                ["gameLanguage"] = RuntimeUiText.CurrentLanguageCode()
             };
             foreach (var binding in fullRunSession.ReadBindingLabels()) fields[binding.Key] = binding.Value;
             foreach (var timing in fullRunSession.ReadFrameTiming()) fields[timing.Key] = timing.Value;
@@ -3603,6 +3605,7 @@ namespace HollowKnightTAS.Runtime.Ipc
             };
             AppendPlaybackState(fields);
             AppendReplayRestoreState(fields);
+            fields["gameLanguage"] = RuntimeUiText.CurrentLanguageCode();
             fields["capturedAtUtc"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
             if (requestId != null)
                 fields["requestId"] = requestId;

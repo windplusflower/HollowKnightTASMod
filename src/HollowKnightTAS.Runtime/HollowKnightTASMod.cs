@@ -12,6 +12,7 @@ using Modding.Menu;
 using Modding.Menu.Config;
 using HollowKnightTAS.Core.Ipc;
 using HollowKnightTAS.Runtime.Companion;
+using HollowKnightTAS.Runtime.Localization;
 using UnityEngine;
 
 namespace HollowKnightTAS.Runtime
@@ -30,7 +31,17 @@ namespace HollowKnightTAS.Runtime
         private bool hooksRegistered;
         private ManualStartupService? manualStartup;
         private ModStartupCompatibility? modStartup;
-        private string startupMessage = "打开 Studio（重启游戏）";
+        private enum StartupMessageKind
+        {
+            Default,
+            AlreadyControlled,
+            NeedTitle,
+            Opening,
+            IncompleteRetry,
+            FailedRetry
+        }
+
+        private StartupMessageKind startupMessageKind = StartupMessageKind.Default;
         private UnityEngine.UI.Text? startupLabel;
 
         public HollowKnightTASMod()
@@ -143,21 +154,51 @@ namespace HollowKnightTAS.Runtime
             {
                 content.AddMenuButton("OpenStudio", new MenuButtonConfig
                 {
-                    Label = startupMessage,
+                    Label = FormatStartupMessage(startupMessageKind),
                     Style = MenuButtonStyle.VanillaStyle,
                     SubmitAction = _ => OpenStudio(),
                     CancelAction = _ => UIManager.instance.UIGoToDynamicMenu(modListMenu),
-                    Description = new DescriptionInfo { Text = "仅标题界面可用；重启后暂停在第 0 帧。" }
+                    Description = new DescriptionInfo
+                    {
+                        Text = RuntimeUiText.T(
+                            "仅标题界面可用；重启后暂停在第 0 帧。",
+                            "Title screen only; restarts paused at frame 0.")
+                    }
                 }, out var button);
                 startupLabel = button.GetComponentInChildren<UnityEngine.UI.Text>();
             });
             return builder.Build();
         }
 
-        private void SetStartupMessage(string message)
+        private static string FormatStartupMessage(StartupMessageKind kind)
         {
-            startupMessage = message;
-            if (startupLabel != null) startupLabel.text = message;
+            return kind switch
+            {
+                StartupMessageKind.AlreadyControlled => RuntimeUiText.T(
+                    "当前已是受控游戏",
+                    "Already running in controlled mode"),
+                StartupMessageKind.NeedTitle => RuntimeUiText.T(
+                    "请先保存退出到标题，再打开 Studio",
+                    "Save & quit to title screen before opening Studio"),
+                StartupMessageKind.Opening => RuntimeUiText.T(
+                    "正在打开 Studio，请稍候…",
+                    "Opening Studio, please wait..."),
+                StartupMessageKind.IncompleteRetry => RuntimeUiText.T(
+                    "启动未完成，点击重试",
+                    "Launch incomplete, click to retry"),
+                StartupMessageKind.FailedRetry => RuntimeUiText.T(
+                    "启动失败，点击重试",
+                    "Launch failed, click to retry"),
+                _ => RuntimeUiText.T(
+                    "打开 Studio（重启游戏）",
+                    "Open Studio (Restart Game)")
+            };
+        }
+
+        private void SetStartupMessage(StartupMessageKind kind)
+        {
+            startupMessageKind = kind;
+            if (startupLabel != null) startupLabel.text = FormatStartupMessage(kind);
         }
 
         private void OpenStudio()
@@ -165,23 +206,23 @@ namespace HollowKnightTAS.Runtime
             if (manualStartup != null) return;
             if (runtimeHost != null)
             {
-                SetStartupMessage("当前已是受控游戏");
+                SetStartupMessage(StartupMessageKind.AlreadyControlled);
                 return;
             }
             if (!ManualStartupService.IsStableTitle())
             {
-                SetStartupMessage("请先保存退出到标题，再打开 Studio");
+                SetStartupMessage(StartupMessageKind.NeedTitle);
                 return;
             }
             try
             {
-                SetStartupMessage("正在打开 Studio，请稍候…");
+                SetStartupMessage(StartupMessageKind.Opening);
                 manualStartup = new ManualStartupService(message => Log(message), message => LogWarn(message),
                     message => LogError(message), reason =>
                     {
                         manualStartup?.Dispose();
                         manualStartup = null;
-                        SetStartupMessage("启动未完成，点击重试");
+                        SetStartupMessage(StartupMessageKind.IncompleteRetry);
                         LogWarn(reason);
                     });
                 manualStartup.Start();
@@ -190,7 +231,7 @@ namespace HollowKnightTAS.Runtime
             {
                 manualStartup?.Dispose();
                 manualStartup = null;
-                SetStartupMessage("启动失败，点击重试");
+                SetStartupMessage(StartupMessageKind.FailedRetry);
                 LogError("Manual Studio launch failed: " + error);
             }
         }
@@ -199,6 +240,7 @@ namespace HollowKnightTAS.Runtime
         {
             try
             {
+                _ = RuntimeUiText.CurrentLanguageCode();
                 runtimeHost?.Start();
             }
             catch (Exception exception)

@@ -9,20 +9,22 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Markup;
+using HollowKnightTAS.Core.Localization;
 
 namespace HollowKnightTAS.Companion.Services
 {
     public sealed class UiText : INotifyPropertyChanged
     {
         public sealed record Entry(string Key, string Source, string Zh, string En);
-        public static UiText Current { get; } = new UiText(DefaultPath);
+        public static UiText Current { get; } = new UiText(DefaultPath, GameLanguageReader.DetectStudioLanguageIndex);
         private static string DefaultPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HollowKnightTAS", "studio-language.txt");
         private readonly string path;
         private readonly Dictionary<string, Entry> keys;
         private readonly Dictionary<string, Entry> exact;
         private readonly List<(Regex Pattern, Entry Entry)> templates;
         private int languageIndex;
-        public UiText(string path)
+        public UiText(string path) : this(path, defaultLanguageDetector: null) { }
+        public UiText(string path, Func<int>? defaultLanguageDetector)
         {
             this.path = path;
             using var stream = typeof(UiText).Assembly.GetManifestResourceStream("HollowKnightTAS.Companion.UiText.json")!;
@@ -36,12 +38,34 @@ namespace HollowKnightTAS.Companion.Services
                     for (var i = 0; i < 10; i++) pattern = pattern.Replace(Regex.Escape("{" + i + "}"), "(?<p" + i + ">.*?)");
                     return (new Regex("^" + pattern + "$", RegexOptions.CultureInvariant | RegexOptions.Singleline, TimeSpan.FromMilliseconds(50)), e);
                 }).ToList();
-            try { languageIndex = File.Exists(path) && File.ReadAllText(path).Trim() == "en" ? 1 : 0; }
-            catch (IOException) { languageIndex = 0; }
-            catch (UnauthorizedAccessException) { languageIndex = 0; }
+            try
+            {
+                if (File.Exists(path))
+                {
+                    var saved = File.ReadAllText(path).Trim().ToLowerInvariant();
+                    if (saved == "zh")
+                    {
+                        languageIndex = GameLanguageDetector.ChineseStudioIndex;
+                        HasExplicitPreference = true;
+                        return;
+                    }
+                    if (saved == "en")
+                    {
+                        languageIndex = GameLanguageDetector.EnglishStudioIndex;
+                        HasExplicitPreference = true;
+                        return;
+                    }
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+
+            HasExplicitPreference = false;
+            languageIndex = ResolveAutoDefault(defaultLanguageDetector);
         }
         public event PropertyChangedEventHandler? PropertyChanged;
         public int Revision { get; private set; }
+        public bool HasExplicitPreference { get; private set; }
         public string[] Languages { get; } = { "中文", "English" };
         public string SettingsError { get; private set; } = "";
         public int LanguageIndex
@@ -56,10 +80,9 @@ namespace HollowKnightTAS.Companion.Services
                     File.WriteAllText(path + ".new", value == 1 ? "en" : "zh");
                     File.Move(path + ".new", path, true);
                     languageIndex = value;
+                    HasExplicitPreference = true;
                     SettingsError = "";
-                    Revision++;
-                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
-                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs("Item[]"));
+                    NotifyLanguageChanged();
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -68,6 +91,47 @@ namespace HollowKnightTAS.Companion.Services
                     PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LanguageIndex)));
                 }
             }
+        }
+        public bool ApplyAutoDetectedGameLanguage(string? gameLanguageCode)
+        {
+            if (HasExplicitPreference || string.IsNullOrWhiteSpace(gameLanguageCode))
+            {
+                return false;
+            }
+
+            var target = GameLanguageDetector.ToStudioLanguageIndex(gameLanguageCode);
+            if (target == languageIndex)
+            {
+                return false;
+            }
+
+            languageIndex = target;
+            NotifyLanguageChanged();
+            return true;
+        }
+        private static int ResolveAutoDefault(Func<int>? detector)
+        {
+            if (detector == null)
+            {
+                return GameLanguageDetector.ChineseStudioIndex;
+            }
+
+            try
+            {
+                return detector() == GameLanguageDetector.EnglishStudioIndex
+                    ? GameLanguageDetector.EnglishStudioIndex
+                    : GameLanguageDetector.ChineseStudioIndex;
+            }
+            catch
+            {
+                return GameLanguageDetector.ChineseStudioIndex;
+            }
+        }
+        private void NotifyLanguageChanged()
+        {
+            Revision++;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs("Item[]"));
         }
         public string this[string key] => keys.TryGetValue(key, out var entry) ? Pick(entry) : key;
         private string Pick(Entry entry) => languageIndex == 1 ? entry.En : entry.Zh;

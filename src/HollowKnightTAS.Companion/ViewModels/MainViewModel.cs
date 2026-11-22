@@ -2230,6 +2230,14 @@ namespace HollowKnightTAS.Companion.ViewModels
                 OnPropertyChanged(nameof(PlayPauseLabel));
             }
 
+            if ((string.Equals(messageType, IpcMessageTypes.FullRunState, StringComparison.Ordinal)
+                    || string.Equals(messageType, IpcMessageTypes.RuntimeStatus, StringComparison.Ordinal))
+                && fields.TryGetValue("gameLanguage", out var gameLanguage)
+                && !string.IsNullOrWhiteSpace(gameLanguage))
+            {
+                Dispatch(() => UiText.Current.ApplyAutoDetectedGameLanguage(gameLanguage));
+            }
+
             if (string.Equals(messageType, IpcMessageTypes.FullRunState,
                     StringComparison.Ordinal))
             {

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using HollowKnightTAS.Core.Inspector;
+using HollowKnightTAS.Runtime.Localization;
 using UnityEngine;
 
 namespace HollowKnightTAS.Runtime.Inspector
@@ -24,6 +25,7 @@ namespace HollowKnightTAS.Runtime.Inspector
         private int groupIndex;
         private long cachedSequence = -1;
         private int cachedGroupIndex = -1;
+        private bool cachedIsChinese;
         private string cachedBody = string.Empty;
 
         public OverlayRenderer(bool visible)
@@ -56,12 +58,15 @@ namespace HollowKnightTAS.Runtime.Inspector
                 return;
             }
 
+            var isChinese = RuntimeUiText.IsChinese();
             if (cachedSequence != frame.Sequence
-                || cachedGroupIndex != groupIndex)
+                || cachedGroupIndex != groupIndex
+                || cachedIsChinese != isChinese)
             {
-                cachedBody = BuildBody(frame, CurrentGroup);
+                cachedBody = BuildBody(frame, CurrentGroup, isChinese);
                 cachedSequence = frame.Sequence;
                 cachedGroupIndex = groupIndex;
+                cachedIsChinese = isChinese;
             }
 
             var width = Math.Min(520f, Screen.width - 24f);
@@ -78,7 +83,9 @@ namespace HollowKnightTAS.Runtime.Inspector
                 height);
             GUI.Box(
                 area,
-                "HollowKnightTAS Inspector [F6 show/hide, F7 group]");
+                isChinese
+                    ? "HollowKnightTAS 监视器 [F6 显示/隐藏, F7 切换分组]"
+                    : "HollowKnightTAS Inspector [F6 show/hide, F7 group]");
             GUI.Label(
                 new Rect(
                     area.x + 10f,
@@ -92,7 +99,8 @@ namespace HollowKnightTAS.Runtime.Inspector
 
         private static string BuildBody(
             WatchFrame frame,
-            string group)
+            string group,
+            bool isChinese)
         {
             var builder = new StringBuilder(2048);
             builder.Append("group=");
@@ -110,7 +118,7 @@ namespace HollowKnightTAS.Runtime.Inspector
             {
                 if (frame.Failures.Count == 0)
                 {
-                    builder.Append("No provider failures.");
+                    builder.Append(isChinese ? "无提供者故障。" : "No provider failures.");
                 }
                 else
                 {
@@ -136,7 +144,7 @@ namespace HollowKnightTAS.Runtime.Inspector
                 .ToArray();
             if (entries.Length == 0)
             {
-                builder.Append("No registered watches in this group.");
+                builder.Append(isChinese ? "该分组下暂无已注册监视项。" : "No registered watches in this group.");
                 return builder.ToString();
             }
 

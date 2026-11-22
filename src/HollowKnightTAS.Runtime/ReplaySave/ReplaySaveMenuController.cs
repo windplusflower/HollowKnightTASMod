@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Linq;
 using HollowKnightTAS.Core.ReplaySave;
+using HollowKnightTAS.Runtime.Localization;
 using UnityEngine;
 
 namespace HollowKnightTAS.Runtime.ReplaySave
@@ -231,8 +232,12 @@ namespace HollowKnightTAS.Runtime.ReplaySave
             if (HasOriginNotice)
             {
                 var heading = manager.RecordingOriginStatus == "Faulted"
-                    ? "TAS 录制准备失败：本次录制不可用，请查看详情。"
-                    : "TAS 正在准备录制起点：准备期间游戏操作暂不可用，请等待。";
+                    ? RuntimeUiText.T(
+                        "TAS 录制准备失败：本次录制不可用，请查看详情。",
+                        "TAS recording setup failed: recording is unavailable. See details.")
+                    : RuntimeUiText.T(
+                        "TAS 正在准备录制起点：准备期间游戏操作暂不可用，请等待。",
+                        "TAS is preparing the recording origin: game input is temporarily unavailable. Please wait.");
                 GUI.Box(new Rect(20f, Screen.height - 105f, Math.Min(900f, Screen.width - 40f), 85f),
                     heading + "\n" + manager.RecordingOriginDetail);
             }
@@ -242,7 +247,7 @@ namespace HollowKnightTAS.Runtime.ReplaySave
             var width = Math.Min(780f, Screen.width - 40f);
             var height = Math.Min(520f, Screen.height - 40f);
             var area = new Rect(20f, 20f, width, height);
-            GUI.Box(area, "HollowKnightTAS Replay Saves");
+            GUI.Box(area, RuntimeUiText.T("HollowKnightTAS 回放存档", "HollowKnightTAS Replay Saves"));
             GUILayout.BeginArea(
                 new Rect(
                     area.x + 12f,
@@ -250,26 +255,36 @@ namespace HollowKnightTAS.Runtime.ReplaySave
                     area.width - 24f,
                     area.height - 36f));
             GUILayout.Label(
-                "F5 save now | F8 close | T auto on/off | "
-                + "Up/Down select | R/Enter restore | P pin auto");
+                RuntimeUiText.T(
+                    "F5 立即保存 | F8 关闭 | T 自动保存开/关 | 上/下 选择 | R/Enter 恢复 | P 固定自动存档",
+                    "F5 save now | F8 close | T auto on/off | Up/Down select | R/Enter restore | P pin auto"));
             var policy = manager.AutoSavePolicy;
+            var intervalText = policy.IntervalMovieTicks.ToString(CultureInfo.InvariantCulture);
+            var retentionText = policy.RetentionCount.ToString(CultureInfo.InvariantCulture);
+            var pendingText = manager.PendingCount.ToString(CultureInfo.InvariantCulture);
             GUILayout.Label(
-                "Auto: "
-                + (policy.Enabled ? "ON" : "OFF")
-                + " every "
-                + policy.IntervalMovieTicks.ToString(
-                    CultureInfo.InvariantCulture)
-                + " movie ticks, keep "
-                + policy.RetentionCount.ToString(
-                    CultureInfo.InvariantCulture)
-                + " | pending="
-                + manager.PendingCount.ToString(
-                    CultureInfo.InvariantCulture));
+                RuntimeUiText.T(
+                    "自动保存: "
+                    + (policy.Enabled ? "开" : "关")
+                    + " 每 "
+                    + intervalText
+                    + " 电影帧，保留 "
+                    + retentionText
+                    + " | 待处理="
+                    + pendingText,
+                    "Auto: "
+                    + (policy.Enabled ? "ON" : "OFF")
+                    + " every "
+                    + intervalText
+                    + " movie ticks, keep "
+                    + retentionText
+                    + " | pending="
+                    + pendingText));
 
             if (restoreProgress != null)
             {
                 GUILayout.Label(
-                    "Restore: "
+                    RuntimeUiText.T("恢复: ", "Restore: ")
                     + restoreProgress.Phase
                     + " "
                     + (restoreProgress.Fraction * 100d).ToString(
@@ -281,21 +296,24 @@ namespace HollowKnightTAS.Runtime.ReplaySave
                     == ReplayRestorePhase.AwaitingOverwriteApproval)
                 {
                     GUILayout.Label(
-                        "Dedicated TAS slot differs. Y = backup and overwrite; "
-                        + "N/Esc = cancel without writing.");
+                        RuntimeUiText.T(
+                            "专用 TAS 存档槽不一致。Y = 备份并覆盖；N/Esc = 取消且不写入。",
+                            "Dedicated TAS slot differs. Y = backup and overwrite; N/Esc = cancel without writing."));
                 }
                 else if (restoreProgress.Phase
                          == ReplayRestorePhase.Paused)
                 {
                     GUILayout.Label(
-                        "Target hash verified and paused. F9/Enter resumes at next tick.");
+                        RuntimeUiText.T(
+                            "目标哈希已校验并暂停。F9/Enter 从下一帧继续。",
+                            "Target hash verified and paused. F9/Enter resumes at next tick."));
                 }
             }
 
             GUILayout.Space(8f);
             if (entries.Count == 0)
             {
-                GUILayout.Label("No replay saves for this build.");
+                GUILayout.Label(RuntimeUiText.T("当前版本暂无回放存档。", "No replay saves for this build."));
             }
             else
             {
@@ -328,7 +346,7 @@ namespace HollowKnightTAS.Runtime.ReplaySave
             {
                 GUILayout.Space(8f);
                 GUILayout.Label(
-                    "Last save: "
+                    RuntimeUiText.T("最近保存: ", "Last save: ")
                     + last.Status
                     + " "
                     + (string.IsNullOrEmpty(last.ReplaySaveId)
