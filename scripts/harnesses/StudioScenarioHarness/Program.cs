@@ -26,6 +26,7 @@ internal static partial class StudioScenarioHarness
     static bool customKeyScenarios;
     static bool suffixToEndScenarios;
     static bool actualDScenarios;
+    static bool s0AcceptanceScenarios;
     static bool memoryGateEnabled;
     static T Field<T>(object owner, string name) => (T)owner.GetType().GetField(name,
         BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(owner)!;
@@ -79,6 +80,7 @@ internal static partial class StudioScenarioHarness
         customKeyScenarios = args.Contains("--custom-keys");
         suffixToEndScenarios = args.Contains("--probe-actual-d-suffix-to-end");
         actualDScenarios = args.Contains("--probe-actual-d-experiment");
+        s0AcceptanceScenarios = args.Contains("--s0-acceptance");
         memoryGateEnabled = false; // Preserve the user-disabled memory gates.
         if (!args.Contains("--headless") || Process.GetProcessesByName("hollow_knight").Length != 0
             || Process.GetProcessesByName("HollowKnightTAS.Companion").Length != 0) return 12;
@@ -94,6 +96,7 @@ internal static partial class StudioScenarioHarness
                 else if (customKeyScenarios) await RunCustomKeysAsync(args);
                 else if (args.Contains("--replay-divergence")) await RunReplayDivergenceAsync(args);
                 else if (args.Contains("--checkpoint-prototype")) await RunCheckpointPrototypeAsync(args);
+                else if (s0AcceptanceScenarios) await RunS0AcceptanceAsync(args);
                 else if (args.Contains("--loading-probe")) await RunLoadingProbeAsync(args);
                 else if (args.Contains("--overlay-stacking")) await RunOverlayStackingAsync();
                 else if (args.Contains("--automation-sync")) await RunAutomationSyncAsync();
@@ -237,6 +240,7 @@ internal static partial class StudioScenarioHarness
         var deadline = DateTime.UtcNow.AddMinutes(battleVideoScenarios || worldlineFaultScenarios || customKeyScenarios ? 20
             : suffixToEndScenarios ? 120
             : actualDScenarios ? 45
+            : s0AcceptanceScenarios ? 60
             : videoExportScenarios || fsmScenarios || Environment.GetEnvironmentVariable("HKTAS_CINEMATIC_ACCEPTANCE") == "1" ? 8 : 4);
         const ulong minimumPhysical = 1536UL * 1024 * 1024;
         const ulong minimumCommit = 2UL * 1024 * 1024 * 1024;

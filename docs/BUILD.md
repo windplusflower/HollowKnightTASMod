@@ -55,6 +55,14 @@ dotnet test tests/HollowKnightTAS.Companion.Tests/HollowKnightTAS.Companion.Test
 
 WPF 测试需要 Windows，界面测试宜独立进程运行。编译和离线测试不证明具体游戏、Mod、存档组合的实机回放结果；回放验证使用同一构建和匹配环境。
 
+仅在任务完整完成做最终实机验收时（平时开发与常规回归不要运行），可执行双序列 S0 自动播放 vs 手动回档一致性验收：
+
+```powershell
+pwsh -NoProfile -File scripts/verify/Invoke-S0AcceptanceSuite.ps1
+```
+
+注意：该实机验收不通过不代表代码必然存在问题；若未通过，须保留输出报告（`artifacts/acceptance/s0-acceptance-*/summary.md`）并说明具体差异原因由用户决策。
+
 ## 配套包签名
 
 完整 Companion 包包含 Studio、原生工具、ClockStartup、CLI、MCP 和 SDK。manifest 对文件清单和哈希签名，Runtime 和 Companion 使用内嵌公钥验证。

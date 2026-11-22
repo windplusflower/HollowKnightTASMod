@@ -221,6 +221,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 leanS0TargetPacket = null;
                                 checkpointRestoreApplied = true;
                                 LoadingSerialSceneProbe.MarkLeanS0BoundaryObserved(reschedule: wasInProcess);
+                                AdvanceAcceptanceTraceSegment(checkpointId);
                                 mode = "Replay";
                                 restoreReply["status"] = "RebuildingCToK";
                                 restoreReply["checkpointId"] = checkpointId;

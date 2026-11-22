@@ -679,6 +679,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             if (mode != "Recording" && mode != "Replay") return;
             input.SetNativeFrameActive(false);
+            long executedMovieFrame = -1;
             try
             {
                 if (!inputReady && completed - 1 == bootstrapFrame)
@@ -714,6 +715,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     Fail("InputMismatch: " + input.Fault);
                     return;
                 }
+                executedMovieFrame = movieFrame;
                 ObserveBoss();
                 TraceMovieRng("after", null);
                 loadingBoundaryProbe?.Sample("after", frameBoundary);
@@ -781,6 +783,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 restoreDrawing.EndFrame();
                 CaptureVideoFrame(completed);
                 TraceReplayState(completed);
+                TraceAcceptanceFrame(completed, executedMovieFrame);
                 try
                 {
                     Volatile.Write(ref observedWorld, CaptureWorldStatus());
@@ -1016,6 +1019,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             DisposeSceneCheckpoints();
             On.GameManager.Update -= OnGameManagerTiming;
             replayStateTrace?.Dispose();
+            acceptanceFrameTrace?.Dispose();
             loadingBoundaryProbe?.Dispose();
             loadingGameplayOracle?.Dispose();
             actualDSuffixOracle?.Dispose();
