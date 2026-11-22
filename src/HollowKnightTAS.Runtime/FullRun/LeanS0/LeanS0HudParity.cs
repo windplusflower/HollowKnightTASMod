@@ -173,7 +173,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
 
             int sizeFullThreshold = reserveMax == fullAmount ? fullAmount + 1 : fullAmount;
-            bool isLarge = reserveMp > emptyAmount && reserveMp < sizeFullThreshold;
+            bool isLarge = reserveMp >= emptyAmount && reserveMp < sizeFullThreshold;
             string sizeState = isLarge ? "Start Large" : "Start Small";
             float scale = isLarge ? VesselLargeScale : VesselSmallScale;
 
@@ -650,7 +650,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             Transform? joniTr = healthRoot.Find("Joni Health");
             Transform? lowHealthParticlesTr = healthRoot.Find("Low Health Particles");
             Transform? lowHealthLightTr = healthRoot.Find("Low Health Light");
-            Transform? lowHealthVignetteTr = healthRoot.Find("Low Health Vignette");
+            Transform? lowHealthVignetteTr = hudCanvas?.parent?.Find("Low Health Vignette") ?? healthRoot.Find("Low Health Vignette");
             Transform? lowHealthLeakTr = hero.transform.Find("Low Health Leak");
 
             PlayMakerFSM? lowHealthFx = FindFsm(healthRoot.gameObject, "Low Health FX");
@@ -758,7 +758,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             Transform? whiteFlashTr = soulOrbTr.Find("White Flash");
             Transform? orbAnimTr = soulOrbTr.Find("Orb Anim");
             Transform? burstAnimTr = soulOrbTr.Find("Burst Anim");
-            Transform? soulBurstTr = soulOrbTr.Find("Soul Orb Break Effect");
+            Transform? heroEffectsTr = hero.transform.Find("Effects");
+            Transform? soulBurstTr = heroEffectsTr?.Find("Soul Burst");
             Transform? vesselsTr = soulOrbTr.Find("Vessels");
 
             PlayMakerFSM? soulOrbFsm = cameras?.soulOrbFSM ?? FindFsm(soulOrbGo, "Soul Orb Control");
@@ -770,8 +771,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (soulOrbFsm != null && soulOrbFsm.Fsm != null && soulOrbFsm.Fsm.Initialized)
             {
                 SetFsmGameObject(soulOrbFsm, "Hero", hero.gameObject);
-                SetFsmGameObject(soulOrbFsm, "Hero Effects", hero.transform.Find("Hero Effects")?.gameObject);
-                SetFsmGameObject(soulOrbFsm, "Soul Burst", soulBurstTr?.gameObject);
+                if (heroEffectsTr != null) SetFsmGameObject(soulOrbFsm, "Hero Effects", heroEffectsTr.gameObject);
+                if (soulBurstTr != null) SetFsmGameObject(soulOrbFsm, "Soul Burst", soulBurstTr.gameObject);
                 SetFsmGameObject(soulOrbFsm, "Vessel Folder", vesselsTr?.gameObject);
                 SetFsmGameObject(soulOrbFsm, "Fill", fillTr?.gameObject);
                 SetFsmGameObject(soulOrbFsm, "Get Flash", whiteFlashTr?.gameObject);
@@ -928,6 +929,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                         SetFsmInt(sizeFsm, "Full Amount", sizeFullAmount);
                         SetFsmInt(sizeFsm, "MP Reserve Max", reserveMax);
                         SetFsmInt(sizeFsm, "MP Reserve", reserveMp);
+                        SetFsmBool(sizeFsm, "Small", !string.Equals(resolved.SizeState, "Start Large", StringComparison.Ordinal));
 
                         TransitionFsmSafe(sizeFsm, resolved.SizeState);
                     }
@@ -1578,6 +1580,10 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private static void SetFsmGameObject(PlayMakerFSM fsm, string name, GameObject? value)
         {
+            if (value == null)
+            {
+                return;
+            }
             FsmGameObject? v = fsm.FsmVariables?.FindFsmGameObject(name);
             if (v != null)
             {

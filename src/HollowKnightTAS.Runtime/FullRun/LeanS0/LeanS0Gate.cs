@@ -106,6 +106,47 @@ namespace HollowKnightTAS.Runtime.FullRun
             "removeEvents",
             BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
 
+        private static readonly (FieldInfo? Field, object ZeroValue)[] TransientHeroResetFields =
+            BuildTransientHeroResetFields();
+
+        private static (FieldInfo? Field, object ZeroValue)[] BuildTransientHeroResetFields()
+        {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+            Type heroType = typeof(HeroController);
+            var specs = new (string Name, object ZeroValue)[]
+            {
+                ("wallUnstickSteps", 0),
+                ("wallLockSteps", 0),
+                ("wallJumpedL", false),
+                ("wallJumpedR", false),
+                ("currentWalljumpSpeed", 0f),
+                ("walljumpSpeedDecel", 0f),
+                ("wallSlashing", false),
+                ("wallslideClipTimer", 0f),
+                ("playingWallslideClip", false),
+                ("playedMantisClawClip", false),
+                ("jumpQueueSteps", 0),
+                ("jumpQueuing", false),
+                ("doubleJumpQueueSteps", 0),
+                ("doubleJumpQueuing", false),
+                ("jumpReleaseQueueSteps", 0),
+                ("jumpReleaseQueuing", false),
+                ("attackQueueSteps", 0),
+                ("attackQueuing", false),
+                ("dashQueueSteps", 0),
+                ("dashQueuing", false),
+                ("landingBufferSteps", 0),
+                ("ledgeBufferSteps", 0),
+                ("headBumpSteps", 0)
+            };
+            var result = new (FieldInfo? Field, object ZeroValue)[specs.Length];
+            for (int i = 0; i < specs.Length; i++)
+            {
+                result[i] = (heroType.GetField(specs[i].Name, flags), specs[i].ZeroValue);
+            }
+            return result;
+        }
+
         internal static LeanS0GateReceipt Execute(
             int boundaryOrdinal,
             string targetSceneName,
@@ -235,6 +276,17 @@ namespace HollowKnightTAS.Runtime.FullRun
                 hero.cState.touchingNonSlider = false;
                 hero.cState.nearBench = false;
                 hero.cState.inWalkZone = false;
+            }
+
+            hero.inAcid = false;
+            hero.touchingWallL = false;
+            hero.touchingWallR = false;
+            hero.wallSlidingL = false;
+            hero.wallSlidingR = false;
+            hero.wallLocked = false;
+            for (int i = 0; i < TransientHeroResetFields.Length; i++)
+            {
+                TransientHeroResetFields[i].Field?.SetValue(hero, TransientHeroResetFields[i].ZeroValue);
             }
 
             if (AltAttackTimeField != null)

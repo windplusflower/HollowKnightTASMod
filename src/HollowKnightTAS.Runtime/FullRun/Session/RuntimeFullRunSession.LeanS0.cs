@@ -125,6 +125,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
             Modding.Logger.Log(
                 $"[HKTAS] LeanS0Gate applied at S0: ordinal={ordinal};source={sourceScene};target={targetScene};gate={entryGateName};seed={lastLeanS0GateReceipt.Seed};rng={lastLeanS0GateReceipt.RngSha256}");
+            MaybeStartAcceptanceRngDiag(targetScene, "s0-boundary", ordinal, native);
 
             if (LeanS0Mode.IsSourceRole && !leanS0SourceParked && ordinal == LeanS0Mode.SelectedCaptureOrdinal)
             {
@@ -482,23 +483,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             GameManager? currentGm = GameManager.instance;
             bool canDirectTransition = CanDirectTransitionForInProcessLeanS0();
+            bool hasDiskSave = false;
 
             if (!canDirectTransition)
             {
-                if (slot < 1 || slot > 4)
-                {
-                    throw new InvalidDataException(
-                        "LeanS0 profileID is 0 (new-game checkpoint requires an in-game process; falling back to cold replay).");
-                }
-                if (checkpointSaves != null)
-                {
-                    string slotPath = checkpointSaves.GetSlotPath(slot, ".dat");
-                    if (!File.Exists(slotPath))
-                    {
-                        throw new InvalidOperationException(
-                            $"LeanS0 target save slot {slot} has no initial save on disk (new-game path); falling back to cold replay.");
-                    }
-                }
+                hasDiskSave = slot >= 1 && slot <= 4
+                    && (checkpointSaves == null || File.Exists(checkpointSaves.GetSlotPath(slot, ".dat")));
             }
             leanS0TargetInProcess = canDirectTransition;
             leanS0TargetPacket = packet;
@@ -514,11 +504,36 @@ namespace HollowKnightTAS.Runtime.FullRun
                 LoadingAudioLifetimePolicy.ResetForInProcessRestore();
                 UnityEngine.Time.timeScale = 1f;
             }
-            else
+            else if (hasDiskSave)
             {
                 AttachLeanS0TargetHooks();
                 (currentGm ?? throw new InvalidOperationException("GameManager is null.")).LoadGameFromUI(slot);
             }
+            else
+            {
+                BeginInMemoryContinueGameBootstrap(
+                    currentGm ?? throw new InvalidOperationException("GameManager is null."),
+                    packet,
+                    slot);
+            }
+        }
+
+        private void BeginInMemoryContinueGameBootstrap(GameManager gm, LeanS0Packet packet, int packetSlot)
+        {
+            PlayerData.instance.Reset();
+            SceneData.instance.Reset();
+            gm.playerData = PlayerData.instance;
+            gm.sceneData = SceneData.instance;
+            int memSlot = (packet.GameManagerProfileId >= 1 && packet.GameManagerProfileId <= 4)
+                ? packet.GameManagerProfileId
+                : 1;
+            gm.profileID = memSlot;
+            gm.inputHandler?.RefreshPlayerData();
+            AttachLeanS0TargetHooks();
+            gm.ui?.ContinueGame();
+            gm.ContinueGame();
+            Modding.Logger.Log(
+                $"[HKTAS] LeanS0 target using in-memory ContinueGame bootstrap: packetSlot={packetSlot};gmProfile={memSlot}");
         }
 
         private LeanS0GateReceipt ApplyLeanS0PacketAtTargetS0(LeanS0Packet packet, long currentNativeFrame)
@@ -534,10 +549,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 (bytes, cursor) => CheckpointClockMethod("ImportCheckpointClockObserver").Invoke(null, new object[] { bytes, cursor }),
                 out CanonicalInputEpoch restoredOrigin);
 
-            if (leanS0TargetInProcess)
-            {
-                LeanS0EnvironmentParity.ResetInControlPersistentTicks(InControl.InputManager.CurrentTick);
-            }
+            LeanS0EnvironmentParity.ResetInControlPersistentTicks(InControl.InputManager.CurrentTick);
 
             // Execute the identical S0Gate after restoring state so target & source share the exact same S0 invariant.
             LeanS0GateReceipt targetReceipt = LeanS0Gate.Execute(
@@ -591,6 +603,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             leanS0TargetParked = false;
             LoadingSerialSceneProbe.SetLeanS0Ordinal(packet.BoundaryOrdinal);
             infoRng.SyncBaseline();
+            MaybeStartAcceptanceRngDiag(packet.TargetSceneName, "s0-restore-apply", packet.BoundaryOrdinal, currentNativeFrame);
             return targetReceipt;
         }
 
@@ -1035,6 +1048,339 @@ namespace HollowKnightTAS.Runtime.FullRun
             catch (Exception ex)
             {
                 Modding.Logger.LogError("[HKTAS] Failed to finalize LeanS0 K3 trace: " + ex);
+            }
+        }
+
+        private readonly string? acceptanceRngDiagTargetScene = Environment.GetEnvironmentVariable("HKTAS_ACCEPTANCE_RNG_DIAG_SCENE");
+        private readonly HashSet<long> acceptanceRngDiagFrames = ParseAcceptanceRngDiagFrames(Environment.GetEnvironmentVariable("HKTAS_ACCEPTANCE_RNG_DIAG_FRAMES"));
+        private StreamWriter? acceptanceRngDiagWriter;
+        private LoadingRandomCallTrace? acceptanceRngDiagTrace;
+        private MonoMod.RuntimeDetour.Hook? acceptanceITweenLaunchHook;
+        private bool acceptanceRngDiagActive;
+        private bool acceptanceRngDiagFrameMatched;
+        private int acceptanceRngDiagGameplayFramesRemaining;
+        private int acceptanceRngDiagEventIndex;
+
+        private static HashSet<long> ParseAcceptanceRngDiagFrames(string? spec)
+        {
+            var result = new HashSet<long>();
+            if (string.IsNullOrWhiteSpace(spec))
+            {
+                return result;
+            }
+
+            foreach (var rawToken in spec!.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string token = rawToken.Trim();
+                if (token.Length == 0) continue;
+                int dash = token.IndexOf('-');
+                if (dash > 0 && dash < token.Length - 1)
+                {
+                    if (long.TryParse(token.Substring(0, dash).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out long start)
+                        && long.TryParse(token.Substring(dash + 1).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out long end)
+                        && start <= end
+                        && end - start <= 100000)
+                    {
+                        for (long f = start; f <= end; f++)
+                        {
+                            result.Add(f);
+                        }
+                    }
+                }
+                else if (long.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out long single))
+                {
+                    result.Add(single);
+                }
+            }
+            return result;
+        }
+
+        private static string FormatAcceptanceDiagStack()
+        {
+            var st = new StackTrace(1, false);
+            var frames = new List<string>(6);
+            int count = st.FrameCount;
+            for (int i = 0; i < count && frames.Count < 6; i++)
+            {
+                var method = st.GetFrame(i)?.GetMethod();
+                if (method == null) continue;
+                string fullType = method.DeclaringType?.FullName ?? string.Empty;
+                if (fullType.IndexOf("LoadingRandomCallTrace", StringComparison.Ordinal) >= 0
+                    || fullType.IndexOf("RuntimeFullRunSession", StringComparison.Ordinal) >= 0
+                    || fullType.StartsWith("MonoMod.", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                string typeName = method.DeclaringType?.Name ?? string.Empty;
+                string methodName = method.Name ?? string.Empty;
+                frames.Add(string.IsNullOrEmpty(typeName) ? methodName : (typeName + "." + methodName));
+            }
+            return string.Join(" <- ", frames);
+        }
+
+        private static string DescribeAcceptanceTargetPath(UnityEngine.GameObject? target)
+        {
+            if (target == null) return "<null>";
+            var names = new List<string>();
+            var cur = target.transform;
+            while (cur != null)
+            {
+                names.Add(cur.name);
+                cur = cur.parent;
+            }
+            names.Reverse();
+            return string.Join("/", names);
+        }
+
+        private void EnsureAcceptanceRngDiagInitialized()
+        {
+            if (acceptanceRngDiagWriter == null)
+            {
+                string diagPath = Path.Combine(sessionDirectory, "acceptance-rng-diag.jsonl");
+                acceptanceRngDiagWriter = new StreamWriter(diagPath, append: false, new UTF8Encoding(false));
+            }
+
+            if (acceptanceRngDiagTrace == null)
+            {
+                acceptanceRngDiagTrace = new LoadingRandomCallTrace((phase, site, self) =>
+                {
+                    if (!acceptanceRngDiagActive || acceptanceRngDiagWriter == null || phase != "rng-after")
+                    {
+                        return;
+                    }
+                    acceptanceRngDiagEventIndex++;
+                    string? stack = acceptanceRngDiagFrameMatched ? FormatAcceptanceDiagStack() : null;
+                    acceptanceRngDiagWriter.WriteLine(JsonConvert.SerializeObject(new
+                    {
+                        segment = acceptanceTraceSegment,
+                        eventType = "rng-call",
+                        idx = acceptanceRngDiagEventIndex,
+                        nativeFrame = clock.CurrentFrameIndex,
+                        movieFrame,
+                        frameInputEnabled,
+                        engineFrame = UnityEngine.Time.frameCount,
+                        site,
+                        owner = LoadingRandomCallTrace.Describe(self),
+                        rngSha256 = ReadCurrentRngSha256Safe(),
+                        stack
+                    }));
+                });
+            }
+
+            if (acceptanceITweenLaunchHook == null)
+            {
+                var launchMethod = typeof(iTween).GetMethod(
+                    "Launch",
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
+                    null,
+                    new[] { typeof(UnityEngine.GameObject), typeof(Hashtable) },
+                    null);
+                if (launchMethod != null)
+                {
+                    acceptanceITweenLaunchHook = new MonoMod.RuntimeDetour.Hook(
+                        launchMethod,
+                        (Action<Action<UnityEngine.GameObject, Hashtable?>, UnityEngine.GameObject, Hashtable?>)((orig, target, args) =>
+                        {
+                            if (acceptanceRngDiagActive && acceptanceRngDiagWriter != null)
+                            {
+                                acceptanceRngDiagWriter.WriteLine(JsonConvert.SerializeObject(new
+                                {
+                                    segment = acceptanceTraceSegment,
+                                    eventType = "itween-launch",
+                                    nativeFrame = clock.CurrentFrameIndex,
+                                    movieFrame,
+                                    frameInputEnabled,
+                                    engineFrame = UnityEngine.Time.frameCount,
+                                    target = DescribeAcceptanceTargetPath(target),
+                                    hasId = args != null && args.Contains("id"),
+                                    type = args?["type"]?.ToString() ?? "",
+                                    method = args?["method"]?.ToString() ?? "",
+                                    name = args?["name"]?.ToString() ?? "",
+                                    stack = Environment.StackTrace
+                                }));
+                            }
+                            orig(target, args);
+                        }));
+                }
+            }
+        }
+
+        private void UpdateAcceptanceRngDiagForFrame(long currentMovieFrame, bool inputEnabled)
+        {
+            if (acceptanceRngDiagFrames.Count == 0)
+            {
+                return;
+            }
+
+            if (inputEnabled && acceptanceRngDiagFrames.Contains(currentMovieFrame))
+            {
+                EnsureAcceptanceRngDiagInitialized();
+                acceptanceRngDiagFrameMatched = true;
+                acceptanceRngDiagActive = true;
+                acceptanceRngDiagEventIndex = 0;
+                acceptanceRngDiagWriter!.WriteLine(JsonConvert.SerializeObject(new
+                {
+                    segment = acceptanceTraceSegment,
+                    eventType = "frame-start",
+                    nativeFrame = clock.CurrentFrameIndex,
+                    movieFrame = currentMovieFrame,
+                    scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name ?? string.Empty,
+                    rngSha256 = ReadCurrentRngSha256Safe()
+                }));
+                return;
+            }
+
+            acceptanceRngDiagFrameMatched = false;
+            if (acceptanceRngDiagGameplayFramesRemaining <= 0 && acceptanceRngDiagActive)
+            {
+                acceptanceRngDiagActive = false;
+                acceptanceRngDiagWriter?.Flush();
+            }
+        }
+
+        private void MaybeStartAcceptanceRngDiag(string? targetScene, string trigger, int ordinal, long nativeFrame)
+        {
+            if (string.IsNullOrEmpty(acceptanceRngDiagTargetScene)
+                || !string.Equals(targetScene, acceptanceRngDiagTargetScene, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            EnsureAcceptanceRngDiagInitialized();
+            acceptanceRngDiagActive = true;
+            acceptanceRngDiagGameplayFramesRemaining = 2;
+            acceptanceRngDiagEventIndex = 0;
+            acceptanceRngDiagWriter!.WriteLine(JsonConvert.SerializeObject(new
+            {
+                segment = acceptanceTraceSegment,
+                eventType = "diag-start",
+                trigger,
+                ordinal,
+                targetScene,
+                nativeFrame,
+                movieFrame,
+                rngSha256 = ReadCurrentRngSha256Safe()
+            }));
+            WriteAcceptanceHudVesselDiag(includeFullGraph: string.Equals(acceptanceTraceSegment, "baseline", StringComparison.Ordinal));
+            acceptanceRngDiagWriter.Flush();
+        }
+
+        private void WriteAcceptanceHudVesselDiag(bool includeFullGraph)
+        {
+            if (acceptanceRngDiagWriter == null) return;
+            var pd = PlayerData.instance;
+            var vessel1 = GameCameras.instance?.hudCamera?.transform?.Find("Hud Canvas/Soul Orb/Vessels/Vessel 1");
+            var fsms = vessel1 != null
+                ? vessel1.GetComponents<PlayMakerFSM>().Select(fsm => new
+                {
+                    fsmName = fsm.FsmName,
+                    activeStateName = fsm.ActiveStateName,
+                    previousActiveState = fsm.Fsm?.PreviousActiveState?.Name ?? "",
+                    initialized = fsm.Fsm?.Initialized ?? false,
+                    started = fsm.Fsm?.Started ?? false,
+                    intVars = fsm.FsmVariables?.IntVariables?.ToDictionary(v => v.Name, v => v.Value) ?? new Dictionary<string, int>(),
+                    boolVars = fsm.FsmVariables?.BoolVariables?.ToDictionary(v => v.Name, v => v.Value) ?? new Dictionary<string, bool>(),
+                    states = includeFullGraph && fsm.FsmStates != null
+                        ? fsm.FsmStates.Select(st => new
+                        {
+                            name = st.Name,
+                            transitions = st.Transitions?.Select(tr => new { @event = tr.EventName, toState = tr.ToState }).ToArray(),
+                            actions = st.Actions?.Select(a => a?.GetType().Name ?? "<null>").ToArray()
+                        }).ToArray()
+                        : null
+                }).ToArray()
+                : null;
+            acceptanceRngDiagWriter.WriteLine(JsonConvert.SerializeObject(new
+            {
+                segment = acceptanceTraceSegment,
+                eventType = "hud-vessel-diag",
+                mpCharge = pd?.GetInt("MPCharge"),
+                mpReserve = pd?.GetInt("MPReserve"),
+                mpReserveMax = pd?.GetInt("MPReserveMax"),
+                soulLimited = pd?.GetBool("soulLimited"),
+                inBossSequence = BossSequenceController.IsInSequence,
+                boundSoul = BossSequenceController.IsInSequence && BossSequenceController.BoundSoul,
+                vesselScale = vessel1 != null ? vessel1.localScale.ToString() : "",
+                fsms
+            }));
+        }
+
+        private void StepAcceptanceRngDiagFrame(long nativeFrame, long executedMovieFrame)
+        {
+            if (!acceptanceRngDiagActive || acceptanceRngDiagWriter == null || !frameInputEnabled || executedMovieFrame < 0)
+            {
+                return;
+            }
+
+            var hero = HeroController.SilentInstance;
+            var body = hero != null ? hero.GetComponent<UnityEngine.Rigidbody2D>() : null;
+            var pos = hero != null ? hero.transform.position : default(UnityEngine.Vector3);
+            var bpos = body != null ? body.position : default(UnityEngine.Vector2);
+            var bvel = body != null ? body.velocity : default(UnityEngine.Vector2);
+            var c = hero?.cState;
+            string cState = c != null
+                ? $"g={(c.onGround ? 1 : 0)},d={(c.dashing ? 1 : 0)},sd={(c.shadowDashing ? 1 : 0)},j={(c.jumping ? 1 : 0)},f={(c.falling ? 1 : 0)},a={(c.attacking ? 1 : 0)},r={(c.recoiling ? 1 : 0)},ws={(c.wallSliding ? 1 : 0)},hl={(c.willHardLand ? 1 : 0)},fr={(c.facingRight ? 1 : 0)},dc={(c.dashCooldown ? 1 : 0)}"
+                : "";
+            var bounces = UnityEngine.Object.FindObjectsOfType<ObjectBounce>()
+                .Where(ob => ob != null && ob.gameObject.activeInHierarchy)
+                .OrderBy(ob => ob.transform.position.x)
+                .ThenBy(ob => ob.transform.position.y)
+                .Select(ob =>
+                {
+                    var rb = ob.GetComponent<UnityEngine.Rigidbody2D>();
+                    var p = ob.transform.position;
+                    var v = rb != null ? rb.velocity : default(UnityEngine.Vector2);
+                    return new
+                    {
+                        n = ob.gameObject.name,
+                        x = p.x.ToString("R", CultureInfo.InvariantCulture),
+                        y = p.y.ToString("R", CultureInfo.InvariantCulture),
+                        vx = rb != null ? v.x.ToString("R", CultureInfo.InvariantCulture) : "",
+                        vy = rb != null ? v.y.ToString("R", CultureInfo.InvariantCulture) : ""
+                    };
+                })
+                .ToArray();
+            acceptanceRngDiagWriter.WriteLine(JsonConvert.SerializeObject(new
+            {
+                segment = acceptanceTraceSegment,
+                eventType = "frame-end",
+                nativeFrame,
+                movieFrame = executedMovieFrame,
+                scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name ?? string.Empty,
+                rngSha256 = ReadCurrentRngSha256Safe(),
+                hx = hero != null ? pos.x.ToString("R", CultureInfo.InvariantCulture) : "",
+                hy = hero != null ? pos.y.ToString("R", CultureInfo.InvariantCulture) : "",
+                bx = body != null ? bpos.x.ToString("R", CultureInfo.InvariantCulture) : "",
+                by = body != null ? bpos.y.ToString("R", CultureInfo.InvariantCulture) : "",
+                vx = body != null ? bvel.x.ToString("R", CultureInfo.InvariantCulture) : "",
+                vy = body != null ? bvel.y.ToString("R", CultureInfo.InvariantCulture) : "",
+                cState,
+                bounces
+            }));
+            if (acceptanceRngDiagGameplayFramesRemaining > 0)
+            {
+                acceptanceRngDiagGameplayFramesRemaining--;
+            }
+            if (acceptanceRngDiagGameplayFramesRemaining <= 0)
+            {
+                acceptanceRngDiagActive = false;
+                acceptanceRngDiagFrameMatched = false;
+                acceptanceRngDiagWriter.Flush();
+            }
+        }
+
+        private void DisposeAcceptanceRngDiag()
+        {
+            acceptanceRngDiagActive = false;
+            acceptanceRngDiagFrameMatched = false;
+            acceptanceITweenLaunchHook?.Dispose();
+            acceptanceITweenLaunchHook = null;
+            acceptanceRngDiagTrace?.Dispose();
+            acceptanceRngDiagTrace = null;
+            if (acceptanceRngDiagWriter != null)
+            {
+                try { acceptanceRngDiagWriter.Flush(); acceptanceRngDiagWriter.Dispose(); } catch { }
+                acceptanceRngDiagWriter = null;
             }
         }
     }

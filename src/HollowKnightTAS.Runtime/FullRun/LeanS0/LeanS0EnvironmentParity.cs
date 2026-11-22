@@ -37,6 +37,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             ?? throw new MissingFieldException("ObjectPool.spawnedObjects");
         private static readonly FieldInfo CachedPointerField = typeof(UnityEngine.Object).GetField("m_CachedPtr", AnyInstance)
             ?? throw new MissingFieldException("UnityEngine.Object.m_CachedPtr");
+        private static readonly FieldInfo? UiManagerStartMenuTimeField =
+            typeof(UIManager).GetField("startMenuTime", AnyInstance);
 
         [DllImport("kernel32.dll")]
         private static extern IntPtr GetCurrentProcess();
@@ -109,6 +111,27 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (receipt == null) throw new ArgumentNullException(nameof(receipt));
             receipt.ResetObjectPoolInstances = ResetObjectPoolToCleanInitialState(hero);
             receipt.ResetHeroInactiveLifecycles = ResetHeroInactiveRandomizerLifecycles(hero);
+            if (hero != null)
+            {
+                var uiManager = UIManager.instance;
+                if (uiManager != null && UiManagerStartMenuTimeField != null)
+                {
+                    UiManagerStartMenuTimeField.SetValue(uiManager, 0f);
+                }
+                if (LoadingEngineClockProbe.IsPinnedEngineMatched)
+                {
+                    try
+                    {
+                        var identities = new BoundaryObjectIdentity();
+                        CheckpointPhysicsBroadphaseState.Canonicalize(identities);
+                        Modding.Logger.Log("[HKTAS] LeanS0 broadphase canonicalized at S0 boundary.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Modding.Logger.LogWarn("[HKTAS] LeanS0 broadphase canonicalize skipped: " + ex.Message);
+                    }
+                }
+            }
         }
 
         /// <summary>

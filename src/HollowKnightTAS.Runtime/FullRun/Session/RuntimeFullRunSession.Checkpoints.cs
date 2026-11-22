@@ -156,16 +156,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 bool canDirectTransition = CanDirectTransitionForInProcessLeanS0();
                                 int slot = ExtractSaveSlotFromPlayerDataJson(
                                     packet.C1_PlayerDataJson,
-                                    allowUnassignedNewGameSlot: canDirectTransition);
-                                if (!canDirectTransition && checkpointSaves != null)
-                                {
-                                    string slotPath = checkpointSaves.GetSlotPath(slot, ".dat");
-                                    if (!File.Exists(slotPath))
-                                    {
-                                        throw new InvalidOperationException(
-                                            $"LeanS0 target save slot {slot} has no initial save on disk (new-game path); falling back to cold replay.");
-                                    }
-                                }
+                                    allowUnassignedNewGameSlot: true);
 
                                 if (validatedCandidate != null)
                                 {
@@ -203,6 +194,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                                     throw new InvalidOperationException("Target process must be parked at target S0 before restore-apply.");
                                 var packet = leanS0TargetPacket;
                                 bool wasInProcess = leanS0TargetInProcess;
+                                int preApplyUnityFrame = UnityEngine.Time.frameCount;
+                                AdvanceAcceptanceTraceSegment(checkpointId);
                                 ApplyLeanS0PacketAtTargetS0(packet, frame);
                                 long targetMovie = hasTarget ? long.Parse(Get("targetMovieFrame"), NumberStyles.None, CultureInfo.InvariantCulture) : movieFrame;
                                 if (targetMovie > movieFrame)
@@ -220,8 +213,9 @@ namespace HollowKnightTAS.Runtime.FullRun
                                 }
                                 leanS0TargetPacket = null;
                                 checkpointRestoreApplied = true;
-                                LoadingSerialSceneProbe.MarkLeanS0BoundaryObserved(reschedule: wasInProcess);
-                                AdvanceAcceptanceTraceSegment(checkpointId);
+                                bool clockRewound = UnityEngine.Time.frameCount < preApplyUnityFrame
+                                    || packet.C12_ControlPlane.NativeFrame < frame;
+                                LoadingSerialSceneProbe.MarkLeanS0BoundaryObserved(reschedule: wasInProcess || clockRewound);
                                 mode = "Replay";
                                 restoreReply["status"] = "RebuildingCToK";
                                 restoreReply["checkpointId"] = checkpointId;

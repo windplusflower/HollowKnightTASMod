@@ -117,14 +117,14 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         }
 
         [TestMethod]
-        [DataRow(1, 0, 99, false, true, true, false, "Empty", "Start Small", "V_Empty", 0.75f)]
+        [DataRow(1, 0, 99, false, true, true, false, "Empty", "Start Large", "V_Empty", 1f)]
         [DataRow(1, 8, 99, false, true, true, false, "Up To Quarter", "Start Large", "V_UpToQuarter", 1f)]
         [DataRow(1, 16, 99, false, true, true, false, "Up To Half", "Start Large", "V_UpToHalf", 1f)]
         [DataRow(1, 24, 99, false, true, true, false, "Up To 3Quarter", "Start Large", "V_UpTo3Quarter", 1f)]
         [DataRow(1, 33, 99, false, true, true, false, "Up To Full", "Start Small", "V_Full", 0.75f)]
         [DataRow(1, 33, 33, false, true, true, false, "Up To Full", "Start Large", "V_Full", 1f)]
         [DataRow(2, 66, 99, false, true, true, false, "Up To Full", "Start Small", "V_Full", 0.75f)]
-        [DataRow(3, 66, 99, false, true, true, false, "Empty", "Start Small", "V_Empty", 0.75f)]
+        [DataRow(3, 66, 99, false, true, true, false, "Empty", "Start Large", "V_Empty", 1f)]
         [DataRow(3, 82, 99, false, true, true, false, "Up To Half", "Start Large", "V_UpToHalf", 1f)]
         [DataRow(3, 99, 99, false, true, true, false, "Up To Full", "Start Large", "V_Full", 1f)]
         [DataRow(4, 99, 99, false, false, false, false, "Not Obtained", "Start Small", null, 0.75f)]

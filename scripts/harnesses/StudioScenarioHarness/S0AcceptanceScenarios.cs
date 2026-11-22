@@ -55,6 +55,8 @@ internal static partial class StudioScenarioHarness
         var ensureAutoCapture = typeof(MainViewModel).GetMethod("EnsureAutoSceneCheckpointCapture", instanceNonPublic)!;
         var cancelAutoCapture = typeof(MainViewModel).GetMethod("CancelAutoSceneCheckpointCaptureAsync", instanceNonPublic)!;
         var rememberManifest = typeof(MainViewModel).GetMethod("RememberRuntimeEnvironmentManifestSha256", instanceNonPublic)!;
+        var setRestoreFrozen = typeof(MainViewModel).GetMethod("SetRestorePresentationFrozen", instanceNonPublic)!;
+        var setGridApplying = typeof(MainViewModel).GetMethod("SetGridApplying", instanceNonPublic)!;
 
         SetVmField("worldlines", new StudioTimelineStore(Path.Combine(output, "timelines.json")));
         SetVmField("initialSaveCacheRoot", Path.Combine(output, "initial-saves"));
@@ -152,6 +154,12 @@ internal static partial class StudioScenarioHarness
                         {
                             var latest = traces.OrderByDescending(File.GetLastWriteTimeUtc).First();
                             File.Copy(latest, Path.Combine(output, "acceptance-frame-trace.csv"), true);
+                        }
+                        var rngDiags = Directory.GetFiles(sessionsDir, "acceptance-rng-diag.jsonl", SearchOption.AllDirectories);
+                        if (rngDiags.Length > 0)
+                        {
+                            var latestDiag = rngDiags.OrderByDescending(File.GetLastWriteTimeUtc).First();
+                            File.Copy(latestDiag, Path.Combine(output, "acceptance-rng-diag.jsonl"), true);
                         }
                     }
                 }
@@ -282,6 +290,12 @@ internal static partial class StudioScenarioHarness
             bool processUnusable = false;
             string fatalReason = "";
 
+            // Freeze Studio background grid polling / auto-capture / branch saves during Stage B
+            // to match MainViewModel.FrameMenuAsync -> RestartDraftAtAsync isolation.
+            setGridApplying.Invoke(vm, new object[] { true });
+            setRestoreFrozen.Invoke(vm, new object[] { true });
+            try
+            {
             for (int i = 0; i < qualified.Count; i++)
             {
                 var cp = qualified[i];
@@ -403,6 +417,12 @@ internal static partial class StudioScenarioHarness
                     sw.Stop();
                     record.ElapsedMs = sw.Elapsed.TotalMilliseconds;
                 }
+            }
+            }
+            finally
+            {
+                setRestoreFrozen.Invoke(vm, new object[] { false });
+                setGridApplying.Invoke(vm, new object[] { false });
             }
 
             movies.VerifyOriginalSavesUnchanged();

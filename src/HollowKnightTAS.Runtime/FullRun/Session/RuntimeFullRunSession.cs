@@ -584,6 +584,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 actualDSuffixOracle?.Sample(ready ? "before" : "loading", boundary);
                 if (ready) TraceMovieRng("before", replayMovie?.Runs[timingRunIndex].RngSeed);
                 frameInputEnabled = ready;
+                UpdateAcceptanceRngDiagForFrame(movieFrame, ready);
                 // Resume drawing before the target so temporal presentation can
                 // settle using only frames already belonging to the replay.
                 restoreDrawing.Active = ready && mode == "Replay" && !IsVideoExportActive
@@ -784,6 +785,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 CaptureVideoFrame(completed);
                 TraceReplayState(completed);
                 TraceAcceptanceFrame(completed, executedMovieFrame);
+                StepAcceptanceRngDiagFrame(completed, executedMovieFrame);
                 try
                 {
                     Volatile.Write(ref observedWorld, CaptureWorldStatus());
@@ -1020,6 +1022,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             On.GameManager.Update -= OnGameManagerTiming;
             replayStateTrace?.Dispose();
             acceptanceFrameTrace?.Dispose();
+            DisposeAcceptanceRngDiag();
             loadingBoundaryProbe?.Dispose();
             loadingGameplayOracle?.Dispose();
             actualDSuffixOracle?.Dispose();

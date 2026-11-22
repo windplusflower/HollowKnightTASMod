@@ -38,11 +38,17 @@ namespace HollowKnightTAS.Runtime.Input
             .Select(name => typeof(InputManager).GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
                 ?? throw new MissingFieldException(typeof(InputManager).FullName, name)).ToArray();
         private bool checkpointInputImported;
-        private static PlayerActionSet[] CheckpointRegisteredSets() =>
-            (CheckpointScalarFields.Declared(typeof(InputManager), true).Single(f => f.Name == "playerActionSets").GetValue(null)
+        private static PlayerActionSet[] CheckpointRegisteredSets()
+        {
+            var activeHero = InputHandler.Instance?.inputActions;
+            return (CheckpointScalarFields.Declared(typeof(InputManager), true).Single(f => f.Name == "playerActionSets").GetValue(null)
                 as IEnumerable<PlayerActionSet> ?? throw new InvalidOperationException("InControl action sets are unavailable."))
-            .Where(set => set is HeroActions || set is InputModuleBinder.MyActionSet
-                || set is PreMenuInputModuleActionAdaptor.PreMenuInputModuleActions).ToArray();
+                .Where(set => set is HeroActions
+                    ? (activeHero == null || ReferenceEquals(set, activeHero))
+                    : (set is InputModuleBinder.MyActionSet
+                        || set is PreMenuInputModuleActionAdaptor.PreMenuInputModuleActions))
+                .ToArray();
+        }
         internal CheckpointInputState CaptureCheckpoint()
         {
             if (disposed || !hooked || currentFrame < 0 || nativeFrameActive || sampleIndex != 0
@@ -74,12 +80,36 @@ namespace HollowKnightTAS.Runtime.Input
                 || state.AuthoredEdges.Any(c => !state.Sets.Any(s => s.Channel == c)))
                 throw new InvalidDataException("Invalid input continuation frame or channel layout.");
             var channels = CheckpointRegisteredSets();
-            if (channels.Length != state.Sets.Length) throw new InvalidDataException("Input continuation registered set count differs.");
+            var stateSets = state.Sets;
+            if (channels.Count(set => Identify(set) == GameInputChannel.Hero) == 1
+                && stateSets.Count(s => s.Channel == GameInputChannel.Hero) > 1)
+            {
+                var chosenHero = stateSets
+                    .Where(s => s.Channel == GameInputChannel.Hero)
+                    .OrderByDescending(s => s.BindingActive)
+                    .ThenByDescending(s => s.RegistrationOrdinal)
+                    .First();
+                var normalizedHero = new CheckpointActionSetState
+                {
+                    Channel = chosenHero.Channel,
+                    RegistrationOrdinal = 0,
+                    BindingActive = chosenHero.BindingActive,
+                    Set = chosenHero.Set,
+                    Actions = chosenHero.Actions
+                };
+                stateSets = stateSets
+                    .Where(s => s.Channel != GameInputChannel.Hero)
+                    .Append(normalizedHero)
+                    .ToArray();
+            }
+            if (channels.Length != stateSets.Length)
+                throw new InvalidDataException(
+                    $"Input continuation registered set count differs (expected={stateSets.Length} [{string.Join(",", stateSets.Select(s => s.Channel))}], actual={channels.Length} [{string.Join(",", channels.Select(c => $"{Identify(c)}:{c.GetType().Name}"))}]).");
             var applications = new List<Action>();
-            foreach (var saved in state.Sets)
+            foreach (var saved in stateSets)
             {
                 var candidates = channels.Where(set => Identify(set) == saved.Channel).ToArray();
-                var savedCount = state.Sets.Count(set => set.Channel == saved.Channel);
+                var savedCount = stateSets.Count(set => set.Channel == saved.Channel);
                 if (candidates.Length != savedCount || saved.RegistrationOrdinal < 0 || saved.RegistrationOrdinal >= savedCount)
                     throw new InvalidDataException("Input continuation action-set registration layout differs: " + saved.Channel);
                 var target = candidates[saved.RegistrationOrdinal];
@@ -100,7 +130,7 @@ namespace HollowKnightTAS.Runtime.Input
             suspended = state.Suspended; authoredEdgeChannels.Clear();
             foreach (var channel in state.AuthoredEdges) authoredEdgeChannels.Add(channel);
             foreach (var lease in leases) lease.Restore(); leases.Clear();
-            foreach (var saved in state.Sets.Where(saved => saved.BindingActive))
+            foreach (var saved in stateSets.Where(saved => saved.BindingActive))
             {
                 var set = channels.Where(value => Identify(value) == saved.Channel).ElementAt(saved.RegistrationOrdinal);
                 var lease = FindOrAttach(set, saved.Channel, GetActions(set, saved.Channel));
