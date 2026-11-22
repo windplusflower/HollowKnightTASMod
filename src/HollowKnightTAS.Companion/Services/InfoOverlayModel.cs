@@ -126,6 +126,7 @@ namespace HollowKnightTAS.Companion.Services
         {
             new InfoField("frame", "帧", "integer"), new InfoField("nativeFrame", "原生帧", "integer"),
             new InfoField("rt", "RT", "number", "s"), new InfoField("gt", "GT", "number", "s"),
+            new InfoField("tft", "T-FT", "number", "ms"), new InfoField("rng", "RNG", "text"),
             new InfoField("room", "房间", "text"), new InfoField("position", "坐标", "pair"),
             new InfoField("x", "坐标 X"), new InfoField("y", "坐标 Y"),
             new InfoField("velocity", "速度", "pair"), new InfoField("vx", "速度 X"), new InfoField("vy", "速度 Y"),
@@ -156,7 +157,7 @@ namespace HollowKnightTAS.Companion.Services
         public static InfoOverlayItem NewItem(string id)
         {
             var field = Fields.Single(f => f.Id == id);
-            return new() { Field = id, Precision = field.Kind == "cooldown" ? 2 : 3, Unit = field.Unit, Color = "" };
+            return new() { Field = id, Precision = field.Id == "tft" ? 4 : field.Kind == "cooldown" ? 2 : 3, Unit = field.Unit, Color = "" };
         }
         public static bool IsColor(string? value) => value != null && value.Length == 7 && value[0] == '#'
             && uint.TryParse(value.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out _);

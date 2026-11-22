@@ -590,6 +590,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             leanS0ParkedOrdinal = packet.BoundaryOrdinal;
             leanS0TargetParked = false;
             LoadingSerialSceneProbe.SetLeanS0Ordinal(packet.BoundaryOrdinal);
+            infoRng.SyncBaseline();
             return targetReceipt;
         }
 

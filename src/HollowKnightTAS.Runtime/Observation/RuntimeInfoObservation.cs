@@ -22,9 +22,11 @@ namespace HollowKnightTAS.Runtime.Observation
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
         public static Dictionary<string, string> Capture(long nativeFrame, long movieFrame, string[]? watches = null,
-            double? realSeconds = null, double? gameSeconds = null, string timingError = "")
+            double? realSeconds = null, double? gameSeconds = null, string timingError = "",
+            string? rng = null, long? rngRolls = null, int? rngDelta = null)
         {
-            var values = CaptureValues(nativeFrame, movieFrame, watches, realSeconds, gameSeconds, timingError, out var errors);
+            var values = CaptureValues(nativeFrame, movieFrame, watches, realSeconds, gameSeconds, timingError, out var errors,
+                rng, rngRolls, rngDelta);
             return new Dictionary<string, string>
             {
                 ["snapshotId"] = "info-" + Guid.NewGuid().ToString("N"),
@@ -33,7 +35,8 @@ namespace HollowKnightTAS.Runtime.Observation
         }
 
         public static Dictionary<string, object?> CaptureValues(long nativeFrame, long movieFrame, string[]? watches,
-            double? realSeconds, double? gameSeconds, string timingError, out Dictionary<string, string> errors)
+            double? realSeconds, double? gameSeconds, string timingError, out Dictionary<string, string> errors,
+            string? rng = null, long? rngRolls = null, int? rngDelta = null)
         {
             var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
             var values = new Dictionary<string, object?>
@@ -41,6 +44,11 @@ namespace HollowKnightTAS.Runtime.Observation
                 ["frame"] = movieFrame, ["nativeFrame"] = nativeFrame, ["room"] = scene,
                 ["rt"] = realSeconds, ["gt"] = gameSeconds
             };
+            var tftMs = (Time.timeAsDouble - Time.fixedTimeAsDouble) * 1000.0;
+            if (!double.IsNaN(tftMs) && !double.IsInfinity(tftMs)) values["tft"] = tftMs;
+            if (rng != null) values["rng"] = rng;
+            if (rngRolls.HasValue) values["rngRolls"] = rngRolls.Value;
+            if (rngDelta.HasValue) values["rngDelta"] = rngDelta.Value;
             var hero = HeroController.SilentInstance;
             var manager = GameManager.instance;
             var valid = hero != null && hero.gameObject.activeInHierarchy && manager != null

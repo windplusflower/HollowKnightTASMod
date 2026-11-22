@@ -10,7 +10,8 @@ namespace HollowKnightTAS.Core.Inspector
         public const int MaximumLength = 512;
         public static IReadOnlyList<string> SnapshotFields { get; } = Array.AsReadOnly(new[]
         {
-            "frame", "nativeFrame", "room", "rt", "gt", "x", "y", "vx", "vy", "dash", "shade", "attack",
+            "frame", "nativeFrame", "room", "rt", "gt", "tft", "rng", "rngRolls", "rngDelta",
+            "x", "y", "vx", "vy", "dash", "shade", "attack",
             "health", "maxHealth", "soul", "reserveSoul", "grounded", "facingRight", "jumping", "dashing"
         });
         private delegate object? Node(Func<InfoWatchQuery, object?> read, Func<string, object?> snapshot);

@@ -50,7 +50,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                         composite = (rgb, width, height) =>
                         {
                             var values = RuntimeInfoObservation.CaptureValues(clock.CurrentFrameIndex, movieFrame, watches,
-                                infoTiming.RealSeconds, infoTiming.GameSeconds, infoTiming.Error, out var errors);
+                                infoTiming.RealSeconds, infoTiming.GameSeconds, infoTiming.Error, out var errors,
+                                infoRng.Formatted, infoRng.RollTimes, infoRng.LastDelta);
                             overlay.Composite(rgb, width, height, values);
                             var detail = string.Join("; ", errors.Take(3).Select(e => e.Key + ": " + e.Value));
                             if (detail != lastErrors && detail.Length != 0) Modding.Logger.LogWarn("[HKTAS] Video overlay: " + detail);

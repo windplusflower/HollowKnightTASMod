@@ -9,12 +9,24 @@ namespace HollowKnightTAS.Core.Tests.Inspector
     {
         private static object? Eval(string expression) => InfoWatchExpression.Parse(expression).Evaluate(
             q => q.Root == "fsm" ? 33 : q.Read(new State()),
-            key => key == "health" ? 5 : key == "maxHealth" ? 10 : key == "grounded" ? (object)true : null);
+            key => key switch
+            {
+                "health" => 5,
+                "maxHealth" => 10,
+                "grounded" => true,
+                "tft" => 16.6667d,
+                "rng" => "1234 +5",
+                "rngRolls" => 1234L,
+                "rngDelta" => 5,
+                _ => null
+            });
         private sealed class State { public int geo = 100; public int[] values = { 4, 7 }; }
         [TestMethod]
         [DataRow("1 + 2 * 3", 7d)]
         [DataRow("(1 + 2) * -3", -9d)]
         [DataRow("health / maxHealth * 100", 50d)]
+        [DataRow("tft * 1", 16.6667d)]
+        [DataRow("rngRolls + rngDelta", 1239d)]
         [DataRow("player.geo - 12.5", 87.5d)]
         [DataRow("player.values[1] % 3 + 1e-2", 1.01d)]
         [DataRow("fsm(\"/Knight\", \"Spell Control\", \"MP Cost\") + 2", 35d)]
@@ -26,6 +38,7 @@ namespace HollowKnightTAS.Core.Tests.Inspector
             Assert.AreEqual(false, Eval("false && (1 / 0 > 1)"));
             Assert.AreEqual(true, Eval("grounded || hero.missing > 0"));
             Assert.AreEqual("5 / 10", Eval("health + \" / \" + maxHealth"));
+            Assert.AreEqual("1234 +5", Eval("rng"));
             Assert.AreEqual("ready", Eval("health <= 5 && !false ? \"ready\" : hero.missing"));
             Assert.AreEqual(true, Eval("player.geo == 100"));
             Assert.AreEqual(true, Eval("\"text\" != false"));

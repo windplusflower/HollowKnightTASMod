@@ -98,6 +98,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly RuntimeWorldObserver worldObserver = new RuntimeWorldObserver();
         private readonly WorldObservationCache observationCache = new WorldObservationCache();
         private readonly RuntimeInfoTiming infoTiming = new RuntimeInfoTiming();
+        private readonly RuntimeInfoRng infoRng = new RuntimeInfoRng();
         private FullRunFrameJournal? journal;
         private MovieV2Document? replayMovie;
         private bool editableReplay;
@@ -200,7 +201,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (watches.Length > 32 || watches.Any(w => w == null || w.Length > 512))
                     throw new ArgumentException("At most 32 custom watches of up to 512 characters are supported.");
                 return observationQueue.Invoke(frame => RuntimeInfoObservation.Capture(frame, movieFrame, watches,
-                    infoTiming.RealSeconds, infoTiming.GameSeconds, infoTiming.Error));
+                    infoTiming.RealSeconds, infoTiming.GameSeconds, infoTiming.Error,
+                    infoRng.Formatted, infoRng.RollTimes, infoRng.LastDelta));
             }
             if (fields.ContainsKey("watches")) throw new ArgumentException("watches requires the info view.");
             if (view != "world" && view != "all" && view != "colliders" && view != "fsmCatalog") throw new ArgumentException("Unknown observation view.");
@@ -574,6 +576,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 clock.SetFrameRate(ready ? activeFrameRate : 50);
                 DeterministicCinematics.FrameDuration = 1d / (double)(ready ? activeFrameRate : 50m);
                 infoTiming.BeginFrame(movieFrame, completed, ready, boundary);
+                infoRng.EnsureBaseline();
                 loadingBoundaryProbe?.Sample(ready ? "before" : "loading", boundary);
                 LoadingSerialSceneProbe.CaptureVisualState(movieFrame);
                 loadingGameplayOracle?.Sample(ready ? "before" : "loading", boundary);
@@ -687,6 +690,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                     throw new InvalidDataException("Native frame completion was not sequential.");
                 expectedNativeStart = completed;
                 infoTiming.CompleteFrame(clock.StepSeconds);
+                infoRng.CompleteFrame();
                 actualDSuffixOracle?.ObserveSuffixRandomBoundary("after", frameInputEnabled, frameBoundary);
                 if (!frameInputEnabled)
                 {

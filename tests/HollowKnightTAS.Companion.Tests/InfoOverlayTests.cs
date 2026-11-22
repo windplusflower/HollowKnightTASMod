@@ -187,6 +187,45 @@ namespace HollowKnightTAS.Companion.Tests
             Assert.AreEqual("health + player.geo + 12", expression.Remove(match.Start, match.Length).Insert(match.Start, "player.geo"));
             Assert.AreEqual(0, InfoExpressionCompletion.At("fsm(\"/Knight\", \"Spe", 18).Matches.Length);
             CollectionAssert.Contains(InfoExpressionCompletion.At("hero.cState.", 12).Matches, "hero.cState.onGround");
+            CollectionAssert.Contains(InfoExpressionCompletion.At("tf", 2).Matches, "tft");
+            CollectionAssert.Contains(InfoExpressionCompletion.At("rn", 2).Matches, "rng");
+            CollectionAssert.Contains(InfoExpressionCompletion.At("rng", 3).Matches, "rngRolls");
+            CollectionAssert.Contains(InfoExpressionCompletion.At("rng", 3).Matches, "rngDelta");
+        }
+        [TestMethod]
+        public void TftAndRngFieldsFormatValidatePersistAndExport()
+        {
+            var tft = InfoOverlayModel.NewItem("tft");
+            Assert.AreEqual("ms", tft.Unit);
+            Assert.AreEqual(4, tft.Precision);
+            Assert.AreEqual("tft", tft.Expression);
+            Assert.AreEqual("16.6667 ms", InfoOverlayModel.Format(tft, Values("{\"tft\":16.66666}")));
+            Assert.AreEqual("—", InfoOverlayModel.Format(tft, Values("{}")));
+
+            var rng = InfoOverlayModel.NewItem("rng");
+            Assert.AreEqual("rng", rng.Expression);
+            Assert.AreEqual("1234 +5", InfoOverlayModel.Format(rng, Values("{\"rng\":\"1234 +5\"}")));
+            Assert.AreEqual("—", InfoOverlayModel.Format(rng, Values("{}")));
+
+            var path = Path.Combine(Path.GetTempPath(), "hktas-info-" + Guid.NewGuid().ToString("N"), "settings.json");
+            try
+            {
+                var settings = InfoOverlaySettings.Defaults();
+                settings.IncludeInVideo = true;
+                settings.Items.Add(tft);
+                settings.Items.Add(rng);
+                settings.Validate();
+                settings.Save(path);
+                var loaded = InfoOverlaySettings.Load(path);
+                Assert.AreEqual(JsonSerializer.Serialize(settings), JsonSerializer.Serialize(loaded));
+
+                var videoJson = InfoOverlayModel.VideoSettingsJson(loaded);
+                var video = JsonSerializer.Deserialize<HollowKnightTAS.Core.Media.InfoOverlayVideoSettings>(videoJson)!;
+                video.Validate();
+                Assert.IsTrue(video.Rows.Any(r => r.Id == "tft" && r.Unit == "ms" && r.Precision == 4));
+                Assert.IsTrue(video.Rows.Any(r => r.Id == "rng" && r.Kind == "text"));
+            }
+            finally { if (File.Exists(path)) File.Delete(path); Directory.Delete(Path.GetDirectoryName(path)!); }
         }
     }
 }
