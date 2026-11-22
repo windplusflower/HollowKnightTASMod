@@ -1,7 +1,5 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -15,30 +13,30 @@ namespace HollowKnightTAS.Runtime.FullRun
         private const BindingFlags AnyInstance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         private const BindingFlags AnyStatic = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
 
-        private static readonly HashSet<Type> HeroInactiveRandomTypes = new HashSet<Type>
+        private static readonly HashSet<Type> HeroInactiveResetTypes = new HashSet<Type>
         {
             typeof(RandomRotationRange),
             typeof(RandomRotation),
             typeof(RandomScale),
             typeof(AudioSourcePitchRandomizer),
-            typeof(RandomAudioStart)
+            typeof(RandomAudioStart),
+            typeof(DeactivateAfterDelay)
         };
 
         private static readonly FieldInfo? PitchRandomizerAudioField = typeof(AudioSourcePitchRandomizer).GetField("audioSource", AnyInstance);
+        private static readonly FieldInfo? RandomScaleDidScaleField = typeof(RandomScale).GetField("didScale", AnyInstance);
+        private static readonly FieldInfo? RandomAudioStartTimeField = typeof(RandomAudioStart).GetField("time", AnyInstance);
+        private static readonly FieldInfo? RandomAudioStartTimerField = typeof(RandomAudioStart).GetField("timer", AnyInstance);
+        private static readonly FieldInfo? RandomAudioStartStartedField = typeof(RandomAudioStart).GetField("started", AnyInstance);
+        private static readonly FieldInfo? DeactivateTimerField = typeof(DeactivateAfterDelay).GetField("timer", AnyInstance);
+        private static readonly FieldInfo? DeactivateWorldPosField = typeof(DeactivateAfterDelay).GetField("worldPos", AnyInstance);
+        private static readonly FieldInfo? DeactivateStartPosField = typeof(DeactivateAfterDelay).GetField("startPos", AnyInstance);
         private static readonly FieldInfo PoolObjectsField = typeof(ObjectPool).GetField("pooledObjects", AnyInstance)
             ?? throw new MissingFieldException("ObjectPool.pooledObjects");
         private static readonly FieldInfo SpawnedObjectsField = typeof(ObjectPool).GetField("spawnedObjects", AnyInstance)
             ?? throw new MissingFieldException("ObjectPool.spawnedObjects");
         private static readonly FieldInfo CachedPointerField = typeof(UnityEngine.Object).GetField("m_CachedPtr", AnyInstance)
             ?? throw new MissingFieldException("UnityEngine.Object.m_CachedPtr");
-
-        private static FieldInfo[] GetScalarFields(Type type)
-        {
-            return CheckpointScalarFields.Declared(type)
-                .Where(f => (f.FieldType.IsPrimitive && f.FieldType != typeof(IntPtr) && f.FieldType != typeof(UIntPtr))
-                    || f.FieldType.IsEnum || f.FieldType == typeof(string) || f.FieldType == typeof(Vector3))
-                .ToArray();
-        }
 
         [DllImport("kernel32.dll")]
         private static extern IntPtr GetCurrentProcess();
@@ -104,578 +102,243 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         /// <summary>
-        /// Captures native Awake/Start lifecycle bits and post-initialization fields for inactive
-        /// HeroController child randomizers (excluding Hit Crack, which D4 handles directly).
+        /// Resets pooled/spawned transient instances and inactive Hero effect lifecycles at an S0 boundary.
         /// </summary>
-        internal static LeanS0HeroInactiveComponentState[] CaptureHeroInactiveLifecycles(HeroController hero)
+        internal static void ResetBoundaryEnvironment(LeanS0GateReceipt receipt, HeroController? hero)
+        {
+            if (receipt == null) throw new ArgumentNullException(nameof(receipt));
+            receipt.ResetObjectPoolInstances = ResetObjectPoolToCleanInitialState(hero);
+            receipt.ResetHeroInactiveLifecycles = ResetHeroInactiveRandomizerLifecycles(hero);
+        }
+
+        /// <summary>
+        /// Destroys all pooled/spawned transient instances at an S0 boundary (preserving explicit
+        /// cross-scene charm companions like Grimmchild) and rebuilds initial startup pools cleanly
+        /// so normal transitions and S0 restores enter every target scene identically.
+        /// </summary>
+        internal static int ResetObjectPoolToCleanInitialState(HeroController? hero)
+        {
+            UnityEngine.Random.State savedRng = UnityEngine.Random.state;
+            int resetCount = 0;
+
+            try
+            {
+                LoadingAudioLifetimePolicy.ResetForInProcessRestore();
+
+                ObjectPool? pool = ObjectPool.instance;
+                if (pool == null)
+                {
+                    GameManager.instance?.DoDestroyPersonalPools();
+                    return 0;
+                }
+
+                var preservedPrefabs = new HashSet<GameObject>();
+                if (SpawnedObjectsField.GetValue(pool) is Dictionary<GameObject, GameObject> spawned && spawned.Count > 0)
+                {
+                    foreach (KeyValuePair<GameObject, GameObject> pair in spawned.ToList())
+                    {
+                        GameObject go = pair.Key;
+                        if (go != null && go.name.StartsWith("Grimmchild", StringComparison.Ordinal))
+                        {
+                            if (pair.Value != null)
+                            {
+                                preservedPrefabs.Add(pair.Value);
+                            }
+                            continue;
+                        }
+
+                        spawned.Remove(pair.Key);
+                        if (go != null)
+                        {
+                            SilenceAndClearEffects(go);
+                            UnityEngine.Object.DestroyImmediate(go);
+                            resetCount++;
+                        }
+                    }
+                }
+
+                var pooledObjects = PoolObjectsField.GetValue(pool) as Dictionary<GameObject, List<GameObject>>;
+                if (pooledObjects != null)
+                {
+                    foreach (List<GameObject> list in pooledObjects.Values)
+                    {
+                        if (list == null)
+                        {
+                            continue;
+                        }
+
+                        foreach (GameObject go in list)
+                        {
+                            if (go != null)
+                            {
+                                SilenceAndClearEffects(go);
+                                UnityEngine.Object.DestroyImmediate(go);
+                                resetCount++;
+                            }
+                        }
+                    }
+
+                    pooledObjects.Clear();
+                }
+
+                // Clear stale PersonalObjectPool delegates from the unloaded scene before rebuilding startup pools.
+                GameManager.instance?.DoDestroyPersonalPools();
+
+                if (pooledObjects != null)
+                {
+                    if (pool.startupPools != null)
+                    {
+                        foreach (ObjectPool.StartupPool sp in pool.startupPools)
+                        {
+                            if (sp?.prefab == null)
+                            {
+                                continue;
+                            }
+
+                            if (sp.prefab.GetComponent<ActiveRecycler>() != null)
+                            {
+                                // ActiveRecycler startup clones self-destroy after their initial animation;
+                                // keep an empty slot list so first spawn behaves identically across all runs.
+                                if (!pooledObjects.ContainsKey(sp.prefab))
+                                {
+                                    pooledObjects[sp.prefab] = new List<GameObject>();
+                                }
+                                continue;
+                            }
+
+                            ObjectPool.CreatePool(sp.prefab, sp.size);
+                        }
+                    }
+
+                    if (hero != null)
+                    {
+                        EnsureInitialHeroDeathPool(pooledObjects, hero.acidDeathPrefab);
+                        EnsureInitialHeroDeathPool(pooledObjects, hero.spikeDeathPrefab);
+                    }
+
+                    foreach (GameObject preservedPrefab in preservedPrefabs)
+                    {
+                        if (preservedPrefab != null && !pooledObjects.ContainsKey(preservedPrefab))
+                        {
+                            pooledObjects[preservedPrefab] = new List<GameObject>();
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                UnityEngine.Random.state = savedRng;
+            }
+
+            if (resetCount > 0)
+            {
+                Modding.Logger.Log($"[HKTAS] Reset ObjectPool to clean initial state at S0: destroyed={resetCount}");
+            }
+
+            return resetCount;
+        }
+
+        private static void EnsureInitialHeroDeathPool(Dictionary<GameObject, List<GameObject>> pooledObjects, GameObject? prefab)
+        {
+            if (prefab == null || prefab.GetComponent<ActiveRecycler>() != null)
+            {
+                return;
+            }
+
+            if (!pooledObjects.TryGetValue(prefab, out List<GameObject>? list) || list == null)
+            {
+                ObjectPool.CreatePool(prefab, 1);
+            }
+            else if (list.Count < 1)
+            {
+                ObjectPool.CreatePool(prefab, 1 - list.Count);
+            }
+        }
+
+        /// <summary>
+        /// Resets inactive HeroController child randomizer/delay MonoBehaviours back to their
+        /// unawakened initial state at S0 boundaries so prior-scene hits do not alter later scenes.
+        /// </summary>
+        internal static int ResetHeroInactiveRandomizerLifecycles(HeroController? hero)
         {
             if (hero == null)
             {
-                return Array.Empty<LeanS0HeroInactiveComponentState>();
+                return 0;
             }
 
             LoadingEngineClockProbe.RequirePinnedEngine();
             if (!LoadingEngineClockProbe.IsPinnedEngineMatched)
             {
-                WarnNativeLifecycleUnsupportedOnce("Skipping CaptureHeroInactiveLifecycles on unmatched UnityPlayer.dll.");
-                return Array.Empty<LeanS0HeroInactiveComponentState>();
-            }
-            GameObject? hitCrack = hero.damageEffectFSM?.FsmVariables.FindFsmGameObject("Hit Crack")?.Value;
-            Transform root = hero.transform;
-            MonoBehaviour[] behaviours = hero.GetComponentsInChildren<MonoBehaviour>(true);
-            var matchCounts = new Dictionary<string, int>(StringComparer.Ordinal);
-            var captured = new List<LeanS0HeroInactiveComponentState>();
-
-            foreach (MonoBehaviour mb in behaviours)
-            {
-                if (mb == null || (IntPtr)CachedPointerField.GetValue(mb)! == IntPtr.Zero)
-                {
-                    continue;
-                }
-
-                Type compType = mb.GetType();
-                if (!HeroInactiveRandomTypes.Contains(compType))
-                {
-                    continue;
-                }
-
-                GameObject go = mb.gameObject;
-                if (go == null || go.activeInHierarchy || (hitCrack != null && ReferenceEquals(go, hitCrack)))
-                {
-                    continue;
-                }
-
-                string relPath = GetRelativePath(root, mb.transform);
-                string typeName = compType.FullName ?? compType.Name;
-                string key = relPath + "|" + typeName;
-                matchCounts.TryGetValue(key, out int matchIndex);
-                matchCounts[key] = matchIndex + 1;
-
-                if (!TryReadMonoLifecycle(mb, out byte[] lifecycle) || (lifecycle[0] == 0 && lifecycle[1] == 0))
-                {
-                    continue;
-                }
-
-                AudioSource? audio = mb.GetComponent<AudioSource>();
-                captured.Add(new LeanS0HeroInactiveComponentState
-                {
-                    RelativePath = relPath,
-                    TypeFullName = typeName,
-                    MatchIndex = matchIndex,
-                    Enabled = mb.enabled,
-                    Lifecycle = lifecycle,
-                    Fields = CheckpointScalarFields.Capture(mb, GetScalarFields(compType)),
-                    LocalRotation = new[] { mb.transform.localRotation.x, mb.transform.localRotation.y, mb.transform.localRotation.z, mb.transform.localRotation.w },
-                    LocalScale = new[] { mb.transform.localScale.x, mb.transform.localScale.y, mb.transform.localScale.z },
-                    HasAudioPitch = audio != null,
-                    AudioPitch = audio != null ? audio.pitch : 1f
-                });
-            }
-
-            return captured.ToArray();
-        }
-
-        /// <summary>
-        /// Applies captured lifecycle bits and post-initialization fields to matching inactive
-        /// HeroController child randomizers whose Awake/Start have not yet run.
-        /// </summary>
-        internal static void ApplyHeroInactiveLifecycles(HeroController hero, LeanS0HeroInactiveComponentState[]? states)
-        {
-            if (hero == null || states == null)
-            {
-                return;
-            }
-
-            LoadingEngineClockProbe.RequirePinnedEngine();
-            bool nativeMatched = LoadingEngineClockProbe.IsPinnedEngineMatched;
-            if (!nativeMatched)
-            {
-                WarnNativeLifecycleUnsupportedOnce("Skipping native lifecycle writes in ApplyHeroInactiveLifecycles on unmatched UnityPlayer.dll.");
-            }
-            GameObject? hitCrack = hero.damageEffectFSM?.FsmVariables.FindFsmGameObject("Hit Crack")?.Value;
-            Transform root = hero.transform;
-            var stateByKey = new Dictionary<string, LeanS0HeroInactiveComponentState>(states.Length, StringComparer.Ordinal);
-            foreach (LeanS0HeroInactiveComponentState dto in states)
-            {
-                stateByKey[$"{dto.RelativePath}|{dto.TypeFullName}|{dto.MatchIndex}"] = dto;
+                WarnNativeLifecycleUnsupportedOnce("Skipping ResetHeroInactiveRandomizerLifecycles on unmatched UnityPlayer.dll.");
+                return 0;
             }
 
             MonoBehaviour[] behaviours = hero.GetComponentsInChildren<MonoBehaviour>(true);
-            var matchCounts = new Dictionary<string, int>(StringComparer.Ordinal);
-            int appliedCount = 0;
             int resetCount = 0;
 
             foreach (MonoBehaviour mb in behaviours)
             {
-                if (mb == null || (IntPtr)CachedPointerField.GetValue(mb)! == IntPtr.Zero)
+                if (mb == null || mb.isActiveAndEnabled)
                 {
                     continue;
                 }
 
-                Type compType = mb.GetType();
-                if (!HeroInactiveRandomTypes.Contains(compType))
+                GameObject? go = mb.gameObject;
+                if (go == null || go.activeInHierarchy || (IntPtr)CachedPointerField.GetValue(mb)! == IntPtr.Zero)
                 {
                     continue;
                 }
 
-                GameObject go = mb.gameObject;
-                if (go == null || go.activeInHierarchy || (hitCrack != null && ReferenceEquals(go, hitCrack)))
+                if (!HeroInactiveResetTypes.Contains(mb.GetType()))
                 {
                     continue;
                 }
 
-                string relPath = GetRelativePath(root, mb.transform);
-                string typeName = compType.FullName ?? compType.Name;
-                string matchKey = relPath + "|" + typeName;
-                matchCounts.TryGetValue(matchKey, out int matchIndex);
-                matchCounts[matchKey] = matchIndex + 1;
-
-                if (mb.isActiveAndEnabled)
+                if (!TryReadMonoLifecycle(mb, out byte[] current) || (current[0] == 0 && current[1] == 0))
                 {
                     continue;
                 }
 
-                byte[] current = new byte[] { 0, 0 };
-                bool hasCurrent = nativeMatched && TryReadMonoLifecycle(mb, out current);
-                string fullKey = $"{matchKey}|{matchIndex}";
-                if (stateByKey.TryGetValue(fullKey, out LeanS0HeroInactiveComponentState? dto))
+                if (mb is RandomScale)
                 {
-                    CheckpointScalarFields.PrepareApply(mb, GetScalarFields(compType), dto.Fields)();
-                    mb.transform.localRotation = new Quaternion(dto.LocalRotation[0], dto.LocalRotation[1], dto.LocalRotation[2], dto.LocalRotation[3]);
-                    mb.transform.localScale = new Vector3(dto.LocalScale[0], dto.LocalScale[1], dto.LocalScale[2]);
-                    if (dto.HasAudioPitch)
-                    {
-                        AudioSource? audio = mb.GetComponent<AudioSource>();
-                        if (audio != null)
-                        {
-                            audio.pitch = dto.AudioPitch;
-                            if (mb is AudioSourcePitchRandomizer)
-                            {
-                                PitchRandomizerAudioField?.SetValue(mb, audio);
-                            }
-                            else if (mb is RandomAudioStart randomAudio && randomAudio.audioSource == null)
-                            {
-                                randomAudio.audioSource = audio;
-                            }
-                        }
-                    }
-
-                    if (hasCurrent && (current[0] != dto.Lifecycle[0] || current[1] != dto.Lifecycle[1]))
-                    {
-                        WriteMonoLifecycle(mb, dto.Lifecycle);
-                    }
-                    mb.enabled = dto.Enabled;
-                    appliedCount++;
+                    RandomScaleDidScaleField?.SetValue(mb, false);
                 }
-                else if (hasCurrent && (current[0] != 0 || current[1] != 0))
+                else if (mb is AudioSourcePitchRandomizer)
                 {
-                    WriteMonoLifecycle(mb, new byte[] { 0, 0 });
-                    resetCount++;
-                }
-            }
-
-            if (appliedCount > 0 || resetCount > 0)
-            {
-                Modding.Logger.Log($"[HKTAS] Synced inactive Hero randomizer lifecycles for S0 parity: applied={appliedCount}, reset={resetCount}");
-            }
-        }
-
-        internal static LeanS0ObjectPoolWarmupState CaptureObjectPoolWarmup(HeroController hero)
-        {
-            ObjectPool? pool = ObjectPool.instance;
-            if (pool == null)
-            {
-                return new LeanS0ObjectPoolWarmupState();
-            }
-
-            var pooledObjects = PoolObjectsField.GetValue(pool) as Dictionary<GameObject, List<GameObject>>;
-            if (pooledObjects == null || pooledObjects.Count == 0)
-            {
-                return new LeanS0ObjectPoolWarmupState();
-            }
-
-            LoadingEngineClockProbe.RequirePinnedEngine();
-            BuildPrefabTables(pool, hero, out Dictionary<GameObject, string> prefabToKey, out _);
-            var entries = new List<LeanS0PooledPrefabState>();
-
-            foreach (KeyValuePair<GameObject, List<GameObject>> pair in pooledObjects)
-            {
-                if (pair.Key == null || pair.Value == null || pair.Value.Count == 0)
-                {
-                    continue;
-                }
-                if (!prefabToKey.TryGetValue(pair.Key, out string? key))
-                {
-                    continue;
-                }
-
-                bool[] awakened = pair.Value.Select(IsObjectAwakened).ToArray();
-                if (!awakened.Any(b => b) && key.StartsWith("startup:", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                entries.Add(new LeanS0PooledPrefabState
-                {
-                    PrefabKey = key,
-                    TotalCount = pair.Value.Count,
-                    AwakenedSlots = awakened
-                });
-            }
-
-            return new LeanS0ObjectPoolWarmupState
-            {
-                Entries = entries.OrderBy(e => e.PrefabKey, StringComparer.Ordinal).ToArray()
-            };
-        }
-
-        internal static void ApplyObjectPoolWarmup(HeroController hero, LeanS0ObjectPoolWarmupState? state, bool inProcessRestore = false)
-        {
-            ObjectPool? pool = ObjectPool.instance;
-            if (pool == null || state?.Entries == null)
-            {
-                return;
-            }
-
-            var pooledObjects = PoolObjectsField.GetValue(pool) as Dictionary<GameObject, List<GameObject>>;
-            if (pooledObjects == null)
-            {
-                return;
-            }
-
-            LoadingEngineClockProbe.RequirePinnedEngine();
-            BuildPrefabTables(pool, hero, out Dictionary<GameObject, string> prefabToKey, out Dictionary<string, GameObject> keyToPrefab);
-            var entryByKey = new Dictionary<string, LeanS0PooledPrefabState>(state.Entries.Length, StringComparer.Ordinal);
-            foreach (LeanS0PooledPrefabState entry in state.Entries)
-            {
-                entryByKey[entry.PrefabKey] = entry;
-            }
-
-            UnityEngine.Random.State savedRng = UnityEngine.Random.state;
-            int warmedCount = 0;
-            int resetCount = 0;
-
-            try
-            {
-                foreach (LeanS0PooledPrefabState entry in state.Entries)
-                {
-                    if (!keyToPrefab.TryGetValue(entry.PrefabKey, out GameObject? prefab) || prefab == null)
+                    PitchRandomizerAudioField?.SetValue(mb, null);
+                    AudioSource? audio = mb.GetComponent<AudioSource>();
+                    if (audio != null)
                     {
-                        continue;
-                    }
-
-                    if (!pooledObjects.TryGetValue(prefab, out List<GameObject>? list))
-                    {
-                        if (entry.TotalCount > 0)
-                        {
-                            ObjectPool.CreatePool(prefab, entry.TotalCount);
-                        }
-                        if (!pooledObjects.TryGetValue(prefab, out list))
-                        {
-                            continue;
-                        }
-                    }
-                    else if (list.Count < entry.TotalCount)
-                    {
-                        ObjectPool.CreatePool(prefab, entry.TotalCount - list.Count);
-                    }
-
-                    bool isActiveRecycler = prefab.GetComponent<ActiveRecycler>() != null;
-                    for (int i = 0; i < entry.AwakenedSlots.Length && i < list.Count; i++)
-                    {
-                        if (!entry.AwakenedSlots[i])
-                        {
-                            continue;
-                        }
-
-                        GameObject go = list[i];
-                        if (go == null || isActiveRecycler || go.activeSelf || IsObjectAwakened(go))
-                        {
-                            continue;
-                        }
-
-                        go.SetActive(true);
-                        SilenceAndClearEffects(go);
-                        go.SetActive(false);
-                        warmedCount++;
+                        audio.pitch = 1f;
                     }
                 }
-
-                var startupSizes = new Dictionary<GameObject, int>();
-                if (pool.startupPools != null)
+                else if (mb is RandomAudioStart)
                 {
-                    foreach (ObjectPool.StartupPool sp in pool.startupPools)
+                    RandomAudioStartTimeField?.SetValue(mb, 0f);
+                    RandomAudioStartTimerField?.SetValue(mb, 0f);
+                    RandomAudioStartStartedField?.SetValue(mb, false);
+                }
+                else if (mb is DeactivateAfterDelay delay)
+                {
+                    if (delay.stayInPlace && DeactivateStartPosField?.GetValue(delay) is Vector3 startPos)
                     {
-                        if (sp?.prefab != null)
-                        {
-                            startupSizes[sp.prefab] = startupSizes.TryGetValue(sp.prefab, out int prev)
-                                ? Math.Max(prev, sp.size)
-                                : sp.size;
-                        }
+                        mb.transform.localPosition = startPos;
                     }
+                    DeactivateTimerField?.SetValue(delay, 0f);
+                    DeactivateWorldPosField?.SetValue(delay, Vector3.zero);
+                    DeactivateStartPosField?.SetValue(delay, Vector3.zero);
                 }
 
-                // Reverse/cross-branch parity: reset or replace inactive slots that were awakened later
-                // than the target S0 packet so pooled randomizers execute identically on respawn.
-                foreach (KeyValuePair<GameObject, List<GameObject>> pair in pooledObjects.ToList())
-                {
-                    GameObject prefab = pair.Key;
-                    List<GameObject> list = pair.Value;
-                    if (prefab == null || list == null)
-                    {
-                        continue;
-                    }
-
-                    bool hasActiveRecycler = prefab.GetComponent<ActiveRecycler>() != null;
-                    if (!prefabToKey.TryGetValue(prefab, out string? key))
-                    {
-                        if (inProcessRestore && !startupSizes.ContainsKey(prefab))
-                        {
-                            for (int i = list.Count - 1; i >= 0; i--)
-                            {
-                                GameObject extra = list[i];
-                                if (extra != null)
-                                {
-                                    SilenceAndClearEffects(extra);
-                                    UnityEngine.Object.DestroyImmediate(extra);
-                                    resetCount++;
-                                }
-                            }
-                            pooledObjects.Remove(prefab);
-                        }
-                        continue;
-                    }
-
-                    entryByKey.TryGetValue(key, out LeanS0PooledPrefabState? entry);
-                    int targetCount = entry != null
-                        ? entry.TotalCount
-                        : (inProcessRestore && startupSizes.TryGetValue(prefab, out int startupSize) ? startupSize : -1);
-
-                    if (targetCount >= 0 && list.Count > targetCount)
-                    {
-                        for (int i = list.Count - 1; i >= targetCount; i--)
-                        {
-                            GameObject extra = list[i];
-                            if (extra != null && (hasActiveRecycler || (!extra.activeSelf && extra.transform.parent == pool.transform)))
-                            {
-                                SilenceAndClearEffects(extra);
-                                UnityEngine.Object.DestroyImmediate(extra);
-                                list.RemoveAt(i);
-                                resetCount++;
-                            }
-                        }
-                    }
-
-                    if (hasActiveRecycler)
-                    {
-                        if (inProcessRestore && targetCount == 0 && !startupSizes.ContainsKey(prefab) && list.Count == 0)
-                        {
-                            pooledObjects.Remove(prefab);
-                            continue;
-                        }
-
-                        if (inProcessRestore && targetCount > 0)
-                        {
-                            for (int i = 0; i < list.Count; i++)
-                            {
-                                GameObject old = list[i];
-                                if (old != null)
-                                {
-                                    SilenceAndClearEffects(old);
-                                    UnityEngine.Object.DestroyImmediate(old);
-                                }
-                                list[i] = InstantiateActiveRecyclerClone(prefab, pool.transform);
-                                resetCount++;
-                            }
-                            while (list.Count < targetCount)
-                            {
-                                list.Add(InstantiateActiveRecyclerClone(prefab, pool.transform));
-                                resetCount++;
-                            }
-                        }
-                        continue;
-                    }
-
-                    int limit = entry != null ? Math.Min(entry.AwakenedSlots.Length, list.Count) : list.Count;
-                    for (int i = 0; i < limit; i++)
-                    {
-                        bool shouldBeAwakened = entry != null && entry.AwakenedSlots[i];
-                        if (!inProcessRestore && shouldBeAwakened)
-                        {
-                            continue;
-                        }
-
-                        GameObject go = list[i];
-                        if (go == null || go.activeSelf)
-                        {
-                            continue;
-                        }
-                        if (!inProcessRestore && !IsObjectAwakened(go))
-                        {
-                            continue;
-                        }
-
-                        if (go.transform.parent == pool.transform)
-                        {
-                            bool prevPrefabActive = prefab.activeSelf;
-                            prefab.SetActive(false);
-                            GameObject fresh;
-                            try
-                            {
-                                fresh = UnityEngine.Object.Instantiate(prefab, pool.transform);
-                            }
-                            finally
-                            {
-                                prefab.SetActive(prevPrefabActive);
-                            }
-                            if (shouldBeAwakened)
-                            {
-                                fresh.SetActive(true);
-                                SilenceAndClearEffects(fresh);
-                                fresh.SetActive(false);
-                            }
-                            list[i] = fresh;
-                            UnityEngine.Object.DestroyImmediate(go);
-                            resetCount++;
-                        }
-                        else if (!shouldBeAwakened)
-                        {
-                            foreach (MonoBehaviour mb in go.GetComponentsInChildren<MonoBehaviour>(true))
-                            {
-                                if (mb == null || mb.isActiveAndEnabled || (IntPtr)CachedPointerField.GetValue(mb)! == IntPtr.Zero)
-                                {
-                                    continue;
-                                }
-                                if (HeroInactiveRandomTypes.Contains(mb.GetType()))
-                                {
-                                    if (TryReadMonoLifecycle(mb, out byte[] cur) && (cur[0] != 0 || cur[1] != 0))
-                                    {
-                                        WriteMonoLifecycle(mb, new byte[] { 0, 0 });
-                                        resetCount++;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                WriteMonoLifecycle(mb, new byte[] { 0, 0 });
+                resetCount++;
             }
-            finally
+
+            if (resetCount > 0)
             {
-                UnityEngine.Random.state = savedRng;
+                Modding.Logger.Log($"[HKTAS] Reset inactive Hero effect lifecycles at S0: reset={resetCount}");
             }
 
-            if (warmedCount > 0 || resetCount > 0)
-            {
-                Modding.Logger.Log($"[HKTAS] Synced ObjectPool slots for S0 parity: warmed={warmedCount}, reset={resetCount}");
-            }
-        }
-
-        /// <summary>
-        /// Recycles active DontDestroyOnLoad pooled combat/effect clones (such as Strike Nail R)
-        /// that survived a direct in-process scene transition before ApplyObjectPoolWarmup runs.
-        /// </summary>
-        internal static int RecycleActivePooledObjectsForInProcessRestore()
-        {
-            ObjectPool? pool = ObjectPool.instance;
-            if (pool == null)
-            {
-                return 0;
-            }
-
-            if (SpawnedObjectsField.GetValue(pool) is not Dictionary<GameObject, GameObject> spawned || spawned.Count == 0)
-            {
-                return 0;
-            }
-
-            var pooledObjects = PoolObjectsField.GetValue(pool) as Dictionary<GameObject, List<GameObject>>;
-            var startupPrefabs = new HashSet<GameObject>();
-            if (pool.startupPools != null)
-            {
-                foreach (ObjectPool.StartupPool sp in pool.startupPools)
-                {
-                    if (sp?.prefab != null)
-                    {
-                        startupPrefabs.Add(sp.prefab);
-                    }
-                }
-            }
-
-            List<KeyValuePair<GameObject, GameObject>> active = spawned
-                .Where(pair => pair.Key != null && !pair.Key.name.StartsWith("Grimmchild", StringComparison.Ordinal))
-                .ToList();
-            if (active.Count == 0)
-            {
-                return 0;
-            }
-
-            UnityEngine.Random.State savedRng = UnityEngine.Random.state;
-            int recycled = 0;
-            try
-            {
-                foreach (KeyValuePair<GameObject, GameObject> pair in active)
-                {
-                    GameObject go = pair.Key;
-                    GameObject prefab = pair.Value;
-                    if (go == null)
-                    {
-                        continue;
-                    }
-                    SilenceAndClearEffects(go);
-                    if (go.GetComponent<ActiveRecycler>() != null)
-                    {
-                        // Do NOT call ObjectPool.Recycle on ActiveRecycler clones: it sends "A RECYCLE"
-                        // to FSMs (e.g., Strike Nail R/Strike/Effect RandomFloat) and keeps them active.
-                        spawned.Remove(go);
-                        UnityEngine.Object.DestroyImmediate(go);
-                        if (prefab != null && startupPrefabs.Contains(prefab) && pooledObjects != null
-                            && pooledObjects.TryGetValue(prefab, out List<GameObject>? list))
-                        {
-                            list.Add(InstantiateActiveRecyclerClone(prefab, pool.transform));
-                        }
-                        recycled++;
-                    }
-                    else
-                    {
-                        ObjectPool.Recycle(go);
-                        recycled++;
-                    }
-                }
-            }
-            finally
-            {
-                UnityEngine.Random.state = savedRng;
-            }
-
-            if (recycled > 0)
-            {
-                Modding.Logger.Log($"[HKTAS] Recycled {recycled} active ObjectPool instance(s) for in-process S0 restore");
-            }
-            return recycled;
-        }
-
-        private static GameObject InstantiateActiveRecyclerClone(GameObject prefab, Transform poolTransform)
-        {
-            bool prevActive = prefab.activeSelf;
-            prefab.SetActive(true);
-            GameObject fresh = UnityEngine.Object.Instantiate(prefab, poolTransform);
-            fresh.transform.SetPosition2D(new Vector2(-20f, -20f));
-            prefab.SetActive(prevActive);
-            foreach (tk2dSprite sprite in fresh.GetComponentsInChildren<tk2dSprite>(true))
-            {
-                if (sprite != null)
-                {
-                    sprite.ForceBuild();
-                }
-            }
-            // Start PlayMakerFSMs synchronously inside savedRng so they do not invoke Start()/Random on frame S0.
-            foreach (PlayMakerFSM fsm in fresh.GetComponentsInChildren<PlayMakerFSM>(true))
-            {
-                if (fsm != null && fsm.Fsm != null && !fsm.Fsm.Started)
-                {
-                    fsm.Fsm.Start();
-                }
-            }
-            return fresh;
+            return resetCount;
         }
 
         private static void SilenceAndClearEffects(GameObject go)
@@ -688,118 +351,6 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 if (ps != null) ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
             }
-        }
-
-        private static bool IsObjectAwakened(GameObject? go)
-        {
-            if (go == null || !LoadingEngineClockProbe.IsPinnedEngineMatched)
-            {
-                return false;
-            }
-            foreach (MonoBehaviour mb in go.GetComponentsInChildren<MonoBehaviour>(true))
-            {
-                if (mb == null || (IntPtr)CachedPointerField.GetValue(mb)! == IntPtr.Zero)
-                {
-                    continue;
-                }
-                if (TryReadMonoLifecycle(mb, out byte[] lifecycle) && lifecycle[0] == 1)
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private static void BuildPrefabTables(
-            ObjectPool pool,
-            HeroController hero,
-            out Dictionary<GameObject, string> prefabToKey,
-            out Dictionary<string, GameObject> keyToPrefab)
-        {
-            var p2k = new Dictionary<GameObject, string>();
-            var k2p = new Dictionary<string, GameObject>(StringComparer.Ordinal);
-
-            void Register(string key, GameObject? go)
-            {
-                if (go == null || go.scene.IsValid() || k2p.ContainsKey(key) || p2k.ContainsKey(go))
-                {
-                    return;
-                }
-                k2p[key] = go;
-                p2k[go] = key;
-            }
-
-            void RegisterFields(string prefix, object target)
-            {
-                foreach (FieldInfo field in target.GetType().GetFields(AnyInstance))
-                {
-                    if (field.FieldType == typeof(GameObject))
-                    {
-                        var go = field.GetValue(target) as GameObject;
-                        if (go != null)
-                        {
-                            Register(prefix + field.Name + ":" + go.name, go);
-                        }
-                    }
-                    else if (typeof(Component).IsAssignableFrom(field.FieldType))
-                    {
-                        var comp = field.GetValue(target) as Component;
-                        if (comp != null)
-                        {
-                            Register(prefix + field.Name + ":" + comp.gameObject.name, comp.gameObject);
-                        }
-                    }
-                }
-            }
-
-            if (pool.startupPools != null)
-            {
-                for (int i = 0; i < pool.startupPools.Length; i++)
-                {
-                    GameObject? prefab = pool.startupPools[i]?.prefab;
-                    if (prefab != null)
-                    {
-                        Register($"startup:{i}:{prefab.name}", prefab);
-                    }
-                }
-            }
-
-            RegisterFields("hero:", hero);
-            foreach (MonoBehaviour child in hero.GetComponentsInChildren<MonoBehaviour>(true))
-            {
-                if (child != null && child != hero)
-                {
-                    RegisterFields($"hero-child:{GetRelativePath(hero.transform, child.transform)}:{child.GetType().Name}:", child);
-                }
-            }
-            if (GlobalPrefabDefaults.Instance != null)
-            {
-                RegisterFields("global:", GlobalPrefabDefaults.Instance);
-            }
-            if (GameManager.instance != null)
-            {
-                RegisterFields("gm:", GameManager.instance);
-            }
-
-            prefabToKey = p2k;
-            keyToPrefab = k2p;
-        }
-
-        private static string GetRelativePath(Transform root, Transform target)
-        {
-            if (target == root)
-            {
-                return string.Empty;
-            }
-            var parts = new List<string>();
-            Transform? cur = target;
-            while (cur != null && cur != root)
-            {
-                parts.Add(cur.name);
-                cur = cur.parent;
-            }
-            parts.Reverse();
-            return string.Join("/", parts);
         }
 
         private static readonly FieldInfo? OneAxisUpdateTickField = typeof(OneAxisInputControl).GetField("<UpdateTick>k__BackingField", AnyInstance);

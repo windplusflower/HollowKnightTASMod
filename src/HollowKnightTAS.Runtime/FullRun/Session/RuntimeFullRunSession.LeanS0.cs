@@ -118,7 +118,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 targetScene,
                 entryGateName,
                 applyUnityRuntime: true,
-                rngDigestReader: ReadCurrentRngSha256Safe);
+                rngDigestReader: ReadCurrentRngSha256Safe,
+                boundaryEnvironmentReset: LeanS0EnvironmentParity.ResetBoundaryEnvironment);
             leanS0RandomSeededForTargetScene = true;
             leanS0SeededTargetSceneName = targetScene;
 
@@ -522,12 +523,6 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private LeanS0GateReceipt ApplyLeanS0PacketAtTargetS0(LeanS0Packet packet, long currentNativeFrame)
         {
-            if (leanS0TargetInProcess)
-            {
-                LoadingAudioLifetimePolicy.ResetForInProcessRestore();
-                LeanS0EnvironmentParity.RecycleActivePooledObjectsForInProcessRestore();
-            }
-
             LeanS0SnapshotRuntime.ApplyAtTargetS0(
                 packet,
                 currentNativeFrame,
@@ -537,8 +532,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 replayMovie ?? throw new InvalidOperationException("Target replayMovie is null."),
                 (bytes, cursor) => CheckpointClockMethod("ImportCheckpointRandomState").Invoke(null, new object[] { bytes, cursor }),
                 (bytes, cursor) => CheckpointClockMethod("ImportCheckpointClockObserver").Invoke(null, new object[] { bytes, cursor }),
-                out CanonicalInputEpoch restoredOrigin,
-                inProcessRestore: leanS0TargetInProcess);
+                out CanonicalInputEpoch restoredOrigin);
 
             if (leanS0TargetInProcess)
             {
@@ -551,7 +545,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 packet.TargetSceneName,
                 packet.EntryGateName,
                 applyUnityRuntime: true,
-                rngDigestReader: ReadCurrentRngSha256Safe);
+                rngDigestReader: ReadCurrentRngSha256Safe,
+                boundaryEnvironmentReset: LeanS0EnvironmentParity.ResetBoundaryEnvironment);
 
             if (targetReceipt.Seed != packet.RngSeed
                 || !string.Equals(targetReceipt.RngSha256, packet.RngSha256, StringComparison.Ordinal))

@@ -22,6 +22,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         public string RngSha256 { get; set; } = string.Empty;
         public int RemovedStaleDamageDelegates { get; set; }
         public int RecycledLevelUnloadObjects { get; set; }
+        public int ResetObjectPoolInstances { get; set; }
+        public int ResetHeroInactiveLifecycles { get; set; }
         public bool NormalizedAltAttack { get; set; }
         public bool NormalizedInvulnerable { get; set; }
         public bool NormalizedNailCharging { get; set; }
@@ -110,7 +112,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             string? entryGateName,
             bool applyUnityRuntime = true,
             Action<int>? overrideRngInit = null,
-            Func<string>? rngDigestReader = null)
+            Func<string>? rngDigestReader = null,
+            Action<LeanS0GateReceipt, HeroController?>? boundaryEnvironmentReset = null)
         {
             string normalizedGate = entryGateName ?? string.Empty;
             int seed = LeanS0Seed.ComputeBoundarySeed(boundaryOrdinal, targetSceneName, normalizedGate);
@@ -122,6 +125,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 EntryGateName = normalizedGate,
                 Seed = seed
             };
+
+            if (applyUnityRuntime)
+            {
+                ExecuteUnityRuntimePhase(receipt, boundaryEnvironmentReset);
+            }
 
             if (overrideRngInit != null)
             {
@@ -137,11 +145,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 receipt.RngSha256 = rngDigestReader() ?? string.Empty;
             }
 
-            if (applyUnityRuntime)
-            {
-                ExecuteUnityRuntimePhase(receipt);
-            }
-
             return receipt;
         }
 
@@ -150,7 +153,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             => UnityEngine.Random.InitState(seed);
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static void ExecuteUnityRuntimePhase(LeanS0GateReceipt receipt)
+        private static void ExecuteUnityRuntimePhase(
+            LeanS0GateReceipt receipt,
+            Action<LeanS0GateReceipt, HeroController?>? boundaryEnvironmentReset)
         {
             HeroController? hero = HeroController.SilentInstance;
             if (hero != null)
@@ -162,6 +167,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             NormalizeHudFsms(receipt);
             NormalizeCameraShakeFsm(receipt);
             receipt.RecycledLevelUnloadObjects = RecycleLevelUnloadPooledObjects();
+            Action<LeanS0GateReceipt, HeroController?> resetHandler = boundaryEnvironmentReset
+                ?? throw new InvalidOperationException("LeanS0Gate boundary environment reset handler is required when applyUnityRuntime is true.");
+            resetHandler(receipt, hero);
         }
 
         internal static void NormalizeHeroController(
@@ -192,6 +200,41 @@ namespace HollowKnightTAS.Runtime.FullRun
                     hero.cState.nailCharging = false;
                     receipt.NormalizedNailCharging = true;
                 }
+
+                // Reset transient combat/environment flags that LeaveScene/EnterScene omit,
+                // so normal transitions and in-process/cold S0 restores share the same boundary state.
+                hero.cState.falling = false;
+                hero.cState.recoiling = false;
+                hero.cState.recoilFrozen = false;
+                hero.cState.casting = false;
+                hero.cState.castRecoiling = false;
+                hero.cState.wallJumping = false;
+                hero.cState.superDashing = false;
+                hero.cState.superDashOnWall = false;
+                hero.cState.spellQuake = false;
+                hero.cState.focusing = false;
+                hero.cState.lookingUp = false;
+                hero.cState.lookingDown = false;
+                hero.cState.lookingUpAnim = false;
+                hero.cState.lookingDownAnim = false;
+                hero.cState.dead = false;
+                hero.cState.hazardDeath = false;
+                hero.cState.hazardRespawning = false;
+                hero.cState.preventDash = false;
+                hero.cState.preventBackDash = false;
+                hero.cState.dashCooldown = false;
+                hero.cState.backDashCooldown = false;
+                hero.cState.freezeCharge = false;
+                hero.cState.inAcid = false;
+                hero.cState.swimming = false;
+                hero.cState.onConveyor = false;
+                hero.cState.onConveyorV = false;
+                hero.cState.inConveyorZone = false;
+                hero.cState.slidingLeft = false;
+                hero.cState.slidingRight = false;
+                hero.cState.touchingNonSlider = false;
+                hero.cState.nearBench = false;
+                hero.cState.inWalkZone = false;
             }
 
             if (AltAttackTimeField != null)

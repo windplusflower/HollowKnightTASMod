@@ -87,6 +87,89 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         }
 
         [TestMethod]
+        public void NormalizeHeroController_ClearsResidualCombatAndEnvironmentCStateFlags()
+        {
+#pragma warning disable SYSLIB0050
+            var hero = (HeroController)FormatterServices.GetUninitializedObject(typeof(HeroController));
+#pragma warning restore SYSLIB0050
+            hero.cState = new HeroControllerStates
+            {
+                facingRight = true,
+                transitioning = true,
+                falling = true,
+                recoiling = true,
+                recoilFrozen = true,
+                casting = true,
+                castRecoiling = true,
+                wallJumping = true,
+                superDashing = true,
+                superDashOnWall = true,
+                spellQuake = true,
+                focusing = true,
+                lookingUp = true,
+                lookingDown = true,
+                lookingUpAnim = true,
+                lookingDownAnim = true,
+                dead = true,
+                hazardDeath = true,
+                hazardRespawning = true,
+                preventDash = true,
+                preventBackDash = true,
+                dashCooldown = true,
+                backDashCooldown = true,
+                freezeCharge = true,
+                inAcid = true,
+                swimming = true,
+                onConveyor = true,
+                onConveyorV = true,
+                inConveyorZone = true,
+                slidingLeft = true,
+                slidingRight = true,
+                touchingNonSlider = true,
+                nearBench = true,
+                inWalkZone = true
+            };
+
+            var receipt = new LeanS0GateReceipt();
+            LeanS0Gate.NormalizeHeroController(hero, receipt);
+
+            Assert.IsTrue(hero.cState.facingRight);
+            Assert.IsTrue(hero.cState.transitioning);
+            Assert.IsFalse(hero.cState.falling);
+            Assert.IsFalse(hero.cState.recoiling);
+            Assert.IsFalse(hero.cState.recoilFrozen);
+            Assert.IsFalse(hero.cState.casting);
+            Assert.IsFalse(hero.cState.castRecoiling);
+            Assert.IsFalse(hero.cState.wallJumping);
+            Assert.IsFalse(hero.cState.superDashing);
+            Assert.IsFalse(hero.cState.superDashOnWall);
+            Assert.IsFalse(hero.cState.spellQuake);
+            Assert.IsFalse(hero.cState.focusing);
+            Assert.IsFalse(hero.cState.lookingUp);
+            Assert.IsFalse(hero.cState.lookingDown);
+            Assert.IsFalse(hero.cState.lookingUpAnim);
+            Assert.IsFalse(hero.cState.lookingDownAnim);
+            Assert.IsFalse(hero.cState.dead);
+            Assert.IsFalse(hero.cState.hazardDeath);
+            Assert.IsFalse(hero.cState.hazardRespawning);
+            Assert.IsFalse(hero.cState.preventDash);
+            Assert.IsFalse(hero.cState.preventBackDash);
+            Assert.IsFalse(hero.cState.dashCooldown);
+            Assert.IsFalse(hero.cState.backDashCooldown);
+            Assert.IsFalse(hero.cState.freezeCharge);
+            Assert.IsFalse(hero.cState.inAcid);
+            Assert.IsFalse(hero.cState.swimming);
+            Assert.IsFalse(hero.cState.onConveyor);
+            Assert.IsFalse(hero.cState.onConveyorV);
+            Assert.IsFalse(hero.cState.inConveyorZone);
+            Assert.IsFalse(hero.cState.slidingLeft);
+            Assert.IsFalse(hero.cState.slidingRight);
+            Assert.IsFalse(hero.cState.touchingNonSlider);
+            Assert.IsFalse(hero.cState.nearBench);
+            Assert.IsFalse(hero.cState.inWalkZone);
+        }
+
+        [TestMethod]
         public void RandomSeedSync_PreservesS0SeedAcrossBootstrapAndLoadingUntilTargetSceneReady()
         {
             // Target S0 restore starts with bootstrap handle 101 (e.g. GG_Workshop) and leanS0RandomSeededForTargetScene=true

@@ -406,6 +406,7 @@ namespace HollowKnightTAS.Companion.ViewModels
 
             if (canRestoreInProcess)
             {
+                var inProcessRestoreAttempted = false;
                 try
                 {
                     if (!startupBoot!.IsWaiting)
@@ -427,6 +428,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                     File.WriteAllText(tempMoviePath, new MovieV2Codec().WriteCanonical(candidate), new UTF8Encoding(false));
 
                     timing?.Mark("inprocess-checkpoint-restore-start");
+                    inProcessRestoreAttempted = true;
                     await ExecuteCheckpointRestoreSequenceAsync(
                         readyLiveClient,
                         availableCheckpoint!,
@@ -447,8 +449,12 @@ namespace HollowKnightTAS.Companion.ViewModels
                     System.Diagnostics.Trace.WriteLine("In-process checkpoint restore failed: " + ex.Message);
                     timing?.Mark("inprocess-checkpoint-restore-fallback");
                     restoredViaCheckpoint = false;
-                    if (IsNonRetryableCheckpointFailure(ex))
+                    if (inProcessRestoreAttempted || IsNonRetryableCheckpointFailure(ex))
+                    {
+                        if (inProcessRestoreAttempted && !IsPreFlightCleanStartRejection(ex))
+                            InvalidateSceneCheckpoint(activeDraftTree, availableCheckpoint?.CheckpointId);
                         availableCheckpoint = null;
+                    }
                 }
             }
 
@@ -521,6 +527,10 @@ namespace HollowKnightTAS.Companion.ViewModels
                     catch (Exception ex)
                     {
                         System.Diagnostics.Trace.WriteLine("Checkpoint restore failed: " + ex.Message);
+                        if (!IsPreFlightCleanStartRejection(ex))
+                        {
+                            InvalidateSceneCheckpoint(activeDraftTree, availableCheckpoint?.CheckpointId);
+                        }
                         if (!restoreStarted || IsPreFlightCleanStartRejection(ex))
                         {
                             timing?.Mark("checkpoint-stage-failed-continue-cold");
@@ -533,6 +543,7 @@ namespace HollowKnightTAS.Companion.ViewModels
                             // 恢复异常安全回退红线：安全回退到从第 0 帧完整冷重播！
                             timing?.Mark("checkpoint-restore-failed-fallback");
                             restoredViaCheckpoint = false;
+                            availableCheckpoint = null;
                             startupBoot?.Refresh();
                             if (startupBoot != null && !startupBoot.IsWaiting && fullRunMovies != null && !fullRunMovies.IsTerminal)
                             {

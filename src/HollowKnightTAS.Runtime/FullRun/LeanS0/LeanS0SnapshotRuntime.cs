@@ -154,9 +154,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 C11_Time = CaptureTimeState(gm),
                 C12_ControlPlane = CaptureControlPlane(ctx),
                 D3_MusicCue = CaptureAudioCues(gm),
-                D4_HeroHitCrack = CaptureHeroHitCrack(hero),
-                D6_ObjectPoolWarmup = LeanS0EnvironmentParity.CaptureObjectPoolWarmup(hero),
-                D7_HeroInactiveLifecycles = LeanS0EnvironmentParity.CaptureHeroInactiveLifecycles(hero),
                 C13_Camera = CaptureCameraState()
             };
 
@@ -191,8 +188,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             MovieV2Document targetMovie,
             Action<byte[], long> importRandom,
             Action<byte[], long> importObserver,
-            out CanonicalInputEpoch restoredOrigin,
-            bool inProcessRestore = false)
+            out CanonicalInputEpoch restoredOrigin)
         {
             if (packet == null) throw new ArgumentNullException(nameof(packet));
             LeanS0PacketCodec.Validate(packet);
@@ -231,6 +227,9 @@ namespace HollowKnightTAS.Runtime.FullRun
             // C9 Charm minions (Hatchlings count + Grimmchild Option B)
             ApplyCharmMinions(hero, packet.C9_CharmMinions);
 
+            // Synchronize HUD displays & charm-derived state deterministically at S0
+            LeanS0HudParity.SynchronizeAtTargetS0(hero, pd, packet.C5_PlayMakerGlobals);
+
             // C10 Input & Mouse previous-frame edge state
             ApplyInputContainer(packet.C10_Input, input, mouse, targetMovie);
 
@@ -239,15 +238,6 @@ namespace HollowKnightTAS.Runtime.FullRun
 
             // D3 Audio cues (best-effort informational sync, excluded from K3 verification)
             ApplyAudioCues(gm, packet.D3_MusicCue);
-
-            // D4 Hero Hit Crack native MonoBehaviour Awake/Start lifecycle parity
-            ApplyHeroHitCrack(hero, packet.D4_HeroHitCrack);
-
-            // D6 Persistent ObjectPool prefab warmup parity (e.g., Nail Terrain Hit Effect AudioSourcePitchRandomizer.Awake)
-            LeanS0EnvironmentParity.ApplyObjectPoolWarmup(hero, packet.D6_ObjectPoolWarmup, inProcessRestore);
-
-            // D7 Inactive HeroController child randomizer native lifecycle parity
-            LeanS0EnvironmentParity.ApplyHeroInactiveLifecycles(hero, packet.D7_HeroInactiveLifecycles);
 
             // C13 Persistent GameCameras / CameraController / CameraTarget parity
             ApplyCameraState(packet.C13_Camera);
@@ -520,16 +510,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                 PlayMakerFSM? lowHealthFx = FindHudFsm("Hud Canvas/Health", "Low Health FX");
                 if (lowHealthFx != null)
                 {
-                    if (!string.IsNullOrEmpty(state.LowHealthFxActiveState)
-                        && lowHealthFx.ActiveStateName != state.LowHealthFxActiveState)
-                    {
-                        lowHealthFx.SetState(state.LowHealthFxActiveState);
-                    }
-
                     FsmFloat? waitTime = lowHealthFx.FsmVariables?.FindFsmFloat("Wait Time");
                     if (waitTime != null)
                     {
                         waitTime.Value = state.LowHealthFxWaitTime;
+                    }
+
+                    if (!string.IsNullOrEmpty(state.LowHealthFxActiveState)
+                        && lowHealthFx.ActiveStateName != state.LowHealthFxActiveState)
+                    {
+                        lowHealthFx.SetState(state.LowHealthFxActiveState);
                     }
                 }
 
@@ -1350,49 +1340,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 AtmosCue? cue = Resources.FindObjectsOfTypeAll<AtmosCue>().FirstOrDefault(c => c != null && c.name == state.AtmosCueName);
                 if (cue != null) AudioCurrentAtmosCueField.SetValue(am, cue);
             }
-        }
-
-        private static LeanS0HeroHitCrackState? CaptureHeroHitCrack(HeroController hero)
-        {
-            GameObject? go = hero.damageEffectFSM?.FsmVariables.FindFsmGameObject("Hit Crack")?.Value;
-            if (go == null || go.activeSelf || go.activeInHierarchy)
-            {
-                return null;
-            }
-            CheckpointHeroHitCrackState captured = CheckpointHeroHitCrackState.Capture(hero);
-            return new LeanS0HeroHitCrackState
-            {
-                RotationFields = new Dictionary<string, string>(captured.RotationFields, StringComparer.Ordinal),
-                DeactivationFields = new Dictionary<string, string>(captured.DeactivationFields, StringComparer.Ordinal),
-                Lifecycle = (byte[])captured.Lifecycle.Clone(),
-                DeactivationLifecycle = (byte[])captured.DeactivationLifecycle.Clone(),
-                RotationEnabled = captured.RotationEnabled,
-                DeactivationEnabled = captured.DeactivationEnabled,
-                LocalPosition = FromVec3(captured.LocalPosition),
-                LocalRotation = FromQuat(captured.LocalRotation),
-                LocalScale = FromVec3(captured.LocalScale)
-            };
-        }
-
-        private static void ApplyHeroHitCrack(HeroController hero, LeanS0HeroHitCrackState? state)
-        {
-            if (state == null)
-            {
-                return;
-            }
-            var raw = new CheckpointHeroHitCrackState
-            {
-                RotationFields = new Dictionary<string, string>(state.RotationFields, StringComparer.Ordinal),
-                DeactivationFields = new Dictionary<string, string>(state.DeactivationFields, StringComparer.Ordinal),
-                Lifecycle = (byte[])state.Lifecycle.Clone(),
-                DeactivationLifecycle = (byte[])state.DeactivationLifecycle.Clone(),
-                RotationEnabled = state.RotationEnabled,
-                DeactivationEnabled = state.DeactivationEnabled,
-                LocalPosition = ToVec3(state.LocalPosition),
-                LocalRotation = ToQuat(state.LocalRotation),
-                LocalScale = ToVec3(state.LocalScale)
-            };
-            raw.PrepareApply(hero)();
         }
 
         private static float[] FromVec2(Vector2 v) => new[] { v.x, v.y };

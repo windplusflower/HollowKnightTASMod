@@ -189,6 +189,20 @@ namespace HollowKnightTAS.Companion.ViewModels
             }
         }
 
+        internal void InvalidateSceneCheckpoint(string? treeId, string? checkpointId)
+        {
+            if (string.IsNullOrWhiteSpace(checkpointId)) return;
+            try { SceneCheckpoints?.RemoveCheckpoint(checkpointId); }
+            catch { }
+
+            if (string.IsNullOrWhiteSpace(treeId) || worldlines == null) return;
+            worldlines.Update(library =>
+            {
+                var tree = library.Trees.FirstOrDefault(t => t.Id == treeId);
+                tree?.Checkpoints.RemoveAll(c => c.CheckpointId == checkpointId);
+            });
+        }
+
         private void SyncTreeCheckpoints(TimelineTree tree, long frame, string movie, int? oldTip, int? newTip)
         {
             if (tree == null || tree.Id.Length != 32 || frame < 0 || string.IsNullOrWhiteSpace(movie) || SceneCheckpoints == null) return;
@@ -217,6 +231,7 @@ namespace HollowKnightTAS.Companion.ViewModels
         {
             if (treeId == null || treeId.Length != 32 || targetFrame <= 0 || SceneCheckpoints == null) return null;
             var compatibleHeaders = SceneCheckpoints.CatalogTree(treeId)
+                .Where(h => h.RestoreQualified && h.ResumeMovieFrame <= targetFrame)
                 .Where(h => IsCheckpointBindingCompatible(h, candidateMovie))
                 .ToArray();
             if (compatibleHeaders.Length == 0) return null;

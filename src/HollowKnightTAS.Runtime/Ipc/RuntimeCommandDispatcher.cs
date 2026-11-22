@@ -669,6 +669,13 @@ namespace HollowKnightTAS.Runtime.Ipc
             catch (Exception exception)
             {
                 var errorCode = GetCommandErrorCode(exception);
+                try
+                {
+                    Modding.Logger.LogError($"[HKTAS] Command '{command.MessageType}' rejected ({errorCode}): {exception}");
+                }
+                catch
+                {
+                }
                 Publish(
                     IpcMessageTypes.CommandRejected,
                     new Dictionary<string, string>(

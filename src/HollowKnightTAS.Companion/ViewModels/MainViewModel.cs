@@ -271,6 +271,8 @@ namespace HollowKnightTAS.Companion.ViewModels
                         var boundary = await fullRunMovies.RunAsync(
                             this.startupBoot!.NativeCompletedFrames, CancellationToken.None);
                         if (boundary.Mode == "Fault") throw new InvalidOperationException(boundary.Error);
+                        if (SelectedSession?.Client is { IsConnected: true } liveClient)
+                            EnsureAutoSceneCheckpointCapture(liveClient);
                     }
                     else this.startupBoot!.Continue();
                     return;

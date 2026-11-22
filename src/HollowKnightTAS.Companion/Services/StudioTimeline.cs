@@ -141,6 +141,13 @@ namespace HollowKnightTAS.Companion.Services
             return result;
         }
 
+        private static bool IsOnSameMovieTrajectory(MovieV2Document doc, long totalFrames, TimelineCheckpoint c)
+        {
+            if (string.IsNullOrEmpty(c.InputPrefixSha256)) return true;
+            if (c.Frame < 0 || c.Frame > totalFrames) return false;
+            return MovieV2Prefix.ComputeInputPrefixSha256(doc, c.Frame) == c.InputPrefixSha256;
+        }
+
         public void RecordCheckpoint(string checkpointId, long frame, long transitionId, string movie)
         {
             if (string.IsNullOrWhiteSpace(checkpointId) || frame < 0 || string.IsNullOrWhiteSpace(movie)) return;
@@ -148,8 +155,19 @@ namespace HollowKnightTAS.Companion.Services
             var total = doc.Runs.Sum(r => r.RepeatCount);
             if (frame > total) return;
             var prefixSha = MovieV2Prefix.ComputeInputPrefixSha256(doc, frame);
-            Checkpoints.RemoveAll(c => c.CheckpointId == checkpointId
-                || (c.Frame == frame && c.TransitionId == transitionId && c.InputPrefixSha256 == prefixSha));
+            var trajectoryDiverged = Checkpoints.Any(c =>
+                IsOnSameMovieTrajectory(doc, total, c)
+                && ((c.TransitionId == transitionId && c.Frame != frame)
+                    || (c.Frame == frame && c.TransitionId != transitionId)
+                    || (c.TransitionId < transitionId && c.Frame >= frame)
+                    || (c.TransitionId > transitionId && c.Frame <= frame)));
+            Checkpoints.RemoveAll(c =>
+                c.CheckpointId == checkpointId
+                || (c.Frame == frame && c.TransitionId == transitionId && c.InputPrefixSha256 == prefixSha)
+                || (IsOnSameMovieTrajectory(doc, total, c)
+                    && (c.TransitionId == transitionId
+                        || c.Frame == frame
+                        || (trajectoryDiverged && (c.TransitionId >= transitionId || c.Frame >= frame)))));
             Checkpoints.Add(new TimelineCheckpoint
             {
                 CheckpointId = checkpointId,

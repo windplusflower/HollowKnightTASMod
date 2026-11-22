@@ -88,9 +88,12 @@
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0\LeanS0Mode.cs" Link="FullRun\LeanS0Mode.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0\LeanS0Gate.cs" Link="FullRun\LeanS0Gate.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0\LeanS0Packet.cs" Link="FullRun\LeanS0Packet.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0\LeanS0HudParity.cs" Link="FullRun\LeanS0HudParity.cs" />
     <Reference Include="Assembly-CSharp"><HintPath>$(HKManagedDir)\Assembly-CSharp.dll</HintPath></Reference>
     <Reference Include="UnityEngine"><HintPath>$(HKManagedDir)\UnityEngine.dll</HintPath></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(HKManagedDir)\UnityEngine.CoreModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.ParticleSystemModule"><HintPath>$(HKManagedDir)\UnityEngine.ParticleSystemModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.AudioModule"><HintPath>$(HKManagedDir)\UnityEngine.AudioModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine.UIModule"><HintPath>$(HKManagedDir)\UnityEngine.UIModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(HKManagedDir)\UnityEngine.IMGUIModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(HKManagedDir)\UnityEngine.TextRenderingModule.dll</HintPath></Reference>
