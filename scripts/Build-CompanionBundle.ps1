@@ -199,7 +199,7 @@ function Write-UnsignedCompanionManifest {
     $unsignedManifest = [ordered]@{
         schemaVersion = 1
         product = 'HollowKnightTAS.Companion'
-        version = '0.1.8'
+        version = '1.0.0'
         rid = 'win-x64'
         runtimeProtocolMin = 1
         runtimeProtocolMax = 1
