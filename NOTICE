@@ -1,0 +1,19 @@
+HollowKnightTASMod
+Copyright (c) 2026 windflower
+
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0).
+Pursuant to Section 7 of GPL-3.0, the following additional terms apply to this software and any derivative, repackaged, or wrapper works distributed with it:
+
+1. Attribution (Section 7b): Any modified version, redistribution, or bundled wrapper/frontend must retain this NOTICE and clearly credit "HollowKnightTASMod" and its original author (windflower) with a link to the official repository in both its user-facing documentation and software attribution notices.
+2. No Misrepresentation of Origin (Section 7c): The origin of this software must not be misrepresented. You may not claim, imply, or present the underlying TAS runtime, deterministic clock, checkpoint/rewind mechanisms, Studio editor, or automation interfaces of HollowKnightTASMod as your own original work. Modified or wrapped versions must be plainly marked as unofficial derivatives, not the original product.
+3. No Trademark / Name Grant (Section 7e): Neither the name "HollowKnightTASMod" nor the names of its authors may be used as the primary name of a derived product or to endorse derived/wrapped tools without prior written permission.
+
+---
+中文附加说明（依 GPL-3.0 第 7 条）：
+1. 来源署名（第 7b 条）：任何修改版、重分发包或捆绑本软件的外壳/前端工具，均须保留本声明，并在对外说明文档及软件关于信息中明确注明底层基于“HollowKnightTASMod”及原作者（windflower，附官方仓库链接）。
+2. 禁止歪曲来源或冒充原创（第 7c 条）：不得歪曲本软件的来源；不得将本软件实现的 TAS 运行时、确定性时钟、热回档、Studio 编辑器或自动化控制接口包装、表述或暗示为衍生者自身的原创成果；任何修改或封装版本均须明确标注为非官方衍生版本。
+3. 名称保护（第 7e 条）：未经事先书面许可，不得将“HollowKnightTASMod”或原作者名称用作衍生/套壳工具的主名称或用于背书宣传。
+
+Third-Party Notices:
+- LiveSplit.HollowKnight load-removal logic: MIT License (see third_party/LiveSplit.HollowKnight.LICENSE.txt).
+- Bundled FFmpeg binary (in full release bundles): distributed as a separate executable under its own license (see Tools/ffmpeg/LICENSE in release archives).

@@ -53,3 +53,7 @@ dotnet test tests/HollowKnightTAS.AgentBridge.Tests/HollowKnightTAS.AgentBridge.
 - [AI control guide](docs/AI-CONTROL.en.md) · [中文](docs/AI-CONTROL.md)
 - [Build guide](docs/BUILD.en.md) · [中文](docs/BUILD.md)
 - [Helper Mod compatibility](docs/HELPER-MOD-COMPATIBILITY.md)
+
+## License
+
+Licensed under [GPL-3.0](LICENSE) with Section 7 attribution and origin notice terms in [NOTICE](NOTICE).
