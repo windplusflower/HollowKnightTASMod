@@ -116,7 +116,7 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
     [TestMethod] public void BuiltRuntimeNativeReaderEntryValidatesStableAllocatedFixture()
     {
         var repo=new DirectoryInfo(AppContext.BaseDirectory);
-        while(repo!=null&&!File.Exists(Path.Combine(repo.FullName,"CURRENT.md")))repo=repo.Parent;
+        while(repo!=null&&!File.Exists(Path.Combine(repo.FullName,"HollowKnightTAS.sln")))repo=repo.Parent;
         Assert.IsNotNull(repo);
         var assembly=Assembly.LoadFrom(Path.Combine(repo.FullName,"src/HollowKnightTAS.Runtime/bin/Release/HollowKnightTAS.dll"));
         var type=assembly.GetType("HollowKnightTAS.Runtime.FullRun.LoadingNativePhysicsDigest",true)!;

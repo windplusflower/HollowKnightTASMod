@@ -86,7 +86,7 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
     {
         // Load the built production Runtime, not another linked helper copy.
         var repo = new DirectoryInfo(AppContext.BaseDirectory);
-        while (repo != null && !File.Exists(Path.Combine(repo.FullName, "CURRENT.md"))) repo = repo.Parent;
+        while (repo != null && !File.Exists(Path.Combine(repo.FullName, "HollowKnightTAS.sln"))) repo = repo.Parent;
         Assert.IsNotNull(repo);
         var assembly = Assembly.LoadFrom(Path.Combine(repo.FullName, "src/HollowKnightTAS.Runtime/bin/Release/HollowKnightTAS.dll"));
         var oracleType = assembly.GetType("HollowKnightTAS.Runtime.FullRun.LoadingGameplayOracle", true)!;
@@ -118,7 +118,7 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
     [TestMethod] public void ProductionTransparentModalGuardRejectsVisibleInteractiveAndInvalidStates()
     {
         var repo = new DirectoryInfo(AppContext.BaseDirectory);
-        while (repo != null && !File.Exists(Path.Combine(repo.FullName, "CURRENT.md"))) repo = repo.Parent;
+        while (repo != null && !File.Exists(Path.Combine(repo.FullName, "HollowKnightTAS.sln"))) repo = repo.Parent;
         Assert.IsNotNull(repo);
         var assembly = Assembly.LoadFrom(Path.Combine(repo.FullName, "src/HollowKnightTAS.Runtime/bin/Release/HollowKnightTAS.dll"));
         var guard = assembly.GetType("HollowKnightTAS.Runtime.FullRun.CanonicalMenuFlashColdPolicy", true)!
@@ -134,7 +134,7 @@ namespace HollowKnightTAS.Core.Tests.FullRun;
     [TestMethod] public void ProductionModalStartupAdmissionRejectsPauseConcurrencyAndOutOfScope()
     {
         var repo = new DirectoryInfo(AppContext.BaseDirectory);
-        while (repo != null && !File.Exists(Path.Combine(repo.FullName, "CURRENT.md"))) repo = repo.Parent;
+        while (repo != null && !File.Exists(Path.Combine(repo.FullName, "HollowKnightTAS.sln"))) repo = repo.Parent;
         Assert.IsNotNull(repo);
         var assembly = Assembly.LoadFrom(Path.Combine(repo.FullName, "src/HollowKnightTAS.Runtime/bin/Release/HollowKnightTAS.dll"));
         const BindingFlags flags = BindingFlags.Static | BindingFlags.NonPublic;
