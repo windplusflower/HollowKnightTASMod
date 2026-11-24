@@ -180,6 +180,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             var view = Value("view", "world");
             if (view == "fsms")
             {
+                EnsureSceneObservationAllowed();
                 if (fields.Keys.Any(key => key != "requestId" && key != "view" && key != "watches"))
                     throw new ArgumentException("FSM observations accept only view and watches.");
                 var json = Value("watches", "[]");
@@ -188,7 +189,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                     ?? throw new ArgumentException("watches must be an array.");
                 if (targets.Length > 32 || targets.Any(t => t == null || t.Length > 256))
                     throw new ArgumentException("At most 32 FSM targets of 256 characters are supported.");
-                return observationQueue.Invoke(frame => worldObserver.CaptureFsms(frame, movieFrame, targets));
+                return observationQueue.Invoke(frame =>
+                {
+                    EnsureSceneObservationAllowed();
+                    return worldObserver.CaptureFsms(frame, movieFrame, targets);
+                });
             }
             if (view == "info")
             {
@@ -206,6 +211,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             if (fields.ContainsKey("watches")) throw new ArgumentException("watches requires the info view.");
             if (view != "world" && view != "all" && view != "colliders" && view != "fsmCatalog") throw new ArgumentException("Unknown observation view.");
+            EnsureSceneObservationAllowed();
             var inactive = Value("includeInactive", "false");
             if (inactive != "true" && inactive != "false") throw new ArgumentException("includeInactive must be true or false.");
             var offset = int.Parse(Value("offset", "0"), CultureInfo.InvariantCulture);
@@ -215,8 +221,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (id.Length == 0)
             {
                 if (offset != 0) throw new ArgumentException("First snapshot request must start at offset zero.");
-                var capture = observationQueue.Invoke(frame => Tuple.Create(frame, movieFrame,
-                    worldObserver.Capture(frame, movieFrame, view, inactive == "true")));
+                var capture = observationQueue.Invoke(frame =>
+                {
+                    EnsureSceneObservationAllowed();
+                    return Tuple.Create(frame, movieFrame,
+                        worldObserver.Capture(frame, movieFrame, view, inactive == "true"));
+                });
                 id = observationCache.AddSnapshot(capture.Item1, capture.Item2, capture.Item3.MetadataJson,
                     capture.Item3.Objects.Select(x => Tuple.Create(x.Id, x.Kind, x.Json)), view);
             }
@@ -226,6 +236,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public Dictionary<string, string> ObserveObject(IReadOnlyDictionary<string, string> fields)
         {
             ValidateObservationFields(fields, "objectId", "expectedNativeFrame", "detailsId", "cursor", "maxCharacters");
+            EnsureSceneObservationAllowed();
             string Value(string key, string fallback) => fields.TryGetValue(key, out var value) ? value : fallback;
             var objectId = Value("objectId", "");
             if (objectId.Length == 0 || objectId.Length > 128) throw new ArgumentException("objectId is required.");
@@ -241,6 +252,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 if (cursor != 0) throw new ArgumentException("First details request must start at cursor zero.");
                 var capture = observationQueue.Invoke(frame =>
                 {
+                    EnsureSceneObservationAllowed();
                     if (expected.HasValue && expected.Value != frame)
                         throw new InvalidOperationException("Expected native frame is stale; pause and obtain a current snapshot.");
                     return Tuple.Create(frame, movieFrame, worldObserver.CaptureObjectDetails(objectId, frame, movieFrame));
@@ -248,6 +260,15 @@ namespace HollowKnightTAS.Runtime.FullRun
                 id = observationCache.AddDetails(objectId, capture.Item1, capture.Item2, capture.Item3);
             }
             return observationCache.ReadDetails(id, objectId, expected, cursor, maximum);
+        }
+
+        private void EnsureSceneObservationAllowed()
+        {
+            if (string.Equals(mode, "LeanS0TargetLoading", StringComparison.Ordinal)
+                || (GameManager.instance != null && GameManager.instance.IsInSceneTransition))
+            {
+                throw new InvalidOperationException("Scene transition in progress; world observation is temporarily unavailable.");
+            }
         }
 
         private static void ValidateObservationFields(IReadOnlyDictionary<string, string> fields, params string[] optional)

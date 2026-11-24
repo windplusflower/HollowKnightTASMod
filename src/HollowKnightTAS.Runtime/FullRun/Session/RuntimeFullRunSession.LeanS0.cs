@@ -467,12 +467,23 @@ namespace HollowKnightTAS.Runtime.FullRun
             throw new InvalidDataException("LeanS0 profileID is outside valid save slots 1..4: " + slot);
         }
 
+        private static readonly System.Reflection.FieldInfo[] UiMenuScreenFields = typeof(UIManager)
+            .GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)
+            .Where(field => field.FieldType == typeof(MenuScreen))
+            .ToArray();
+        private static readonly System.Reflection.FieldInfo? UiIsFadingMenuField = typeof(UIManager).GetField("isFadingMenu", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        private static readonly System.Reflection.FieldInfo? UiIgnoreUnpauseField = typeof(UIManager).GetField("ignoreUnpause", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        private static readonly System.Reflection.FieldInfo? UiMenuAnimationCounterField = typeof(UIManager).GetField("menuAnimationCounter", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        private static readonly System.Reflection.FieldInfo? UiGoToPauseMenuCoField = typeof(UIManager).GetField("goToPauseMenuCo", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        private static readonly System.Reflection.FieldInfo? UiTogglePauseCoField = typeof(UIManager).GetField("togglePauseCo", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        private static readonly System.Reflection.FieldInfo? UiLeavePauseMenuCoField = typeof(UIManager).GetField("leavePauseMenuCo", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
         private bool CanDirectTransitionForInProcessLeanS0()
         {
             GameManager? currentGm = GameManager.instance;
             HeroController? currentHero = HeroController.SilentInstance;
             return currentGm != null
-                && currentGm.gameState == GameState.PLAYING
+                && (currentGm.gameState == GameState.PLAYING || currentGm.gameState == GameState.PAUSED)
                 && !currentGm.IsInSceneTransition
                 && !firstLevelActivationPending
                 && currentHero != null
@@ -501,6 +512,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             mouse.SetFrameInputEnabled(false);
             if (canDirectTransition)
             {
+                if (currentGm != null
+                    && (currentGm.gameState == GameState.PAUSED
+                        || currentGm.isPaused
+                        || (currentGm.ui != null && currentGm.ui.uiState == UIState.PAUSED)))
+                {
+                    ClearInProcessPauseStateBeforeDirectTransition(currentGm);
+                }
                 LoadingAudioLifetimePolicy.ResetForInProcessRestore();
                 UnityEngine.Time.timeScale = 1f;
             }
@@ -516,6 +534,53 @@ namespace HollowKnightTAS.Runtime.FullRun
                     packet,
                     slot);
             }
+        }
+
+        private static void ClearInProcessPauseStateBeforeDirectTransition(GameManager currentGm)
+        {
+            GameCameras.instance?.ResumeCameraShake();
+            currentGm.actorSnapshotUnpaused?.TransitionTo(0f);
+            currentGm.isPaused = false;
+            currentGm.SetState(GameState.PLAYING);
+            TimeController.GenericTimeScale = 1f;
+            UnityEngine.Time.timeScale = 1f;
+
+            UIManager? ui = currentGm.ui;
+            if (ui != null)
+            {
+                ui.StopAllCoroutines();
+                UiIsFadingMenuField?.SetValue(ui, false);
+                UiIgnoreUnpauseField?.SetValue(ui, false);
+                UiMenuAnimationCounterField?.SetValue(ui, 0);
+                UiGoToPauseMenuCoField?.SetValue(ui, null);
+                UiTogglePauseCoField?.SetValue(ui, null);
+                UiLeavePauseMenuCoField?.SetValue(ui, null);
+
+                foreach (System.Reflection.FieldInfo field in UiMenuScreenFields)
+                {
+                    if (field.GetValue(ui) is MenuScreen screen
+                        && screen != null
+                        && screen.gameObject != null
+                        && screen.gameObject.activeInHierarchy
+                        && screen.screenCanvasGroup != null)
+                    {
+                        ui.HideMenuInstant(screen);
+                    }
+                }
+
+                if (ui.modalDimmer != null)
+                {
+                    ui.HideCanvasGroup(ui.modalDimmer);
+                }
+
+                ui.uiState = UIState.PLAYING;
+                ui.menuState = MainMenuState.MAIN_MENU;
+                ui.AudioGoToGameplay(0f);
+            }
+
+            MenuButtonList.ClearAllLastSelected();
+            HeroController.SilentInstance?.UnPause();
+            currentGm.inputHandler?.AllowPause();
         }
 
         private void BeginInMemoryContinueGameBootstrap(GameManager gm, LeanS0Packet packet, int packetSlot)

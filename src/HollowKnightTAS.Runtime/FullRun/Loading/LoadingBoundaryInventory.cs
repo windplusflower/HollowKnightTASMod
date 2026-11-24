@@ -152,10 +152,16 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private static void Bind(Transform node, string path, Dictionary<int, string> identities)
         {
+            if (node == null || node.gameObject.GetInstanceID() == 0) return;
             if (identities.Count >= 100000) throw new InvalidOperationException("Boundary hierarchy exceeds object budget.");
             identities.Add(node.gameObject.GetInstanceID(), path);
-            for (var index = 0; index < node.childCount; index++)
-                Bind(node.GetChild(index), path + "/" + node.GetChild(index).name + "[" + index + "]", identities);
+            var childCount = node.childCount;
+            for (var index = 0; index < childCount; index++)
+            {
+                var child = node.GetChild(index);
+                if (child == null || child.gameObject.GetInstanceID() == 0) continue;
+                Bind(child, path + "/" + child.name + "[" + index + "]", identities);
+            }
         }
 
         private static IEnumerable<DictionaryEntry> Entries(IDictionary table)

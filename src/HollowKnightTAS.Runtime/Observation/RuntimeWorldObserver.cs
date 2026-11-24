@@ -70,71 +70,53 @@ namespace HollowKnightTAS.Runtime.Observation
             var sceneRecords = new List<object>();
             int total = 0, inactiveFiltered = 0, viewFiltered = 0, failed = 0;
             var seen = new HashSet<int>();
+            var byScene = CollectAliveSceneObjects(scenes).ToLookup(go => go.scene.handle);
             foreach (var scene in scenes)
             {
                 int sceneObjects = 0, sceneReturned = 0;
-                GameObject[] roots;
-                try { roots = scene.GetRootGameObjects(); }
-                catch (Exception error)
+                foreach (var go in byScene[scene.handle])
                 {
-                    errors.Add(ObservationData.Map("scope", "sceneRoots", "scene", SceneData(scene), "error", ObservationData.Error(error)));
-                    continue;
-                }
-                foreach (var root in roots)
-                {
-                    Transform[] descendants;
-                    try { descendants = root.GetComponentsInChildren<Transform>(true); }
+                    if (go == null || go.GetInstanceID() == 0 || !seen.Add(go.GetInstanceID())) continue;
+                    total++; sceneObjects++;
+                    string id = Id(go);
+                    objects[id] = go;
+                    if (!go.activeInHierarchy && (!includeInactive || view == "colliders")) { inactiveFiltered++; continue; }
+                    try
+                    {
+                        if (view == "colliders")
+                        {
+                            var colliders = go.GetComponents<Collider2D>();
+                            if (!colliders.Any(collider => collider != null && ObservationColliders.Visible(collider, camera))) { viewFiltered++; continue; }
+                            var data = BaseObject(go, "collider");
+                            var allComponents = go.GetComponents<Component>();
+                            data["colliders"] = colliders.Where(collider => collider != null && ObservationColliders.Visible(collider, camera))
+                                .Select(collider => geometry.Capture(collider, Array.IndexOf(allComponents, collider), camera, Classify(collider, hero))).ToArray();
+                            results.Add(new ObservedObject(id, "collider", ObservationData.Json(data)));
+                        }
+                        else
+                        {
+                            var components = go.GetComponents<Component>();
+                            if (view == "world" && !Gameplay(components)) { viewFiltered++; continue; }
+                            string kind = Kind(components);
+                            var overview = CaptureOverview(go, components, kind, hero, player, camera);
+                            if (overview["errors"] is List<object> componentErrors && componentErrors.Count > 0)
+                                errors.Add(ObservationData.Map("scope", "objectComponents", "objectId", id, "errors", componentErrors));
+                            results.Add(new ObservedObject(id, kind, ObservationData.Json(overview)));
+                        }
+                        sceneReturned++;
+                    }
                     catch (Exception error)
                     {
-                        errors.Add(ObservationData.Map("scope", "hierarchy", "object", Reference(root), "error", ObservationData.Error(error)));
-                        continue;
-                    }
-                    foreach (var transform in descendants)
-                    {
-                        if (transform == null) continue;
-                        var go = transform.gameObject;
-                        if (!seen.Add(go.GetInstanceID())) continue;
-                        total++; sceneObjects++;
-                        string id = Id(go);
-                        objects[id] = go;
-                        if (!go.activeInHierarchy && (!includeInactive || view == "colliders")) { inactiveFiltered++; continue; }
-                        try
-                        {
-                            if (view == "colliders")
-                            {
-                                var colliders = go.GetComponents<Collider2D>();
-                                if (!colliders.Any(collider => collider != null && ObservationColliders.Visible(collider, camera))) { viewFiltered++; continue; }
-                                var data = BaseObject(go, "collider");
-                                var allComponents = go.GetComponents<Component>();
-                                data["colliders"] = colliders.Where(collider => collider != null && ObservationColliders.Visible(collider, camera))
-                                    .Select(collider => geometry.Capture(collider, Array.IndexOf(allComponents, collider), camera, Classify(collider, hero))).ToArray();
-                                results.Add(new ObservedObject(id, "collider", ObservationData.Json(data)));
-                            }
-                            else
-                            {
-                                var components = go.GetComponents<Component>();
-                                if (view == "world" && !Gameplay(components)) { viewFiltered++; continue; }
-                                string kind = Kind(components);
-                                var overview = CaptureOverview(go, components, kind, hero, player, camera);
-                                if (overview["errors"] is List<object> componentErrors && componentErrors.Count > 0)
-                                    errors.Add(ObservationData.Map("scope", "objectComponents", "objectId", id, "errors", componentErrors));
-                                results.Add(new ObservedObject(id, kind, ObservationData.Json(overview)));
-                            }
-                            sceneReturned++;
-                        }
-                        catch (Exception error)
-                        {
-                            failed++;
-                            var failure = BaseObject(go, "error");
-                            failure["error"] = ObservationData.Error(error);
-                            results.Add(new ObservedObject(id, "error", ObservationData.Json(failure)));
-                            errors.Add(ObservationData.Map("scope", "object", "objectId", id, "error", ObservationData.Error(error)));
-                            sceneReturned++;
-                        }
+                        failed++;
+                        var failure = BaseObject(go, "error");
+                        failure["error"] = ObservationData.Error(error);
+                        results.Add(new ObservedObject(id, "error", ObservationData.Json(failure)));
+                        errors.Add(ObservationData.Map("scope", "object", "objectId", id, "error", ObservationData.Error(error)));
+                        sceneReturned++;
                     }
                 }
                 var descriptor = SceneData(scene);
-                descriptor["rootCount"] = roots.Length;
+                descriptor["rootCount"] = scene.rootCount;
                 descriptor["objectCount"] = sceneObjects;
                 descriptor["returnedCount"] = sceneReturned;
                 sceneRecords.Add(descriptor);
@@ -256,7 +238,48 @@ namespace HollowKnightTAS.Runtime.Observation
 
         private void PruneObjects()
         {
-            foreach (var id in objects.Where(pair => pair.Value == null || Id(pair.Value) != pair.Key).Select(pair => pair.Key).ToArray()) objects.Remove(id);
+            foreach (var id in objects.Where(pair => pair.Value == null || pair.Value.GetInstanceID() == 0 || Id(pair.Value) != pair.Key).Select(pair => pair.Key).ToArray()) objects.Remove(id);
+        }
+
+        private static List<GameObject> CollectAliveSceneObjects(IReadOnlyCollection<Scene> scenes)
+        {
+            var validHandles = new HashSet<int>();
+            foreach (var scene in scenes)
+            {
+                if (scene.IsValid() && scene.isLoaded) validHandles.Add(scene.handle);
+            }
+
+            if (validHandles.Count == 0) return new List<GameObject>();
+
+            var collected = new List<(GameObject Go, int Handle, string Path, int SiblingIndex, int InstanceId)>();
+            foreach (var go in Resources.FindObjectsOfTypeAll<GameObject>())
+            {
+                if (go == null) continue;
+                int instanceId = go.GetInstanceID();
+                if (instanceId == 0) continue;
+                var scene = go.scene;
+                if (!scene.IsValid() || !scene.isLoaded || !validHandles.Contains(scene.handle)) continue;
+                var transform = go.transform;
+                collected.Add((go, scene.handle, ObservationData.Path(transform), transform.GetSiblingIndex(), instanceId));
+            }
+
+            collected.Sort((a, b) =>
+            {
+                int cmp = a.Handle.CompareTo(b.Handle);
+                if (cmp != 0) return cmp;
+                cmp = string.CompareOrdinal(a.Path, b.Path);
+                if (cmp != 0) return cmp;
+                cmp = a.SiblingIndex.CompareTo(b.SiblingIndex);
+                if (cmp != 0) return cmp;
+                return a.InstanceId.CompareTo(b.InstanceId);
+            });
+
+            var result = new List<GameObject>(collected.Count);
+            foreach (var item in collected)
+            {
+                result.Add(item.Go);
+            }
+            return result;
         }
 
         private string Id(GameObject go) => sessionId + ":" + go.scene.handle.ToString(CultureInfo.InvariantCulture) + ":" + go.GetInstanceID().ToString(CultureInfo.InvariantCulture);

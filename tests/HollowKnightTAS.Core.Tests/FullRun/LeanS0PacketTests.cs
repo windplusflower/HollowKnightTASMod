@@ -340,5 +340,98 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             LeanS0Packet decoded = LeanS0PacketCodec.DeserializeJson(json);
             Assert.IsNull(decoded.C14_ModRandom);
         }
+
+        [TestMethod]
+        public void EncodeDecode_RoundTrip_PreservesPendingBossStatueSetup()
+        {
+            LeanS0Packet original = CreateSamplePacket();
+            original.C3_BossSequence = new LeanS0BossSequenceState
+            {
+                IsInSequence = false,
+                WasCompleted = false,
+                BossIndex = -1,
+                LastSelectedButton = 1,
+                SequenceName = string.Empty,
+                HasCurrentData = false,
+                HasPendingSetup = true,
+                PendingLevel = 1,
+                PendingStatueSceneName = "GG_Ghost_Marmu",
+                PendingStatueStatePd = "statueStateMarmu",
+                PendingDreamStatueStatePd = string.Empty,
+                PendingStatueIsAlwaysUnlocked = true,
+                HasPendingCompletionCache = true,
+                HasPendingSequenceSetup = false
+            };
+
+            byte[] encoded = LeanS0PacketCodec.Encode(original);
+            LeanS0Packet decoded = LeanS0PacketCodec.Decode(encoded);
+
+            Assert.IsFalse(decoded.C3_BossSequence.HasCurrentData);
+            Assert.IsTrue(decoded.C3_BossSequence.HasPendingSetup);
+            Assert.AreEqual(1, decoded.C3_BossSequence.PendingLevel);
+            Assert.AreEqual("GG_Ghost_Marmu", decoded.C3_BossSequence.PendingStatueSceneName);
+            Assert.AreEqual("statueStateMarmu", decoded.C3_BossSequence.PendingStatueStatePd);
+            Assert.IsTrue(decoded.C3_BossSequence.PendingStatueIsAlwaysUnlocked);
+            Assert.IsTrue(decoded.C3_BossSequence.HasPendingCompletionCache);
+            Assert.IsFalse(decoded.C3_BossSequence.HasPendingSequenceSetup);
+        }
+
+        [TestMethod]
+        public void DeserializeJson_LegacyPacketWithoutPendingStatueIsAlwaysUnlocked_RemainsCompatible()
+        {
+            LeanS0Packet original = CreateSamplePacket();
+            string json = LeanS0PacketCodec.SerializeJson(original)
+                .Replace(",\"PendingStatueIsAlwaysUnlocked\":false", string.Empty, StringComparison.Ordinal);
+
+            Assert.IsFalse(json.Contains("PendingStatueIsAlwaysUnlocked", StringComparison.Ordinal));
+            LeanS0Packet decoded = LeanS0PacketCodec.DeserializeJson(json);
+            Assert.IsFalse(decoded.C3_BossSequence.PendingStatueIsAlwaysUnlocked);
+        }
+
+        [TestMethod]
+        public void EncodeDecode_RoundTrip_PreservesHeroSpatialPositionAndVelocity()
+        {
+            LeanS0Packet original = CreateSamplePacket();
+            original.C7_HeroController.Position = new[] { 189.17f, 63.41f, 0.004f };
+            original.C7_HeroController.RbPosition = new[] { 189.17f, 63.41f };
+            original.C7_HeroController.RbVelocity = new[] { 8.3f, -1.5f };
+
+            byte[] encoded = LeanS0PacketCodec.Encode(original);
+            LeanS0Packet decoded = LeanS0PacketCodec.Decode(encoded);
+
+            CollectionAssert.AreEqual(new[] { 189.17f, 63.41f, 0.004f }, decoded.C7_HeroController.Position);
+            CollectionAssert.AreEqual(new[] { 189.17f, 63.41f }, decoded.C7_HeroController.RbPosition);
+            CollectionAssert.AreEqual(new[] { 8.3f, -1.5f }, decoded.C7_HeroController.RbVelocity);
+        }
+
+        [TestMethod]
+        public void Validate_RejectsInvalidHeroSpatialArrayLengths()
+        {
+            LeanS0Packet badPos = CreateSamplePacket();
+            badPos.C7_HeroController.Position = new[] { 1f, 2f };
+            Assert.ThrowsExactly<InvalidDataException>(() => LeanS0PacketCodec.Validate(badPos));
+
+            LeanS0Packet badRbPos = CreateSamplePacket();
+            badRbPos.C7_HeroController.RbPosition = new[] { 1f, 2f, 3f };
+            Assert.ThrowsExactly<InvalidDataException>(() => LeanS0PacketCodec.Validate(badRbPos));
+
+            LeanS0Packet badRbVel = CreateSamplePacket();
+            badRbVel.C7_HeroController.RbVelocity = new[] { 1f };
+            Assert.ThrowsExactly<InvalidDataException>(() => LeanS0PacketCodec.Validate(badRbVel));
+        }
+
+        [TestMethod]
+        public void DeserializeJson_LegacyPacketWithoutHeroSpatialFields_RemainsCompatible()
+        {
+            LeanS0Packet original = CreateSamplePacket();
+            string json = LeanS0PacketCodec.SerializeJson(original)
+                .Replace(",\"Position\":null,\"RbPosition\":null,\"RbVelocity\":null", string.Empty, StringComparison.Ordinal);
+
+            Assert.IsFalse(json.Contains("\"Position\"", StringComparison.Ordinal));
+            LeanS0Packet decoded = LeanS0PacketCodec.DeserializeJson(json);
+            Assert.IsNull(decoded.C7_HeroController.Position);
+            Assert.IsNull(decoded.C7_HeroController.RbPosition);
+            Assert.IsNull(decoded.C7_HeroController.RbVelocity);
+        }
     }
 }

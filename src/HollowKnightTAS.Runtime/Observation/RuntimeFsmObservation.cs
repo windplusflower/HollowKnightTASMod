@@ -24,11 +24,37 @@ namespace HollowKnightTAS.Runtime.Observation
             PruneObjects();
             foreach (var key in fsmTargets.Where(p => p.Value == null).Select(p => p.Key).ToArray()) fsmTargets.Remove(key);
             var items = new List<ObservedObject>();
+            var validHandles = new HashSet<int>();
             foreach (var scene in scenes)
-            foreach (var root in scene.GetRootGameObjects())
-            foreach (var transform in root.GetComponentsInChildren<Transform>(true))
             {
-                var go = transform.gameObject;
+                if (scene.IsValid() && scene.isLoaded) validHandles.Add(scene.handle);
+            }
+            var targetMap = new Dictionary<int, GameObject>();
+            void CollectOwners<T>() where T : Component
+            {
+                foreach (var comp in Resources.FindObjectsOfTypeAll<T>())
+                {
+                    if (comp == null || comp.GetInstanceID() == 0) continue;
+                    var owner = comp.gameObject;
+                    if (owner == null || owner.GetInstanceID() == 0) continue;
+                    var ownerScene = owner.scene;
+                    if (!ownerScene.IsValid() || !ownerScene.isLoaded || !validHandles.Contains(ownerScene.handle)) continue;
+                    targetMap[owner.GetInstanceID()] = owner;
+                }
+            }
+            CollectOwners<PlayMakerFSM>();
+            CollectOwners<HealthManager>();
+            var orderedTargets = targetMap.Values
+                .Select(go => (Go: go, Handle: go.scene.handle, Path: ObservationData.Path(go.transform), SiblingIndex: go.transform.GetSiblingIndex(), InstanceId: go.GetInstanceID()))
+                .OrderBy(x => x.Handle)
+                .ThenBy(x => x.Path, StringComparer.Ordinal)
+                .ThenBy(x => x.SiblingIndex)
+                .ThenBy(x => x.InstanceId)
+                .Select(x => x.Go);
+
+            foreach (var go in orderedTargets)
+            {
+                var transform = go.transform;
                 var components = go.GetComponents<PlayMakerFSM>();
                 bool enemy = go.GetComponent<HealthManager>() != null;
                 if (components.Length == 0 && !enemy) continue;

@@ -31,6 +31,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public bool NormalizedSoulOrbFsm { get; set; }
         public bool NormalizedLowHealthFsm { get; set; }
         public bool NormalizedCameraShakeFsm { get; set; }
+        public bool NormalizedHeroLightFsm { get; set; }
     }
 
     /// <summary>
@@ -104,6 +105,14 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private static readonly FieldInfo? FsmRemoveEventsField = typeof(Fsm).GetField(
             "removeEvents",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? TweenActionEventsField = typeof(HutongGames.PlayMaker.Actions.iTweenFsmAction).GetField(
+            "itweenEvents",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? WaitActionTimerField = typeof(HutongGames.PlayMaker.Actions.Wait).GetField(
+            "timer",
             BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
 
         private static readonly (FieldInfo? Field, object ZeroValue)[] TransientHeroResetFields =
@@ -203,6 +212,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 NormalizeHeroController(hero, receipt, hasActiveBossScene: BossSceneController.Instance != null, checkUnityLifetime: true);
                 NormalizeHeroFsms(hero, receipt);
+                NormalizeHeroLightFsms(hero, receipt);
             }
 
             NormalizeHudFsms(receipt);
@@ -382,6 +392,133 @@ namespace HollowKnightTAS.Runtime.FullRun
                 {
                     queueTimer.Value = 0f;
                     receipt.NormalizedDreamNailQueueTimer = true;
+                }
+            }
+        }
+
+        internal static void NormalizeHeroLightFsms(HeroController hero, LeanS0GateReceipt receipt)
+        {
+            if (hero == null || receipt == null)
+            {
+                return;
+            }
+
+            SpriteRenderer? heroLight = hero.heroLight;
+            if (heroLight == null || heroLight.gameObject == null)
+            {
+                return;
+            }
+
+            UnityEngine.Random.State savedRng = UnityEngine.Random.state;
+            try
+            {
+                bool removedTweens = StopAndRemoveITweens(heroLight.gameObject, restorePositionAnchor: false);
+                iTweenFSMEvents[] residualEvents = heroLight.gameObject.GetComponentsInChildren<iTweenFSMEvents>(true);
+                foreach (iTweenFSMEvents ev in residualEvents)
+                {
+                    if (ev != null)
+                    {
+                        UnityEngine.Object.DestroyImmediate(ev);
+                        removedTweens = true;
+                    }
+                }
+
+                bool normalized = removedTweens;
+                foreach (PlayMakerFSM fsm in heroLight.GetComponents<PlayMakerFSM>())
+                {
+                    if (fsm == null || fsm.Fsm == null || !fsm.Fsm.Initialized)
+                    {
+                        continue;
+                    }
+
+                    bool clearedEvents = ClearFsmEventList(FsmDelayedEventsField, fsm.Fsm);
+                    if (ClearFsmEventList(FsmUpdateEventsField, fsm.Fsm)) clearedEvents = true;
+                    if (ClearFsmEventList(FsmRemoveEventsField, fsm.Fsm)) clearedEvents = true;
+                    if (clearedEvents) normalized = true;
+
+                    if (string.Equals(fsm.FsmName, "HeroLight Control", StringComparison.Ordinal))
+                    {
+                        FsmVector3? idleScale = fsm.FsmVariables?.FindFsmVector3("Idle Scale");
+                        bool hasIdleScale = idleScale != null && idleScale.Value != Vector3.zero;
+                        bool scaleMismatch = hasIdleScale && heroLight.transform.localScale != idleScale!.Value;
+                        bool notIdle = !string.Equals(fsm.ActiveStateName, "Idle", StringComparison.Ordinal);
+
+                        if (removedTweens || clearedEvents || scaleMismatch || notIdle)
+                        {
+                            ResetFsmStatesAndActions(fsm.Fsm);
+                            if (hasIdleScale)
+                            {
+                                heroLight.transform.localScale = idleScale!.Value;
+                            }
+                            if (fsm.Fsm.GetState("Idle") != null)
+                            {
+                                fsm.SetState("Idle");
+                            }
+                            FsmPreviousActiveStateField?.SetValue(fsm.Fsm, null);
+                            FsmLastTransitionField?.SetValue(fsm.Fsm, null);
+                            normalized = true;
+                        }
+                    }
+                    else if (string.Equals(fsm.FsmName, "color_fader", StringComparison.Ordinal))
+                    {
+                        if (!string.Equals(fsm.ActiveStateName, "Init", StringComparison.Ordinal)
+                            && fsm.Fsm.GetState("Init") != null)
+                        {
+                            ResetFsmStatesAndActions(fsm.Fsm);
+                            fsm.SetState("Init");
+                            FsmPreviousActiveStateField?.SetValue(fsm.Fsm, null);
+                            FsmLastTransitionField?.SetValue(fsm.Fsm, null);
+                            normalized = true;
+                        }
+                    }
+                }
+
+                if (normalized)
+                {
+                    receipt.NormalizedHeroLightFsm = true;
+                }
+            }
+            finally
+            {
+                UnityEngine.Random.state = savedRng;
+            }
+        }
+
+        private static void ResetFsmStatesAndActions(Fsm fsm)
+        {
+            if (fsm.States == null)
+            {
+                return;
+            }
+
+            foreach (FsmState state in fsm.States)
+            {
+                if (state == null) continue;
+                state.ResetLoopCount();
+                state.ActiveActions?.Clear();
+                if (FsmStateFinishedActionsField?.GetValue(state) is IList finishedList)
+                {
+                    finishedList.Clear();
+                }
+                FsmStateActiveField?.SetValue(state, false);
+                FsmStateFinishedField?.SetValue(state, false);
+                FsmStateActiveActionField?.SetValue(state, null);
+                FsmStateActiveActionIndexField?.SetValue(state, 0);
+                if (state.Actions == null) continue;
+                foreach (FsmStateAction action in state.Actions)
+                {
+                    if (action == null) continue;
+                    action.Active = false;
+                    action.Finished = false;
+                    action.Entered = false;
+                    if (action is HutongGames.PlayMaker.Actions.Wait && WaitActionTimerField != null)
+                    {
+                        WaitActionTimerField.SetValue(action, 0f);
+                    }
+                    if (action is HutongGames.PlayMaker.Actions.iTweenFsmAction && TweenActionEventsField != null)
+                    {
+                        TweenActionEventsField.SetValue(action, null);
+                    }
                 }
             }
         }

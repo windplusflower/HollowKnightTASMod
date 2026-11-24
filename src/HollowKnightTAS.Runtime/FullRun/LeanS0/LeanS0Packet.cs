@@ -83,6 +83,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public string PendingStatueSceneName { get; set; } = string.Empty;
         public string PendingStatueStatePd { get; set; } = string.Empty;
         public string PendingDreamStatueStatePd { get; set; } = string.Empty;
+        public bool PendingStatueIsAlwaysUnlocked { get; set; }
         public bool HasPendingCompletionCache { get; set; }
         public bool HasPendingSequenceSetup { get; set; }
     }
@@ -159,6 +160,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         public bool TakeNoDamage { get; set; }
         public bool BlockerFix { get; set; }
         public int JumpedSteps { get; set; }
+        public float[]? Position { get; set; }
+        public float[]? RbPosition { get; set; }
+        public float[]? RbVelocity { get; set; }
     }
 
     public sealed class LeanS0KnightFsmsState
@@ -656,6 +660,12 @@ namespace HollowKnightTAS.Runtime.FullRun
                         throw new InvalidDataException("LeanS0 C14_ModRandom instance entry is invalid.");
                     }
                 }
+            }
+            if ((packet.C7_HeroController.Position != null && packet.C7_HeroController.Position.Length != 3)
+                || (packet.C7_HeroController.RbPosition != null && packet.C7_HeroController.RbPosition.Length != 2)
+                || (packet.C7_HeroController.RbVelocity != null && packet.C7_HeroController.RbVelocity.Length != 2))
+            {
+                throw new InvalidDataException("LeanS0 C7_HeroController spatial array dimensions are invalid.");
             }
             if (packet.C12_ControlPlane.MovieFrame < 0 || packet.C12_ControlPlane.NativeFrame < 0
                 || packet.C12_ControlPlane.ConsumedSamples < 0 || packet.C12_ControlPlane.SkippedLoadingFrames < 0)

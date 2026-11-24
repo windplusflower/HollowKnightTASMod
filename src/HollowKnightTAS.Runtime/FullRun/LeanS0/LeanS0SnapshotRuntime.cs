@@ -71,6 +71,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             ?? throw new MissingMethodException("BossSequenceController.SetupBossScene");
         private static readonly FieldInfo BossLastSelectedField = typeof(BossChallengeUI).GetField("lastSelectedButton", AnyStatic)
             ?? throw new MissingFieldException("BossChallengeUI.lastSelectedButton");
+        private static readonly FieldInfo? BossChallengePrimaryLevelField = CanonicalBossChallengeOriginal.Primary?.GetField("level", AnyInstance);
+        private static readonly FieldInfo? BossChallengePrimaryUiField = CanonicalBossChallengeOriginal.Primary?.GetField("<>4__this", AnyInstance);
+        private static readonly FieldInfo? BossChallengePrimaryCachedField = CanonicalBossChallengeOriginal.Primary?.GetField("<>9__1", AnyInstance);
+        private static readonly FieldInfo? BossChallengeUiStatueField = typeof(BossChallengeUI).GetField("bossStatue", AnyInstance);
 
         private static readonly FieldInfo TimeSlowedCountField = typeof(GameManager).GetField("timeSlowedCount", AnyInstance)
             ?? throw new MissingFieldException("GameManager.timeSlowedCount");
@@ -310,7 +314,33 @@ namespace HollowKnightTAS.Runtime.FullRun
                     dto.PendingStatueSceneName = ctx.Statue.BossScene != null ? ctx.Statue.BossScene.sceneName ?? string.Empty : string.Empty;
                     dto.PendingStatueStatePd = ctx.Statue.StatueStatePD ?? string.Empty;
                     dto.PendingDreamStatueStatePd = ctx.Statue.DreamStatueStatePD ?? string.Empty;
+                    dto.PendingStatueIsAlwaysUnlocked = ctx.Statue.IsAlwaysUnlocked;
                     dto.HasPendingCompletionCache = ctx.CachedCompletion != null;
+                }
+                else if (setup.Target != null
+                    && setup.Target.GetType() == CanonicalBossChallengeOriginal.Primary
+                    && BossChallengePrimaryLevelField != null
+                    && BossChallengePrimaryUiField != null
+                    && BossChallengeUiStatueField != null)
+                {
+                    object closure = setup.Target;
+                    object? ui = BossChallengePrimaryUiField.GetValue(closure);
+                    if (!ReferenceEquals(ui, null))
+                    {
+                        var statue = BossChallengeUiStatueField.GetValue(ui) as BossStatue;
+                        if (!ReferenceEquals(statue, null))
+                        {
+                            BossScene? bossScene = statue.bossScene;
+                            object? cached = BossChallengePrimaryCachedField?.GetValue(closure);
+                            dto.HasPendingSetup = true;
+                            dto.PendingLevel = (int)BossChallengePrimaryLevelField.GetValue(closure)!;
+                            dto.PendingStatueSceneName = !ReferenceEquals(bossScene, null) ? bossScene.sceneName ?? string.Empty : string.Empty;
+                            dto.PendingStatueStatePd = statue.statueStatePD ?? string.Empty;
+                            dto.PendingDreamStatueStatePd = statue.dreamStatueStatePD ?? string.Empty;
+                            dto.PendingStatueIsAlwaysUnlocked = statue.isAlwaysUnlocked;
+                            dto.HasPendingCompletionCache = !ReferenceEquals(cached, null);
+                        }
+                    }
                 }
                 else if (decl == typeof(BossSequenceController) || decl?.DeclaringType == typeof(BossSequenceController))
                 {
@@ -332,6 +362,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             {
                 BossCurrentDataField.SetValue(null, null);
                 BossCurrentSequenceField.SetValue(null, null);
+                RestorePendingBossSetup(state);
                 return;
             }
 
@@ -377,7 +408,40 @@ namespace HollowKnightTAS.Runtime.FullRun
             BossCurrentDataField.SetValue(null, data);
             BossCurrentSequenceField.SetValue(null, seq);
 
-            if (state.HasPendingSequenceSetup)
+            RestorePendingBossSetup(state);
+        }
+
+        private static void RestorePendingBossSetup(LeanS0BossSequenceState state)
+        {
+            if (state.HasPendingSetup)
+            {
+                BossScene? bossScene = null;
+                if (!string.IsNullOrEmpty(state.PendingStatueSceneName))
+                {
+                    bossScene = Resources.FindObjectsOfTypeAll<BossScene>()
+                        .FirstOrDefault(s => s != null && (string.Equals(s.sceneName, state.PendingStatueSceneName, StringComparison.Ordinal)
+                            || string.Equals(s.name, state.PendingStatueSceneName, StringComparison.Ordinal)));
+                }
+
+                var context = new CanonicalBossChallengeContext
+                {
+                    Level = state.PendingLevel,
+                    Statue = new CanonicalBossStatueContext
+                    {
+                        StatueStatePD = state.PendingStatueStatePd,
+                        DreamStatueStatePD = state.PendingDreamStatueStatePd,
+                        IsAlwaysUnlocked = state.PendingStatueIsAlwaysUnlocked,
+                        BossScene = bossScene
+                    }
+                };
+                if (state.HasPendingCompletionCache)
+                {
+                    context.CachedCompletion = context.Complete;
+                }
+
+                BossSceneController.SetupEvent = context.Setup;
+            }
+            else if (state.HasPendingSequenceSetup)
             {
                 BossSetupBossSceneMethod.Invoke(null, null);
             }
@@ -679,6 +743,8 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private static LeanS0HeroControllerState CaptureHeroController(HeroController hero)
         {
+            Vector3 pos = hero.transform.position;
+            Rigidbody2D? rb = hero.GetComponent<Rigidbody2D>();
             return new LeanS0HeroControllerState
             {
                 FacingRight = hero.cState != null && hero.cState.facingRight,
@@ -694,7 +760,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 WieldingLantern = (bool)HcWieldingLantern.GetValue(hero)!,
                 TakeNoDamage = (bool)HcTakeNoDamage.GetValue(hero)!,
                 BlockerFix = (bool)HcBlockerFix.GetValue(hero)!,
-                JumpedSteps = (int)HcJumpedSteps.GetValue(hero)!
+                JumpedSteps = (int)HcJumpedSteps.GetValue(hero)!,
+                Position = new[] { pos.x, pos.y, pos.z },
+                RbPosition = rb != null ? new[] { rb.position.x, rb.position.y } : null,
+                RbVelocity = rb != null ? new[] { rb.velocity.x, rb.velocity.y } : null
             };
         }
 
@@ -711,6 +780,21 @@ namespace HollowKnightTAS.Runtime.FullRun
                     hero.FaceLeft();
                 }
             }
+            hero.transform.position = (state.Position != null && state.Position.Length == 3)
+                ? new Vector3(state.Position[0], state.Position[1], state.Position[2])
+                : new Vector3(-20000f, 20000f, 0f);
+            Rigidbody2D? rb = hero.GetComponent<Rigidbody2D>();
+            if (rb != null)
+            {
+                rb.position = (state.RbPosition != null && state.RbPosition.Length == 2)
+                    ? new Vector2(state.RbPosition[0], state.RbPosition[1])
+                    : new Vector2(hero.transform.position.x, hero.transform.position.y);
+                rb.velocity = (state.RbVelocity != null && state.RbVelocity.Length == 2)
+                    ? new Vector2(state.RbVelocity[0], state.RbVelocity[1])
+                    : Vector2.zero;
+            }
+            Physics2D.SyncTransforms();
+
             HcExitedSuperDashing.SetValue(hero, state.ExitedSuperDashing);
             HcExitedQuake.SetValue(hero, state.ExitedQuake);
             HcEnterWithoutInput.SetValue(hero, state.EnterWithoutInput);
