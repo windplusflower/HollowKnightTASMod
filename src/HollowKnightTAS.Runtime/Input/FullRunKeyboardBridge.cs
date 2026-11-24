@@ -70,6 +70,16 @@ namespace HollowKnightTAS.Runtime.Input
         }
         public void Prepare(IEnumerable<GameInputSample> samples) => state.Prepare(samples);
         public void Complete() => state.Complete();
+        public bool IsVirtualKeyHeld(short keyCode)
+            => keys.Count != 0 && keys.Contains(keyCode) && active() && state.Held(keyCode);
+        public static bool EvaluateKeyCodeSet(IReadOnlyCollection<short>? heldKeys, short keyCode)
+        {
+            if (heldKeys == null || heldKeys.Count == 0) return false;
+            if (heldKeys is ISet<short> set) return set.Contains(keyCode);
+            foreach (var key in heldKeys)
+                if (key == keyCode) return true;
+            return false;
+        }
         internal short[] CapturePrevious() => state.CapturePrevious();
         internal short[] CaptureCurrent() => state.CaptureCurrent();
         internal short[] CaptureConfigured() => keys.OrderBy(key => key).ToArray();

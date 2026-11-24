@@ -37,12 +37,16 @@ namespace HollowKnightTAS.Runtime.Input
         private static readonly FieldInfo[] CheckpointManagerFields = new[] { "initialTime", "currentTime", "lastUpdateTime", "currentTick", "<CommandWasPressed>k__BackingField" }
             .Select(name => typeof(InputManager).GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
                 ?? throw new MissingFieldException(typeof(InputManager).FullName, name)).ToArray();
+        private static readonly FieldInfo InputManagerActionSetsField = CheckpointScalarFields.Declared(typeof(InputManager), true)
+            .Single(f => f.Name == "playerActionSets");
         private bool checkpointInputImported;
+        private static IEnumerable<PlayerActionSet> AllRegisteredActionSets()
+            => InputManagerActionSetsField.GetValue(null) as IEnumerable<PlayerActionSet>
+                ?? throw new InvalidOperationException("InControl action sets are unavailable.");
         private static PlayerActionSet[] CheckpointRegisteredSets()
         {
             var activeHero = InputHandler.Instance?.inputActions;
-            return (CheckpointScalarFields.Declared(typeof(InputManager), true).Single(f => f.Name == "playerActionSets").GetValue(null)
-                as IEnumerable<PlayerActionSet> ?? throw new InvalidOperationException("InControl action sets are unavailable."))
+            return AllRegisteredActionSets()
                 .Where(set => set is HeroActions
                     ? (activeHero == null || ReferenceEquals(set, activeHero))
                     : (set is InputModuleBinder.MyActionSet
@@ -137,7 +141,57 @@ namespace HollowKnightTAS.Runtime.Input
                 lease.Prepare(suspended ? new short[saved.Actions.Length] : GetActions(set, saved.Channel).Select(a => Quantize(a.Value)).ToArray());
             }
             foreach (var application in applications) application();
+            SyncThirdPartyActionSetsAfterCheckpoint(state.KeyboardPrevious, state.KeyboardCurrent);
             checkpointInputImported = true;
+        }
+
+        private void SyncThirdPartyActionSetsAfterCheckpoint(short[] previousKeys, short[] currentKeys)
+        {
+            var prevHeld = new HashSet<short>(previousKeys);
+            var currHeld = new HashSet<short>(currentKeys);
+            foreach (var set in AllRegisteredActionSets())
+            {
+                if (set == null || TryIdentify(set, out _) || CustomKnightInputGuard.IsCustomKnightSet(set))
+                    continue;
+                var actions = set.Actions;
+                for (var index = 0; index < actions.Count; index++)
+                {
+                    var action = actions[index];
+                    if (action == null) continue;
+                    var prevPressed = EvaluateActionPressed(
+                        action,
+                        code => FullRunKeyboardBridge.EvaluateKeyCodeSet(prevHeld, code),
+                        includeScratch,
+                        excludeScratch);
+                    var currPressed = EvaluateActionPressed(
+                        action,
+                        code => FullRunKeyboardBridge.EvaluateKeyCodeSet(currHeld, code),
+                        includeScratch,
+                        excludeScratch);
+                    SyncOneAxisControlState(action, prevPressed, currPressed, set.Enabled);
+                }
+            }
+        }
+
+        private static InputControlState CreateControlState(bool pressed)
+        {
+            var controlState = default(InputControlState);
+            controlState.Set(pressed);
+            return controlState;
+        }
+
+        private static void SyncOneAxisControlState(
+            OneAxisInputControl control,
+            bool lastPressed,
+            bool thisPressed,
+            bool ownerEnabled)
+        {
+            OneAxisOwnerEnabledField.SetValue(control, ownerEnabled);
+            OneAxisLastStateField.SetValue(control, CreateControlState(lastPressed));
+            OneAxisThisStateField.SetValue(control, CreateControlState(thisPressed));
+            OneAxisNextStateField.SetValue(control, default(InputControlState));
+            OneAxisPendingCommitField.SetValue(control, false);
+            OneAxisClearInputStateField.SetValue(control, false);
         }
     }
 }

@@ -14,11 +14,16 @@ namespace HollowKnightTAS.Runtime.Input
         private readonly Dictionary<PlayerActionSet, BindingSource[][]> originals
             = new Dictionary<PlayerActionSet, BindingSource[][]>();
 
-        public bool TryPrepare(PlayerActionSet set)
+        internal static bool IsCustomKnightSet(PlayerActionSet set)
         {
             var type = set.GetType();
-            if (type.FullName != "CustomKnight.KeyBinds"
-                || type.Assembly.GetName().Name != "CustomKnight") return false;
+            return type.FullName == "CustomKnight.KeyBinds"
+                && type.Assembly.GetName().Name == "CustomKnight";
+        }
+
+        public bool TryPrepare(PlayerActionSet set)
+        {
+            if (!IsCustomKnightSet(set)) return false;
             if (originals.ContainsKey(set)) return true;
 
             var actions = set.Actions.ToArray();

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using HollowKnightTAS.Core.Movie;
 using InControl;
 
@@ -9,8 +10,39 @@ namespace HollowKnightTAS.Runtime.Input
 {
     public sealed partial class FullRunActionSetAdapter : IDisposable
     {
+        private static readonly FieldInfo OneAxisOwnerEnabledField = typeof(OneAxisInputControl).GetField("ownerEnabled", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(OneAxisInputControl).FullName, "ownerEnabled");
+        private static readonly FieldInfo OneAxisPendingTickField = typeof(OneAxisInputControl).GetField("pendingTick", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(OneAxisInputControl).FullName, "pendingTick");
+        private static readonly FieldInfo OneAxisPendingCommitField = typeof(OneAxisInputControl).GetField("pendingCommit", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(OneAxisInputControl).FullName, "pendingCommit");
+        private static readonly FieldInfo OneAxisClearInputStateField = typeof(OneAxisInputControl).GetField("clearInputState", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(OneAxisInputControl).FullName, "clearInputState");
+        private static readonly FieldInfo OneAxisLastStateField = typeof(OneAxisInputControl).GetField("lastState", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(OneAxisInputControl).FullName, "lastState");
+        private static readonly FieldInfo OneAxisNextStateField = typeof(OneAxisInputControl).GetField("nextState", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(OneAxisInputControl).FullName, "nextState");
+        private static readonly FieldInfo OneAxisThisStateField = typeof(OneAxisInputControl).GetField("thisState", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(OneAxisInputControl).FullName, "thisState");
+        private static readonly FieldInfo PlayerActionSetOneAxisActionsField = typeof(PlayerActionSet).GetField("oneAxisActions", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(PlayerActionSet).FullName, "oneAxisActions");
+        private static readonly FieldInfo PlayerActionSetTwoAxisActionsField = typeof(PlayerActionSet).GetField("twoAxisActions", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(PlayerActionSet).FullName, "twoAxisActions");
+        private static readonly FieldInfo PlayerActionSetUpdateTickField = typeof(PlayerActionSet).GetField("<UpdateTick>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(PlayerActionSet).FullName, "<UpdateTick>k__BackingField");
+        private static readonly Action<PlayerOneAxisAction, ulong, float> PlayerOneAxisActionUpdate = (Action<PlayerOneAxisAction, ulong, float>)Delegate.CreateDelegate(
+            typeof(Action<PlayerOneAxisAction, ulong, float>),
+            typeof(PlayerOneAxisAction).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic, null, new[] { typeof(ulong), typeof(float) }, null)
+                ?? throw new MissingMethodException(typeof(PlayerOneAxisAction).FullName, "Update"));
+        private static readonly Action<PlayerTwoAxisAction, ulong, float> PlayerTwoAxisActionUpdate = (Action<PlayerTwoAxisAction, ulong, float>)Delegate.CreateDelegate(
+            typeof(Action<PlayerTwoAxisAction, ulong, float>),
+            typeof(PlayerTwoAxisAction).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic, null, new[] { typeof(ulong), typeof(float) }, null)
+                ?? throw new MissingMethodException(typeof(PlayerTwoAxisAction).FullName, "Update"));
+
         private readonly List<ActionSetLease> leases = new List<ActionSetLease>();
         private readonly CustomKnightInputGuard customKnightInputs = new CustomKnightInputGuard();
+        private readonly List<int> includeScratch = new List<int>(8);
+        private readonly List<int> excludeScratch = new List<int>(8);
         private MovieV2Document? movie;
         private FullRunKeyboardBridge? keyboard;
         private IReadOnlyList<GameInputSample> customSamples = Array.Empty<GameInputSample>();
@@ -263,14 +295,9 @@ namespace HollowKnightTAS.Runtime.Input
             // They belong to no Movie frame and must not consume the prepared next frame.
             if (!IsNativeFrameActive) return;
             var originalCalled = false;
+            var isThirdParty = false;
             try
             {
-                if (fault.Length != 0 || currentFrame < 0)
-                {
-                    originalCalled = true;
-                    original(self, updateTick, deltaTime);
-                    return;
-                }
                 // Cosmetic hotkeys are deliberately neutral during both recording and replay.
                 // They are not gameplay channels and must not consume Movie input samples.
                 if (customKnightInputs.TryPrepare(self))
@@ -279,7 +306,18 @@ namespace HollowKnightTAS.Runtime.Input
                     original(self, updateTick, deltaTime);
                     return;
                 }
-                var channel = Identify(self);
+                if (!TryIdentify(self, out var channel))
+                {
+                    isThirdParty = true;
+                    UpdateThirdPartyActionSet(self, updateTick, deltaTime);
+                    return;
+                }
+                if (fault.Length != 0 || currentFrame < 0)
+                {
+                    originalCalled = true;
+                    original(self, updateTick, deltaTime);
+                    return;
+                }
                 var actions = GetActions(self, channel);
                 if (suspended)
                 {
@@ -364,19 +402,118 @@ namespace HollowKnightTAS.Runtime.Input
             catch (Exception exception)
             {
                 Fail(exception.GetType().Name + ": " + exception.Message);
-                if (!originalCalled) original(self, updateTick, deltaTime);
+                if (!originalCalled && !isThirdParty) original(self, updateTick, deltaTime);
             }
         }
 
-        private static GameInputChannel Identify(PlayerActionSet set)
+        private void UpdateThirdPartyActionSet(PlayerActionSet self, ulong updateTick, float deltaTime)
         {
-            if (set is HeroActions) return GameInputChannel.Hero;
-            if (set is PreMenuInputModuleActionAdaptor.PreMenuInputModuleActions)
-                return GameInputChannel.PreMenu;
-            if (set is InputModuleBinder.MyActionSet) return GameInputChannel.Binder;
-            throw new InvalidDataException("Unknown PlayerActionSet entered the full-run input path: "
-                + set.GetType().FullName);
+            var allowCustomKeys = replaying && !suspended && IsNativeFrameActive
+                && fault.Length == 0 && currentFrame >= 0 && self.Enabled && keyboard != null;
+            Func<short, bool>? isKeyCodeHeld = allowCustomKeys ? keyboard!.IsVirtualKeyHeld : null;
+
+            var actions = self.Actions;
+            for (var index = 0; index < actions.Count; index++)
+            {
+                var action = actions[index];
+                if (action == null) continue;
+                var pressed = allowCustomKeys && EvaluateActionPressed(action, isKeyCodeHeld!, includeScratch, excludeScratch);
+                OneAxisOwnerEnabledField.SetValue(action, self.Enabled);
+                SanitizePendingTick(action, updateTick);
+                action.UpdateWithState(pressed, updateTick, deltaTime);
+                action.Commit();
+            }
+
+            if (PlayerActionSetOneAxisActionsField.GetValue(self) is List<PlayerOneAxisAction> oneAxisList)
+            {
+                for (var index = 0; index < oneAxisList.Count; index++)
+                {
+                    var oneAxis = oneAxisList[index];
+                    if (oneAxis == null) continue;
+                    SanitizePendingTick(oneAxis, updateTick);
+                    PlayerOneAxisActionUpdate(oneAxis, updateTick, deltaTime);
+                }
+            }
+
+            if (PlayerActionSetTwoAxisActionsField.GetValue(self) is List<PlayerTwoAxisAction> twoAxisList)
+            {
+                for (var index = 0; index < twoAxisList.Count; index++)
+                {
+                    var twoAxis = twoAxisList[index];
+                    if (twoAxis == null) continue;
+                    SanitizePendingTick(twoAxis.Left, updateTick);
+                    SanitizePendingTick(twoAxis.Right, updateTick);
+                    SanitizePendingTick(twoAxis.Up, updateTick);
+                    SanitizePendingTick(twoAxis.Down, updateTick);
+                    PlayerTwoAxisActionUpdate(twoAxis, updateTick, deltaTime);
+                }
+            }
+
+            if (self.UpdateTick < updateTick)
+                PlayerActionSetUpdateTickField.SetValue(self, updateTick);
         }
+
+        private static bool EvaluateActionPressed(
+            PlayerAction action,
+            Func<short, bool> isKeyCodeHeld,
+            List<int> includes,
+            List<int> excludes)
+        {
+            var bindings = action.UnfilteredBindings;
+            for (var index = 0; index < bindings.Count; index++)
+            {
+                if (bindings[index] is not KeyBindingSource keyBinding) continue;
+                var combo = keyBinding.Control;
+                var includeCount = combo.IncludeCount;
+                if (includeCount == 0) continue;
+
+                includes.Clear();
+                for (var i = 0; i < includeCount; i++)
+                    includes.Add((int)combo.GetInclude(i));
+
+                excludes.Clear();
+                var excludeCount = combo.ExcludeCount;
+                for (var i = 0; i < excludeCount; i++)
+                    excludes.Add((int)combo.GetExclude(i));
+
+                if (InControlKeyComboEvaluator.EvaluateCombo(includes, excludes, isKeyCodeHeld))
+                    return true;
+            }
+            return false;
+        }
+
+        private static void SanitizePendingTick(OneAxisInputControl control, ulong updateTick)
+        {
+            var pendingTick = (ulong)OneAxisPendingTickField.GetValue(control)!;
+            if (pendingTick > updateTick)
+            {
+                OneAxisPendingTickField.SetValue(control, 0UL);
+                OneAxisPendingCommitField.SetValue(control, false);
+            }
+            else if ((bool)OneAxisPendingCommitField.GetValue(control)! && pendingTick != updateTick)
+            {
+                OneAxisPendingCommitField.SetValue(control, false);
+            }
+        }
+
+        private static bool TryIdentify(PlayerActionSet set, out GameInputChannel channel)
+        {
+            if (set is HeroActions) { channel = GameInputChannel.Hero; return true; }
+            if (set is PreMenuInputModuleActionAdaptor.PreMenuInputModuleActions)
+            {
+                channel = GameInputChannel.PreMenu;
+                return true;
+            }
+            if (set is InputModuleBinder.MyActionSet) { channel = GameInputChannel.Binder; return true; }
+            channel = default;
+            return false;
+        }
+
+        private static GameInputChannel Identify(PlayerActionSet set)
+            => TryIdentify(set, out var channel)
+                ? channel
+                : throw new InvalidDataException("Unknown PlayerActionSet entered the full-run input path: "
+                    + set.GetType().FullName);
 
         private static PlayerAction[] GetActions(PlayerActionSet set, GameInputChannel channel)
         {
