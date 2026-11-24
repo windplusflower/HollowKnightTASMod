@@ -225,5 +225,120 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             LeanS0Packet decoded = LeanS0PacketCodec.DeserializeJson(json);
             Assert.AreEqual(0, decoded.GameManagerProfileId);
         }
+
+        [TestMethod]
+        public void EncodeDecode_RoundTrip_PreservesC14ModRandom()
+        {
+            LeanS0Packet original = CreateSamplePacket();
+            var seedArray = new int[56];
+            for (int i = 0; i < seedArray.Length; i++)
+            {
+                seedArray[i] = (i * 131) + 17;
+            }
+
+            original.C14_ModRandom = new LeanS0ModRandomState
+            {
+                Ordinals = new Dictionary<string, uint>(StringComparer.Ordinal)
+                {
+                    ["PaleCourt:BossA:Update:12"] = 2,
+                    ["HuKing:Controller:Awake:4"] = 1
+                },
+                Instances = new[]
+                {
+                    new LeanS0ModRandomInstanceState
+                    {
+                        CallsiteKey = "PaleCourt:BossA:Update:12",
+                        Ordinal = 0,
+                        Inext = 14,
+                        Inextp = 35,
+                        SeedArray = seedArray
+                    }
+                }
+            };
+
+            byte[] encoded = LeanS0PacketCodec.Encode(original);
+            LeanS0Packet decoded = LeanS0PacketCodec.Decode(encoded);
+
+            Assert.IsNotNull(decoded.C14_ModRandom);
+            Assert.AreEqual(2, decoded.C14_ModRandom!.Ordinals.Count);
+            Assert.AreEqual(2u, decoded.C14_ModRandom.Ordinals["PaleCourt:BossA:Update:12"]);
+            Assert.AreEqual(1u, decoded.C14_ModRandom.Ordinals["HuKing:Controller:Awake:4"]);
+            Assert.AreEqual(1, decoded.C14_ModRandom.Instances.Length);
+            Assert.AreEqual("PaleCourt:BossA:Update:12", decoded.C14_ModRandom.Instances[0].CallsiteKey);
+            Assert.AreEqual(0u, decoded.C14_ModRandom.Instances[0].Ordinal);
+            Assert.AreEqual(14, decoded.C14_ModRandom.Instances[0].Inext);
+            Assert.AreEqual(35, decoded.C14_ModRandom.Instances[0].Inextp);
+            CollectionAssert.AreEqual(seedArray, decoded.C14_ModRandom.Instances[0].SeedArray);
+        }
+
+        [TestMethod]
+        public void Validate_RejectsInvalidC14ModRandom()
+        {
+            LeanS0Packet badSeedLen = CreateSamplePacket();
+            badSeedLen.C14_ModRandom = new LeanS0ModRandomState
+            {
+                Ordinals = new Dictionary<string, uint> { ["Mod:Type:Method:0"] = 1 },
+                Instances = new[]
+                {
+                    new LeanS0ModRandomInstanceState
+                    {
+                        CallsiteKey = "Mod:Type:Method:0",
+                        Ordinal = 0,
+                        Inext = 1,
+                        Inextp = 22,
+                        SeedArray = new int[55]
+                    }
+                }
+            };
+            Assert.ThrowsExactly<InvalidDataException>(() => LeanS0PacketCodec.Validate(badSeedLen));
+
+            LeanS0Packet badInext = CreateSamplePacket();
+            badInext.C14_ModRandom = new LeanS0ModRandomState
+            {
+                Ordinals = new Dictionary<string, uint> { ["Mod:Type:Method:0"] = 1 },
+                Instances = new[]
+                {
+                    new LeanS0ModRandomInstanceState
+                    {
+                        CallsiteKey = "Mod:Type:Method:0",
+                        Ordinal = 0,
+                        Inext = 56,
+                        Inextp = 22,
+                        SeedArray = new int[56]
+                    }
+                }
+            };
+            Assert.ThrowsExactly<InvalidDataException>(() => LeanS0PacketCodec.Validate(badInext));
+
+            LeanS0Packet badInextp = CreateSamplePacket();
+            badInextp.C14_ModRandom = new LeanS0ModRandomState
+            {
+                Ordinals = new Dictionary<string, uint> { ["Mod:Type:Method:0"] = 1 },
+                Instances = new[]
+                {
+                    new LeanS0ModRandomInstanceState
+                    {
+                        CallsiteKey = "Mod:Type:Method:0",
+                        Ordinal = 0,
+                        Inext = 10,
+                        Inextp = -1,
+                        SeedArray = new int[56]
+                    }
+                }
+            };
+            Assert.ThrowsExactly<InvalidDataException>(() => LeanS0PacketCodec.Validate(badInextp));
+        }
+
+        [TestMethod]
+        public void DeserializeJson_LegacyPacketWithoutC14ModRandom_RemainsCompatible()
+        {
+            LeanS0Packet original = CreateSamplePacket();
+            string json = LeanS0PacketCodec.SerializeJson(original)
+                .Replace(",\"C14_ModRandom\":null", string.Empty, StringComparison.Ordinal);
+
+            Assert.IsFalse(json.Contains("C14_ModRandom", StringComparison.Ordinal));
+            LeanS0Packet decoded = LeanS0PacketCodec.DeserializeJson(json);
+            Assert.IsNull(decoded.C14_ModRandom);
+        }
     }
 }

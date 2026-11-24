@@ -146,52 +146,33 @@ namespace HollowKnightTAS.Runtime.FullRun
 
             try
             {
-                LoadingAudioLifetimePolicy.ResetForInProcessRestore();
-
-                ObjectPool? pool = ObjectPool.instance;
-                if (pool == null)
+                using (StartupObjectPoolRegistry.EnterRebuildScope())
                 {
-                    GameManager.instance?.DoDestroyPersonalPools();
-                    return 0;
-                }
+                    LoadingAudioLifetimePolicy.ResetForInProcessRestore();
 
-                var preservedPrefabs = new HashSet<GameObject>();
-                if (SpawnedObjectsField.GetValue(pool) is Dictionary<GameObject, GameObject> spawned && spawned.Count > 0)
-                {
-                    foreach (KeyValuePair<GameObject, GameObject> pair in spawned.ToList())
+                    ObjectPool? pool = ObjectPool.instance;
+                    if (pool == null)
                     {
-                        GameObject go = pair.Key;
-                        if (go != null && go.name.StartsWith("Grimmchild", StringComparison.Ordinal))
-                        {
-                            if (pair.Value != null)
-                            {
-                                preservedPrefabs.Add(pair.Value);
-                            }
-                            continue;
-                        }
-
-                        spawned.Remove(pair.Key);
-                        if (go != null)
-                        {
-                            SilenceAndClearEffects(go);
-                            UnityEngine.Object.DestroyImmediate(go);
-                            resetCount++;
-                        }
+                        GameManager.instance?.DoDestroyPersonalPools();
+                        return 0;
                     }
-                }
 
-                var pooledObjects = PoolObjectsField.GetValue(pool) as Dictionary<GameObject, List<GameObject>>;
-                if (pooledObjects != null)
-                {
-                    foreach (List<GameObject> list in pooledObjects.Values)
+                    var preservedPrefabs = new HashSet<GameObject>();
+                    if (SpawnedObjectsField.GetValue(pool) is Dictionary<GameObject, GameObject> spawned && spawned.Count > 0)
                     {
-                        if (list == null)
+                        foreach (KeyValuePair<GameObject, GameObject> pair in spawned.ToList())
                         {
-                            continue;
-                        }
+                            GameObject go = pair.Key;
+                            if (go != null && go.name.StartsWith("Grimmchild", StringComparison.Ordinal))
+                            {
+                                if (pair.Value != null)
+                                {
+                                    preservedPrefabs.Add(pair.Value);
+                                }
+                                continue;
+                            }
 
-                        foreach (GameObject go in list)
-                        {
+                            spawned.Remove(pair.Key);
                             if (go != null)
                             {
                                 SilenceAndClearEffects(go);
@@ -201,49 +182,88 @@ namespace HollowKnightTAS.Runtime.FullRun
                         }
                     }
 
-                    pooledObjects.Clear();
-                }
-
-                // Clear stale PersonalObjectPool delegates from the unloaded scene before rebuilding startup pools.
-                GameManager.instance?.DoDestroyPersonalPools();
-
-                if (pooledObjects != null)
-                {
-                    if (pool.startupPools != null)
+                    var pooledObjects = PoolObjectsField.GetValue(pool) as Dictionary<GameObject, List<GameObject>>;
+                    if (pooledObjects != null)
                     {
-                        foreach (ObjectPool.StartupPool sp in pool.startupPools)
+                        foreach (List<GameObject> list in pooledObjects.Values)
                         {
-                            if (sp?.prefab == null)
+                            if (list == null)
                             {
                                 continue;
                             }
 
-                            if (sp.prefab.GetComponent<ActiveRecycler>() != null)
+                            foreach (GameObject go in list)
                             {
-                                // ActiveRecycler startup clones self-destroy after their initial animation;
-                                // keep an empty slot list so first spawn behaves identically across all runs.
-                                if (!pooledObjects.ContainsKey(sp.prefab))
+                                if (go != null)
                                 {
-                                    pooledObjects[sp.prefab] = new List<GameObject>();
+                                    SilenceAndClearEffects(go);
+                                    UnityEngine.Object.DestroyImmediate(go);
+                                    resetCount++;
                                 }
+                            }
+                        }
+
+                        pooledObjects.Clear();
+                    }
+
+                    // Clear stale PersonalObjectPool delegates from the unloaded scene before rebuilding startup pools.
+                    GameManager.instance?.DoDestroyPersonalPools();
+
+                    if (pooledObjects != null)
+                    {
+                        if (pool.startupPools != null)
+                        {
+                            foreach (ObjectPool.StartupPool sp in pool.startupPools)
+                            {
+                                if (sp?.prefab == null)
+                                {
+                                    continue;
+                                }
+
+                                if (sp.prefab.GetComponent<ActiveRecycler>() != null)
+                                {
+                                    // ActiveRecycler startup clones self-destroy after their initial animation;
+                                    // keep an empty slot list so first spawn behaves identically across all runs.
+                                    if (!pooledObjects.ContainsKey(sp.prefab))
+                                    {
+                                        pooledObjects[sp.prefab] = new List<GameObject>();
+                                    }
+                                    continue;
+                                }
+
+                                ObjectPool.CreatePool(sp.prefab, sp.size);
+                            }
+                        }
+
+                        if (hero != null)
+                        {
+                            EnsureInitialHeroDeathPool(pooledObjects, hero.acidDeathPrefab);
+                            EnsureInitialHeroDeathPool(pooledObjects, hero.spikeDeathPrefab);
+                        }
+
+                        foreach (GameObject preservedPrefab in preservedPrefabs)
+                        {
+                            if (preservedPrefab != null && !pooledObjects.ContainsKey(preservedPrefab))
+                            {
+                                pooledObjects[preservedPrefab] = new List<GameObject>();
+                            }
+                        }
+
+                        foreach (StartupObjectPoolCatalogEntry<GameObject> entry in StartupObjectPoolRegistry.GetRegisteredEntries())
+                        {
+                            GameObject prefab = entry.Prefab;
+                            if (prefab == null || pooledObjects.ContainsKey(prefab))
+                            {
                                 continue;
                             }
 
-                            ObjectPool.CreatePool(sp.prefab, sp.size);
-                        }
-                    }
+                            if (prefab.GetComponent<ActiveRecycler>() != null)
+                            {
+                                pooledObjects[prefab] = new List<GameObject>();
+                                continue;
+                            }
 
-                    if (hero != null)
-                    {
-                        EnsureInitialHeroDeathPool(pooledObjects, hero.acidDeathPrefab);
-                        EnsureInitialHeroDeathPool(pooledObjects, hero.spikeDeathPrefab);
-                    }
-
-                    foreach (GameObject preservedPrefab in preservedPrefabs)
-                    {
-                        if (preservedPrefab != null && !pooledObjects.ContainsKey(preservedPrefab))
-                        {
-                            pooledObjects[preservedPrefab] = new List<GameObject>();
+                            ObjectPool.CreatePool(prefab, entry.InitialPoolSize);
                         }
                     }
                 }

@@ -154,7 +154,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 C11_Time = CaptureTimeState(gm),
                 C12_ControlPlane = CaptureControlPlane(ctx),
                 D3_MusicCue = CaptureAudioCues(gm),
-                C13_Camera = CaptureCameraState()
+                C13_Camera = CaptureCameraState(),
+                C14_ModRandom = ModStartupCompatibility.CaptureModRandomState()
             };
 
             LeanS0PacketCodec.Validate(packet);
@@ -241,6 +242,12 @@ namespace HollowKnightTAS.Runtime.FullRun
 
             // C13 Persistent GameCameras / CameraController / CameraTarget parity
             ApplyCameraState(packet.C13_Camera);
+
+            // C14 Mod System.Random ordinals & live instance state parity
+            if (packet.C14_ModRandom != null)
+            {
+                ModStartupCompatibility.RestoreModRandomState(packet.C14_ModRandom);
+            }
         }
 
         private static LeanS0BossSequenceState CaptureBossSequence()

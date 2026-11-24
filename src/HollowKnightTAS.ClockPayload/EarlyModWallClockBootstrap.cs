@@ -36,11 +36,30 @@ namespace HollowKnightTAS.ClockPayload
 
         private static void InstallPolicies()
         {
+            EarlyModPreloadBridge.Install();
+            EarlyModRandomPolicy.Install();
             if (NativeExecutionProfile.UsesCanonicalParticles(NativeExecutionProfile.SelectedProfileId))
                 particles = new CanonicalParticleRandomPolicy();
             if (NativeExecutionProfile.UsesIsolatedOnline(NativeExecutionProfile.SelectedProfileId))
                 online = new IsolatedOnlinePolicy();
             policy = new CustomKnightModWallClockPolicy();
+        }
+
+        public static bool IsPreloadActive => EarlyModPreloadBridge.IsPreloadActive;
+        public static bool PreloadOccurred => EarlyModPreloadBridge.PreloadOccurred;
+        public static bool HasEarlyInputGuard => EarlyModPreloadBridge.HasEarlyInputGuard;
+        public static bool IsModRandomPolicyInstalled => EarlyModRandomPolicy.IsInstalled;
+
+        public static void ReleaseStartupInputGuard()
+            => EarlyModPreloadBridge.ReleaseStartupInputGuard();
+
+        public static void RebaselineParticlesAfterPreload()
+        {
+            if (particles == null || !particles.IsSupported)
+            {
+                return;
+            }
+            particles.RebaselineAfterPreload();
         }
 
         public static void Verify()
@@ -62,6 +81,11 @@ namespace HollowKnightTAS.ClockPayload
         public static void VerifySessionOnline() => online?.Verify();
 
         public static uint[] CaptureParticleRandomState() => particles?.Capture() ?? Array.Empty<uint>();
+
+        public static byte[]? CaptureModRandomState() => EarlyModRandomPolicy.CaptureStateBytes();
+
+        public static void RestoreModRandomState(byte[]? encodedState)
+            => EarlyModRandomPolicy.RestoreStateBytes(encodedState);
 
         internal static void RestoreCheckpointParticleRandomState(uint[] source)
         {
@@ -86,6 +110,8 @@ namespace HollowKnightTAS.ClockPayload
 
         internal static void Dispose()
         {
+            EarlyModPreloadBridge.Dispose();
+            EarlyModRandomPolicy.Dispose();
             policy?.Dispose();
             policy = null;
             online?.Dispose();

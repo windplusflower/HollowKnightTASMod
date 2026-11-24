@@ -17,6 +17,7 @@
   <ItemGroup>
     <Compile Include="..\HollowKnightTAS.Core\SceneCheckpoints\CheckpointRandomState.cs" Link="CheckpointRandomState.cs" />
     <Compile Include="..\HollowKnightTAS.Core\SceneCheckpoints\CheckpointClockObserverState.cs" Link="CheckpointClockObserverState.cs" />
+    <Compile Include="..\HollowKnightTAS.Core\SceneCheckpoints\ModRandomStateSync.cs" Link="ModRandomStateSync.cs" />
     <Reference Include="UnityEngine.ParticleSystemModule"><HintPath>$(HKManagedDir)\UnityEngine.ParticleSystemModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Assembly-CSharp-firstpass"><HintPath>$(HKManagedDir)\Assembly-CSharp-firstpass.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Assembly-CSharp">

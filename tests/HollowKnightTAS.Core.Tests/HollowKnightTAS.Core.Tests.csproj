@@ -89,6 +89,7 @@
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0\LeanS0Gate.cs" Link="FullRun\LeanS0Gate.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0\LeanS0Packet.cs" Link="FullRun\LeanS0Packet.cs" />
     <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0\LeanS0HudParity.cs" Link="FullRun\LeanS0HudParity.cs" />
+    <Compile Include="..\..\src\HollowKnightTAS.Runtime\FullRun\LeanS0\StartupObjectPoolCatalog.cs" Link="FullRun\StartupObjectPoolCatalog.cs" />
     <Reference Include="Assembly-CSharp"><HintPath>$(HKManagedDir)\Assembly-CSharp.dll</HintPath></Reference>
     <Reference Include="UnityEngine"><HintPath>$(HKManagedDir)\UnityEngine.dll</HintPath></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(HKManagedDir)\UnityEngine.CoreModule.dll</HintPath></Reference>

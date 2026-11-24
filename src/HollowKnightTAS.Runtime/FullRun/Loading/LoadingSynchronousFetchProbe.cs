@@ -217,7 +217,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 {
                     update();
                     iterations++;
-                    if (unchecked(Environment.TickCount - wallStart) > 30000)
+                    if (ModStartupCompatibility.TryQueryIsPreloadActive())
+                    {
+                        wallStart = Environment.TickCount;
+                    }
+                    else if (unchecked(Environment.TickCount - wallStart) > 30000)
                     {
                         Modding.Logger.LogWarn("[HKTAS] Native scene fetch pump exceeded 30 seconds; falling back to native async scene loading.");
                         fallbackToNativeAsync = true;

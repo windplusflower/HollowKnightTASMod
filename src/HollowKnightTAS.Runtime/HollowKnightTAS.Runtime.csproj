@@ -27,6 +27,8 @@
     <ProjectReference Include="..\HollowKnightTAS.Core\HollowKnightTAS.Core.csproj">
       <Private>true</Private>
     </ProjectReference>
+    <Compile Include="..\HollowKnightTAS.ClockPayload\ModRandomConstructorHook.cs"
+             Link="FullRun\Session\ModRandomConstructorHook.cs" />
   </ItemGroup>
 
   <ItemGroup>

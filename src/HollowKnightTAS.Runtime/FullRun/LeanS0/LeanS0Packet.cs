@@ -40,6 +40,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public LeanS0ObjectPoolWarmupState? D6_ObjectPoolWarmup { get; set; }
         public LeanS0HeroInactiveComponentState[]? D7_HeroInactiveLifecycles { get; set; }
         public LeanS0CameraState? C13_Camera { get; set; }
+        public LeanS0ModRandomState? C14_ModRandom { get; set; }
     }
 
     public sealed class LeanS0TypedValue
@@ -111,6 +112,21 @@ namespace HollowKnightTAS.Runtime.FullRun
         public Dictionary<string, string> Controller { get; set; } = new Dictionary<string, string>(StringComparer.Ordinal);
         public Dictionary<string, string> Target { get; set; } = new Dictionary<string, string>(StringComparer.Ordinal);
         public LeanS0CameraTransformPose[] Transforms { get; set; } = Array.Empty<LeanS0CameraTransformPose>();
+    }
+
+    public sealed class LeanS0ModRandomState
+    {
+        public Dictionary<string, uint> Ordinals { get; set; } = new Dictionary<string, uint>(StringComparer.Ordinal);
+        public LeanS0ModRandomInstanceState[] Instances { get; set; } = Array.Empty<LeanS0ModRandomInstanceState>();
+    }
+
+    public sealed class LeanS0ModRandomInstanceState
+    {
+        public string CallsiteKey { get; set; } = string.Empty;
+        public uint Ordinal { get; set; }
+        public int Inext { get; set; }
+        public int Inextp { get; set; }
+        public int[] SeedArray { get; set; } = new int[56];
     }
 
     public sealed class LeanS0TransitionInfo
@@ -609,6 +625,35 @@ namespace HollowKnightTAS.Runtime.FullRun
                         || comp.LocalRotation?.Length != 4 || comp.LocalScale?.Length != 3)
                     {
                         throw new InvalidDataException("LeanS0 D7_HeroInactiveLifecycles entry is invalid.");
+                    }
+                }
+            }
+            if (packet.C14_ModRandom != null)
+            {
+                LeanS0ModRandomState modRandom = packet.C14_ModRandom;
+                if (modRandom.Ordinals == null)
+                {
+                    throw new InvalidDataException("LeanS0 C14_ModRandom.Ordinals cannot be null.");
+                }
+                foreach (string key in modRandom.Ordinals.Keys)
+                {
+                    if (string.IsNullOrEmpty(key))
+                    {
+                        throw new InvalidDataException("LeanS0 C14_ModRandom.Ordinals contains an empty callsite key.");
+                    }
+                }
+                if (modRandom.Instances == null)
+                {
+                    throw new InvalidDataException("LeanS0 C14_ModRandom.Instances cannot be null.");
+                }
+                foreach (LeanS0ModRandomInstanceState inst in modRandom.Instances)
+                {
+                    if (inst == null || string.IsNullOrEmpty(inst.CallsiteKey)
+                        || inst.SeedArray == null || inst.SeedArray.Length != 56
+                        || inst.Inext < 0 || inst.Inext > 55
+                        || inst.Inextp < 0 || inst.Inextp > 55)
+                    {
+                        throw new InvalidDataException("LeanS0 C14_ModRandom instance entry is invalid.");
                     }
                 }
             }

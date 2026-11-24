@@ -95,13 +95,6 @@ namespace HollowKnightTAS.Runtime
                         throw new InvalidDataException("Protected save descriptor path does not match its shadow root.");
                     protectedSaves = ProtectedSaveRedirector.Install(descriptor,
                         message => Log(message));
-                    var token = Environment.GetEnvironmentVariable("HKTAS_BOOT_GATE_TOKEN")
-                        ?? throw new InvalidOperationException("Full-run gate token is missing.");
-                    var clock = NativeFullRunFrameClock.Attach(token,
-                        HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId);
-                    fullRunSession = RuntimeFullRunBootstrap.Attach(token, clock,
-                        protectedSaves, message => Log(message));
-                    modStartup?.FinishPreloading();
                 }
                 catch (Exception exception)
                 {
@@ -114,18 +107,6 @@ namespace HollowKnightTAS.Runtime
             }
 
             hooksRegistered = true;
-            // A normal Steam launch must not create any TAS services or gameplay hooks.
-            if (StartupActivationPolicy.ShouldStartRuntime(SavePathResolver.ProtectionRequested,
-                    Environment.GetEnvironmentVariable("HKTAS_CLOCK_STARTUP_LATCH")))
-            {
-                runtimeHost = new TasRuntimeHost(
-                    settings ?? new TasGlobalSettings(),
-                    message => Log(message),
-                    message => LogDebug(message),
-                    message => LogWarn(message),
-                    message => LogError(message),
-                    fullRunSession);
-            }
 
             ModHooks.FinishedLoadingModsHook += OnFinishedLoadingMods;
             ModHooks.ApplicationQuitHook += OnApplicationQuit;
@@ -204,7 +185,10 @@ namespace HollowKnightTAS.Runtime
         private void OpenStudio()
         {
             if (manualStartup != null) return;
-            if (runtimeHost != null)
+            if (runtimeHost != null
+                || fullRunSession != null
+                || StartupActivationPolicy.ShouldStartRuntime(SavePathResolver.ProtectionRequested,
+                    Environment.GetEnvironmentVariable("HKTAS_CLOCK_STARTUP_LATCH")))
             {
                 SetStartupMessage(StartupMessageKind.AlreadyControlled);
                 return;
@@ -241,17 +225,67 @@ namespace HollowKnightTAS.Runtime
             try
             {
                 _ = RuntimeUiText.CurrentLanguageCode();
+                if (SavePathResolver.ProtectionRequested)
+                {
+                    if (protectedSaves == null)
+                        throw new InvalidOperationException("Protected save redirector was not initialized before FinishedLoadingMods.");
+
+                    if (ModStartupCompatibility.TryQueryPreloadOccurred())
+                    {
+                        if (ModStartupCompatibility.TryQueryIsPreloadActive())
+                            throw new InvalidOperationException("Mod preloading was still active when FinishedLoadingModsHook ran.");
+                        NormalizeBaselineAfterPreload();
+                    }
+
+                    var token = Environment.GetEnvironmentVariable("HKTAS_BOOT_GATE_TOKEN")
+                        ?? throw new InvalidOperationException("Full-run gate token is missing.");
+                    var clock = NativeFullRunFrameClock.Attach(token,
+                        HollowKnightTAS.Core.Movie.MovieProtocolV2.SelectedNativeProfileId);
+                    fullRunSession = RuntimeFullRunBootstrap.Attach(token, clock,
+                        protectedSaves, message => Log(message));
+                    modStartup?.FinishPreloading();
+                    StartupObjectPoolRegistry.CloseRegistrationWindow();
+                }
+
+                // A normal Steam launch must not create any TAS services or gameplay hooks.
+                if (runtimeHost == null && StartupActivationPolicy.ShouldStartRuntime(
+                        SavePathResolver.ProtectionRequested,
+                        Environment.GetEnvironmentVariable("HKTAS_CLOCK_STARTUP_LATCH")))
+                {
+                    runtimeHost = new TasRuntimeHost(
+                        settings ?? new TasGlobalSettings(),
+                        message => Log(message),
+                        message => LogDebug(message),
+                        message => LogWarn(message),
+                        message => LogError(message),
+                        fullRunSession);
+                }
+
                 runtimeHost?.Start();
             }
             catch (Exception exception)
             {
                 LogError("T01 runtime host failed to start: " + exception);
-                if (fullRunSession != null)
+                if (SavePathResolver.ProtectionRequested || fullRunSession != null)
                 {
-                    NativeFullRunFrameClock.TryFaultEarly(44);
+                    if (!NativeFullRunFrameClock.TryFaultEarly(44))
+                        Environment.FailFast("Protected full-run startup could not stop the native frame gate.",
+                            exception);
                     throw;
                 }
             }
+        }
+
+        private void NormalizeBaselineAfterPreload()
+        {
+            UnityEngine.Random.InitState(1212896321);
+            ModStartupCompatibility.TryRebaselineParticlesAfterPreload();
+            if (AudioListener.pause)
+            {
+                AudioListener.pause = false;
+                LogWarn("Reset AudioListener.pause=false after mod preloading.");
+            }
+            Log("[HKTAS] Post-preload baseline normalized (UnityEngine.Random, particles, AudioListener).");
         }
 
         private void OnApplicationQuit()
@@ -285,6 +319,7 @@ namespace HollowKnightTAS.Runtime
             protectedSaves = null;
             modStartup?.Dispose();
             modStartup = null;
+            StartupObjectPoolRegistry.UninstallHooks();
             LogDebug("T01 hooks unregistered.");
         }
     }

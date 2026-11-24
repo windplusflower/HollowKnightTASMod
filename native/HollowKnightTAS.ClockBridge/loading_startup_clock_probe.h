@@ -8,7 +8,11 @@ static BOOL g_loading_startup_clock_enabled;
 static BOOL g_loading_startup_clock_initialized;
 static BOOL g_loading_startup_clock_released;
 static BOOL g_loading_startup_clock_frozen_frame;
+static volatile LONG g_loading_startup_preload_active = 0;
+static volatile LONG g_loading_startup_preload_reset_pending = 0;
 static BYTE *g_loading_startup_time_manager;
+static LONGLONG *g_loading_startup_counter_origin;
+static double *g_loading_startup_scripting_origin;
 static DWORD g_loading_startup_clock_wall_begin;
 static unsigned g_loading_startup_clock_frozen_loops;
 
@@ -130,6 +134,8 @@ static BOOL prepare_loading_startup_clock_probe(void)
         LONGLONG anchor = g_deterministic_clock_anchor.QuadPart;
         ReleaseSRWLockShared(&g_clock_lock);
         loading_startup_clock_diagnostic("before-initialize");
+        g_loading_startup_counter_origin = counter_origin;
+        g_loading_startup_scripting_origin = scripting_origin;
         InterlockedExchange64(counter_origin, anchor);
         *scripting_origin = 0.0;
         zero_loading_startup_time_fields();
@@ -143,7 +149,31 @@ static BOOL prepare_loading_startup_clock_probe(void)
         g_loading_startup_clock_initialized = TRUE;
         loading_startup_clock_diagnostic("initialized");
     }
-    if (InterlockedCompareExchange(&g_v2_state->runtime_input_ready, 0, 0) == 1) {
+    if (InterlockedCompareExchange(&g_loading_startup_preload_active, 0, 0) != 0) {
+        g_loading_startup_clock_wall_begin = GetTickCount();
+        g_loading_startup_clock_frozen_frame = FALSE;
+        if (g_loading_startup_time_manager) {
+            g_loading_startup_time_manager[0xc2] = 1;
+        }
+        return TRUE;
+    }
+    if (InterlockedExchange(&g_loading_startup_preload_reset_pending, 0) != 0) {
+        if (g_loading_startup_counter_origin && g_loading_startup_scripting_origin
+            && loading_startup_writable(g_loading_startup_counter_origin, 8)
+            && loading_startup_writable(g_loading_startup_scripting_origin, 8)) {
+            AcquireSRWLockShared(&g_clock_lock);
+            LONGLONG anchor = g_deterministic_clock_anchor.QuadPart;
+            ReleaseSRWLockShared(&g_clock_lock);
+            InterlockedExchange64(g_loading_startup_counter_origin, anchor);
+            *g_loading_startup_scripting_origin = 0.0;
+        }
+        g_loading_startup_clock_wall_begin = GetTickCount();
+        if (g_loading_startup_time_manager) {
+            zero_loading_startup_time_fields();
+        }
+        loading_startup_clock_diagnostic("preload-reset");
+    }
+    if (g_v2_state != NULL && InterlockedCompareExchange(&g_v2_state->runtime_input_ready, 0, 0) == 1) {
         g_loading_startup_clock_released = TRUE;
         g_loading_startup_clock_frozen_frame = FALSE;
         g_loading_startup_time_manager[0xc2] = 1;

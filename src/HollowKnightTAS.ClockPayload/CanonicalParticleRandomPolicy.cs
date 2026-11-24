@@ -131,6 +131,26 @@ namespace HollowKnightTAS.ClockPayload
 
         internal bool IsSupported => supported;
 
+        internal void RebaselineAfterPreload()
+        {
+            if (!supported)
+            {
+                UnityEngine.Debug.LogWarning("[HKTAS] Skipping particle random RebaselineAfterPreload() (passthrough/unsupported): " + unsupportedReason);
+                return;
+            }
+            if (!TryRead(managerSlot, 8, out var slotBytes)
+                || new IntPtr(BitConverter.ToInt64(slotBytes, 0)) != manager)
+            {
+                UnityEngine.Debug.LogWarning("[HKTAS] Skipping particle random RebaselineAfterPreload(): particle manager slot changed.");
+                return;
+            }
+            var state = new uint[4];
+            state[0] = RootSeed;
+            for (var i = 1; i < state.Length; i++) state[i] = unchecked(state[i - 1] * 1812433253u + 1u);
+            RestoreWords(state);
+            UnityEngine.Debug.Log("[HKTAS] V11 particle random baseline restored after mod preloading.");
+        }
+
         private static bool PristineIntroParticle(ParticleSystem particle)
         {
             if (particle.gameObject.scene.name != "Pre_Menu_Intro" || particle.isPlaying || !particle.isStopped

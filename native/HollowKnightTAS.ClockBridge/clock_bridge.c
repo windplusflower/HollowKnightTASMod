@@ -631,7 +631,24 @@ static DWORD WINAPI clock_worker(LPVOID ignored)
             InterlockedExchange(&g_status, -10);
             return 10u;
         }
-        DWORD ready_wait = WaitForSingleObject(payload_ready, 120000u);
+        DWORD ready_wait = WAIT_TIMEOUT;
+        DWORD non_preload_waited_ms = 0u;
+        for (;;)
+        {
+            ready_wait = WaitForSingleObject(payload_ready, 2000u);
+            if (ready_wait == WAIT_OBJECT_0 || ready_wait != WAIT_TIMEOUT)
+            {
+                break;
+            }
+            if (InterlockedCompareExchange(&g_loading_startup_preload_active, 0, 0) == 0)
+            {
+                non_preload_waited_ms += 2000u;
+                if (non_preload_waited_ms >= 120000u)
+                {
+                    break;
+                }
+            }
+        }
         CloseHandle(payload_ready);
         if (ready_wait != WAIT_OBJECT_0)
         {
@@ -1371,6 +1388,20 @@ __declspec(dllexport) LONG __cdecl HktasClockBridge_FaultFullRun(LONG code)
 {
     if (!g_v2_gate_enabled || code <= 0) return 0;
     hktas_v2_fault(code);
+    return 1;
+}
+
+__declspec(dllexport) LONG __cdecl HktasClockBridge_SetStartupPreloadActive(BOOL active)
+{
+    if (active != FALSE)
+    {
+        InterlockedExchange(&g_loading_startup_preload_active, 1);
+    }
+    else
+    {
+        InterlockedExchange(&g_loading_startup_preload_active, 0);
+        InterlockedExchange(&g_loading_startup_preload_reset_pending, 1);
+    }
     return 1;
 }
 

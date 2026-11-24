@@ -137,7 +137,10 @@ namespace HollowKnightTAS.Runtime.FullRun
                 {
                     if (!method.HasBody || !method.Body.Instructions.Any(IsPauseCall)) continue;
                     if (type.HasGenericParameters || method.HasGenericParameters)
-                        throw Fail("Generic pooled audio pause caller requires an adapter: " + method.FullName);
+                    {
+                        Modding.Logger.LogWarn("[HKTAS] Skipping generic pooled audio pause caller: " + method.FullName);
+                        continue;
+                    }
                     var reflected = assembly.ManifestModule.ResolveMethod(method.MetadataToken.ToInt32());
                     hooks.Add(new ILHook(reflected, il =>
                     {
