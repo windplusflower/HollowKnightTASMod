@@ -21,6 +21,9 @@ namespace HollowKnightTAS.Runtime.FullRun
         private delegate IEnumerator OriginalBegin(SceneLoad self);
         private delegate IEnumerator OriginalTransition(GameManager self, GameManager.SceneLoadInfo info);
         private delegate bool OriginalUnload(string name);
+        private delegate void OriginalActiveSceneChanged(Scene previousActiveScene, Scene newActiveScene);
+        private delegate void OriginalSceneLoaded(Scene scene, LoadSceneMode mode);
+        private delegate void OriginalSceneUnloaded(Scene scene);
         private static readonly FieldInfo SceneLoadRunnerField = typeof(SceneLoad).GetField("runner", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingFieldException("SceneLoad.runner");
         private static readonly MethodInfo SceneLoadBeginRoutineMethod = typeof(SceneLoad).GetMethod("BeginRoutine", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -30,6 +33,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         private readonly Hook unloadHook;
         private readonly Hook transitionHook;
         private readonly Hook lightingHook;
+        private readonly Hook activeSceneChangedHook;
+        private readonly Hook sceneLoadedHook;
+        private readonly Hook sceneUnloadedHook;
+        private readonly SerialSceneEventFilter<Scene> eventFilter;
+        private OriginalActiveSceneChanged? deferredActiveSceneChangedInvoker;
         private readonly string? report;
         private static LoadingSerialSceneProbe? instance;
         private SceneLoad? transition;
@@ -102,7 +110,34 @@ namespace HollowKnightTAS.Runtime.FullRun
             var sceneStart = typeof(global::SceneManager).GetMethod("Start", BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new MissingMethodException("SceneManager.Start");
             lightingHook = new Hook(sceneStart, (Action<Action<global::SceneManager>, global::SceneManager>)SceneStart);
-            USceneManager.sceneLoaded += TargetLoaded;
+            eventFilter = new SerialSceneEventFilter<Scene>(IsStagingScene, static scene => scene.name);
+            var internalActiveSceneChanged = typeof(USceneManager).GetMethod(
+                "Internal_ActiveSceneChanged",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                null,
+                new[] { typeof(Scene), typeof(Scene) },
+                null) ?? throw new MissingMethodException("SceneManager.Internal_ActiveSceneChanged");
+            var internalSceneLoaded = typeof(USceneManager).GetMethod(
+                "Internal_SceneLoaded",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                null,
+                new[] { typeof(Scene), typeof(LoadSceneMode) },
+                null) ?? throw new MissingMethodException("SceneManager.Internal_SceneLoaded");
+            var internalSceneUnloaded = typeof(USceneManager).GetMethod(
+                "Internal_SceneUnloaded",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                null,
+                new[] { typeof(Scene) },
+                null) ?? throw new MissingMethodException("SceneManager.Internal_SceneUnloaded");
+            activeSceneChangedHook = new Hook(
+                internalActiveSceneChanged,
+                (Action<OriginalActiveSceneChanged, Scene, Scene>)OnInternalActiveSceneChanged);
+            sceneLoadedHook = new Hook(
+                internalSceneLoaded,
+                (Action<OriginalSceneLoaded, Scene, LoadSceneMode>)OnInternalSceneLoaded);
+            sceneUnloadedHook = new Hook(
+                internalSceneUnloaded,
+                (Action<OriginalSceneUnloaded, Scene>)OnInternalSceneUnloaded);
             instance = this;
             Write("installed", null);
             Modding.Logger.Log("[HKTAS] V6 serial scene experiment installed.");
@@ -154,7 +189,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             transition = load;
             ordinal++;
             sourceUnloaded = false;
+            awaitingBoundary = false;
             observedBoundary = false;
+            eventFilter.Reset();
+            deferredActiveSceneChangedInvoker = null;
             try
             {
                 // Finish speculative work before starting destruction. This routine
@@ -218,7 +256,12 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
             finally
             {
+                eventFilter.Reset();
+                deferredActiveSceneChangedInvoker = null;
                 awaitingBoundary = false;
+                sourceUnloaded = false;
+                source = default;
+                sourceName = "";
                 transition = null;
                 checkpointLoadInfo = null;
                 checkpointTransitionRoutine = null;
@@ -626,9 +669,60 @@ namespace HollowKnightTAS.Runtime.FullRun
             RenderState("scene-manager-start:" + manager.gameObject.scene.name);
         }
 
-        private void TargetLoaded(Scene scene, LoadSceneMode mode)
+        private bool IsStagingScene(Scene scene)
+            => (staging.IsValid() && scene == staging) || string.Equals(scene.name, StagingName, StringComparison.Ordinal);
+
+        private void OnInternalActiveSceneChanged(
+            OriginalActiveSceneChanged original,
+            Scene previousActiveScene,
+            Scene newActiveScene)
         {
-            if (transition == null || !sourceUnloaded || scene.name != transition.TargetSceneName) return;
+            if (eventFilter.IsDeferringTargetActivationChange)
+            {
+                deferredActiveSceneChangedInvoker = original;
+            }
+
+            eventFilter.HandleActiveSceneChanged(
+                previousActiveScene,
+                newActiveScene,
+                (prev, next) => original(prev, next));
+        }
+
+        private void OnInternalSceneLoaded(
+            OriginalSceneLoaded original,
+            Scene scene,
+            LoadSceneMode mode)
+        {
+            var serialTargetSceneName = transition != null && sourceUnloaded ? transition.TargetSceneName : null;
+            try
+            {
+                eventFilter.HandleSceneLoaded(
+                    scene,
+                    mode == LoadSceneMode.Single,
+                    serialTargetSceneName,
+                    SelectAndRefreshTargetScene,
+                    () => original(scene, mode),
+                    (prev, next) =>
+                    {
+                        var invoker = deferredActiveSceneChangedInvoker
+                            ?? activeSceneChangedHook.GenerateTrampoline<OriginalActiveSceneChanged>();
+                        deferredActiveSceneChangedInvoker = null;
+                        invoker(prev, next);
+                    });
+            }
+            finally
+            {
+                deferredActiveSceneChangedInvoker = null;
+            }
+        }
+
+        private void OnInternalSceneUnloaded(OriginalSceneUnloaded original, Scene scene)
+        {
+            eventFilter.HandleSceneUnloaded(scene, s => original(s));
+        }
+
+        private void SelectAndRefreshTargetScene(Scene scene)
+        {
             // Select the target and refresh its dimensions before Start builds
             // scene borders from GameManager tilemap bounds.
             RenderState("before-early-select");
@@ -731,12 +825,43 @@ namespace HollowKnightTAS.Runtime.FullRun
         public void Dispose()
         {
             instance = null;
-            USceneManager.sceneLoaded -= TargetLoaded;
+            sceneUnloadedHook.Dispose();
+            sceneLoadedHook.Dispose();
+            activeSceneChangedHook.Dispose();
             lightingHook.Dispose();
             transitionHook.Dispose();
             loadBeginHook.Dispose();
             beginHook.Dispose();
             unloadHook.Dispose();
+
+            eventFilter.Reset();
+            deferredActiveSceneChangedInvoker = null;
+            transition = null;
+            checkpointLoadInfo = null;
+            checkpointTransitionRoutine = null;
+            checkpointTransitionFinished = false;
+            checkpointBossBindings = null;
+            serialBeginRoutine = null;
+            serialBeginCoroutine = null;
+            source = default;
+            sourceName = "";
+            staging = default;
+            sourceUnloaded = false;
+            awaitingBoundary = false;
+            observedBoundary = false;
+            protectedClockCanonScope = null;
+            protectedSourceCharmDerivationConsumed = false;
+            protectedCompletedCoroutineDerivationConsumed = false;
+            protectedSourceGeoDerivationConsumed = false;
+            protectedSourceMarkerDerivationConsumed = false;
+            protectedSourceBorderDerivationConsumed = false;
+            protectedSourceMapKeyDerivationConsumed = false;
+            protectedFinalVisualVisibilityConsumed = false;
+            protectedHudControlsConsumed = false;
+            retiredSourceOwners.Clear();
+            ordinal = 0;
+            rows = 0;
+            failure = null;
         }
     }
 }
