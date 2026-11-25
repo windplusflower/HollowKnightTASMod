@@ -392,18 +392,18 @@ function Read-SnapshotEntries([string]$dirPath) {
     $files = @(Get-ChildItem -LiteralPath $dirPath -File -Filter '*s0-semantic-boundary-*.json' | Sort-Object Name)
     $entries = [Collections.Generic.List[object]]::new()
     foreach ($f in $files) {
-        $obj = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json
-        $meta = $obj.meta
+        $obj = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json -AsHashtable
+        $meta = if ($obj -and $obj.ContainsKey('meta') -and $null -ne $obj['meta']) { $obj['meta'] } else { @{} }
         $entries.Add([pscustomobject]@{
             path = $f.FullName
             name = $f.Name
-            ordinal = if ($null -ne $meta.ordinal) { [int]$meta.ordinal } else { -1 }
-            segment = [string]$meta.segment
-            sourceScene = [string]$meta.sourceScene
-            targetScene = [string]$meta.targetScene
-            entryGate = [string]$meta.entryGate
-            movieFrame = [long]$meta.movieFrame
-            nativeFrame = [long]$meta.nativeFrame
+            ordinal = if ($null -ne $meta['ordinal']) { [int]$meta['ordinal'] } else { -1 }
+            segment = [string]$meta['segment']
+            sourceScene = [string]$meta['sourceScene']
+            targetScene = [string]$meta['targetScene']
+            entryGate = [string]$meta['entryGate']
+            movieFrame = [long]$meta['movieFrame']
+            nativeFrame = [long]$meta['nativeFrame']
         })
     }
     return @($entries)
@@ -510,8 +510,8 @@ foreach ($pair in $pairs) {
         throw "Compare-S0SemanticSnapshots.py failed for $($pair.pairId) with exit code $cmpCode."
     }
 
-    $diffObj = Get-Content -LiteralPath $pairJson -Raw | ConvertFrom-Json
-    $diffCount = [int]$diffObj.totalDiffCount
+    $diffObj = Get-Content -LiteralPath $pairJson -Raw | ConvertFrom-Json -AsHashtable
+    $diffCount = [int]$diffObj['totalDiffCount']
     if ($diffCount -gt 0) {
         $anyDiffs = $true
     }
@@ -523,8 +523,8 @@ foreach ($pair in $pairs) {
         ordinalRight = $pair.right.ordinal
         transition = "$($pair.left.sourceScene) -> $($pair.left.targetScene)"
         totalDiffCount = $diffCount
-        ignoredDiffCount = [int]$diffObj.ignoredDiffCount
-        diffCountByDomain = $diffObj.diffCountByDomain
+        ignoredDiffCount = [int]$diffObj['ignoredDiffCount']
+        diffCountByDomain = $diffObj['diffCountByDomain']
         passed = ($diffCount -eq 0)
         jsonPath = $pairJson
         markdownPath = $pairMd

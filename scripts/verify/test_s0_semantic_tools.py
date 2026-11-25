@@ -382,6 +382,109 @@ class S0SemanticToolsTests(unittest.TestCase):
             self.assertEqual(fail_json["diffCountByDomain"], {"ObjectPool": 1})
             self.assertIn("**FAIL**", (out_fail / "semantic-diff.md").read_text(encoding="utf-8"))
 
+    def test_case_only_conflicting_keys_handled_by_compare_and_audit(self) -> None:
+        pwsh = _find_powershell()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snap_dir = root / "snapshots"
+            snap_dir.mkdir(parents=True, exist_ok=True)
+            left_path = snap_dir / "baseline-s0-semantic-boundary-01.json"
+            right_path = snap_dir / "s0-restore-01-s0-semantic-boundary-01.json"
+
+            left_path.write_text(
+                json.dumps(
+                    _make_snapshot(
+                        {
+                            "ddol/Knight:HeroController.JUMP_STEPS": 10,
+                            "ddol/Knight:HeroController.jump_steps": 2,
+                        },
+                        ordinal=1,
+                        segment="baseline",
+                        movie_frame=100,
+                        native_frame=150,
+                    )
+                ),
+                encoding="utf-8",
+            )
+            right_path.write_text(
+                json.dumps(
+                    _make_snapshot(
+                        {
+                            "ddol/Knight:HeroController.JUMP_STEPS": 10,
+                            "ddol/Knight:HeroController.jump_steps": 3,
+                        },
+                        ordinal=1,
+                        segment="s0-restore-01",
+                        movie_frame=101,
+                        native_frame=250,
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            # 1. Compare-S0SemanticSnapshots.py preserves both case-distinct keys
+            summary = _COMPARE_MOD.compare_snapshots(
+                json.loads(left_path.read_text(encoding="utf-8")),
+                json.loads(right_path.read_text(encoding="utf-8")),
+                ignore_known_time_fields=True,
+            )
+            self.assertEqual(summary["totalFlatKeysLeft"], 2)
+            self.assertEqual(summary["totalFlatKeysRight"], 2)
+            self.assertEqual(summary["totalDiffCount"], 1)
+            self.assertEqual(summary["diffs"][0]["path"], "ddol/Knight:HeroController.jump_steps")
+            self.assertEqual(summary["diffs"][0]["left"], 2)
+            self.assertEqual(summary["diffs"][0]["right"], 3)
+
+            # 2. Invoke-S0SemanticAudit.ps1 -CompareOnly succeeds on case-conflicting snapshots
+            out_dir = root / "audit-case"
+            proc_cmp = subprocess.run(
+                [
+                    pwsh,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(_AUDIT_SCRIPT),
+                    "-CompareOnly",
+                    "-LeftSnapshot",
+                    str(left_path),
+                    "-RightSnapshot",
+                    str(right_path),
+                    "-OutputDirectory",
+                    str(out_dir),
+                    "-IgnoreKnownTimeFields",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc_cmp.returncode, 0, msg=proc_cmp.stdout + "\n" + proc_cmp.stderr)
+            cmp_json = json.loads((out_dir / "semantic-diff.json").read_text(encoding="utf-8"))
+            self.assertEqual(cmp_json["totalDiffCount"], 1)
+
+            # 3. Read-SnapshotEntries inside Invoke-S0SemanticAudit.ps1 parses both JSONs without ConvertFrom-Json key collision
+            ps_check = (
+                "$tokens = $null; $errors = $null; "
+                f"$ast = [System.Management.Automation.Language.Parser]::ParseFile('{_AUDIT_SCRIPT}', [ref]$tokens, [ref]$errors); "
+                "if ($errors.Count -gt 0) { throw 'AST parse errors' }; "
+                "$fn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Read-SnapshotEntries' }, $true) | Select-Object -First 1; "
+                "if ($null -eq $fn) { throw 'Read-SnapshotEntries not found' }; "
+                "Invoke-Expression $fn.Extent.Text; "
+                f"$entries = @(Read-SnapshotEntries '{snap_dir}'); "
+                "$entries | ConvertTo-Json -Compress"
+            )
+            proc_ps = subprocess.run(
+                [pwsh, "-NoProfile", "-Command", ps_check],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc_ps.returncode, 0, msg=proc_ps.stdout + "\n" + proc_ps.stderr)
+            entries = json.loads(proc_ps.stdout)
+            self.assertEqual(len(entries), 2)
+            self.assertEqual({e["segment"] for e in entries}, {"baseline", "s0-restore-01"})
+            self.assertTrue(all(e["ordinal"] == 1 for e in entries))
+
 
 if __name__ == "__main__":
     unittest.main()
