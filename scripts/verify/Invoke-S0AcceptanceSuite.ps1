@@ -20,7 +20,8 @@ param(
     [int] $ChainRestoreRounds = 0,
     [int] $ChainRestoreSeed = 1337,
     [string] $OutputDirectory = '',
-    [string] $InstallDirectory = ''
+    [string] $InstallDirectory = '',
+    [string[]] $KeepMods = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -195,7 +196,11 @@ $prevTraceEnv = $env:HKTAS_ACCEPTANCE_FRAME_TRACE
 $hostProcess = $null
 
 try {
-    Isolate-OtherMods
+    if ($KeepMods -and $KeepMods.Count -gt 0) {
+        Isolate-OtherMods -KeepMods $KeepMods
+    } else {
+        Isolate-OtherMods
+    }
     foreach ($item in $managedTargets) {
         Copy-Item -LiteralPath $item.source -Destination $item.destination -Force
     }

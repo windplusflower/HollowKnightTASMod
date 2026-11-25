@@ -1,6 +1,10 @@
 function Write-ModIsolation {
-    [ordered]@{ onlyTasMods=[bool]$OnlyTasMods; modRoot=$modRoot; quarantine=$modQuarantine;
-        status=$script:modIsolationStatus; entries=@($modMoves.ToArray()) } |
+    $payload = [ordered]@{ onlyTasMods=[bool]$OnlyTasMods; modRoot=$modRoot; quarantine=$modQuarantine;
+        status=$script:modIsolationStatus; entries=@($modMoves.ToArray()) }
+    if ($null -ne $script:modIsolationKeptMods) {
+        $payload['keptMods'] = [string[]]@($script:modIsolationKeptMods)
+    }
+    $payload |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outputRoot 'mods-isolation.json') -Encoding utf8
 }
 function Read-ModEntryAudit([string]$entryPath) {
@@ -24,11 +28,34 @@ function Assert-ModMovePaths([string]$original, [string]$isolated) {
         [IO.Path]::GetFileName($originalAbsolute) -eq 'disabled') { throw 'Mod isolation path escaped its direct owned boundaries.' }
 }
 function Isolate-OtherMods {
+    param(
+        [string[]]$KeepMods = @()
+    )
     if (-not $OnlyTasMods) { return }
+    $script:modIsolationKeptMods = $null
+    $keepSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($km in @($KeepMods)) {
+        if (-not [string]::IsNullOrWhiteSpace($km)) {
+            [void]$keepSet.Add($km.Trim())
+        }
+    }
+    $keptList = [System.Collections.Generic.List[string]]::new()
     $foreignEntries = @(Get-ChildItem -LiteralPath $modRoot -Force | Where-Object {
-        if ($_.PSIsContainer) { $_.Name -ne 'disabled' -and $_.FullName -ne [IO.Path]::GetFullPath($install) }
+        if ($_.PSIsContainer) {
+            if ($_.Name -eq 'disabled' -or $_.FullName -eq [IO.Path]::GetFullPath($install)) {
+                return $false
+            }
+            if ($keepSet.Count -gt 0 -and $keepSet.Contains($_.Name)) {
+                $keptList.Add($_.Name)
+                return $false
+            }
+            return $true
+        }
         else { $_.Extension -eq '.dll' }
     })
+    if ($keepSet.Count -gt 0) {
+        $script:modIsolationKeptMods = [string[]]$keptList.ToArray()
+    }
     foreach ($foreignEntry in $foreignEntries) {
         if ($foreignEntry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Mod isolation does not move linked Mod directories.' }
         $isolatedPath = Join-Path $modQuarantine $foreignEntry.Name
