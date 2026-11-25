@@ -158,12 +158,15 @@ static void* __cdecl dn_job_Group(void *queue,void *out,void *group,int priority
         if(cursor==last) break;
         cursor=hktas_dn_ptr(job);
     }
-    if(hktas_dn_u64(body+8)>UINT64_MAX-2u) {hktas_dn_reject_locked(37);return NULL;}
-    hktas_dn_supersede_group_locked(queue,group,hktas_dn_u64(body+8)+2);
+    if(hktas_dn_u64(body+8)>UINT64_MAX-2u
+        || !hktas_dn_supersede_group_locked(queue,group,hktas_dn_u64(body+8)+2)) {hktas_dn_reject_locked(37);return NULL;}
     if(!matches) {
         hktas_dn_lineage *family=hktas_dn_find_cohort(queue,group,hktas_dn_u64(body+8)+2);
         if(!family && (!owner || !owner->director_depth)) {ReleaseSRWLockExclusive(&g_dn_lock);return original(queue,out,group,priority,inline_mode);}
-        if(!family) family=hktas_dn_lineage_bind_locked(queue,group,body,count,owner,TRUE);
+        if(!family) {
+            family=hktas_dn_lineage_bind_locked(queue,group,body,count,owner,TRUE);
+            if(!family) return NULL;
+        }
         else if(family->published || !hktas_dn_assemble_lineage_locked(family,body,count)) {hktas_dn_reject_locked(39);return NULL;}
         ++family->publisher_refs;hktas_dn_enter_locked(DN_job_Group,TRUE);
         void *result=original(queue,out,group,priority,inline_mode);
@@ -211,9 +214,30 @@ static void __cdecl dn_job_Complete(void *fence,int mode)
 {
     typedef void (__cdecl *complete_fn)(void*,int);
     complete_fn original=(complete_fn)(void*)hktas_de_original_job_Complete;
-    if(!InterlockedCompareExchange(&g_dn_job_count,0,0)) {original(fence,mode);return;}
+    if(!InterlockedCompareExchange(&g_dn_job_count,0,0) && !InterlockedCompareExchange(&g_dn_lineage_count,0,0)) {
+        original(fence,mode);return;
+    }
     AcquireSRWLockExclusive(&g_dn_lock);hktas_dn_job_ticket *t=hktas_dn_job_by_fence(fence);
-    if(!t) {ReleaseSRWLockExclusive(&g_dn_lock);original(fence,mode);return;}
+    if(!t) {
+        BYTE before[16];void *group=NULL;DWORD version=0;
+        if(InterlockedCompareExchange(&g_dn_lineage_count,0,0) && fence && hktas_dn_read((uintptr_t)fence,before,16)) {
+            group=(void*)hktas_dn_ptr(before);version=hktas_dn_u32(before+8);
+        }
+        hktas_dn_lineage *match=group ? hktas_dn_find_lineage_by_handle_locked(group,version) : NULL;
+        if(!match) {ReleaseSRWLockExclusive(&g_dn_lock);original(fence,mode);return;}
+        if(!hktas_dn_enter_locked(DN_job_Complete,TRUE)) return;
+        original(fence,mode);
+        AcquireSRWLockExclusive(&g_dn_lock);BYTE after[16];
+        if(!hktas_dn_read((uintptr_t)fence,after,16) || hktas_dn_ptr(after) || hktas_dn_u32(after+8)) {
+            hktas_dn_reject_locked(36);return;
+        }
+        hktas_dn_lineage *still=hktas_dn_find_lineage_by_handle_locked(group,version);
+        if(still && still->entered==still->returned && !still->publisher_refs
+            && !hktas_dn_lineage_unlink_retire_locked(still)) {
+            hktas_dn_reject_locked(40);return;
+        }
+        ReleaseSRWLockExclusive(&g_dn_lock);hktas_dn_leave(DN_job_Complete);return;
+    }
     BYTE before[16];
     if(!t->published || t->completing || t->owner!=(hktas_dn_thread*)FlsGetValue(g_dn_fls)
         || !hktas_dn_read((uintptr_t)fence,before,16) || (void*)hktas_dn_ptr(before)!=t->group || hktas_dn_u32(before+8)!=t->version) {

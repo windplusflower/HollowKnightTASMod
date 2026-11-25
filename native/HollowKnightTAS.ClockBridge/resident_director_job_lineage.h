@@ -18,7 +18,7 @@ typedef struct hktas_dn_lineage {
     void *batch_cookie;
     uint64_t generation,successor,serial,ancestor;
     uintptr_t completion,completion_data;
-    unsigned count,returned;
+    unsigned count,entered,returned;
     unsigned publisher_refs;
     BOOL published,superseded,assembled;
     hktas_dn_lineage_row rows[];
@@ -37,15 +37,49 @@ static hktas_dn_lineage_row *hktas_dn_lookup_row(hktas_dn_lineage *group,uintptr
     hktas_dn_lineage_row key={0};key.node=node;
     return (hktas_dn_lineage_row*)bsearch(&key,group->rows,group->count,sizeof(key),hktas_dn_row_order);
 }
-static void hktas_dn_supersede_group_locked(void *queue,void *group,uint64_t next)
+static BOOL hktas_dn_lineage_unlink_retire_locked(hktas_dn_lineage *g)
+{
+    hktas_dn_lineage **row=&g_dn_lineages;while(*row && *row!=g) row=&(*row)->next;
+    if(*row!=g || g_dn_lineage_rows<g->count || g_dn_lineage_count<=0) return FALSE;
+    *row=g->next;g_dn_lineage_rows-=g->count;InterlockedDecrement(&g_dn_lineage_count);
+    ++g_dn_lineage_retired;HeapFree(GetProcessHeap(),0,g);WakeAllConditionVariable(&g_dn_cv);
+    return TRUE;
+}
+static hktas_dn_lineage *hktas_dn_find_lineage_by_handle_locked(void *group,DWORD version)
+{
+    if(!group) return NULL;
+    for(hktas_dn_lineage *g=g_dn_lineages;g;g=g->next)
+        if(g->group==group && (DWORD)g->generation==version) return g;
+    return NULL;
+}
+static BOOL hktas_dn_supersede_group_locked(void *queue,void *group,uint64_t next)
 {
     for(hktas_dn_lineage *g=g_dn_lineages;g;g=g->next) if(g->queue==queue && g->group==group) {
         /* Native completion can precede return of the last Exec tail. A
          * real new publication may legally reuse this allocation already. */
         if(next==g->generation) continue;
-        if(next<g->generation) {hktas_dn_reject_locked(39);return;}
+        if(next<g->generation) return FALSE;
         g->superseded=TRUE;g->successor=next;
     }
+    return TRUE;
+}
+static BOOL hktas_dn_reclaim_or_supersede_group_locked(void *queue,void *group,uint64_t next)
+{
+    for(hktas_dn_lineage *g=g_dn_lineages,*next_g;g;g=next_g) {
+        next_g=g->next;
+        if(g->queue!=queue || g->group!=group) continue;
+        if(next<g->generation) return FALSE;
+        if(g->entered==g->returned && !g->publisher_refs) {
+            /* CreateGroup just allocated or popped a pooled JobGroup; any
+             * prior unretired lineage on this address with no live Exec tail
+             * or publisher is already dead in Unity and must be retired. */
+            if(!hktas_dn_lineage_unlink_retire_locked(g)) return FALSE;
+            continue;
+        }
+        if(next==g->generation) return FALSE;
+        g->superseded=TRUE;g->successor=next;
+    }
+    return TRUE;
 }
 static hktas_dn_lineage *hktas_dn_find_cohort(void *queue,void *group,uint64_t generation)
 {
@@ -81,10 +115,7 @@ static hktas_dn_lineage *hktas_dn_lineage_bind_locked(void *queue,void *group,co
 static void hktas_dn_lineage_retire_locked(hktas_dn_lineage *g)
 {
     if(!g->published || g->publisher_refs || g->returned!=g->count) return;
-    hktas_dn_lineage **row=&g_dn_lineages;while(*row && *row!=g) row=&(*row)->next;
-    if(*row!=g || g_dn_lineage_rows<g->count || g_dn_lineage_count<=0) {hktas_dn_reject_locked(40);return;}
-    *row=g->next;g_dn_lineage_rows-=g->count;InterlockedDecrement(&g_dn_lineage_count);
-    ++g_dn_lineage_retired;HeapFree(GetProcessHeap(),0,g);WakeAllConditionVariable(&g_dn_cv);
+    if(!hktas_dn_lineage_unlink_retire_locked(g)) {hktas_dn_reject_locked(40);return;}
 }
 typedef int (__cdecl *hktas_dn_native_exec)(void*,void*,uint64_t,int,BYTE);
 static BOOL hktas_dn_native_dispatch_site(void *return_pc)
@@ -119,7 +150,8 @@ static int hktas_dn_lineage_exec(hktas_dn_native_exec original,void *queue,void 
      * factory-issued physical job/generation is already ours; the real
      * dispatcher chooses its callback. It stays in scope until Exec returns. */
     match->published=TRUE;
-    row->state=1;++g_dn_lineage_entered;hktas_dn_enter_locked(DN_job_Exec,TRUE);
+    row->state=1;++match->entered;++g_dn_lineage_entered;
+    if(!hktas_dn_enter_locked(DN_job_Exec,TRUE)) return 0;
     hktas_dn_thread *owner=(hktas_dn_thread*)FlsGetValue(g_dn_fls);uint64_t previous=owner->lineage;owner->lineage=match->serial;
     int result=original(queue,job,generation,decrement,inline_mode);
     AcquireSRWLockExclusive(&g_dn_lock);
@@ -144,17 +176,32 @@ static void* __cdecl dn_job_CreateGroup(void *queue,unsigned count,void *depende
     typedef void* (__cdecl *factory)(void*,unsigned,void*);
     factory original=(factory)(void*)hktas_de_original_job_CreateGroup;
     hktas_dn_thread *owner=(hktas_dn_thread*)FlsGetValue(g_dn_fls);
-    if(!owner || !owner->director_depth) return original(queue,count,dependency);
+    if(!owner || !owner->director_depth) {
+        void *group=original(queue,count,dependency);
+        if(group && InterlockedCompareExchange(&g_dn_lineage_count,0,0)) {
+            AcquireSRWLockExclusive(&g_dn_lock);BYTE body[48];
+            if(!hktas_dn_read((uintptr_t)group,body,48) || hktas_dn_u64(body+8)>UINT64_MAX-2u) {
+                hktas_dn_reject_locked(41);return NULL;
+            }
+            if(!hktas_dn_reclaim_or_supersede_group_locked(queue,group,hktas_dn_u64(body+8)+2)) {
+                hktas_dn_reject_locked(39);return NULL;
+            }
+            ReleaseSRWLockExclusive(&g_dn_lock);
+        }
+        return group;
+    }
     hktas_dn_enter(DN_job_CreateGroup);
     void *group=original(queue,count,dependency);
     AcquireSRWLockExclusive(&g_dn_lock);BYTE body[48];
     if(!group || !hktas_dn_read((uintptr_t)group,body,48) || hktas_dn_u32(body+16)!=count || hktas_dn_ptr(body+32)
         || hktas_dn_u64(body+8)>UINT64_MAX-2u) {hktas_dn_reject_locked(41);return NULL;}
-    hktas_dn_supersede_group_locked(queue,group,hktas_dn_u64(body+8)+2);
+    if(!hktas_dn_reclaim_or_supersede_group_locked(queue,group,hktas_dn_u64(body+8)+2)) {
+        hktas_dn_reject_locked(39);return NULL;
+    }
     hktas_dn_job_ticket *special=(hktas_dn_job_ticket*)owner->publishing;
     if(special && !special->created_group && special->count==count && __builtin_return_address(0)==g_dn_base+0x727da7u)
         special->created_group=group;
-    else hktas_dn_lineage_bind_locked(queue,group,body,count,owner,FALSE);
+    else if(!hktas_dn_lineage_bind_locked(queue,group,body,count,owner,FALSE)) return NULL;
     ReleaseSRWLockExclusive(&g_dn_lock);hktas_dn_leave(DN_job_CreateGroup);return group;
 }
 static void __cdecl dn_job_ScheduleGroups(void *queue,void *first,void *last)
@@ -171,11 +218,15 @@ static void __cdecl dn_job_ScheduleGroups(void *queue,void *first,void *last)
             || !hktas_dn_read(node,&next_node,8) || hktas_dn_u64(body+8)>UINT64_MAX-2u) {hktas_dn_reject_locked(42);return;}
         unsigned count=hktas_dn_u32(body+16)&0x7fffffffu;
         if(hktas_dn_ptr(body+32) && count) --count;
-        uint64_t generation=hktas_dn_u64(body+8)+2;hktas_dn_supersede_group_locked(queue,(void*)group,generation);
+        uint64_t generation=hktas_dn_u64(body+8)+2;
+        if(!hktas_dn_supersede_group_locked(queue,(void*)group,generation)) {hktas_dn_reject_locked(42);return;}
         hktas_dn_lineage *g=hktas_dn_find_cohort(queue,(void*)group,generation);
         if(g) {
             if(g->published || g->publisher_refs || !hktas_dn_assemble_lineage_locked(g,body,count)) {hktas_dn_reject_locked(42);return;}
-        } else if(owner && owner->director_depth) g=hktas_dn_lineage_bind_locked(queue,(void*)group,body,count,owner,TRUE);
+        } else if(owner && owner->director_depth) {
+            g=hktas_dn_lineage_bind_locked(queue,(void*)group,body,count,owner,TRUE);
+            if(!g) return;
+        }
         if(g) {g->batch_cookie=&cookie;++g->publisher_refs;++bound;}
         if(!next_node) {if(group!=(uintptr_t)last) {hktas_dn_reject_locked(42);return;}break;}
         if(group==(uintptr_t)last || !hktas_dn_read(next_node+8,&group,8) || !group) {hktas_dn_reject_locked(42);return;}
