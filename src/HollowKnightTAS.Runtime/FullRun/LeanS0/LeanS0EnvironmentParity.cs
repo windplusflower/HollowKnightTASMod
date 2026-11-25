@@ -169,6 +169,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             if (receipt == null) throw new ArgumentNullException(nameof(receipt));
             NormalizeTimeControllerAtBoundary();
             receipt.ResetObjectPoolInstances = ResetObjectPoolToCleanInitialState(hero);
+            receipt.SweptStaleITweens += LeanS0Gate.SweepStaleITweens();
             receipt.ResetHeroInactiveLifecycles = ResetHeroInactiveRandomizerLifecycles(hero);
             ResetCrossSceneStaticState();
             ResetPersistentTransientComponents(hero);

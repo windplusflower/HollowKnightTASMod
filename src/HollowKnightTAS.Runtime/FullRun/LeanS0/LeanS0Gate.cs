@@ -7,6 +7,7 @@ using GlobalEnums;
 using HollowKnightTAS.Core.SceneCheckpoints;
 using HutongGames.PlayMaker;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
@@ -24,6 +25,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public int RecycledLevelUnloadObjects { get; set; }
         public int ResetObjectPoolInstances { get; set; }
         public int ResetHeroInactiveLifecycles { get; set; }
+        public int SweptStaleITweens { get; set; }
         public bool NormalizedAltAttack { get; set; }
         public bool NormalizedInvulnerable { get; set; }
         public bool NormalizedNailCharging { get; set; }
@@ -32,6 +34,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         public bool NormalizedLowHealthFsm { get; set; }
         public bool NormalizedCameraShakeFsm { get; set; }
         public bool NormalizedHeroLightFsm { get; set; }
+        public bool NormalizedCharmEffectFsms { get; set; }
     }
 
     /// <summary>
@@ -115,14 +118,41 @@ namespace HollowKnightTAS.Runtime.FullRun
             "timer",
             BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
 
-        private static readonly (FieldInfo? Field, object ZeroValue)[] TransientHeroResetFields =
+        private static readonly FieldInfo? AttackDurationField = typeof(HeroController).GetField(
+            "attackDuration",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? InvPulseNormalColorField = typeof(InvulnerablePulse).GetField("normalColor", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? InvPulseSpriteField = typeof(InvulnerablePulse).GetField("sprite", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? InvPulsePulsingField = typeof(InvulnerablePulse).GetField("pulsing", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? InvPulseReverseField = typeof(InvulnerablePulse).GetField("reverse", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? InvPulseCurrentLerpTimeField = typeof(InvulnerablePulse).GetField("currentLerpTime", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly FieldInfo? SpriteFlashRendField = typeof(SpriteFlash).GetField("rend", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashColourField = typeof(SpriteFlash).GetField("flashColour", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashAmountField = typeof(SpriteFlash).GetField("amount", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashTimeUpField = typeof(SpriteFlash).GetField("timeUp", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashStayTimeField = typeof(SpriteFlash).GetField("stayTime", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashTimeDownField = typeof(SpriteFlash).GetField("timeDown", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashStateField = typeof(SpriteFlash).GetField("flashingState", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashTimerField = typeof(SpriteFlash).GetField("flashTimer", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashAmountCurrentField = typeof(SpriteFlash).GetField("amountCurrent", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashTField = typeof(SpriteFlash).GetField("t", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashRepeatField = typeof(SpriteFlash).GetField("repeatFlash", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashCancelField = typeof(SpriteFlash).GetField("cancelFlash", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashGeoTimerField = typeof(SpriteFlash).GetField("geoTimer", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashGeoFlashField = typeof(SpriteFlash).GetField("geoFlash", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashBlockField = typeof(SpriteFlash).GetField("block", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        private static readonly FieldInfo? SpriteFlashSendToChildrenField = typeof(SpriteFlash).GetField("sendToChildren", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        private static readonly (FieldInfo? Field, object? ZeroValue)[] TransientHeroResetFields =
             BuildTransientHeroResetFields();
 
-        private static (FieldInfo? Field, object ZeroValue)[] BuildTransientHeroResetFields()
+        private static (FieldInfo? Field, object? ZeroValue)[] BuildTransientHeroResetFields()
         {
             const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
             Type heroType = typeof(HeroController);
-            var specs = new (string Name, object ZeroValue)[]
+            var specs = new (string Name, object? ZeroValue)[]
             {
                 ("wallUnstickSteps", 0),
                 ("wallLockSteps", 0),
@@ -146,9 +176,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 ("dashQueuing", false),
                 ("landingBufferSteps", 0),
                 ("ledgeBufferSteps", 0),
-                ("headBumpSteps", 0)
+                ("headBumpSteps", 0),
+                ("drainMP", false),
+                ("drainMP_timer", 0f),
+                ("drainMP_time", 0f),
+                ("MP_drained", 0f),
+                ("drainMP_seconds", 0f),
+                ("focusMP_amount", 0f),
+                ("recoilVector", Vector2.zero),
+                ("dashEffect", null),
+                ("takeDamageCoroutine", null)
             };
-            var result = new (FieldInfo? Field, object ZeroValue)[specs.Length];
+            var result = new (FieldInfo? Field, object? ZeroValue)[specs.Length];
             for (int i = 0; i < specs.Length; i++)
             {
                 result[i] = (heroType.GetField(specs[i].Name, flags), specs[i].ZeroValue);
@@ -221,6 +260,13 @@ namespace HollowKnightTAS.Runtime.FullRun
             Action<LeanS0GateReceipt, HeroController?> resetHandler = boundaryEnvironmentReset
                 ?? throw new InvalidOperationException("LeanS0Gate boundary environment reset handler is required when applyUnityRuntime is true.");
             resetHandler(receipt, hero);
+
+            if (hero != null)
+            {
+                NormalizeCharmEffectFsms(hero, receipt);
+            }
+
+            receipt.SweptStaleITweens += SweepStaleITweens();
         }
 
         internal static void NormalizeHeroController(
@@ -299,6 +345,11 @@ namespace HollowKnightTAS.Runtime.FullRun
                 TransientHeroResetFields[i].Field?.SetValue(hero, TransientHeroResetFields[i].ZeroValue);
             }
 
+            if (AttackDurationField != null && (hero.cState == null || !hero.cState.attacking))
+            {
+                AttackDurationField.SetValue(hero, 0f);
+            }
+
             if (AltAttackTimeField != null)
             {
                 float current = (float)(AltAttackTimeField.GetValue(hero) ?? 0f);
@@ -307,6 +358,66 @@ namespace HollowKnightTAS.Runtime.FullRun
                     AltAttackTimeField.SetValue(hero, 0f);
                     receipt.NormalizedAltAttack = true;
                 }
+            }
+
+            if (checkUnityLifetime)
+            {
+                NormalizeHeroPulseAndFlash(hero);
+            }
+        }
+
+        private static void NormalizeHeroPulseAndFlash(HeroController hero)
+        {
+            InvulnerablePulse? invPulse = hero.GetComponent<InvulnerablePulse>();
+            if (invPulse != null)
+            {
+                bool wasPulsing = InvPulsePulsingField?.GetValue(invPulse) is bool p && p;
+                if (wasPulsing
+                    && InvPulseSpriteField?.GetValue(invPulse) is tk2dSprite sprite
+                    && sprite != null
+                    && InvPulseNormalColorField?.GetValue(invPulse) is Color normalColor)
+                {
+                    sprite.color = normalColor;
+                }
+
+                InvPulsePulsingField?.SetValue(invPulse, false);
+                InvPulseReverseField?.SetValue(invPulse, false);
+                InvPulseCurrentLerpTimeField?.SetValue(invPulse, 0f);
+            }
+
+            SpriteFlash? spriteFlash = hero.GetComponent<SpriteFlash>();
+            if (spriteFlash != null)
+            {
+                Renderer? rend = SpriteFlashRendField?.GetValue(spriteFlash) as Renderer;
+                if (rend == null)
+                {
+                    rend = hero.GetComponent<Renderer>();
+                    if (rend != null)
+                    {
+                        SpriteFlashRendField?.SetValue(spriteFlash, rend);
+                    }
+                }
+
+                if (SpriteFlashBlockField?.GetValue(spriteFlash) is MaterialPropertyBlock block && rend != null)
+                {
+                    block.SetFloat("_FlashAmount", 0f);
+                    rend.SetPropertyBlock(block);
+                }
+
+                SpriteFlashStateField?.SetValue(spriteFlash, 0);
+                SpriteFlashTimerField?.SetValue(spriteFlash, 0f);
+                SpriteFlashAmountCurrentField?.SetValue(spriteFlash, 0f);
+                SpriteFlashTField?.SetValue(spriteFlash, 0f);
+                SpriteFlashRepeatField?.SetValue(spriteFlash, false);
+                SpriteFlashCancelField?.SetValue(spriteFlash, false);
+                SpriteFlashGeoTimerField?.SetValue(spriteFlash, 0f);
+                SpriteFlashGeoFlashField?.SetValue(spriteFlash, false);
+                SpriteFlashColourField?.SetValue(spriteFlash, default(Color));
+                SpriteFlashAmountField?.SetValue(spriteFlash, 0f);
+                SpriteFlashTimeUpField?.SetValue(spriteFlash, 0f);
+                SpriteFlashStayTimeField?.SetValue(spriteFlash, 0f);
+                SpriteFlashTimeDownField?.SetValue(spriteFlash, 0f);
+                SpriteFlashSendToChildrenField?.SetValue(spriteFlash, true);
             }
         }
 
@@ -783,23 +894,290 @@ namespace HollowKnightTAS.Runtime.FullRun
                     tween.transform.position = vecs[0];
                 }
 
-                GameObject tweenGo = tween.gameObject;
-                for (int i = iTween.tweens.Count - 1; i >= 0; i--)
-                {
-                    if (iTween.tweens[i] is Hashtable args && (args["target"] == null || ReferenceEquals(args["target"], tweenGo)
-                        || (args["target"] is UnityEngine.Object obj && obj == null)))
-                    {
-                        iTween.tweens.RemoveAt(i);
-                    }
-                }
-
                 tween.StopAllCoroutines();
                 tween.enabled = false;
                 UnityEngine.Object.DestroyImmediate(tween);
                 removedAny = true;
             }
 
+            for (int i = iTween.tweens.Count - 1; i >= 0; i--)
+            {
+                if (iTween.tweens[i] is not Hashtable args)
+                {
+                    iTween.tweens.RemoveAt(i);
+                    removedAny = true;
+                    continue;
+                }
+
+                object? rawTarget = args["target"];
+                if (rawTarget == null
+                    || (rawTarget is UnityEngine.Object obj && IsUnityObjectDestroyed(obj))
+                    || (rawTarget is GameObject go && (ReferenceEquals(go, targetRoot) || go.transform.IsChildOf(targetRoot.transform))))
+                {
+                    iTween.tweens.RemoveAt(i);
+                    removedAny = true;
+                }
+            }
+
             return removedAny;
+        }
+
+        internal static int SweepStaleITweens()
+        {
+            if (iTween.tweens == null || iTween.tweens.Count == 0)
+            {
+                return 0;
+            }
+
+            UnityEngine.Random.State savedRng = UnityEngine.Random.state;
+            int removed = 0;
+            try
+            {
+                Scene ddolScene = default;
+                GameManager? gm = GameManager.instance;
+                if (gm != null && gm.gameObject != null)
+                {
+                    ddolScene = gm.gameObject.scene;
+                }
+
+                for (int i = iTween.tweens.Count - 1; i >= 0; i--)
+                {
+                    if (ShouldRemoveITweenEntry(iTween.tweens[i], ddolScene))
+                    {
+                        iTween.tweens.RemoveAt(i);
+                        removed++;
+                    }
+                }
+            }
+            finally
+            {
+                UnityEngine.Random.state = savedRng;
+            }
+
+            return removed;
+        }
+
+        private static bool ShouldRemoveITweenEntry(object? entry, Scene ddolScene)
+        {
+            if (entry is not Hashtable args)
+            {
+                return true;
+            }
+
+            object? rawTarget = args["target"];
+            if (rawTarget == null)
+            {
+                return true;
+            }
+
+            if (rawTarget is not UnityEngine.Object unityObj || IsUnityObjectDestroyed(unityObj))
+            {
+                return true;
+            }
+
+            if (rawTarget is not GameObject targetGo)
+            {
+                return true;
+            }
+
+            Scene targetScene = targetGo.scene;
+            bool isDdol = (ddolScene.IsValid() && targetScene == ddolScene)
+                || string.Equals(targetScene.name, "DontDestroyOnLoad", StringComparison.Ordinal);
+            if (!isDdol)
+            {
+                return true;
+            }
+
+            string? entryId = args["id"] as string;
+            iTween[] components = targetGo.GetComponents<iTween>();
+            for (int i = 0; i < components.Length; i++)
+            {
+                iTween comp = components[i];
+                if (comp == null)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(entryId) && string.Equals(comp.id, entryId, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                if (string.IsNullOrEmpty(comp.id) && !targetGo.activeInHierarchy)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        internal static bool ResetFsmToState(PlayMakerFSM? fsm, string targetStateName)
+        {
+            if (fsm == null || fsm.Fsm == null || !fsm.Fsm.Initialized)
+            {
+                return false;
+            }
+
+            if (fsm.Fsm.GetState(targetStateName) == null)
+            {
+                return false;
+            }
+
+            ClearFsmEventList(FsmDelayedEventsField, fsm.Fsm);
+            ClearFsmEventList(FsmUpdateEventsField, fsm.Fsm);
+            ClearFsmEventList(FsmRemoveEventsField, fsm.Fsm);
+            ResetFsmStatesAndActions(fsm.Fsm);
+            fsm.SetState(targetStateName);
+            FsmPreviousActiveStateField?.SetValue(fsm.Fsm, null);
+            FsmLastTransitionField?.SetValue(fsm.Fsm, null);
+            return true;
+        }
+
+        internal static GameObject? FindGrimmchildInstance()
+        {
+            try
+            {
+                GameObject tagged = GameObject.FindGameObjectWithTag("Grimmchild");
+                if (tagged != null) return tagged;
+            }
+            catch
+            {
+                // Ignore if tag lookup throws during teardown; fallback to DDOL scan.
+            }
+
+            GameManager? gm = GameManager.instance;
+            Scene ddol = gm != null ? gm.gameObject.scene : default;
+            if (ddol.IsValid() && ddol.isLoaded)
+            {
+                foreach (GameObject root in ddol.GetRootGameObjects())
+                {
+                    if (root != null && root.name.StartsWith("Grimmchild", StringComparison.Ordinal))
+                    {
+                        return root;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        internal static void NormalizeCharmEffectFsms(HeroController hero, LeanS0GateReceipt receipt)
+        {
+            if (hero == null || receipt == null)
+            {
+                return;
+            }
+
+            Transform? charmEffects = hero.transform.Find("Charm Effects");
+            if (charmEffects == null)
+            {
+                return;
+            }
+
+            UnityEngine.Random.State savedRng = UnityEngine.Random.state;
+            bool normalized = false;
+            try
+            {
+                PlayMakerFSM[] fsms = charmEffects.GetComponents<PlayMakerFSM>();
+                foreach (PlayMakerFSM fsm in fsms)
+                {
+                    if (fsm == null)
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(fsm.FsmName, "Weaverling Control", StringComparison.Ordinal))
+                    {
+                        if (ResetFsmToState(fsm, "Unequipped")) normalized = true;
+                        FsmGameObject? weaverlingVar = fsm.FsmVariables?.FindFsmGameObject("Weaverling");
+                        if (weaverlingVar != null && weaverlingVar.Value != null)
+                        {
+                            weaverlingVar.Value = null;
+                            normalized = true;
+                        }
+                    }
+                    else if (string.Equals(fsm.FsmName, "Spawn Orbit Shield", StringComparison.Ordinal))
+                    {
+                        if (ResetFsmToState(fsm, "Idle")) normalized = true;
+                        FsmGameObject? shieldVar = fsm.FsmVariables?.FindFsmGameObject("Shield");
+                        if (shieldVar != null && shieldVar.Value != null)
+                        {
+                            shieldVar.Value = null;
+                            normalized = true;
+                        }
+                    }
+                    else if (string.Equals(fsm.FsmName, "Thorn Counter", StringComparison.Ordinal))
+                    {
+                        if (ResetFsmToState(fsm, "Idle")) normalized = true;
+                    }
+                    else if (string.Equals(fsm.FsmName, "Spawn Grimmchild", StringComparison.Ordinal))
+                    {
+                        if (ResetFsmToState(fsm, "Idle")) normalized = true;
+                        FsmGameObject? childVar = fsm.FsmVariables?.FindFsmGameObject("Child");
+                        if (childVar != null)
+                        {
+                            GameObject? liveGrimmchild = FindGrimmchildInstance();
+                            if (!ReferenceEquals(childVar.Value, liveGrimmchild))
+                            {
+                                childVar.Value = liveGrimmchild;
+                                normalized = true;
+                            }
+                        }
+                    }
+                    else if (string.Equals(fsm.FsmName, "Hatchling Spawn", StringComparison.Ordinal))
+                    {
+                        if (ResetFsmToState(fsm, "Count Remaining")) normalized = true;
+                    }
+                }
+
+                Transform? dung = charmEffects.Find("Dung");
+                if (dung != null)
+                {
+                    foreach (PlayMakerFSM fsm in dung.GetComponents<PlayMakerFSM>())
+                    {
+                        if (fsm != null && string.Equals(fsm.FsmName, "Control", StringComparison.Ordinal))
+                        {
+                            if (ResetFsmToState(fsm, "Unequipped")) normalized = true;
+                            break;
+                        }
+                    }
+
+                    AudioSource? dungAudio = dung.GetComponent<AudioSource>();
+                    if (dungAudio != null && dungAudio.isPlaying)
+                    {
+                        dungAudio.Stop();
+                        normalized = true;
+                    }
+
+                    Transform? particle1 = dung.Find("Particle 1");
+                    if (particle1 != null)
+                    {
+                        ParticleSystem? ps = particle1.GetComponent<ParticleSystem>();
+                        if (ps != null)
+                        {
+                            ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+                            normalized = true;
+                        }
+
+                        AudioSource? p1Audio = particle1.GetComponent<AudioSource>();
+                        if (p1Audio != null)
+                        {
+                            p1Audio.Stop();
+                            normalized = true;
+                        }
+                    }
+                }
+
+                if (normalized)
+                {
+                    receipt.NormalizedCharmEffectFsms = true;
+                }
+            }
+            finally
+            {
+                UnityEngine.Random.state = savedRng;
+            }
         }
 
         private static bool ClearFsmEventList(FieldInfo? field, Fsm fsm)

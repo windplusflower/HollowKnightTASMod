@@ -169,6 +169,8 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         public string SporeCooldownActiveState { get; set; } = string.Empty;
         public string SporeCooldownPreviousState { get; set; } = string.Empty;
+        public float? SporeCooldownWaitTimer { get; set; }
+        public bool? SpellControlSporeCooldown { get; set; }
         public string DreamReturnActiveState { get; set; } = string.Empty;
         public string DreamReturnPreviousState { get; set; } = string.Empty;
         public Dictionary<string, bool> DreamReturnBools { get; set; } = new Dictionary<string, bool>(StringComparer.Ordinal);
@@ -207,6 +209,8 @@ namespace HollowKnightTAS.Runtime.FullRun
     {
         public int HatchlingCount { get; set; }
         public bool HatchlingDreamgateEntry { get; set; }
+        public string? WhiteCharmActiveState { get; set; }
+        public float? WhiteCharmWaitTimer { get; set; }
         public LeanS0GrimmchildState? Grimmchild { get; set; }
     }
 

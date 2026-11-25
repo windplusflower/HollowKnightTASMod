@@ -117,6 +117,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static readonly FieldInfo BounceSpeedField = BounceField("speed");
         private static readonly FieldInfo BounceStepCounterField = BounceField("stepCounter");
         private static readonly FieldInfo BounceBouncingField = BounceField("bouncing");
+        private static readonly FieldInfo? WaitTimerField = typeof(Wait).GetField("timer", AnyInstance);
 
         private static FieldInfo HeroField(string name)
             => typeof(HeroController).GetField(name, AnyInstance) ?? throw new MissingFieldException("HeroController." + name);
@@ -208,6 +209,10 @@ namespace HollowKnightTAS.Runtime.FullRun
 
             // C1 + C2
             JsonUtility.FromJsonOverwrite(packet.C1_PlayerDataJson, pd);
+            if (pd.currentBossSequence != null && string.IsNullOrEmpty(pd.currentBossSequence.bossSequenceName))
+            {
+                pd.currentBossSequence = null;
+            }
             JsonUtility.FromJsonOverwrite(packet.C2_SceneDataJson, sd);
             if (packet.GameManagerProfileId >= 1 && packet.GameManagerProfileId <= 4)
             {
@@ -821,6 +826,7 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             PlayMakerFSM[] fsms = hero.GetComponents<PlayMakerFSM>();
             PlayMakerFSM? spore = fsms.FirstOrDefault(f => f != null && f.FsmName == "Spore Cooldown");
+            PlayMakerFSM? spellControl = fsms.FirstOrDefault(f => f != null && f.FsmName == "Spell Control");
             PlayMakerFSM? dreamReturn = fsms.FirstOrDefault(f => f != null && f.FsmName == "Dream Return");
             PlayMakerFSM? interp = fsms.FirstOrDefault(f => f != null && f.FsmName == "Control Interpolation");
 
@@ -832,6 +838,18 @@ namespace HollowKnightTAS.Runtime.FullRun
                 DreamReturnPreviousState = dreamReturn?.Fsm?.PreviousActiveState?.Name ?? string.Empty,
                 ControlInterpolationActiveState = interp?.ActiveStateName ?? string.Empty
             };
+
+            Wait? sporeCooldownWait = spore?.Fsm?.GetState("Cooldown")?.Actions?.OfType<Wait>().FirstOrDefault();
+            if (sporeCooldownWait != null && WaitTimerField != null)
+            {
+                state.SporeCooldownWaitTimer = (float)WaitTimerField.GetValue(sporeCooldownWait)!;
+            }
+
+            FsmBool? spellControlSporeBool = spellControl?.FsmVariables?.FindFsmBool("Spore Cooldown");
+            if (spellControlSporeBool != null)
+            {
+                state.SpellControlSporeCooldown = spellControlSporeBool.Value;
+            }
 
             if (dreamReturn?.FsmVariables != null)
             {
@@ -854,10 +872,35 @@ namespace HollowKnightTAS.Runtime.FullRun
         {
             PlayMakerFSM[] fsms = hero.GetComponents<PlayMakerFSM>();
             PlayMakerFSM? spore = fsms.FirstOrDefault(f => f != null && f.FsmName == "Spore Cooldown");
-            if (spore != null && !string.IsNullOrEmpty(state.SporeCooldownActiveState)
-                && spore.ActiveStateName != state.SporeCooldownActiveState)
+            if (spore != null)
             {
-                spore.SetState(state.SporeCooldownActiveState);
+                if (!string.IsNullOrEmpty(state.SporeCooldownActiveState)
+                    && spore.ActiveStateName != state.SporeCooldownActiveState)
+                {
+                    if (!LeanS0Gate.ResetFsmToState(spore, state.SporeCooldownActiveState))
+                    {
+                        spore.SetState(state.SporeCooldownActiveState);
+                    }
+                }
+
+                if (state.SporeCooldownWaitTimer.HasValue && WaitTimerField != null)
+                {
+                    Wait? sporeCooldownWait = spore.Fsm?.GetState("Cooldown")?.Actions?.OfType<Wait>().FirstOrDefault();
+                    if (sporeCooldownWait != null)
+                    {
+                        WaitTimerField.SetValue(sporeCooldownWait, state.SporeCooldownWaitTimer.Value);
+                    }
+                }
+            }
+
+            if (state.SpellControlSporeCooldown.HasValue)
+            {
+                PlayMakerFSM? spellControl = fsms.FirstOrDefault(f => f != null && f.FsmName == "Spell Control");
+                FsmBool? spellControlSporeBool = spellControl?.FsmVariables?.FindFsmBool("Spore Cooldown");
+                if (spellControlSporeBool != null)
+                {
+                    spellControlSporeBool.Value = state.SpellControlSporeCooldown.Value;
+                }
             }
 
             PlayMakerFSM? dreamReturn = fsms.FirstOrDefault(f => f != null && f.FsmName == "Dream Return");
@@ -907,8 +950,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             Transform? charmEffects = hero.transform.Find("Charm Effects");
             if (charmEffects != null)
             {
-                PlayMakerFSM? hatchlingSpawn = charmEffects.GetComponents<PlayMakerFSM>()
-                    .FirstOrDefault(f => f != null && f.FsmName == "Hatchling Spawn");
+                PlayMakerFSM[] charmFsms = charmEffects.GetComponents<PlayMakerFSM>();
+                PlayMakerFSM? hatchlingSpawn = charmFsms.FirstOrDefault(f => f != null && f.FsmName == "Hatchling Spawn");
                 if (hatchlingSpawn != null)
                 {
                     FsmInt? countVar = hatchlingSpawn.FsmVariables.FindFsmInt("Hatchlings");
@@ -916,9 +959,20 @@ namespace HollowKnightTAS.Runtime.FullRun
                     result.HatchlingCount = countVar != null ? countVar.Value : 0;
                     result.HatchlingDreamgateEntry = dreamgateVar != null && dreamgateVar.Value;
                 }
+
+                PlayMakerFSM? whiteCharm = charmFsms.FirstOrDefault(f => f != null && f.FsmName == "White Charm");
+                if (whiteCharm != null)
+                {
+                    result.WhiteCharmActiveState = whiteCharm.ActiveStateName ?? string.Empty;
+                    Wait? waitAction = whiteCharm.Fsm?.ActiveState?.Actions?.OfType<Wait>().FirstOrDefault();
+                    if (waitAction != null && WaitTimerField != null)
+                    {
+                        result.WhiteCharmWaitTimer = (float)WaitTimerField.GetValue(waitAction)!;
+                    }
+                }
             }
 
-            GameObject? grimmchild = FindGrimmchildInstance();
+            GameObject? grimmchild = LeanS0Gate.FindGrimmchildInstance();
             if (grimmchild != null)
             {
                 result.Grimmchild = CaptureGrimmchild(grimmchild);
@@ -932,18 +986,34 @@ namespace HollowKnightTAS.Runtime.FullRun
             Transform? charmEffects = hero.transform.Find("Charm Effects");
             if (charmEffects != null)
             {
-                PlayMakerFSM? hatchlingSpawn = charmEffects.GetComponents<PlayMakerFSM>()
-                    .FirstOrDefault(f => f != null && f.FsmName == "Hatchling Spawn");
+                PlayMakerFSM[] charmFsms = charmEffects.GetComponents<PlayMakerFSM>();
+                PlayMakerFSM? hatchlingSpawn = charmFsms.FirstOrDefault(f => f != null && f.FsmName == "Hatchling Spawn");
                 if (hatchlingSpawn != null)
                 {
                     FsmInt? countVar = hatchlingSpawn.FsmVariables.FindFsmInt("Hatchlings");
                     if (countVar != null) countVar.Value = state.HatchlingCount;
                     FsmBool? dreamgateVar = hatchlingSpawn.FsmVariables.FindFsmBool("Dreamgate Entry");
                     if (dreamgateVar != null) dreamgateVar.Value = state.HatchlingDreamgateEntry;
+                    LeanS0Gate.ResetFsmToState(hatchlingSpawn, "Count Remaining");
+                }
+
+                PlayMakerFSM? whiteCharm = charmFsms.FirstOrDefault(f => f != null && f.FsmName == "White Charm");
+                if (whiteCharm != null && !string.IsNullOrEmpty(state.WhiteCharmActiveState))
+                {
+                    if (LeanS0Gate.ResetFsmToState(whiteCharm, state.WhiteCharmActiveState!)
+                        && state.WhiteCharmWaitTimer.HasValue
+                        && WaitTimerField != null)
+                    {
+                        Wait? waitAction = whiteCharm.Fsm?.ActiveState?.Actions?.OfType<Wait>().FirstOrDefault();
+                        if (waitAction != null)
+                        {
+                            WaitTimerField.SetValue(waitAction, state.WhiteCharmWaitTimer.Value);
+                        }
+                    }
                 }
             }
 
-            GameObject? existing = FindGrimmchildInstance();
+            GameObject? existing = LeanS0Gate.FindGrimmchildInstance();
             if (state.Grimmchild == null)
             {
                 if (existing != null)
@@ -958,38 +1028,6 @@ namespace HollowKnightTAS.Runtime.FullRun
                 existing = SpawnGrimmchildFromCharmEffects(charmEffects, state.Grimmchild);
             }
             ApplyGrimmchildState(existing, state.Grimmchild);
-        }
-
-        private static GameObject? FindGrimmchildInstance()
-        {
-            try
-            {
-                GameObject tagged = GameObject.FindGameObjectWithTag("Grimmchild");
-                if (tagged != null) return tagged;
-            }
-            catch
-            {
-                // Ignore if tag lookup throws during teardown; fallback to DDOL scan.
-            }
-
-            Scene ddol = GetDontDestroyOnLoadSceneSafe();
-            if (ddol.IsValid() && ddol.isLoaded)
-            {
-                foreach (GameObject root in ddol.GetRootGameObjects())
-                {
-                    if (root != null && root.name.StartsWith("Grimmchild", StringComparison.Ordinal))
-                    {
-                        return root;
-                    }
-                }
-            }
-            return null;
-        }
-
-        private static Scene GetDontDestroyOnLoadSceneSafe()
-        {
-            GameManager? gm = GameManager.instance;
-            return gm != null ? gm.gameObject.scene : default;
         }
 
         private static GameObject SpawnGrimmchildFromCharmEffects(Transform? charmEffects, LeanS0GrimmchildState gc)

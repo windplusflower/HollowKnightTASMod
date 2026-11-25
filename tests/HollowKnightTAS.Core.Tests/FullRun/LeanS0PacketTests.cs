@@ -433,5 +433,41 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             Assert.IsNull(decoded.C7_HeroController.RbPosition);
             Assert.IsNull(decoded.C7_HeroController.RbVelocity);
         }
+
+        [TestMethod]
+        public void EncodeDecode_RoundTrip_PreservesCrossSceneCharmTimers()
+        {
+            LeanS0Packet original = CreateSamplePacket();
+            original.C8_KnightFsms.SporeCooldownWaitTimer = 1.75f;
+            original.C8_KnightFsms.SpellControlSporeCooldown = true;
+            original.C9_CharmMinions.WhiteCharmActiveState = "Wait";
+            original.C9_CharmMinions.WhiteCharmWaitTimer = 0.85f;
+
+            byte[] encoded = LeanS0PacketCodec.Encode(original);
+            LeanS0Packet decoded = LeanS0PacketCodec.Decode(encoded);
+
+            Assert.AreEqual(1.75f, decoded.C8_KnightFsms.SporeCooldownWaitTimer);
+            Assert.AreEqual(true, decoded.C8_KnightFsms.SpellControlSporeCooldown);
+            Assert.AreEqual("Wait", decoded.C9_CharmMinions.WhiteCharmActiveState);
+            Assert.AreEqual(0.85f, decoded.C9_CharmMinions.WhiteCharmWaitTimer);
+        }
+
+        [TestMethod]
+        public void DeserializeJson_LegacyPacketWithoutCrossSceneCharmTimers_RemainsCompatible()
+        {
+            LeanS0Packet original = CreateSamplePacket();
+            string json = LeanS0PacketCodec.SerializeJson(original)
+                .Replace(",\"SporeCooldownWaitTimer\":null,\"SpellControlSporeCooldown\":null", string.Empty, StringComparison.Ordinal)
+                .Replace(",\"WhiteCharmActiveState\":null,\"WhiteCharmWaitTimer\":null", string.Empty, StringComparison.Ordinal);
+
+            Assert.IsFalse(json.Contains("SporeCooldownWaitTimer", StringComparison.Ordinal));
+            Assert.IsFalse(json.Contains("WhiteCharmActiveState", StringComparison.Ordinal));
+
+            LeanS0Packet decoded = LeanS0PacketCodec.DeserializeJson(json);
+            Assert.IsNull(decoded.C8_KnightFsms.SporeCooldownWaitTimer);
+            Assert.IsNull(decoded.C8_KnightFsms.SpellControlSporeCooldown);
+            Assert.IsNull(decoded.C9_CharmMinions.WhiteCharmActiveState);
+            Assert.IsNull(decoded.C9_CharmMinions.WhiteCharmWaitTimer);
+        }
     }
 }

@@ -170,6 +170,40 @@ namespace HollowKnightTAS.Core.Tests.FullRun
         }
 
         [TestMethod]
+        public void NormalizeHeroController_ClearsTransientFocusAttackRecoilAndEffectReferences()
+        {
+#pragma warning disable SYSLIB0050
+            var hero = (HeroController)FormatterServices.GetUninitializedObject(typeof(HeroController));
+#pragma warning restore SYSLIB0050
+            hero.cState = new HeroControllerStates { attacking = false };
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+            Type hc = typeof(HeroController);
+            hc.GetField("drainMP", flags)!.SetValue(hero, true);
+            hc.GetField("drainMP_timer", flags)!.SetValue(hero, 0.12f);
+            hc.GetField("drainMP_time", flags)!.SetValue(hero, 0.025f);
+            hc.GetField("MP_drained", flags)!.SetValue(hero, 18f);
+            hc.GetField("drainMP_seconds", flags)!.SetValue(hero, 1.45f);
+            hc.GetField("focusMP_amount", flags)!.SetValue(hero, 33f);
+            hc.GetField("attackDuration", flags)!.SetValue(hero, 0.35f);
+            hc.GetField("recoilVector", flags)!.SetValue(hero, new UnityEngine.Vector2(-15f, 7.5f));
+
+            var receipt = new LeanS0GateReceipt();
+            LeanS0Gate.NormalizeHeroController(hero, receipt);
+
+            Assert.IsFalse((bool)hc.GetField("drainMP", flags)!.GetValue(hero)!);
+            Assert.AreEqual(0f, (float)hc.GetField("drainMP_timer", flags)!.GetValue(hero)!);
+            Assert.AreEqual(0f, (float)hc.GetField("drainMP_time", flags)!.GetValue(hero)!);
+            Assert.AreEqual(0f, (float)hc.GetField("MP_drained", flags)!.GetValue(hero)!);
+            Assert.AreEqual(0f, (float)hc.GetField("drainMP_seconds", flags)!.GetValue(hero)!);
+            Assert.AreEqual(0f, (float)hc.GetField("focusMP_amount", flags)!.GetValue(hero)!);
+            Assert.AreEqual(0f, (float)hc.GetField("attackDuration", flags)!.GetValue(hero)!);
+            Assert.AreEqual(UnityEngine.Vector2.zero, (UnityEngine.Vector2)hc.GetField("recoilVector", flags)!.GetValue(hero)!);
+            Assert.IsNull(hc.GetField("dashEffect", flags)!.GetValue(hero));
+            Assert.IsNull(hc.GetField("takeDamageCoroutine", flags)!.GetValue(hero));
+        }
+
+        [TestMethod]
         public void RandomSeedSync_PreservesS0SeedAcrossBootstrapAndLoadingUntilTargetSceneReady()
         {
             // Target S0 restore starts with bootstrap handle 101 (e.g. GG_Workshop) and leanS0RandomSeededForTargetScene=true
