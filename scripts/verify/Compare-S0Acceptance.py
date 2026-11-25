@@ -252,6 +252,45 @@ def floats_equal_exact(a: float, b: float) -> bool:
     return a == b
 
 
+def find_first_divergence(
+    baseline_by_frame: dict[int, TraceRow],
+    s0_rows: list[TraceRow],
+    resume_frame: int,
+) -> dict[str, Any] | None:
+    for s0_row in sorted(s0_rows, key=lambda r: r.movie):
+        if s0_row.movie < resume_frame:
+            continue
+        base_row = baseline_by_frame.get(s0_row.movie)
+        if base_row is None:
+            continue
+        scene_diff = s0_row.scene != base_row.scene
+        rng_diff = s0_row.rng_sha256 != base_row.rng_sha256
+        tft_diff = not floats_equal_exact(base_row.tft_ms, s0_row.tft_ms)
+        if not (scene_diff or rng_diff or tft_diff):
+            continue
+        if scene_diff:
+            kind = "scene"
+        elif rng_diff and tft_diff:
+            kind = "rng_and_tft"
+        elif rng_diff:
+            kind = "rng"
+        else:
+            kind = "tft"
+        return {
+            "movieFrame": s0_row.movie,
+            "scene": s0_row.scene,
+            "baselineScene": base_row.scene,
+            "kind": kind,
+            "baselineRngSha256": base_row.rng_sha256,
+            "restoreRngSha256": s0_row.rng_sha256,
+            "baselineRngDelta": base_row.rng_delta,
+            "restoreRngDelta": s0_row.rng_delta,
+            "baselineTftMs": base_row.tft_ms,
+            "restoreTftMs": s0_row.tft_ms,
+        }
+    return None
+
+
 def compare_s0_acceptance(
     *,
     trace_path: Path,
@@ -390,6 +429,7 @@ def compare_s0_acceptance(
             "runError": run_error,
             "passed": False,
             "reason": "",
+            "firstDivergence": None,
             "startSceneCheck": None,
             "frameCoverageCheck": None,
             "transitionCheck": None,
@@ -579,8 +619,10 @@ def compare_s0_acceptance(
                 else:
                     entry["reason"] = "sample_scene_mismatch"
             first_failure_reason = first_failure_reason or entry["reason"]
+            entry["firstDivergence"] = find_first_divergence(base_map, s0_rows, resume_frame)
         else:
             entry["reason"] = "ok"
+            entry["firstDivergence"] = None
 
         s0_results.append(entry)
 
@@ -683,6 +725,15 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
                 lines.append(f"#### S0 #{r.get('index')} `{r.get('checkpointId')}` (resumeFrame=`{r.get('resumeMovieFrame')}`)")
                 if r.get("runError"):
                     lines.append(f"- 执行异常：`{r['runError']}`")
+                fd = r.get("firstDivergence")
+                if fd:
+                    lines.append(
+                        f"- 首帧分叉：frame=`{fd.get('movieFrame')}`, kind=`{fd.get('kind')}`, "
+                        f"scene(base=`{fd.get('baselineScene')}` vs s0=`{fd.get('scene')}`), "
+                        f"rng(base=`{str(fd.get('baselineRngSha256'))[:12]}` delta=`{fd.get('baselineRngDelta')}` "
+                        f"vs s0=`{str(fd.get('restoreRngSha256'))[:12]}` delta=`{fd.get('restoreRngDelta')}`), "
+                        f"tft(base=`{fd.get('baselineTftMs')}` ms vs s0=`{fd.get('restoreTftMs')}` ms)"
+                    )
                 fc = r.get("frameCoverageCheck")
                 if fc and not fc.get("passed"):
                     lines.append(
