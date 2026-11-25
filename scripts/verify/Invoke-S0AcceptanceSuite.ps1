@@ -10,16 +10,24 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Tas1', 'Tas2')]
+    [ValidateSet('All', 'Tas1', 'Tas2', 'Custom')]
     [string] $Suite = 'All',
     [int] $Seed = 0,
     [string] $Tas1Path = '',
     [string] $Tas2Path = '',
+    [string] $CustomPackage = '',
+    [string] $CustomSuiteName = '',
+    [int] $ChainRestoreRounds = 0,
+    [int] $ChainRestoreSeed = 1337,
     [string] $OutputDirectory = '',
     [string] $InstallDirectory = ''
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($ChainRestoreRounds -lt 0) {
+    throw "ChainRestoreRounds must be non-negative: $ChainRestoreRounds"
+}
 
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 
@@ -38,6 +46,25 @@ if ($Suite -in @('All', 'Tas1')) {
 }
 if ($Suite -in @('All', 'Tas2')) {
     $selectedSuites.Add(@{ key = 'tas2_newsave_dirtmouth_bench'; path = $resolvedTas2 })
+}
+if ($Suite -eq 'Custom') {
+    if ([string]::IsNullOrWhiteSpace($CustomPackage)) {
+        throw "CustomPackage is required when -Suite Custom is specified."
+    }
+    $resolvedCustom = [IO.Path]::GetFullPath($CustomPackage)
+    if (-not (Test-Path -LiteralPath $resolvedCustom -PathType Leaf)) {
+        throw "Acceptance sequence package not found: $resolvedCustom"
+    }
+    $rawCustomName = if (-not [string]::IsNullOrWhiteSpace($CustomSuiteName)) {
+        $CustomSuiteName.Trim()
+    } else {
+        [IO.Path]::GetFileNameWithoutExtension($resolvedCustom)
+    }
+    $sanitizedCustomKey = ([regex]::Replace($rawCustomName, '[^A-Za-z0-9._-]+', '_')).Trim('_', '.')
+    if ([string]::IsNullOrWhiteSpace($sanitizedCustomKey)) {
+        $sanitizedCustomKey = 'custom'
+    }
+    $selectedSuites.Add(@{ key = $sanitizedCustomKey; path = $resolvedCustom })
 }
 foreach ($s in $selectedSuites) {
     if (-not (Test-Path -LiteralPath $s.path -PathType Leaf)) {
@@ -196,6 +223,12 @@ try {
             ('--acceptance-package="{0}"' -f $pkgPath),
             ('--acceptance-suite="{0}"' -f $suiteKey)
         )
+        if ($ChainRestoreRounds -gt 0) {
+            $args += @(
+                ('--chain-restore-rounds={0}' -f $ChainRestoreRounds.ToString([Globalization.CultureInfo]::InvariantCulture)),
+                ('--chain-restore-seed={0}' -f $ChainRestoreSeed.ToString([Globalization.CultureInfo]::InvariantCulture))
+            )
+        }
         $stdoutPath = Join-Path $suiteDir 'harness-stdout.log'
         $stderrPath = Join-Path $suiteDir 'harness-stderr.log'
         $hostProcess = Start-Process -FilePath (Join-Path $companion 'StudioScenarioHarness.exe') `

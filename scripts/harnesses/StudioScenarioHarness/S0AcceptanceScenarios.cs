@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using HollowKnightTAS.Companion.Automation;
@@ -35,14 +36,31 @@ internal static partial class StudioScenarioHarness
         public bool Skipped { get; set; }
         public string Error { get; set; } = "";
         public double ElapsedMs { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public bool? IsChainRestore { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? ChainRound { get; set; }
     }
 
     static async Task RunS0AcceptanceAsync(string[] args)
     {
         string Arg(string name) => args.Single(a => a.StartsWith(name + "=", StringComparison.Ordinal)).Split('=', 2)[1];
+        string? OptionalArg(string name) => args.SingleOrDefault(a => a.StartsWith(name + "=", StringComparison.Ordinal))?.Split('=', 2)[1];
+        int ParseIntArg(string name, int defaultValue)
+        {
+            var raw = OptionalArg(name);
+            if (string.IsNullOrWhiteSpace(raw)) return defaultValue;
+            if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+                throw new ArgumentException($"Invalid integer value for {name}: {raw}");
+            return parsed;
+        }
         var packagePath = Path.GetFullPath(Arg("--acceptance-package"));
-        var suiteName = args.SingleOrDefault(a => a.StartsWith("--acceptance-suite=", StringComparison.Ordinal))?.Split('=', 2)[1]
+        var suiteName = OptionalArg("--acceptance-suite")
             ?? Path.GetFileNameWithoutExtension(packagePath);
+        var chainRestoreRounds = ParseIntArg("--chain-restore-rounds", 0);
+        if (chainRestoreRounds < 0)
+            throw new ArgumentOutOfRangeException("--chain-restore-rounds", chainRestoreRounds, "Chain restore rounds must be non-negative.");
+        var chainRestoreSeed = ParseIntArg("--chain-restore-seed", 1337);
         Require(File.Exists(packagePath), "acceptance package exists: " + packagePath);
 
         Environment.SetEnvironmentVariable("HKTAS_ACCEPTANCE_FRAME_TRACE", "1");
@@ -290,19 +308,12 @@ internal static partial class StudioScenarioHarness
             bool processUnusable = false;
             string fatalReason = "";
 
-            // Freeze Studio background grid polling / auto-capture / branch saves during Stage B
-            // to match MainViewModel.FrameMenuAsync -> RestartDraftAtAsync isolation.
-            setGridApplying.Invoke(vm, new object[] { true });
-            setRestoreFrozen.Invoke(vm, new object[] { true });
-            try
+            async Task ExecuteRestoreAsync(SceneCheckpointHeader cp, int index, bool isChainRestore, int? chainRound)
             {
-            for (int i = 0; i < qualified.Count; i++)
-            {
-                var cp = qualified[i];
                 var record = new S0AcceptanceRunRecord
                 {
-                    Index = i + 1,
-                    SegmentName = $"s0-restore-{i + 1}:{cp.CheckpointId}",
+                    Index = index,
+                    SegmentName = $"s0-restore-{index}:{cp.CheckpointId}",
                     CheckpointId = cp.CheckpointId,
                     TransitionId = cp.TransitionId,
                     CaptureMovieFrame = cp.CaptureMovieFrame,
@@ -310,7 +321,9 @@ internal static partial class StudioScenarioHarness
                     CaptureNativeFrame = cp.CaptureNativeFrame,
                     ResumeNativeFrame = cp.ResumeNativeFrame,
                     TargetMovieFrame = Math.Max(stopFrame, cp.ResumeMovieFrame),
-                    InProcess = true
+                    InProcess = true,
+                    IsChainRestore = isChainRestore ? true : null,
+                    ChainRound = chainRound
                 };
                 runRecords.Add(record);
 
@@ -320,12 +333,13 @@ internal static partial class StudioScenarioHarness
                     record.Succeeded = false;
                     record.Skipped = true;
                     record.Error = "Skipped after prior fatal restore error: " + fatalReason;
-                    continue;
+                    return;
                 }
 
                 var sw = Stopwatch.StartNew();
                 record.Attempted = true;
                 var client = vm.CreateSceneCheckpointClient(vm.SelectedSession!.Client);
+                var kindTag = isChainRestore ? $"CHAIN-RESTORE round={chainRound} #{record.Index}" : $"RESTORE #{record.Index}";
                 try
                 {
                     boot.Refresh();
@@ -397,13 +411,13 @@ internal static partial class StudioScenarioHarness
                     }
 
                     record.Succeeded = true;
-                    Log($"S0-ACCEPTANCE RESTORE #{record.Index} PASS id={cp.CheckpointId} resume={cp.ResumeMovieFrame} elapsedMs={sw.Elapsed.TotalMilliseconds:F0}");
+                    Log($"S0-ACCEPTANCE {kindTag} PASS id={cp.CheckpointId} resume={cp.ResumeMovieFrame} elapsedMs={sw.Elapsed.TotalMilliseconds:F0}");
                 }
                 catch (Exception ex)
                 {
                     record.Succeeded = false;
                     record.Error = ex.Message;
-                    Log($"S0-ACCEPTANCE RESTORE #{record.Index} FAIL id={cp.CheckpointId} resume={cp.ResumeMovieFrame}: {ex.Message}");
+                    Log($"S0-ACCEPTANCE {kindTag} FAIL id={cp.CheckpointId} resume={cp.ResumeMovieFrame}: {ex.Message}");
                     try { await client.CancelRestoreAsync(cp.CheckpointId, CancellationToken.None); } catch { }
                     try { boot.Refresh(); } catch { }
                     if (gameProcess.HasExited || !boot.IsWaiting || boot.FullRunFaultCode != 0 || movies.IsTerminal)
@@ -418,6 +432,41 @@ internal static partial class StudioScenarioHarness
                     record.ElapsedMs = sw.Elapsed.TotalMilliseconds;
                 }
             }
+
+            // Freeze Studio background grid polling / auto-capture / branch saves during Stage B
+            // to match MainViewModel.FrameMenuAsync -> RestartDraftAtAsync isolation.
+            setGridApplying.Invoke(vm, new object[] { true });
+            setRestoreFrozen.Invoke(vm, new object[] { true });
+            try
+            {
+                for (int i = 0; i < qualified.Count; i++)
+                {
+                    await ExecuteRestoreAsync(qualified[i], i + 1, isChainRestore: false, chainRound: null);
+                }
+
+                if (chainRestoreRounds > 0 && qualified.Count >= 1 && !processUnusable)
+                {
+                    var chainRng = new Random(chainRestoreSeed);
+                    int previousCheckpointIndex = qualified.Count - 1;
+                    Log($"S0-ACCEPTANCE CHAIN-RESTORE START rounds={chainRestoreRounds} seed={chainRestoreSeed} qualified={qualified.Count}");
+                    for (int round = 1; round <= chainRestoreRounds; round++)
+                    {
+                        int chosenIndex;
+                        if (qualified.Count == 1)
+                        {
+                            chosenIndex = 0;
+                        }
+                        else
+                        {
+                            chosenIndex = chainRng.Next(qualified.Count - 1);
+                            if (chosenIndex >= previousCheckpointIndex)
+                                chosenIndex++;
+                        }
+                        previousCheckpointIndex = chosenIndex;
+                        await ExecuteRestoreAsync(qualified[chosenIndex], runRecords.Count + 1, isChainRestore: true, chainRound: round);
+                    }
+                    Log($"S0-ACCEPTANCE CHAIN-RESTORE COMPLETE rounds={chainRestoreRounds} succeeded={runRecords.Count(r => r.IsChainRestore == true && r.Succeeded)}");
+                }
             }
             finally
             {
