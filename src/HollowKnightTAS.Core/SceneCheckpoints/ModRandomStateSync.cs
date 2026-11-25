@@ -568,15 +568,11 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
             }
         }
 
-        public ModRandomStateSnapshot? CaptureState(Action<string>? logWarning = null)
+        public ModRandomStateSnapshot CaptureState(Action<string>? logWarning = null)
         {
             lock (sync)
             {
                 PruneDeadEntriesLocked();
-                if (ordinals.Count == 0 && tracked.Count == 0)
-                {
-                    return null;
-                }
 
                 var instances = new List<ModRandomInstanceSnapshot>(tracked.Count);
                 foreach (TrackedInstance entry in tracked)
@@ -594,11 +590,6 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
                     }
 
                     instances.Add(new ModRandomInstanceSnapshot(entry.CallsiteKey, entry.Ordinal, inext, inextp, seedArray));
-                }
-
-                if (ordinals.Count == 0 && instances.Count == 0)
-                {
-                    return null;
                 }
 
                 return new ModRandomStateSnapshot(
@@ -635,11 +626,13 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
                     aliveByKey[new InstanceKey(entry.CallsiteKey, entry.Ordinal)] = target;
                 }
 
+                var snapshotInstanceKeys = new HashSet<InstanceKey>();
                 int restoredCount = 0;
                 int missingCount = 0;
                 foreach (ModRandomInstanceSnapshot inst in snapshot.Instances)
                 {
                     var key = new InstanceKey(inst.CallsiteKey, inst.Ordinal);
+                    snapshotInstanceKeys.Add(key);
                     if (!aliveByKey.TryGetValue(key, out Random? target))
                     {
                         missingCount++;
@@ -659,8 +652,37 @@ namespace HollowKnightTAS.Core.SceneCheckpoints
                     restoredCount++;
                 }
 
+                // Static constructor (.cctor) Random instances constructed after this S0 checkpoint
+                // will not have their .cctor re-executed by the CLR in the same process. Reset any
+                // live .cctor-created instance absent from snapshot.Instances back to its initial
+                // deterministic seed state while keeping it tracked.
+                foreach (KeyValuePair<InstanceKey, Random> aliveEntry in aliveByKey)
+                {
+                    if (snapshotInstanceKeys.Contains(aliveEntry.Key)
+                        || !IsStaticConstructorCallsite(aliveEntry.Key.CallsiteKey))
+                    {
+                        continue;
+                    }
+
+                    int initialSeed = ComputeDeterministicSeed(aliveEntry.Key.CallsiteKey, aliveEntry.Key.Ordinal);
+                    var initialInstance = new Random(initialSeed);
+                    if (!SystemRandomStateAccessor.TryReadState(initialInstance, out int initInext, out int initInextp, out int[] initSeedArray)
+                        || !SystemRandomStateAccessor.TryWriteState(aliveEntry.Value, initInext, initInextp, initSeedArray))
+                    {
+                        logDiagnostic?.Invoke(
+                            $"[HKTAS] Failed to reset post-S0 .cctor System.Random instance: key='{aliveEntry.Key.CallsiteKey}', ordinal={aliveEntry.Key.Ordinal}.");
+                    }
+                }
+
                 return new ModRandomRestoreResult(ordinals.Count, snapshot.Instances.Length, restoredCount, missingCount);
             }
+        }
+
+        private static bool IsStaticConstructorCallsite(string callsiteKey)
+        {
+            return !string.IsNullOrEmpty(callsiteKey)
+                && (callsiteKey.IndexOf(":Void .cctor():", StringComparison.Ordinal) >= 0
+                    || callsiteKey.IndexOf(":.cctor(", StringComparison.Ordinal) >= 0);
         }
 
         public Dictionary<string, uint> SnapshotOrdinals()

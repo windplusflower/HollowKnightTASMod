@@ -257,10 +257,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             ApplyCameraState(packet.C13_Camera);
 
             // C14 Mod System.Random ordinals & live instance state parity
-            if (packet.C14_ModRandom != null)
-            {
-                ModStartupCompatibility.RestoreModRandomState(packet.C14_ModRandom);
-            }
+            ModStartupCompatibility.RestoreModRandomState(packet.C14_ModRandom ?? new LeanS0ModRandomState());
         }
 
         private static LeanS0BossSequenceState CaptureBossSequence(PlayerData pd)

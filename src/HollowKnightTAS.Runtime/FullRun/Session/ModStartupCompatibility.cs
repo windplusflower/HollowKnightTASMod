@@ -186,7 +186,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 snapshot = localTracker?.CaptureState(Modding.Logger.LogWarn);
             }
 
-            if (snapshot == null || (snapshot.Ordinals.Count == 0 && snapshot.Instances.Length == 0))
+            if (snapshot == null)
             {
                 return null;
             }
@@ -196,10 +196,7 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         internal static void RestoreModRandomState(LeanS0ModRandomState? state)
         {
-            if (state == null)
-            {
-                return;
-            }
+            state ??= new LeanS0ModRandomState();
 
             ModRandomStateSnapshot snapshot = FromDto(state);
             if (TryQueryIsModRandomPolicyInstalled())

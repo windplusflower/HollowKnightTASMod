@@ -132,6 +132,9 @@ namespace HollowKnightTAS.ClockPayload
         {
             if (encodedState == null || encodedState.Length == 0)
             {
+                RestoreState(new ModRandomStateSnapshot(
+                    new Dictionary<string, uint>(StringComparer.Ordinal),
+                    Array.Empty<ModRandomInstanceSnapshot>()));
                 return;
             }
 
