@@ -373,7 +373,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 self.checkpointLoadInfo?.HeroLeaveDirection?.ToString(),
                 self.checkpointLoadInfo?.Visualization.ToString() ?? "",
                 movie,
-                native);
+                native,
+                sessionSegment: session.ActiveSemanticProbeSegment);
             if (session.TryEnterLeanS0Boundary(
                     self.ordinal,
                     self.sourceName,

@@ -40,6 +40,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             public string StagingSceneName = "__HKTAS_SerialBoundary_v6";
         }
 
+        /// <summary>
+        /// Captures an S0 boundary semantic snapshot when HKTAS_S0_SEMANTIC_PROBE=1.
+        /// Read-only inspection only: never mutates game state or consumes UnityEngine.Random.
+        /// </summary>
         internal static void CaptureIfEnabled(
             int ordinal,
             string sourceScene,
@@ -48,26 +52,70 @@ namespace HollowKnightTAS.Runtime.FullRun
             string? leaveDirection,
             string visualization,
             long movieFrame,
-            long nativeFrame)
+            long nativeFrame,
+            string? segment = null,
+            string? sessionSegment = null)
         {
             if (Environment.GetEnvironmentVariable("HKTAS_S0_SEMANTIC_PROBE") != "1")
                 return;
-            var outputDir = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT");
+            var outputDir = Environment.GetEnvironmentVariable("HKTAS_S0_SEMANTIC_PROBE_DIR");
+            if (string.IsNullOrWhiteSpace(outputDir))
+                outputDir = Environment.GetEnvironmentVariable("HKTAS_LOADING_PROBE_OUTPUT");
             if (string.IsNullOrWhiteSpace(outputDir))
                 return;
+
+            var resolvedSegment = ResolveSegment(segment, sessionSegment);
+            var safeSegment = SanitizeSegmentForFilename(resolvedSegment);
+            var filePrefix = string.IsNullOrEmpty(safeSegment) ? string.Empty : safeSegment + "-";
 
             try
             {
                 Directory.CreateDirectory(outputDir);
-                var payload = BuildSnapshot(ordinal, sourceScene, targetScene, entryGate, leaveDirection, visualization, movieFrame, nativeFrame);
-                var filePath = Path.Combine(outputDir, $"s0-semantic-boundary-{ordinal:d2}.json");
+                var payload = BuildSnapshot(ordinal, sourceScene, targetScene, entryGate, leaveDirection, visualization, movieFrame, nativeFrame, resolvedSegment);
+                var filePath = Path.Combine(outputDir, $"{filePrefix}s0-semantic-boundary-{ordinal:d2}.json");
                 File.WriteAllText(filePath, JsonConvert.SerializeObject(payload, Formatting.Indented));
             }
             catch (Exception ex)
             {
-                var errPath = Path.Combine(outputDir, $"s0-semantic-error-{ordinal:d2}.txt");
-                File.WriteAllText(errPath, ex.ToString());
+                try
+                {
+                    Directory.CreateDirectory(outputDir);
+                    var errPath = Path.Combine(outputDir, $"{filePrefix}s0-semantic-error-{ordinal:d2}.txt");
+                    File.WriteAllText(errPath, ex.ToString());
+                }
+                catch
+                {
+                    // Avoid masking boundary execution if error log directory cannot be created.
+                }
             }
+        }
+
+        private static string? ResolveSegment(string? explicitSegment, string? sessionSegment)
+        {
+            if (!string.IsNullOrWhiteSpace(explicitSegment))
+                return explicitSegment!.Trim();
+            if (!string.IsNullOrWhiteSpace(sessionSegment))
+                return sessionSegment!.Trim();
+            var envSegment = Environment.GetEnvironmentVariable("HKTAS_S0_SEMANTIC_PROBE_SEGMENT");
+            return string.IsNullOrWhiteSpace(envSegment) ? null : envSegment.Trim();
+        }
+
+        private static string? SanitizeSegmentForFilename(string? segment)
+        {
+            if (string.IsNullOrWhiteSpace(segment))
+                return null;
+            var trimmed = segment!.Trim();
+            var invalid = Path.GetInvalidFileNameChars();
+            var chars = new char[trimmed.Length];
+            for (var i = 0; i < trimmed.Length; i++)
+            {
+                var ch = trimmed[i];
+                chars[i] = (ch == ':' || ch == '/' || ch == '\\' || char.IsWhiteSpace(ch) || Array.IndexOf(invalid, ch) >= 0)
+                    ? '-'
+                    : ch;
+            }
+            var sanitized = new string(chars).Trim('-');
+            return string.IsNullOrEmpty(sanitized) ? null : sanitized;
         }
 
         private static object BuildSnapshot(
@@ -78,7 +126,8 @@ namespace HollowKnightTAS.Runtime.FullRun
             string? leaveDirection,
             string visualization,
             long movieFrame,
-            long nativeFrame)
+            long nativeFrame,
+            string? segment)
         {
             var ctx = new DumpContext();
             var ddolScene = ResolveDdolScene();
@@ -154,6 +203,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 meta = new
                 {
                     ordinal,
+                    segment = segment ?? "",
                     sourceScene,
                     targetScene,
                     entryGate,

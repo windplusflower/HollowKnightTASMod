@@ -17,9 +17,12 @@ namespace HollowKnightTAS.Runtime.FullRun
         private string acceptanceTraceSegment = "baseline";
         private int acceptanceRestoreSegmentCount;
 
+        internal string CurrentAcceptanceTraceSegment => acceptanceTraceSegment;
+
+        internal string? ActiveSemanticProbeSegment => acceptanceRestoreSegmentCount > 0 ? acceptanceTraceSegment : null;
+
         private void AdvanceAcceptanceTraceSegment(string checkpointId)
         {
-            if (!acceptanceFrameTraceEnabled) return;
             acceptanceRestoreSegmentCount++;
             acceptanceTraceSegment = "s0-restore-"
                 + acceptanceRestoreSegmentCount.ToString(CultureInfo.InvariantCulture)
