@@ -1281,7 +1281,14 @@ namespace HollowKnightTAS.Runtime.FullRun
 
         private static void ApplyTimeState(GameManager gm, LeanS0TimeState state)
         {
-            Time.timeScale = state.TimeScale;
+            TimeController.SlowMotionTimeScale = 1f;
+            TimeController.PauseTimeScale = 1f;
+            TimeController.PlatformBackgroundTimeScale = 1f;
+            TimeController.GenericTimeScale = state.TimeScale;
+            if (Time.timeScale != state.TimeScale)
+            {
+                Time.timeScale = state.TimeScale;
+            }
             TimeSlowedCountField.SetValue(gm, state.TimeSlowedCount);
         }
 

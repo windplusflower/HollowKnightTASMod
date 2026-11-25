@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using InControl;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace HollowKnightTAS.Runtime.FullRun
 {
@@ -20,7 +21,14 @@ namespace HollowKnightTAS.Runtime.FullRun
             typeof(RandomScale),
             typeof(AudioSourcePitchRandomizer),
             typeof(RandomAudioStart),
-            typeof(DeactivateAfterDelay)
+            typeof(DeactivateAfterDelay),
+            typeof(PlayFromRandomFrame),
+            typeof(PlayFromRandomFrameMecanim),
+            typeof(BasicSpriteAnimator),
+            typeof(SetZRandom),
+            typeof(SetZ),
+            typeof(SpinSelf),
+            typeof(SpinSelfSimple)
         };
 
         private static readonly FieldInfo? PitchRandomizerAudioField = typeof(AudioSourcePitchRandomizer).GetField("audioSource", AnyInstance);
@@ -31,6 +39,15 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static readonly FieldInfo? DeactivateTimerField = typeof(DeactivateAfterDelay).GetField("timer", AnyInstance);
         private static readonly FieldInfo? DeactivateWorldPosField = typeof(DeactivateAfterDelay).GetField("worldPos", AnyInstance);
         private static readonly FieldInfo? DeactivateStartPosField = typeof(DeactivateAfterDelay).GetField("startPos", AnyInstance);
+        private static readonly FieldInfo? PlayFromRandomFrameAnimatorField = typeof(PlayFromRandomFrame).GetField("animator", AnyInstance);
+        private static readonly FieldInfo? PlayFromRandomFrameMecanimAnimatorField = typeof(PlayFromRandomFrameMecanim).GetField("animator", AnyInstance);
+        private static readonly FieldInfo? BasicSpriteAnimatorRendField = typeof(BasicSpriteAnimator).GetField("rend", AnyInstance);
+        private static readonly FieldInfo? BasicSpriteAnimatorRoutineField = typeof(BasicSpriteAnimator).GetField("animRoutine", AnyInstance);
+        private static readonly FieldInfo? SetZField = typeof(SetZ).GetField("setZ", AnyInstance);
+        private static readonly FieldInfo? SpinSelfStepCounterField = typeof(SpinSelf).GetField("stepCounter", AnyInstance);
+        private static readonly FieldInfo? SpinSelfSpunField = typeof(SpinSelf).GetField("spun", AnyInstance);
+        private static readonly FieldInfo? SpinSelfSimpleTimingField = typeof(SpinSelfSimple).GetField("timing", AnyInstance);
+        private static readonly FieldInfo? SpinSelfSimpleTimerField = typeof(SpinSelfSimple).GetField("timer", AnyInstance);
         private static readonly FieldInfo PoolObjectsField = typeof(ObjectPool).GetField("pooledObjects", AnyInstance)
             ?? throw new MissingFieldException("ObjectPool.pooledObjects");
         private static readonly FieldInfo SpawnedObjectsField = typeof(ObjectPool).GetField("spawnedObjects", AnyInstance)
@@ -39,6 +56,46 @@ namespace HollowKnightTAS.Runtime.FullRun
             ?? throw new MissingFieldException("UnityEngine.Object.m_CachedPtr");
         private static readonly FieldInfo? UiManagerStartMenuTimeField =
             typeof(UIManager).GetField("startMenuTime", AnyInstance);
+
+        private static readonly FieldInfo? BounceShroomNextParticleTimeField =
+            typeof(BounceShroom).GetField("nextBounceParticleTime", AnyStatic);
+        private static readonly FieldInfo? BounceShroomNextCamShakeTimeField =
+            typeof(BounceShroom).GetField("nextCamShakeTime", AnyStatic);
+        private static readonly FieldInfo? BounceShroomHeroParticlesField =
+            typeof(BounceShroom).GetField("heroParticles", AnyStatic);
+        private static readonly FieldInfo? DreamPlantOrbPitchReturnTimeField =
+            typeof(DreamPlantOrb).GetField("pitchReturnTime", AnyStatic);
+        private static readonly FieldInfo? DreamPlantOrbCurrentPitchField =
+            typeof(DreamPlantOrb).GetField("currentPitch", AnyStatic);
+        private static readonly FieldInfo? SetEventPropertiesField =
+            typeof(HutongGames.PlayMaker.Actions.SetEventProperties).GetField("properties", AnyStatic);
+        private static readonly FieldInfo? LimitBehaviourListsField =
+            typeof(LimitBehaviour).GetField("behaviourLists", AnyStatic);
+        private static readonly FieldInfo? SceneAdditiveLoadsField =
+            typeof(SceneAdditiveLoadConditional).GetField("additiveSceneLoads", AnyStatic);
+        private static readonly FieldInfo? SceneAdditiveLoadInSequenceField =
+            typeof(SceneAdditiveLoadConditional).GetField("loadInSequence", AnyStatic);
+        private static readonly FieldInfo? ScenePreloaderPendingField =
+            typeof(ScenePreloader).GetField("pendingOperations", AnyStatic);
+        private static readonly FieldInfo? ScenePreloaderCompletedField =
+            typeof(ScenePreloader).GetField("completedOperations", AnyStatic);
+
+        private static readonly FieldInfo? CharmDisplayDoJitterField =
+            typeof(CharmDisplay).GetField("doJitter", AnyInstance);
+        private static readonly FieldInfo? CharmDisplayStartPosField =
+            typeof(CharmDisplay).GetField("startPos", AnyInstance);
+        private static readonly FieldInfo? CharmDisplayMenuFsmField =
+            typeof(CharmDisplay).GetField("charmsMenuFsm", AnyStatic);
+        private static readonly FieldInfo? InvAnimReadyingAnimUpField =
+            typeof(InvAnimateUpAndDown).GetField("readyingAnimUp", AnyInstance);
+        private static readonly FieldInfo? InvAnimTimerField =
+            typeof(InvAnimateUpAndDown).GetField("timer", AnyInstance);
+        private static readonly FieldInfo? InvAnimAnimatingDownField =
+            typeof(InvAnimateUpAndDown).GetField("animatingDown", AnyInstance);
+        private static readonly FieldInfo? InvAnimMeshRendererField =
+            typeof(InvAnimateUpAndDown).GetField("meshRenderer", AnyInstance);
+        private static readonly FieldInfo? HeroAudioFallingCoField =
+            typeof(HeroAudioController).GetField("fallingCo", AnyInstance);
 
         [DllImport("kernel32.dll")]
         private static extern IntPtr GetCurrentProcess();
@@ -104,13 +161,17 @@ namespace HollowKnightTAS.Runtime.FullRun
         }
 
         /// <summary>
-        /// Resets pooled/spawned transient instances and inactive Hero effect lifecycles at an S0 boundary.
+        /// Resets pooled/spawned transient instances, cross-scene static state, DDOL HUD/companion transient
+        /// state, and inactive Hero effect lifecycles at an S0 boundary.
         /// </summary>
         internal static void ResetBoundaryEnvironment(LeanS0GateReceipt receipt, HeroController? hero)
         {
             if (receipt == null) throw new ArgumentNullException(nameof(receipt));
+            NormalizeTimeControllerAtBoundary();
             receipt.ResetObjectPoolInstances = ResetObjectPoolToCleanInitialState(hero);
             receipt.ResetHeroInactiveLifecycles = ResetHeroInactiveRandomizerLifecycles(hero);
+            ResetCrossSceneStaticState();
+            ResetPersistentTransientComponents(hero);
             if (hero != null)
             {
                 var uiManager = UIManager.instance;
@@ -129,6 +190,147 @@ namespace HollowKnightTAS.Runtime.FullRun
                     catch (Exception ex)
                     {
                         Modding.Logger.LogWarn("[HKTAS] LeanS0 broadphase canonicalize skipped: " + ex.Message);
+                    }
+                }
+            }
+        }
+
+        private static void NormalizeTimeControllerAtBoundary()
+        {
+            if (Time.timeScale == 1f)
+            {
+                TimeController.SlowMotionTimeScale = 1f;
+                TimeController.PauseTimeScale = 1f;
+                TimeController.PlatformBackgroundTimeScale = 1f;
+                TimeController.GenericTimeScale = 1f;
+                if (Time.timeScale != 1f)
+                {
+                    Time.timeScale = 1f;
+                }
+            }
+        }
+
+        private static void ResetCrossSceneStaticState()
+        {
+            BounceShroomNextParticleTimeField?.SetValue(null, 0f);
+            BounceShroomNextCamShakeTimeField?.SetValue(null, 0f);
+            BounceShroomHeroParticlesField?.SetValue(null, null);
+
+            DreamPlantOrbPitchReturnTimeField?.SetValue(null, 0f);
+            DreamPlantOrbCurrentPitchField?.SetValue(null, 0f);
+
+            SetEventPropertiesField?.SetValue(null, null);
+
+            if (LimitBehaviourListsField?.GetValue(null) is Dictionary<string, List<GameObject>> behaviourLists)
+            {
+                behaviourLists.Clear();
+            }
+
+            if (SceneAdditiveLoadsField?.GetValue(null) is List<SceneAdditiveLoadConditional> additiveLoads)
+            {
+                additiveLoads.RemoveAll(item => item == null);
+            }
+            // SceneLoad.BeginRoutine immediately sets loadInSequence = true right after S0;
+            // reset stale true left over from non-boss scenes before BeginRoutine begins.
+            if (SceneAdditiveLoadInSequenceField != null)
+            {
+                SceneAdditiveLoadInSequenceField.SetValue(null, false);
+            }
+
+            if (ScenePreloaderPendingField?.GetValue(null) is List<ScenePreloader.SceneLoadOp> pendingOps)
+            {
+                pendingOps.RemoveAll(op => op == null || op.operation == null || op.operation.isDone);
+            }
+            if (ScenePreloaderCompletedField?.GetValue(null) is List<ScenePreloader.SceneLoadOp> completedOps)
+            {
+                completedOps.RemoveAll(op =>
+                {
+                    if (op == null || string.IsNullOrEmpty(op.sceneName))
+                    {
+                        return true;
+                    }
+                    if (op.operation != null && !op.operation.isDone)
+                    {
+                        return false;
+                    }
+                    Scene scene = UnityEngine.SceneManagement.SceneManager.GetSceneByName(op.sceneName);
+                    return !scene.IsValid() || !scene.isLoaded;
+                });
+            }
+
+            if (CharmDisplayMenuFsmField?.GetValue(null) is PlayMakerFSM menuFsm && menuFsm == null)
+            {
+                CharmDisplayMenuFsmField.SetValue(null, null);
+            }
+        }
+
+        private static void ResetPersistentTransientComponents(HeroController? hero)
+        {
+            Camera? hudCam = GameCameras.instance?.hudCamera;
+            if (hudCam != null)
+            {
+                foreach (CharmDisplay cd in hudCam.GetComponentsInChildren<CharmDisplay>(true))
+                {
+                    if (cd == null)
+                    {
+                        continue;
+                    }
+                    if (CharmDisplayDoJitterField != null
+                        && CharmDisplayDoJitterField.GetValue(cd) is bool doJitter
+                        && doJitter)
+                    {
+                        if (CharmDisplayStartPosField?.GetValue(cd) is Vector3 startPos)
+                        {
+                            cd.transform.localPosition = startPos;
+                        }
+                        CharmDisplayDoJitterField.SetValue(cd, false);
+                    }
+                }
+
+                foreach (InvAnimateUpAndDown anim in hudCam.GetComponentsInChildren<InvAnimateUpAndDown>(true))
+                {
+                    if (anim == null)
+                    {
+                        continue;
+                    }
+                    if (InvAnimAnimatingDownField != null
+                        && InvAnimAnimatingDownField.GetValue(anim) is bool animatingDown
+                        && animatingDown)
+                    {
+                        if (InvAnimMeshRendererField?.GetValue(anim) is MeshRenderer mr && mr != null)
+                        {
+                            mr.enabled = false;
+                        }
+                        InvAnimAnimatingDownField.SetValue(anim, false);
+                    }
+                    InvAnimReadyingAnimUpField?.SetValue(anim, false);
+                    InvAnimTimerField?.SetValue(anim, 0f);
+                }
+            }
+
+            foreach (GrimmEnemyRange range in Resources.FindObjectsOfTypeAll<GrimmEnemyRange>())
+            {
+                if (range == null || range.gameObject == null
+                    || !range.gameObject.scene.IsValid() || !range.gameObject.scene.isLoaded)
+                {
+                    continue;
+                }
+                range.enemyList?.Clear();
+            }
+
+            if (hero != null)
+            {
+                HeroAudioController? heroAudio = hero.GetComponent<HeroAudioController>();
+                if (heroAudio != null)
+                {
+                    if (HeroAudioFallingCoField?.GetValue(heroAudio) is Coroutine fallingCo && fallingCo != null)
+                    {
+                        heroAudio.StopCoroutine(fallingCo);
+                        HeroAudioFallingCoField.SetValue(heroAudio, null);
+                    }
+                    if (heroAudio.falling != null && heroAudio.falling.isPlaying)
+                    {
+                        heroAudio.falling.Stop();
                     }
                 }
             }
@@ -370,6 +572,33 @@ namespace HollowKnightTAS.Runtime.FullRun
                     DeactivateTimerField?.SetValue(delay, 0f);
                     DeactivateWorldPosField?.SetValue(delay, Vector3.zero);
                     DeactivateStartPosField?.SetValue(delay, Vector3.zero);
+                }
+                else if (mb is PlayFromRandomFrame)
+                {
+                    PlayFromRandomFrameAnimatorField?.SetValue(mb, null);
+                }
+                else if (mb is PlayFromRandomFrameMecanim)
+                {
+                    PlayFromRandomFrameMecanimAnimatorField?.SetValue(mb, null);
+                }
+                else if (mb is BasicSpriteAnimator)
+                {
+                    BasicSpriteAnimatorRendField?.SetValue(mb, null);
+                    BasicSpriteAnimatorRoutineField?.SetValue(mb, null);
+                }
+                else if (mb is SetZ)
+                {
+                    SetZField?.SetValue(mb, 0f);
+                }
+                else if (mb is SpinSelf)
+                {
+                    SpinSelfStepCounterField?.SetValue(mb, 0);
+                    SpinSelfSpunField?.SetValue(mb, false);
+                }
+                else if (mb is SpinSelfSimple)
+                {
+                    SpinSelfSimpleTimingField?.SetValue(mb, false);
+                    SpinSelfSimpleTimerField?.SetValue(mb, 0f);
                 }
 
                 WriteMonoLifecycle(mb, new byte[] { 0, 0 });

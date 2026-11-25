@@ -29,7 +29,16 @@ internal static class Program
         "RandomScale",
         "AudioSourcePitchRandomizer",
         "RandomAudioStart",
-        "FastNoise"
+        "FastNoise",
+        "PlayFromRandomFrame",
+        "PlayFromRandomFrameMecanim",
+        "BasicSpriteAnimator",
+        "SetZRandom",
+        "SetZ",
+        "SpinSelf",
+        "SpinSelfSimple",
+        "CharmDisplay",
+        "InvAnimateUpAndDown"
     };
 
     private static readonly HashSet<string> LeanS0CoveredStaticFields = new(StringComparer.Ordinal)
@@ -41,7 +50,22 @@ internal static class Program
         "BossChallengeUI.lastSelectedButton",
         "BossSceneController.SetupEvent",
         "StaticVariableList.variables",
-        "iTween.tweens"
+        "iTween.tweens",
+        "TimeController.slowMotionTimeScale",
+        "TimeController.pauseTimeScale",
+        "TimeController.platformBackgroundTimeScale",
+        "TimeController.genericTimeScale",
+        "BounceShroom.nextBounceParticleTime",
+        "BounceShroom.nextCamShakeTime",
+        "BounceShroom.heroParticles",
+        "DreamPlantOrb.pitchReturnTime",
+        "DreamPlantOrb.currentPitch",
+        "HutongGames.PlayMaker.Actions.SetEventProperties.properties",
+        "LimitBehaviour.behaviourLists",
+        "SceneAdditiveLoadConditional.additiveSceneLoads",
+        "SceneAdditiveLoadConditional.loadInSequence",
+        "ScenePreloader.pendingOperations",
+        "ScenePreloader.completedOperations"
     };
 
     private static readonly HashSet<string> LeanS0CoveredComponents = new(StringComparer.Ordinal)
@@ -62,7 +86,17 @@ internal static class Program
         "GameManager",
         "GameCameras",
         "AudioManager",
-        "FastNoise"
+        "FastNoise",
+        "PlayFromRandomFrame",
+        "PlayFromRandomFrameMecanim",
+        "BasicSpriteAnimator",
+        "SetZRandom",
+        "SetZ",
+        "SpinSelf",
+        "SpinSelfSimple",
+        "CharmDisplay",
+        "InvAnimateUpAndDown",
+        "HeroAudioController"
     };
 
     private static readonly string[] TimerOrCounterKeywords =
