@@ -69,6 +69,10 @@ namespace HollowKnightTAS.Runtime.FullRun
             ?? throw new MissingFieldException("BossSequenceController.<WasCompleted>k__BackingField");
         private static readonly MethodInfo BossSetupBossSceneMethod = typeof(BossSequenceController).GetMethod("SetupBossScene", AnyStatic)
             ?? throw new MissingMethodException("BossSequenceController.SetupBossScene");
+        private static readonly FieldInfo BossStatueCurrentSceneField = typeof(BossStatueLoadManager).GetField("currentBossScene", AnyStatic)
+            ?? throw new MissingFieldException("BossStatueLoadManager.currentBossScene");
+        private static readonly FieldInfo BossStatuePreviousSceneField = typeof(BossStatueLoadManager).GetField("previousBossScene", AnyStatic)
+            ?? throw new MissingFieldException("BossStatueLoadManager.previousBossScene");
         private static readonly FieldInfo BossLastSelectedField = typeof(BossChallengeUI).GetField("lastSelectedButton", AnyStatic)
             ?? throw new MissingFieldException("BossChallengeUI.lastSelectedButton");
         private static readonly FieldInfo? BossChallengePrimaryLevelField = CanonicalBossChallengeOriginal.Primary?.GetField("level", AnyInstance);
@@ -148,7 +152,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 GameManagerProfileId = gm.profileID,
                 C1_PlayerDataJson = JsonUtility.ToJson(pd),
                 C2_SceneDataJson = JsonUtility.ToJson(sd),
-                C3_BossSequence = CaptureBossSequence(),
+                C3_BossSequence = CaptureBossSequence(pd),
                 C4_StaticVariables = CaptureStaticVariables(),
                 C5_PlayMakerGlobals = CapturePlayMakerGlobals(),
                 C6_TransitionInfo = CaptureTransitionInfo(ctx.LoadInfo, ctx.TargetSceneName, entryGate),
@@ -219,8 +223,8 @@ namespace HollowKnightTAS.Runtime.FullRun
                 gm.profileID = packet.GameManagerProfileId;
             }
 
-            // C3 BossSequence & BossChallengeUI
-            ApplyBossSequence(packet.C3_BossSequence);
+            // C3 BossSequence, BossChallengeUI & BossStatueLoadManager
+            ApplyBossSequence(packet.C3_BossSequence, pd);
 
             // C4 StaticVariableList
             ApplyStaticVariables(packet.C4_StaticVariables);
@@ -259,13 +263,15 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
         }
 
-        private static LeanS0BossSequenceState CaptureBossSequence()
+        private static LeanS0BossSequenceState CaptureBossSequence(PlayerData pd)
         {
             var data = BossCurrentDataField.GetValue(null) as BossSequenceController.BossSequenceData;
             var seq = BossCurrentSequenceField.GetValue(null) as BossSequence;
             int index = (int)BossIndexField.GetValue(null)!;
             bool wasCompleted = (bool)BossWasCompletedField.GetValue(null)!;
             int lastSelected = (int)BossLastSelectedField.GetValue(null)!;
+            var statueCurrent = BossStatueCurrentSceneField.GetValue(null) as BossScene;
+            var statuePrevious = BossStatuePreviousSceneField.GetValue(null) as BossScene;
 
             var dto = new LeanS0BossSequenceState
             {
@@ -274,7 +280,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                 BossIndex = index,
                 LastSelectedButton = lastSelected,
                 SequenceName = seq != null ? seq.name : string.Empty,
-                HasCurrentData = data != null
+                HasCurrentData = data != null,
+                PlayerDataAliasesCurrentData = data != null && pd.currentBossSequence != null && ReferenceEquals(pd.currentBossSequence, data),
+                PlayerDataHasPreviousEquippedCharms = pd.currentBossSequence != null
+                    ? pd.currentBossSequence.previousEquippedCharms != null
+                    : (bool?)null,
+                StatueLoadCurrentBossSceneName = statueCurrent != null ? statueCurrent.name : null,
+                StatueLoadPreviousBossSceneName = statuePrevious != null ? statuePrevious.name : null
             };
 
             if (data != null)
@@ -283,6 +295,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 dto.Timer = data.timer;
                 dto.KnightDamaged = data.knightDamaged;
                 dto.PlayerDataKey = data.playerData ?? string.Empty;
+                dto.HasPreviousEquippedCharms = data.previousEquippedCharms != null;
                 dto.PreviousEquippedCharms = data.previousEquippedCharms != null
                     ? (int[])data.previousEquippedCharms.Clone()
                     : Array.Empty<int>();
@@ -356,20 +369,32 @@ namespace HollowKnightTAS.Runtime.FullRun
             return dto;
         }
 
-        private static void ApplyBossSequence(LeanS0BossSequenceState state)
+        private static void ApplyBossSequence(LeanS0BossSequenceState state, PlayerData pd)
         {
             BossLastSelectedField.SetValue(null, state.LastSelectedButton);
             BossIndexField.SetValue(null, state.BossIndex);
             BossWasCompletedField.SetValue(null, state.WasCompleted);
             BossSceneController.SetupEvent = null;
+            ApplyBossStatueLoadManager(state);
 
             if (!state.HasCurrentData)
             {
                 BossCurrentDataField.SetValue(null, null);
                 BossCurrentSequenceField.SetValue(null, null);
+                if (pd.currentBossSequence != null && state.PlayerDataHasPreviousEquippedCharms == false)
+                {
+                    pd.currentBossSequence.previousEquippedCharms = null;
+                }
                 RestorePendingBossSetup(state);
                 return;
             }
+
+            bool hasPreviousCharms = state.HasPreviousEquippedCharms ?? (
+                ((BossSequenceController.ChallengeBindings)state.BindingsMask & BossSequenceController.ChallengeBindings.Charms) != 0
+                || (state.PreviousEquippedCharms != null && state.PreviousEquippedCharms.Length > 0));
+            int[]? previousEquippedCharms = hasPreviousCharms
+                ? (state.PreviousEquippedCharms != null ? (int[])state.PreviousEquippedCharms.Clone() : Array.Empty<int>())
+                : null;
 
             var data = new BossSequenceController.BossSequenceData
             {
@@ -377,9 +402,7 @@ namespace HollowKnightTAS.Runtime.FullRun
                 timer = state.Timer,
                 knightDamaged = state.KnightDamaged,
                 playerData = state.PlayerDataKey,
-                previousEquippedCharms = state.PreviousEquippedCharms != null
-                    ? (int[])state.PreviousEquippedCharms.Clone()
-                    : Array.Empty<int>(),
+                previousEquippedCharms = previousEquippedCharms,
                 wasOvercharmed = state.WasOvercharmed,
                 bossSequenceName = state.SequenceName,
                 previousCompletion = new BossSequenceDoor.Completion
@@ -413,7 +436,52 @@ namespace HollowKnightTAS.Runtime.FullRun
             BossCurrentDataField.SetValue(null, data);
             BossCurrentSequenceField.SetValue(null, seq);
 
+            // Re-establish reference aliasing between PlayerData.currentBossSequence and
+            // BossSequenceController.currentData so BossSceneController.Update() keeps both timers in sync.
+            if (state.PlayerDataAliasesCurrentData == true
+                || (!state.PlayerDataAliasesCurrentData.HasValue && pd.currentBossSequence != null))
+            {
+                pd.currentBossSequence = data;
+            }
+            else if (pd.currentBossSequence != null && state.PlayerDataHasPreviousEquippedCharms == false)
+            {
+                pd.currentBossSequence.previousEquippedCharms = null;
+            }
+
             RestorePendingBossSetup(state);
+        }
+
+        private static void ApplyBossStatueLoadManager(LeanS0BossSequenceState state)
+        {
+            BossScene? current = ResolveBossSceneByName(state.StatueLoadCurrentBossSceneName);
+            BossScene? previous = ResolveBossSceneByName(state.StatueLoadPreviousBossSceneName);
+            BossStatueCurrentSceneField.SetValue(null, current);
+            BossStatuePreviousSceneField.SetValue(null, previous);
+        }
+
+        private static BossScene? ResolveBossSceneByName(string? assetName)
+        {
+            if (string.IsNullOrEmpty(assetName))
+            {
+                return null;
+            }
+
+            BossScene? found = Resources.FindObjectsOfTypeAll<BossScene>()
+                .FirstOrDefault(s => s != null && string.Equals(s.name, assetName, StringComparison.Ordinal));
+            if (found != null)
+            {
+                return found;
+            }
+
+            found = Resources.Load<BossScene>(assetName) ?? Resources.Load<BossScene>("GG/" + assetName);
+            if (found != null)
+            {
+                return found;
+            }
+
+            Resources.LoadAll<BossSequence>("GG");
+            return Resources.FindObjectsOfTypeAll<BossScene>()
+                .FirstOrDefault(s => s != null && string.Equals(s.name, assetName, StringComparison.Ordinal));
         }
 
         private static void RestorePendingBossSetup(LeanS0BossSequenceState state)

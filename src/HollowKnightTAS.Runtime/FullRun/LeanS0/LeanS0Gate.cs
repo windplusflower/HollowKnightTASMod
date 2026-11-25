@@ -30,6 +30,8 @@ namespace HollowKnightTAS.Runtime.FullRun
         public bool NormalizedInvulnerable { get; set; }
         public bool NormalizedNailCharging { get; set; }
         public bool NormalizedDreamNailQueueTimer { get; set; }
+        public bool NormalizedSpellControlFsm { get; set; }
+        public bool NormalizedAudioManagerFsms { get; set; }
         public bool NormalizedSoulOrbFsm { get; set; }
         public bool NormalizedLowHealthFsm { get; set; }
         public bool NormalizedCameraShakeFsm { get; set; }
@@ -255,6 +257,7 @@ namespace HollowKnightTAS.Runtime.FullRun
             }
 
             NormalizeHudFsms(receipt);
+            NormalizeAudioManagerFsms(receipt);
             NormalizeCameraShakeFsm(receipt);
             receipt.RecycledLevelUnloadObjects = RecycleLevelUnloadPooledObjects();
             Action<LeanS0GateReceipt, HeroController?> resetHandler = boundaryEnvironmentReset
@@ -483,6 +486,45 @@ namespace HollowKnightTAS.Runtime.FullRun
         private static bool IsUnityObjectDestroyed(UnityEngine.Object unityTarget)
             => unityTarget == null;
 
+        private static readonly string[] SpellControlTransientBools =
+        {
+            "Return Bool",
+            "Focusing",
+            "Refocusing",
+            "Double",
+            "Didnt Hit Full HP",
+            "Dream End",
+            "Dream Focus",
+            "Is In Dream Focus"
+        };
+
+        private static readonly string[] SpellControlTransientFloats =
+        {
+            "Grace Timer",
+            "Fireball Recoil Current",
+            "Y Speed",
+            "Self X Scale",
+            "Camera Start Z",
+            "Quake Antic Speed"
+        };
+
+        private static readonly string[] SpellControlTransientInts =
+        {
+            "Start MP",
+            "MP",
+            "HP",
+            "Max HP",
+            "Health Increase"
+        };
+
+        private static readonly string[] SpellControlTransientVector3s =
+        {
+            "Fireball Recoil Vector",
+            "Focus Camera Zoom Current",
+            "Quake Antic Vector",
+            "Camera Pos"
+        };
+
         internal static void NormalizeHeroFsms(HeroController hero, LeanS0GateReceipt receipt)
         {
             if (hero == null || receipt == null)
@@ -493,18 +535,109 @@ namespace HollowKnightTAS.Runtime.FullRun
             PlayMakerFSM[] fsms = hero.GetComponents<PlayMakerFSM>();
             foreach (PlayMakerFSM fsm in fsms)
             {
-                if (fsm == null || !string.Equals(fsm.FsmName, "Dream Nail", StringComparison.Ordinal))
+                if (fsm == null)
                 {
                     continue;
                 }
 
-                FsmFloat? queueTimer = fsm.FsmVariables?.FindFsmFloat("Queue Timer");
-                if (queueTimer != null && queueTimer.Value != 0f)
+                if (string.Equals(fsm.FsmName, "Dream Nail", StringComparison.Ordinal))
                 {
-                    queueTimer.Value = 0f;
-                    receipt.NormalizedDreamNailQueueTimer = true;
+                    FsmFloat? queueTimer = fsm.FsmVariables?.FindFsmFloat("Queue Timer");
+                    if (queueTimer != null && queueTimer.Value != 0f)
+                    {
+                        queueTimer.Value = 0f;
+                        receipt.NormalizedDreamNailQueueTimer = true;
+                    }
+                }
+                else if (string.Equals(fsm.FsmName, "Spell Control", StringComparison.Ordinal))
+                {
+                    bool isInactive = string.Equals(fsm.ActiveStateName, "Inactive", StringComparison.Ordinal);
+                    if (NormalizeSpellControlVariables(fsm.FsmVariables, isInactive, checkUnityLifetime: true))
+                    {
+                        receipt.NormalizedSpellControlFsm = true;
+                    }
                 }
             }
+        }
+
+        internal static bool NormalizeSpellControlVariables(
+            FsmVariables? vars,
+            bool isInactive,
+            bool checkUnityLifetime = true)
+        {
+            if (vars == null)
+            {
+                return false;
+            }
+
+            bool normalized = false;
+            if (vars.GameObjectVariables != null)
+            {
+                foreach (FsmGameObject? goVar in vars.GameObjectVariables)
+                {
+                    if (goVar == null || ReferenceEquals(goVar.Value, null))
+                    {
+                        continue;
+                    }
+
+                    bool isTransientSpellObj = string.Equals(goVar.Name, "Fireball Top", StringComparison.Ordinal)
+                        || string.Equals(goVar.Name, "Roar Wave", StringComparison.Ordinal);
+                    if (isTransientSpellObj || (checkUnityLifetime && IsUnityObjectDestroyed(goVar.Value)))
+                    {
+                        goVar.Value = null;
+                        normalized = true;
+                    }
+                }
+            }
+
+            if (!isInactive)
+            {
+                return normalized;
+            }
+
+            // Reset single-cast / single-focus transient variables only; charm-derived config
+            // variables (Spell Level, Time Per MP Drain, Focus MP amount, MP Cost, Spore Cooldown) stay untouched.
+            for (int i = 0; i < SpellControlTransientBools.Length; i++)
+            {
+                FsmBool? b = vars.FindFsmBool(SpellControlTransientBools[i]);
+                if (b != null && b.Value)
+                {
+                    b.Value = false;
+                    normalized = true;
+                }
+            }
+
+            for (int i = 0; i < SpellControlTransientFloats.Length; i++)
+            {
+                FsmFloat? f = vars.FindFsmFloat(SpellControlTransientFloats[i]);
+                if (f != null && f.Value != 0f)
+                {
+                    f.Value = 0f;
+                    normalized = true;
+                }
+            }
+
+            for (int i = 0; i < SpellControlTransientInts.Length; i++)
+            {
+                FsmInt? iv = vars.FindFsmInt(SpellControlTransientInts[i]);
+                if (iv != null && iv.Value != 0)
+                {
+                    iv.Value = 0;
+                    normalized = true;
+                }
+            }
+
+            for (int i = 0; i < SpellControlTransientVector3s.Length; i++)
+            {
+                FsmVector3? v = vars.FindFsmVector3(SpellControlTransientVector3s[i]);
+                if (v != null && v.Value != Vector3.zero)
+                {
+                    v.Value = Vector3.zero;
+                    normalized = true;
+                }
+            }
+
+            return normalized;
         }
 
         internal static void NormalizeHeroLightFsms(HeroController hero, LeanS0GateReceipt receipt)
@@ -1179,6 +1312,72 @@ namespace HollowKnightTAS.Runtime.FullRun
                 UnityEngine.Random.state = savedRng;
             }
         }
+
+        internal static void NormalizeAudioManagerFsms(LeanS0GateReceipt receipt)
+        {
+            if (receipt == null)
+            {
+                return;
+            }
+
+            AudioManager? audioManager = GameManager.instance?.AudioManager;
+            if (audioManager == null)
+            {
+                return;
+            }
+
+            UnityEngine.Random.State savedRng = UnityEngine.Random.state;
+            try
+            {
+                bool normalized = false;
+                foreach (PlayMakerFSM fsm in audioManager.GetComponents<PlayMakerFSM>())
+                {
+                    if (fsm == null || fsm.Fsm == null || !fsm.Fsm.Initialized)
+                    {
+                        continue;
+                    }
+
+                    if (!string.Equals(fsm.FsmName, "Hero Damaged Effects", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    bool hasDelayed = HasNonEmptyEventList(FsmDelayedEventsField, fsm.Fsm)
+                        || HasNonEmptyEventList(FsmUpdateEventsField, fsm.Fsm)
+                        || HasNonEmptyEventList(FsmRemoveEventsField, fsm.Fsm);
+                    bool hasPrevious = FsmPreviousActiveStateField?.GetValue(fsm.Fsm) != null
+                        || FsmLastTransitionField?.GetValue(fsm.Fsm) != null;
+                    FsmInt? hpVar = fsm.FsmVariables?.FindFsmInt("HP");
+                    bool dirtyHp = hpVar != null && hpVar.Value != 0;
+                    bool notIdle = !string.Equals(fsm.ActiveStateName, "Idle", StringComparison.Ordinal);
+
+                    if (notIdle || hasDelayed || hasPrevious || dirtyHp)
+                    {
+                        if (ResetFsmToState(fsm, "Idle"))
+                        {
+                            normalized = true;
+                        }
+                        if (hpVar != null && hpVar.Value != 0)
+                        {
+                            hpVar.Value = 0;
+                            normalized = true;
+                        }
+                    }
+                }
+
+                if (normalized)
+                {
+                    receipt.NormalizedAudioManagerFsms = true;
+                }
+            }
+            finally
+            {
+                UnityEngine.Random.state = savedRng;
+            }
+        }
+
+        private static bool HasNonEmptyEventList(FieldInfo? field, Fsm fsm)
+            => field?.GetValue(fsm) is IList list && list.Count > 0;
 
         private static bool ClearFsmEventList(FieldInfo? field, Fsm fsm)
         {

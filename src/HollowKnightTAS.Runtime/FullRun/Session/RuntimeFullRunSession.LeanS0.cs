@@ -332,6 +332,13 @@ namespace HollowKnightTAS.Runtime.FullRun
                     GameManager.SceneLoadInfo inProcLoadInfo = LeanS0SnapshotRuntime.ToGameSceneLoadInfo(inProcPacket.C6_TransitionInfo);
                     inProcLoadInfo.WaitForSceneTransitionCameraFade = false;
                     inProcLoadInfo.PreventCameraFadeOut = true;
+                    // Clear stale target Godhome transition flags before BeginSceneTransition so they
+                    // cannot override C6_TransitionInfo.AlwaysUnloadUnusedAssets prior to target S0.
+                    BossStatueLoadManager.Clear();
+                    if (BossSequenceController.IsInSequence)
+                    {
+                        BossSequenceController.Reset();
+                    }
                     Modding.Logger.Log(
                         $"[HKTAS] LeanS0 in-process target starting transition to {inProcLoadInfo.SceneName} (gate={inProcLoadInfo.EntryGateName}, vis={inProcLoadInfo.Visualization})");
                     inProcManager.BeginSceneTransition(inProcLoadInfo);

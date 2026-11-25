@@ -77,6 +77,11 @@ namespace HollowKnightTAS.Runtime.FullRun
         public string PlayerDataKey { get; set; } = string.Empty;
         public LeanS0BossDoorCompletionDto PreviousCompletion { get; set; } = new LeanS0BossDoorCompletionDto();
         public int[] PreviousEquippedCharms { get; set; } = Array.Empty<int>();
+        public bool? HasPreviousEquippedCharms { get; set; }
+        public bool? PlayerDataAliasesCurrentData { get; set; }
+        public bool? PlayerDataHasPreviousEquippedCharms { get; set; }
+        public string? StatueLoadCurrentBossSceneName { get; set; }
+        public string? StatueLoadPreviousBossSceneName { get; set; }
         public bool WasOvercharmed { get; set; }
         public bool HasPendingSetup { get; set; }
         public int PendingLevel { get; set; }

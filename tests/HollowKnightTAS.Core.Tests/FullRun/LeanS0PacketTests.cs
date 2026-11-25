@@ -469,5 +469,53 @@ namespace HollowKnightTAS.Core.Tests.FullRun
             Assert.IsNull(decoded.C9_CharmMinions.WhiteCharmActiveState);
             Assert.IsNull(decoded.C9_CharmMinions.WhiteCharmWaitTimer);
         }
+
+        [TestMethod]
+        public void EncodeDecode_RoundTrip_PreservesBossSequenceAliasingAndBossStatueLoadScenes()
+        {
+            LeanS0Packet original = CreateSamplePacket();
+            original.C3_BossSequence.Timer = 132.031387f;
+            original.C3_BossSequence.HasPreviousEquippedCharms = false;
+            original.C3_BossSequence.PlayerDataAliasesCurrentData = true;
+            original.C3_BossSequence.PlayerDataHasPreviousEquippedCharms = false;
+            original.C3_BossSequence.StatueLoadCurrentBossSceneName = "GG_Hornet_1";
+            original.C3_BossSequence.StatueLoadPreviousBossSceneName = "GG_Gruz_Mother";
+
+            byte[] encoded = LeanS0PacketCodec.Encode(original);
+            LeanS0Packet decoded = LeanS0PacketCodec.Decode(encoded);
+
+            Assert.AreEqual(132.031387f, decoded.C3_BossSequence.Timer);
+            Assert.AreEqual(false, decoded.C3_BossSequence.HasPreviousEquippedCharms);
+            Assert.AreEqual(true, decoded.C3_BossSequence.PlayerDataAliasesCurrentData);
+            Assert.AreEqual(false, decoded.C3_BossSequence.PlayerDataHasPreviousEquippedCharms);
+            Assert.AreEqual("GG_Hornet_1", decoded.C3_BossSequence.StatueLoadCurrentBossSceneName);
+            Assert.AreEqual("GG_Gruz_Mother", decoded.C3_BossSequence.StatueLoadPreviousBossSceneName);
+        }
+
+        [TestMethod]
+        public void DeserializeJson_LegacyPacketWithoutBossStatueLoadAndAliasingFields_RemainsCompatible()
+        {
+            LeanS0Packet original = CreateSamplePacket();
+            string json = LeanS0PacketCodec.SerializeJson(original)
+                .Replace(",\"HasPreviousEquippedCharms\":null", string.Empty, StringComparison.Ordinal)
+                .Replace(",\"PlayerDataAliasesCurrentData\":null", string.Empty, StringComparison.Ordinal)
+                .Replace(",\"PlayerDataHasPreviousEquippedCharms\":null", string.Empty, StringComparison.Ordinal)
+                .Replace(",\"StatueLoadCurrentBossSceneName\":null", string.Empty, StringComparison.Ordinal)
+                .Replace(",\"StatueLoadPreviousBossSceneName\":null", string.Empty, StringComparison.Ordinal);
+
+            Assert.IsFalse(json.Contains("HasPreviousEquippedCharms", StringComparison.Ordinal));
+            Assert.IsFalse(json.Contains("PlayerDataAliasesCurrentData", StringComparison.Ordinal));
+            Assert.IsFalse(json.Contains("PlayerDataHasPreviousEquippedCharms", StringComparison.Ordinal));
+            Assert.IsFalse(json.Contains("StatueLoadCurrentBossSceneName", StringComparison.Ordinal));
+            Assert.IsFalse(json.Contains("StatueLoadPreviousBossSceneName", StringComparison.Ordinal));
+
+            LeanS0Packet decoded = LeanS0PacketCodec.DeserializeJson(json);
+            Assert.AreEqual(210.5f, decoded.C3_BossSequence.Timer);
+            Assert.IsNull(decoded.C3_BossSequence.HasPreviousEquippedCharms);
+            Assert.IsNull(decoded.C3_BossSequence.PlayerDataAliasesCurrentData);
+            Assert.IsNull(decoded.C3_BossSequence.PlayerDataHasPreviousEquippedCharms);
+            Assert.IsNull(decoded.C3_BossSequence.StatueLoadCurrentBossSceneName);
+            Assert.IsNull(decoded.C3_BossSequence.StatueLoadPreviousBossSceneName);
+        }
     }
 }

@@ -3,7 +3,9 @@ using System.Reflection;
 using System.Runtime.Serialization;
 using HollowKnightTAS.Core.SceneCheckpoints;
 using HollowKnightTAS.Runtime.FullRun;
+using HutongGames.PlayMaker;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using UnityEngine;
 
 namespace HollowKnightTAS.Core.Tests.FullRun
 {
@@ -276,6 +278,74 @@ namespace HollowKnightTAS.Core.Tests.FullRun
                 leanS0ModeEnabled: false, ready: true, sceneHandle: 10, sceneName: "Menu_Title",
                 seededTargetSceneName: string.Empty,
                 ref trackedHandle, ref trackedName, ref handshakePending, ref s0Seeded));
+        }
+
+        [TestMethod]
+        public void NormalizeSpellControlVariables_ClearsTransientVarsWithoutTouchingCharmConfig()
+        {
+            var vars = new FsmVariables
+            {
+                BoolVariables = new[]
+                {
+                    new FsmBool("Return Bool") { Value = true },
+                    new FsmBool("Refocusing") { Value = true },
+                    new FsmBool("Spore Cooldown") { Value = true }
+                },
+                FloatVariables = new[]
+                {
+                    new FsmFloat("Grace Timer") { Value = 0.74f },
+                    new FsmFloat("Fireball Recoil Current") { Value = 2f },
+                    new FsmFloat("Y Speed") { Value = -50f },
+                    new FsmFloat("Self X Scale") { Value = 1f },
+                    new FsmFloat("Camera Start Z") { Value = -38.1f },
+                    new FsmFloat("Time Per MP Drain") { Value = 0.027f }
+                },
+                IntVariables = new[]
+                {
+                    new FsmInt("Start MP") { Value = 57 },
+                    new FsmInt("MP") { Value = 31 },
+                    new FsmInt("HP") { Value = 3 },
+                    new FsmInt("Max HP") { Value = 9 },
+                    new FsmInt("Health Increase") { Value = 1 },
+                    new FsmInt("Spell Level") { Value = 2 },
+                    new FsmInt("Focus MP amount") { Value = 33 },
+                    new FsmInt("MP Cost") { Value = 24 }
+                },
+                Vector3Variables = new[]
+                {
+                    new FsmVector3("Fireball Recoil Vector") { Value = new Vector3(1f, 0f, 0f) },
+                    new FsmVector3("Focus Camera Zoom Current") { Value = new Vector3(0f, 0f, 3f) },
+                    new FsmVector3("Camera Pos") { Value = new Vector3(94.2f, 19.9f, -38.1f) },
+                    new FsmVector3("Focus Camera Zoom") { Value = new Vector3(0f, 0f, 3f) }
+                }
+            };
+
+            bool changed = LeanS0Gate.NormalizeSpellControlVariables(vars, isInactive: true, checkUnityLifetime: false);
+            Assert.IsTrue(changed);
+
+            Assert.IsFalse(vars.FindFsmBool("Return Bool").Value);
+            Assert.IsFalse(vars.FindFsmBool("Refocusing").Value);
+            Assert.AreEqual(0f, vars.FindFsmFloat("Grace Timer").Value);
+            Assert.AreEqual(0f, vars.FindFsmFloat("Fireball Recoil Current").Value);
+            Assert.AreEqual(0f, vars.FindFsmFloat("Y Speed").Value);
+            Assert.AreEqual(0f, vars.FindFsmFloat("Self X Scale").Value);
+            Assert.AreEqual(0f, vars.FindFsmFloat("Camera Start Z").Value);
+            Assert.AreEqual(0, vars.FindFsmInt("Start MP").Value);
+            Assert.AreEqual(0, vars.FindFsmInt("MP").Value);
+            Assert.AreEqual(0, vars.FindFsmInt("HP").Value);
+            Assert.AreEqual(0, vars.FindFsmInt("Max HP").Value);
+            Assert.AreEqual(0, vars.FindFsmInt("Health Increase").Value);
+            Assert.AreEqual(Vector3.zero, vars.FindFsmVector3("Fireball Recoil Vector").Value);
+            Assert.AreEqual(Vector3.zero, vars.FindFsmVector3("Focus Camera Zoom Current").Value);
+            Assert.AreEqual(Vector3.zero, vars.FindFsmVector3("Camera Pos").Value);
+
+            // Charm-derived config variables must remain untouched.
+            Assert.IsTrue(vars.FindFsmBool("Spore Cooldown").Value);
+            Assert.AreEqual(0.027f, vars.FindFsmFloat("Time Per MP Drain").Value);
+            Assert.AreEqual(2, vars.FindFsmInt("Spell Level").Value);
+            Assert.AreEqual(33, vars.FindFsmInt("Focus MP amount").Value);
+            Assert.AreEqual(24, vars.FindFsmInt("MP Cost").Value);
+            Assert.AreEqual(new Vector3(0f, 0f, 3f), vars.FindFsmVector3("Focus Camera Zoom").Value);
         }
     }
 }
