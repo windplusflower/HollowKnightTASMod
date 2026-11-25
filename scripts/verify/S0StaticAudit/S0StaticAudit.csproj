@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <HKManagedDir Condition="'$(HKManagedDir)' == ''">D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight_Data\Managed</HKManagedDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Mono.Cecil">
+      <HintPath>$(HKManagedDir)\Mono.Cecil.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>
