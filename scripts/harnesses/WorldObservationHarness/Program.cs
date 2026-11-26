@@ -63,7 +63,7 @@ internal static class Program
         };
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(options.Mode == "interactive" ? 30 : 4));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
-        var resources = new ResourceMonitor(report, linked.Token);
+        var resources = new ResourceMonitor(report, options.RelaxedResources, linked.Token);
         VerifiedGameLaunchHandle? handle = null;
         StartupBootController? boot = null;
         FullRunMovieCoordinator? movies = null;
@@ -821,10 +821,11 @@ internal static class Program
     private sealed class ResourceMonitor
     {
         private readonly Dictionary<string, object?> report;
+        private readonly bool relaxedResources;
         private readonly CancellationToken token;
         private VerifiedGameLaunchHandle? handle;
         private Task? task;
-        public ResourceMonitor(Dictionary<string, object?> report, CancellationToken token) { this.report = report; this.token = token; }
+        public ResourceMonitor(Dictionary<string, object?> report, bool relaxedResources, CancellationToken token) { this.report = report; this.relaxedResources = relaxedResources; this.token = token; }
         public void Start(VerifiedGameLaunchHandle value) { handle = value; task = Task.Run(RunAsync); }
         public void Stop() { try { task?.Wait(TimeSpan.FromSeconds(1)); } catch { } }
         private async Task RunAsync()
@@ -843,7 +844,8 @@ internal static class Program
                     ["gamePrivateBytes"] = gameBytes
                 };
                 lock (report) ((List<object>)report["resources"]!).Add(row);
-                if (watchdog.Elapsed.TotalMinutes > ((string)report["mode"]! == "interactive" ? 30 : 4) || process.PrivateMemorySize64 > 1024L * 1024 * 1024 || gameBytes > 3L * 1024 * 1024 * 1024)
+                bool memoryExceeded = !relaxedResources && (process.PrivateMemorySize64 > 1024L * 1024 * 1024 || gameBytes > 3L * 1024 * 1024 * 1024);
+                if (watchdog.Elapsed.TotalMinutes > ((string)report["mode"]! == "interactive" ? 30 : 4) || memoryExceeded)
                 {
                     // Independent of the UI dispatcher: terminate only the test-owned game,
                     // then this harness, even if a managed await or native message pump is stuck.
@@ -871,6 +873,7 @@ internal static class Program
         public string Game = DefaultGame;
         public string Bundle = DefaultBundle;
         public bool Overlay;
+        public bool RelaxedResources;
         public string? VideoOutput;
         public string? Ffmpeg;
         public long VideoStart = 1400;
@@ -887,6 +890,7 @@ internal static class Program
                 else if (arg.StartsWith("--game=", StringComparison.Ordinal)) result.Game = Path.GetFullPath(arg.Substring(7));
                 else if (arg.StartsWith("--bundle=", StringComparison.Ordinal)) result.Bundle = Path.GetFullPath(arg.Substring(9));
                 else if (arg == "--overlay") result.Overlay = true;
+                else if (arg == "--relaxed-resources") result.RelaxedResources = true;
                 else if (arg.StartsWith("--video-output=", StringComparison.Ordinal)) result.VideoOutput = Path.GetFullPath(arg.Substring(15));
                 else if (arg.StartsWith("--ffmpeg=", StringComparison.Ordinal)) result.Ffmpeg = Path.GetFullPath(arg.Substring(9));
                 else if (arg.StartsWith("--video-start=", StringComparison.Ordinal)) result.VideoStart = long.Parse(arg.Substring(14), CultureInfo.InvariantCulture);

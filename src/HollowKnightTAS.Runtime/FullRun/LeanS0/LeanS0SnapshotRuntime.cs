@@ -321,8 +321,28 @@ namespace HollowKnightTAS.Runtime.FullRun
             Delegate? setup = BossSceneController.SetupEvent;
             if (setup != null)
             {
-                Type? decl = setup.Method?.DeclaringType;
-                if (setup.Target is CanonicalBossChallengeContext ctx && ctx.Statue != null)
+                TryCaptureBossSetupDelegate(setup, dto, depth: 0);
+            }
+
+            return dto;
+        }
+
+        private static bool TryCaptureBossSetupDelegate(Delegate setup, LeanS0BossSequenceState dto, int depth)
+        {
+            if (depth > 3)
+            {
+                return false;
+            }
+
+            foreach (Delegate item in setup.GetInvocationList())
+            {
+                if (item == null)
+                {
+                    continue;
+                }
+
+                Type? decl = item.Method?.DeclaringType;
+                if (item.Target is CanonicalBossChallengeContext ctx && ctx.Statue != null)
                 {
                     dto.HasPendingSetup = true;
                     dto.PendingLevel = ctx.Level;
@@ -331,14 +351,16 @@ namespace HollowKnightTAS.Runtime.FullRun
                     dto.PendingDreamStatueStatePd = ctx.Statue.DreamStatueStatePD ?? string.Empty;
                     dto.PendingStatueIsAlwaysUnlocked = ctx.Statue.IsAlwaysUnlocked;
                     dto.HasPendingCompletionCache = ctx.CachedCompletion != null;
+                    return true;
                 }
-                else if (setup.Target != null
-                    && setup.Target.GetType() == CanonicalBossChallengeOriginal.Primary
+
+                if (item.Target != null
+                    && item.Target.GetType() == CanonicalBossChallengeOriginal.Primary
                     && BossChallengePrimaryLevelField != null
                     && BossChallengePrimaryUiField != null
                     && BossChallengeUiStatueField != null)
                 {
-                    object closure = setup.Target;
+                    object closure = item.Target;
                     object? ui = BossChallengePrimaryUiField.GetValue(closure);
                     if (!ReferenceEquals(ui, null))
                     {
@@ -354,16 +376,33 @@ namespace HollowKnightTAS.Runtime.FullRun
                             dto.PendingDreamStatueStatePd = statue.dreamStatueStatePD ?? string.Empty;
                             dto.PendingStatueIsAlwaysUnlocked = statue.isAlwaysUnlocked;
                             dto.HasPendingCompletionCache = !ReferenceEquals(cached, null);
+                            return true;
                         }
                     }
                 }
-                else if (decl == typeof(BossSequenceController) || decl?.DeclaringType == typeof(BossSequenceController))
+
+                if (decl == typeof(BossSequenceController) || decl?.DeclaringType == typeof(BossSequenceController))
                 {
                     dto.HasPendingSequenceSetup = true;
+                    return true;
+                }
+
+                if (item.Target != null && depth < 3)
+                {
+                    foreach (FieldInfo field in item.Target.GetType().GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                    {
+                        if (typeof(Delegate).IsAssignableFrom(field.FieldType)
+                            && field.GetValue(item.Target) is Delegate inner
+                            && !ReferenceEquals(inner, item)
+                            && TryCaptureBossSetupDelegate(inner, dto, depth + 1))
+                        {
+                            return true;
+                        }
+                    }
                 }
             }
 
-            return dto;
+            return false;
         }
 
         private static void ApplyBossSequence(LeanS0BossSequenceState state, PlayerData pd)
